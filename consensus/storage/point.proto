@@ -1,0 +1,16 @@
+syntax = "proto3";
+package storage;
+
+message ProducerDetailProto {
+  string name = 1;
+  fixed32 factualNum = 2;
+  fixed32 expectedNum = 3;
+  bytes weight = 4;
+}
+
+message ConsensusPointProto {
+  bytes prevHash = 1;
+  bytes endHash = 2;
+  bytes totalWeight = 3;
+  repeated ProducerDetailProto content = 4;
+}

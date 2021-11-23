@@ -1,0 +1,50 @@
+syntax = "proto3";
+package nom;
+
+import "common/types/protobuf.proto";
+
+message AccountBlockProto {
+  uint64 version = 1;
+  uint64 chainIdentifier = 2;
+  uint64 blockType = 3;
+  types.HashProto hash = 4;
+  types.HashProto previousHash = 5;
+  uint64 height = 6;
+  types.HashHeightProto momentumAcknowledged = 7;
+  types.AddressProto address = 8;
+
+  types.AddressProto toAddress = 9;
+  bytes amount = 10;
+  bytes tokenStandard = 11;
+
+  types.HashProto fromBlockHash = 12;
+
+  repeated AccountBlockProto descendantBlocks = 13;
+
+  bytes data = 14;
+
+  uint64 fusedPlasma = 15;
+  uint64 difficulty = 17;
+  bytes nonce = 18;
+  uint64 basePlasma = 19;
+  uint64 totalPlasma = 20;
+
+  types.HashProto changesHash = 21;
+
+  bytes publicKey = 22;
+  bytes signature = 23;
+}
+
+message MomentumProto {
+  uint64 version = 1;
+  uint64 chainIdentifier = 2;
+  types.HashProto hash = 3;
+  types.HashProto previousHash = 4;
+  uint64 height = 5;
+  uint64 timestamp = 6;
+  bytes data = 7;
+  repeated types.AccountHeaderProto content = 8;
+  types.HashProto changesHash = 9;
+  bytes publicKey = 10;
+  bytes signature = 11;
+}

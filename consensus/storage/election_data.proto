@@ -1,0 +1,13 @@
+syntax = "proto3";
+package storage;
+
+message PillarDelegationProto {
+  bytes producingAddress = 1;
+  string name = 2;
+  bytes weight = 3;
+}
+
+message ElectionDataProto {
+  repeated bytes producers = 1;
+  repeated PillarDelegationProto delegations = 2;
+}

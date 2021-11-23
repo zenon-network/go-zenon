@@ -1,0 +1,17 @@
+syntax = "proto3";
+package types;
+
+message AddressProto {
+  bytes address = 1;
+}
+message HashProto {
+  bytes hash = 1;
+}
+message HashHeightProto {
+  HashProto hash = 1;
+  uint64 height = 2;
+}
+message AccountHeaderProto {
+  AddressProto address = 1;
+  HashHeightProto hashHeight = 2;
+}

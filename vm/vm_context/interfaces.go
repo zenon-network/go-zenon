@@ -1,0 +1,32 @@
+package vm_context
+
+import (
+	"math/big"
+
+	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
+	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/consensus/api"
+)
+
+type AccountVmContext interface {
+	api.PillarReader
+	store.Account
+	MomentumStore() store.Momentum
+
+	// ====== State ======
+
+	GetFrontierMomentum() (*nom.Momentum, error)
+	GetGenesisMomentum() *nom.Momentum
+
+	// ====== Lifecycle ======
+
+	Save()
+	Reset()
+	Done()
+
+	// ====== Balance ======
+
+	AddBalance(ts *types.ZenonTokenStandard, amount *big.Int)
+	SubBalance(ts *types.ZenonTokenStandard, amount *big.Int)
+}
