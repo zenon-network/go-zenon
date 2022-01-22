@@ -16,7 +16,14 @@ const (
 	Unknown SyncState = iota
 	Syncing
 	SyncDone
+	NotEnoughPeers
 )
+
+type SyncInfo struct {
+	State         SyncState `json:"state"`
+	CurrentHeight uint64    `json:"currentHeight"`
+	TargetHeight  uint64    `json:"targetHeight"`
+}
 
 type txPool interface {
 	AddAccountBlocks([]*nom.AccountBlock) error
@@ -43,7 +50,7 @@ type ChainBridge interface {
 }
 
 type Broadcaster interface {
-	SyncState() SyncState
+	SyncInfo() *SyncInfo
 	CreateMomentum(*nom.MomentumTransaction)
 	CreateAccountBlock(*nom.AccountBlockTransaction)
 }

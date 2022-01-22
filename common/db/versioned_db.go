@@ -3,6 +3,7 @@ package db
 import (
 	"sync"
 
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/pkg/errors"
 	"github.com/syndtr/goleveldb/leveldb"
 
@@ -10,11 +11,24 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
+const (
+	l1CacheSize                  = 400
+	l2CacheSize                  = 100
+	maximumCacheHeightDifference = 360
+)
+
 var (
 	frontierByte = []byte{85}
 	patchByte    = []byte{102}
 	rollbackByte = []byte{119}
 )
+
+func absDiff(x, y uint64) uint64 {
+	if x < y {
+		return y - x
+	}
+	return x - y
+}
 
 type Manager interface {
 	Frontier() DB
@@ -77,7 +91,7 @@ func (m *memdbManager) Add(transaction Transaction) error {
 	head := commits[len(commits)-1].Identifier()
 
 	if previous != m.frontierIdentifier {
-		return errors.Errorf("can't insert identifier %v. previous doesnt match with current frontier %v", head, m.frontierIdentifier)
+		return errors.Errorf("can't insert identifier %v. previous doesn't match with current frontier %v", head, m.frontierIdentifier)
 	}
 
 	// apply transaction on db
@@ -159,7 +173,8 @@ type rollbackCache struct {
 
 type ldbManager struct {
 	location string
-	cache    map[types.HashHeight]*rollbackCache
+	l1Cache  *lru.Cache
+	l2Cache  *lru.Cache
 	ldb      *leveldb.DB
 	changes  sync.Mutex
 	stopped  bool
@@ -168,9 +183,14 @@ type ldbManager struct {
 func NewLevelDBManager(dir string) Manager {
 	ldb, err := leveldb.OpenFile(dir, nil)
 	common.DealWithErr(err)
+	l1Cache, err := lru.New(l1CacheSize)
+	common.DealWithErr(err)
+	l2Cache, err := lru.New(l2CacheSize)
+	common.DealWithErr(err)
 	return &ldbManager{
 		location: dir,
-		cache:    map[types.HashHeight]*rollbackCache{},
+		l1Cache:  l1Cache,
+		l2Cache:  l2Cache,
 		ldb:      ldb,
 	}
 }
@@ -214,12 +234,15 @@ func (m *ldbManager) Get(identifier types.HashHeight) DB {
 	var rawChanges db
 	var toIdentifier types.HashHeight
 
-	if cache, ok := m.cache[identifier]; ok == false {
+	if cache, ok := m.l1Cache.Get(identifier); ok {
+		toIdentifier = cache.(*rollbackCache).frontier
+		rawChanges = cache.(*rollbackCache).raw
+	} else if cache, ok := m.l2Cache.Get(identifier); ok {
+		toIdentifier = cache.(*rollbackCache).frontier
+		rawChanges = cache.(*rollbackCache).raw
+	} else {
 		rawChanges = newMemDBInternal()
 		toIdentifier = identifier
-	} else {
-		toIdentifier = cache.frontier
-		rawChanges = cache.raw
 	}
 
 	for i := toIdentifier.Height + 1; i <= frontierIdentifier.Height; i += 1 {
@@ -229,9 +252,16 @@ func (m *ldbManager) Get(identifier types.HashHeight) DB {
 		}
 	}
 
-	m.cache[identifier] = &rollbackCache{
-		frontier: frontierIdentifier,
-		raw:      rawChanges,
+	if absDiff(identifier.Height, frontierIdentifier.Height) < maximumCacheHeightDifference {
+		m.l1Cache.Add(identifier, &rollbackCache{
+			frontier: frontierIdentifier,
+			raw:      rawChanges,
+		})
+	} else {
+		m.l2Cache.Add(identifier, &rollbackCache{
+			frontier: frontierIdentifier,
+			raw:      rawChanges,
+		})
 	}
 
 	u := newMergedDb([]db{
@@ -353,7 +383,8 @@ func (m *ldbManager) Stop() error {
 	}
 	m.stopped = true
 	m.ldb = nil
-	m.cache = nil
+	m.l1Cache = nil
+	m.l2Cache = nil
 	return nil
 }
 func (m *ldbManager) Location() string {

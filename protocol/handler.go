@@ -460,11 +460,6 @@ func (pm *ProtocolManager) BroadcastAccountBlock(tx *nom.AccountBlock) {
 	log.Info("propagated account-block to peers", "num-peers", len(peers), "account-block-header", tx.Header())
 }
 
-func (pm *ProtocolManager) SyncState() SyncState {
-	synchronising := pm.needsToSync()
-	if synchronising == true {
-		return Syncing
-	} else {
-		return SyncDone
-	}
+func (pm *ProtocolManager) SyncInfo() *SyncInfo {
+	return pm.syncInfo()
 }

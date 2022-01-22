@@ -12,6 +12,7 @@ import (
 	"github.com/zenon-network/go-zenon/metadata"
 	"github.com/zenon-network/go-zenon/p2p"
 	"github.com/zenon-network/go-zenon/p2p/discover"
+	"github.com/zenon-network/go-zenon/protocol"
 	"github.com/zenon-network/go-zenon/zenon"
 )
 
@@ -119,4 +120,8 @@ func (api *StatsApi) NetworkInfo() (*NetworkInfoResponse, error) {
 		Peers:    peers,
 		Self:     selfToPeer(api.p2p.Self()),
 	}, nil
+}
+
+func (api *StatsApi) SyncInfo() (*protocol.SyncInfo, error) {
+	return api.z.Broadcaster().SyncInfo(), nil
 }

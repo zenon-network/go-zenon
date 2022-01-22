@@ -22,8 +22,8 @@ func NewBroadcaster(chain chain.Chain, protocol *ProtocolManager) Broadcaster {
 	}
 }
 
-func (b *broadcaster) SyncState() SyncState {
-	return b.protocol.SyncState()
+func (b *broadcaster) SyncInfo() *SyncInfo {
+	return b.protocol.SyncInfo()
 }
 
 // CreateMomentum is called when our node created a momentum.

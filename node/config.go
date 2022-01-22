@@ -117,14 +117,14 @@ func (c *Config) makeGenesisConfig() (genesisConfig store.Genesis) {
 		path = c.GenesisFile
 		genesisConfig, err = genesis.ReadGenesisConfigFromFile(c.GenesisFile)
 	} else {
-		log.Info("no genesis config located. znnd will poll for the genesis file", "poll-location", path)
-		fmt.Printf(`
-No genesis config located!
-This is happening because you are running an early version of znnd.
-Once the genesis config file will be downloaded from a decentralized location, znnd will continue running smoothly.
-`)
-		path = filepath.Join(c.DataPath, DefaultGenesisPollingFile)
-		genesisConfig, err = genesis.PollGenesisConfigFromFile(path)
+		genesisConfig, err = genesis.MakeEmbeddedGenesisConfig()
+		if err == genesis.ErrNoEmbeddedGenesis {
+			log.Crit("no embedded genesis found and no genesis was specified")
+			os.Exit(1)
+		} else {
+			log.Info("using embedded genesis")
+			return
+		}
 	}
 
 	if err == nil {

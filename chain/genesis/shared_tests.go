@@ -67,8 +67,8 @@ func CheckFieldsExist(g *GenesisConfig) error {
 	if g.PillarConfig == nil {
 		return errors.Errorf("PillarConfig is nil")
 	}
-	if g.GenesisAccountAddress == nil {
-		return errors.Errorf("GenesisAccountAddress is nil")
+	if g.SporkAddress == nil {
+		return errors.Errorf("SporkAddress is nil")
 	}
 	if g.PlasmaConfig == nil {
 		return errors.Errorf("PlasmaConfig is nil")
@@ -160,7 +160,7 @@ func CheckGenesisCheckSum(g *GenesisConfig, expected types.Hash) error {
 	genesis := NewGenesis(g)
 	checkSum := genesis.GetGenesisMomentum().Hash
 	if checkSum != expected {
-		return errors.Errorf("invalid genesis hash. Expected %v but got %v", expected, checkSum)
+		return errors.Errorf("invalid genesis-momentum hash. Expected %v but got %v", expected, checkSum)
 	}
 	return nil
 }

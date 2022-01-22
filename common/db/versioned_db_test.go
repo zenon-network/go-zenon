@@ -67,7 +67,6 @@ func newMockTransaction(seed int64, db DB) *mockTransaction {
 
 func TestVersionedDBConcurrentUse(t *testing.T) {
 	m := NewLevelDBManager(t.TempDir())
-	//m := NewMemDBManager(NewMemDB())
 	v0 := m.Frontier()
 	v01 := m.Frontier()
 
@@ -107,7 +106,6 @@ e871bc355914f2c3 - 48c39064a7c7e355`)
 func TestVersionedDBVersions(t *testing.T) {
 	dir := t.TempDir()
 	m := NewLevelDBManager(dir)
-	//m := NewMemDBManager(NewMemDB())
 
 	db := m.Frontier()
 	t1 := newMockTransaction(1, db)

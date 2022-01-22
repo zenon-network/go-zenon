@@ -34,7 +34,7 @@ func (t ticker) TickMultiplier(bigger Ticker) (uint64, error) {
 	cStart, cEnd := t.ToTime(0)
 	bStart, bEnd := bigger.ToTime(0)
 	if cStart != bStart {
-		return 0, errors.Errorf("ticker error - start time is different - cant convert ticks")
+		return 0, errors.Errorf("ticker error - start time is different - can't convert ticks")
 	}
 
 	cDuration := cEnd.UnixNano() - cStart.UnixNano()

@@ -74,7 +74,7 @@ func (m *manager) NewProducerEvent(e consensus.ProducerEvent) {
 }
 
 func (m *manager) shouldProcess(e consensus.ProducerEvent) error {
-	if m.broadcaster.SyncState() != protocol.SyncDone {
+	if m.broadcaster.SyncInfo().State != protocol.SyncDone {
 		return ErrSyncNotDone
 	}
 	if m.coinbase == nil {

@@ -33,3 +33,6 @@ func (g *genesis) GetGenesisMomentum() *nom.Momentum {
 func (g *genesis) GetGenesisTransaction() *nom.MomentumTransaction {
 	return g.momentumTransaction
 }
+func (g *genesis) GetSporkAddress() *types.Address {
+	return g.config.SporkAddress
+}

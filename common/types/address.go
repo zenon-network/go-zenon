@@ -33,7 +33,7 @@ var (
 	EmbeddedContracts = []Address{PlasmaContract, PillarContract, TokenContract, SentinelContract, SwapContract, StakeContract, SporkContract, LiquidityContract, AcceleratorContract}
 	EmbeddedWUpdate   = []Address{PillarContract, StakeContract, SentinelContract, LiquidityContract}
 
-	SporkAddress, _ = ParseAddress("z1qpxswrfnlll355wrx868xh58j7e2gu2n2u5czv")
+	SporkAddress *Address
 )
 
 func IsEmbeddedAddress(addr Address) bool {

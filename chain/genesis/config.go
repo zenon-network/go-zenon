@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"math/big"
 	"os"
-	"time"
 
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
@@ -15,6 +14,13 @@ import (
 var (
 	log = common.ChainLogger.New("submodule", "genesis")
 )
+
+func MakeEmbeddedGenesisConfig() (store.Genesis, error) {
+	if embeddedGenesis == nil {
+		return nil, ErrNoEmbeddedGenesis
+	}
+	return NewGenesis(embeddedGenesis), nil
+}
 
 func ReadGenesisConfigFromFile(genesisFile string) (store.Genesis, error) {
 	defer func() {
@@ -53,24 +59,11 @@ func ReadGenesisConfigFromFile(genesisFile string) (store.Genesis, error) {
 	}
 }
 
-// PollGenesisConfigFromFile tries to ReadGenesisConfigFromFile and retries after 10 seconds if file doesn't exist
-func PollGenesisConfigFromFile(genesisFile string) (store.Genesis, error) {
-	for {
-		if genesisConfig, err := ReadGenesisConfigFromFile(genesisFile); err == ErrInvalidGenesisPath {
-			select {
-			case <-time.After(time.Second * 10):
-			}
-		} else {
-			return genesisConfig, err
-		}
-	}
-}
-
 type GenesisConfig struct {
-	ChainIdentifier       uint64
-	ExtraData             string
-	GenesisTimestampSec   int64
-	GenesisAccountAddress *types.Address
+	ChainIdentifier     uint64
+	ExtraData           string
+	GenesisTimestampSec int64
+	SporkAddress        *types.Address
 
 	PillarConfig *PillarContractConfig
 	TokenConfig  *TokenContractConfig

@@ -10,8 +10,7 @@ import (
 )
 
 const (
-	DefaultWalletDir          = "wallet"
-	DefaultGenesisPollingFile = "genesis.json"
+	DefaultWalletDir = "wallet"
 )
 
 var DefaultNodeConfig = Config{

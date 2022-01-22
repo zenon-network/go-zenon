@@ -10,4 +10,5 @@ type Genesis interface {
 	IsGenesisMomentum(hash types.Hash) bool
 	GetGenesisMomentum() *nom.Momentum
 	GetGenesisTransaction() *nom.MomentumTransaction
+	GetSporkAddress() *types.Address
 }

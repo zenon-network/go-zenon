@@ -146,18 +146,32 @@ func (pm *ProtocolManager) syncer() {
 	}
 }
 
-func (pm *ProtocolManager) needsToSync() bool {
-	best := pm.peers.BestPeer()
-	if best == nil {
-		return true
+func (pm *ProtocolManager) syncInfo() *SyncInfo {
+	// find height details
+	currentHeight := pm.chainman.CurrentBlock().Height
+	targetHeight := uint64(0)
+	if best := pm.peers.BestPeer(); best != nil {
+		targetHeight = best.Td()
 	}
+
+	// find state
+	var state SyncState
+	if currentHeight >= targetHeight {
+		state = SyncDone
+	} else {
+		state = Syncing
+	}
+
+	// if there are not enough peers, return this instead
 	if pm.peers.Len() < pm.minPeers {
-		return true
+		state = NotEnoughPeers
 	}
-	if best.Td() > pm.chainman.CurrentBlock().Height {
-		return true
+
+	return &SyncInfo{
+		State:         state,
+		CurrentHeight: currentHeight,
+		TargetHeight:  targetHeight,
 	}
-	return false
 }
 
 // synchronise tries to sync up our local block chain with a remote peer.

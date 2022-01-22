@@ -47,7 +47,7 @@ func (ep *eventPrinter) InsertMomentum(detailed *nom.DetailedMomentum) {
 	if detailed.AccountBlocks != nil {
 		txs = len(detailed.AccountBlocks)
 	}
-	if ep.broadcaster.SyncState() != protocol.Syncing || (ep.broadcaster.SyncState() == protocol.Syncing && block.Height%50 == 0) {
+	if ep.broadcaster.SyncInfo().State == protocol.SyncDone || block.Height%50 == 0 {
 		fmt.Printf("[Momentum inserted] Height: %d, Hash: %s, Timestamp: %d, Pillar producer address: %s, Current time: %s, Txs: %d\n", block.Height, block.Hash, block.Timestamp.Unix(), block.Producer(), time.Now().Format("2006-01-02 15:04:05"), txs)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
+	"github.com/zenon-network/go-zenon/common/types"
 )
 
 var (
@@ -50,7 +51,7 @@ func (c *chain) Init() error {
 	if err := c.checkGenesisCompatibility(); err != nil {
 		return err
 	}
-
+	types.SporkAddress = c.genesis.GetSporkAddress()
 	c.Register(c.accountPool)
 
 	frontierStore := c.GetFrontierMomentumStore()
