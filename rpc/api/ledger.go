@@ -291,6 +291,65 @@ func (l *LedgerApi) GetUnreceivedBlocksByAddress(address types.Address, pageInde
 	}, nil
 }
 
+// Glue
+
+func (l *LedgerApi) GetAccountBlockByMomentumAcknowledged(address types.Address, momentumHeight uint64) (*AccountBlock, error) {
+	l.log.Info("GetAccountBlockByMomentumAcknowledged")
+
+	accountStore := l.chain.GetFrontierAccountStore(address)
+	frontierAccountBlock, err := accountStore.Frontier()
+	if err != nil {
+		l.log.Error("GetFrontierAccountBlock failed, error is "+err.Error(), "method", "GetAccountBlockByMomentumAcknowledged")
+		return nil, err
+	}
+	if frontierAccountBlock == nil {
+		return nil, nil
+	}
+
+	// check because already retrieved
+	fMomentumAcknowledged := frontierAccountBlock.MomentumAcknowledged.Height
+	if fMomentumAcknowledged <= momentumHeight {
+		return ledgerAccountBlockToRpc(l.chain, frontierAccountBlock)
+	}
+
+	// TODO: Remove commented, in for clarity right now
+	//	genesisAccountBlock, err := accountStore.ByHeight(1)
+	//	if err != nil {
+	//		l.log.Error("GetGenesisAccountBlock failed, error is "+err.Error(), "method", "GetAccountBlockByMomentumAcknowledged")
+	//		return nil, err
+	//	}
+	//
+	//	gMomentumAcknowledged := genesisAccountBlock.MomentumAcknowledged.Height
+	//	if gMomentumAcknowledged > momentumHeight {
+	//		return nil, nil
+	//	}
+
+	// binary search for latest block where momentum acknowleged <= desired momentum height
+	var block *nom.AccountBlock = nil
+	low := uint64(1)
+	high := frontierAccountBlock.Height
+
+	for low <= high {
+		mid := low + (high-low)/2
+		midBlock, err := accountStore.ByHeight(mid)
+		if err != nil {
+			l.log.Error("GetAccountBlockByHeight failed, error is "+err.Error(), "method", "GetAccountBlockByMomentumAcknowledged")
+			return nil, err
+		}
+		if midBlock.MomentumAcknowledged.Height <= momentumHeight {
+			block = midBlock
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+
+	if block == nil {
+		return nil, nil
+	}
+	return ledgerAccountBlockToRpc(l.chain, block)
+}
+
 // Momentum
 func (l *LedgerApi) GetFrontierMomentum() (*Momentum, error) {
 	momentum, err := l.chain.GetFrontierMomentumStore().GetFrontierMomentum()
