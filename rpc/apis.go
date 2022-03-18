@@ -73,6 +73,12 @@ func getApi(z zenon.Zenon, p2p *p2p.Server, apiModule string) []rpc.API {
 				Service:   embedded.NewSporkApi(z),
 				Public:    true,
 			},
+			{
+				Namespace: "embedded.accelerator",
+				Version:   "1.0",
+				Service:   embedded.NewAcceleratorApi(z),
+				Public:    true,
+			},
 		}
 	case "stats":
 		return []rpc.API{

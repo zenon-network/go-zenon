@@ -20,6 +20,20 @@ var (
 
 	// UpdateMinNumMomentums is the number momentums between 2 UpdateEmbedded* calls which will execute, used for all applicable contracts
 	UpdateMinNumMomentums = uint64(MomentumsPerHour * 5 / 6)
+	MaxEpochsPerUpdate    = 20
+
+	// === Accelerator ===
+
+	ProjectNameLengthMax                  = 30
+	ProjectDescriptionLengthMax           = 240
+	ProjectZnnMaximumFunds                = big.NewInt(5000 * Decimals)
+	ProjectQsrMaximumFunds                = big.NewInt(50000 * Decimals)
+	ProjectCreationAmount                 = big.NewInt(1 * Decimals)
+	PhaseTimeUnit                  int64  = 24 * 60 * 60
+	AcceleratorDuration                   = 20 * 12 * 30 * PhaseTimeUnit
+	VoteAcceptanceThreshold        uint32 = 33
+	AcceleratorProjectVotingPeriod        = 14 * PhaseTimeUnit
+	MaxBlocksPerUpdate                    = 40
 
 	/// ==== Pillar constants ===
 

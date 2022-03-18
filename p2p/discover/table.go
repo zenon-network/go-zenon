@@ -53,6 +53,8 @@ type Table struct {
 	nursery []*Node           // bootstrap nodes
 	db      *nodeDB           // database of known nodes
 
+	closing chan struct{}
+
 	bondmu    sync.Mutex
 	bonding   map[NodeID]*bondproc
 	bondslots chan struct{} // limits total number of active bonding processes
@@ -61,6 +63,8 @@ type Table struct {
 
 	net  transport
 	self *Node // metadata of the local node
+
+	wg sync.WaitGroup
 }
 
 type bondproc struct {
@@ -98,6 +102,7 @@ func newTable(t transport, ourID NodeID, ourAddr *net.UDPAddr, nodeDBPath string
 		net:       t,
 		db:        db,
 		self:      newNode(ourID, ourAddr.IP, uint16(ourAddr.Port), uint16(ourAddr.Port)),
+		closing:   make(chan struct{}),
 		bonding:   make(map[NodeID]*bondproc),
 		bondslots: make(chan struct{}, maxBondingPingPongs),
 	}
@@ -167,6 +172,7 @@ func randUint(max uint32) uint32 {
 func (tab *Table) Close() {
 	tab.net.close()
 	tab.db.close()
+	close(tab.closing)
 }
 
 // Bootstrap sets the bootstrap nodes. These nodes are used to connect
@@ -183,7 +189,7 @@ func (tab *Table) Bootstrap(nodes []*Node) {
 		tab.nursery = append(tab.nursery, &cpy)
 	}
 	tab.mutex.Unlock()
-	tab.refresh()
+	tab.refresh(false)
 }
 
 // Lookup performs a network search for nodes close
@@ -191,7 +197,7 @@ func (tab *Table) Bootstrap(nodes []*Node) {
 // nodes that are closer to it on each iteration.
 // The given target does not need to be an actual node
 // identifier.
-func (tab *Table) Lookup(targetID NodeID) []*Node {
+func (tab *Table) Lookup(targetID NodeID, wg *sync.WaitGroup, forceSeed bool) []*Node {
 	var (
 		target         = types.BytesToHashPanic(crypto.Keccak256(targetID[:]))
 		asked          = make(map[NodeID]bool)
@@ -212,7 +218,7 @@ func (tab *Table) Lookup(targetID NodeID) []*Node {
 
 	// If the result set is empty, all nodes were dropped, refresh
 	if len(result.entries) == 0 {
-		tab.refresh()
+		tab.refresh(forceSeed)
 		return nil
 	}
 
@@ -223,6 +229,7 @@ func (tab *Table) Lookup(targetID NodeID) []*Node {
 			if !asked[n.ID] {
 				asked[n.ID] = true
 				pendingQueries++
+				wg.Add(1)
 				go func() {
 					// Find potential neighbors to bond with
 					r, err := tab.net.findnode(n.ID, n.addr(), targetID)
@@ -253,13 +260,14 @@ func (tab *Table) Lookup(targetID NodeID) []*Node {
 			}
 		}
 		pendingQueries--
+		wg.Done()
 	}
 	return result.entries
 }
 
 // refresh performs a lookup for a random target to keep buckets full, or seeds
 // the table if it is empty (initial bootstrap or discarded faulty peers).
-func (tab *Table) refresh() {
+func (tab *Table) refresh(forceSeed bool) {
 	seed := true
 
 	// If the discovery table is empty, seed with previously known nodes
@@ -273,7 +281,7 @@ func (tab *Table) refresh() {
 	tab.mutex.Unlock()
 
 	// If the table is not empty, try to refresh using the live entries
-	if !seed {
+	if !seed && !forceSeed {
 		// The Kademlia paper specifies that the bucket refresh should
 		// perform a refresh in the least recently used bucket. We cannot
 		// adhere to this because the findnode target is a 512bit value
@@ -284,25 +292,31 @@ func (tab *Table) refresh() {
 		var target NodeID
 		rand.Read(target[:])
 
-		result := tab.Lookup(target)
+		result := tab.Lookup(target, &tab.wg, !forceSeed)
 		if len(result) == 0 {
 			// Lookup failed, seed after all
 			seed = true
 		}
 	}
 
-	if seed {
+	if seed || forceSeed {
 		// Pick a batch of previously know seeds to lookup with
-		seeds := tab.db.querySeeds(10)
+		seeds := tab.db.querySeeds(32)
 		for _, seed := range seeds {
 			common.P2PLogger.Debug("Seeding network with", "seed", seed)
 		}
+
 		nodes := append(tab.nursery, seeds...)
+
+		for i := uint32(len(nodes)) - 1; i > 0; i-- {
+			j := randUint(i)
+			nodes[i], nodes[j] = nodes[j], nodes[i]
+		}
 
 		// Bond with all the seed nodes (will pingpong only if failed recently)
 		bonded := tab.bondall(nodes)
 		if len(bonded) > 0 {
-			tab.Lookup(tab.self.ID)
+			tab.Lookup(tab.self.ID, &tab.wg, !forceSeed)
 		}
 		// TODO: the Kademlia paper says that we're supposed to perform
 		// random lookups in all buckets further away than our closest neighbor.
@@ -335,9 +349,11 @@ func (tab *Table) len() (n int) {
 // those nodes for which bonding has probably succeeded.
 func (tab *Table) bondall(nodes []*Node) (result []*Node) {
 	rc := make(chan *Node, len(nodes))
+	tab.wg.Add(len(nodes))
 	for i := range nodes {
 		go func(n *Node) {
 			nn, _ := tab.bond(false, n.ID, n.addr(), uint16(n.TCP))
+			tab.wg.Done()
 			rc <- nn
 		}(nodes[i])
 	}
@@ -417,7 +433,20 @@ func (tab *Table) bond(pinged bool, id NodeID, addr *net.UDPAddr, tcpPort uint16
 func (tab *Table) pingpong(w *bondproc, pinged bool, id NodeID, addr *net.UDPAddr, tcpPort uint16) {
 	// Request a bonding slot to limit network usage
 	<-tab.bondslots
-	defer func() { tab.bondslots <- struct{}{} }()
+	ok := true
+	go func() {
+		select {
+		case <-w.done:
+		case <-tab.bondslots:
+		case <-tab.closing:
+			ok = false
+		}
+	}()
+	defer func() {
+		if ok {
+			tab.bondslots <- struct{}{}
+		}
+	}()
 
 	// Ping the remote side and wait for a pong
 	if w.err = tab.ping(id, addr); w.err != nil {

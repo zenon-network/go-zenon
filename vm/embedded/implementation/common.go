@@ -85,6 +85,7 @@ func checkAndPerformUpdateEpoch(context vm_context.AccountVmContext, epoch *defi
 // the users will call this method to receive the tokens.
 type CollectRewardMethod struct {
 	MethodName string
+	Plasma     uint64
 }
 
 func addReward(context vm_context.AccountVmContext, epoch uint64, reward definition.RewardDeposit) {
@@ -104,7 +105,7 @@ func addReward(context vm_context.AccountVmContext, epoch uint64, reward definit
 
 func (p *CollectRewardMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	// in case of sentinels it issues 2 rewards, but it's not called enough to cause issues
-	return plasmaTable.EmbeddedSimple + plasmaTable.EmbeddedWWithdraw, nil
+	return p.Plasma, nil
 }
 func (p *CollectRewardMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
@@ -298,5 +299,138 @@ func (p *DonateMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 		return nil, err
 	}
 	commonLog.Info("received donation", "embedded", sendBlock.ToAddress, "from-address", sendBlock.Address, "zts", sendBlock.TokenStandard, "amount", sendBlock.Amount)
+	return nil, nil
+}
+
+type VoteByNameMethod struct {
+	MethodName string
+}
+
+func (p *VoteByNameMethod) Fee() (*big.Int, error) {
+	return big.NewInt(0), nil
+}
+func (p *VoteByNameMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+	return plasmaTable.EmbeddedSimple, nil
+}
+func (p *VoteByNameMethod) ValidateSendBlock(block *nom.AccountBlock) error {
+	var err error
+
+	param := new(definition.PillarVote)
+	if err := definition.ABICommon.UnpackMethod(param, p.MethodName, block.Data); err != nil {
+		return constants.ErrUnpackError
+	}
+
+	if param.Vote >= definition.VoteNotValid {
+		return constants.ErrForbiddenParam
+	}
+
+	if block.Amount.Sign() != 0 {
+		return constants.ErrInvalidTokenOrAmount
+	}
+
+	block.Data, err = definition.ABICommon.PackMethod(p.MethodName, param.Id, param.Name, param.Vote)
+	return err
+}
+func (p *VoteByNameMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+	if err := p.ValidateSendBlock(sendBlock); err != nil {
+		return nil, err
+	}
+
+	param := new(definition.PillarVote)
+	if err := definition.ABICommon.UnpackMethod(param, p.MethodName, sendBlock.Data); err != nil {
+		return nil, constants.ErrUnpackError
+	}
+
+	if _, err := definition.GetVotableHash(context.Storage(), param.Id); err == constants.ErrDataNonExistent {
+		return nil, err
+	} else {
+		common.DealWithErr(err)
+	}
+
+	pillarList, err := context.MomentumStore().GetActivePillars()
+	common.DealWithErr(err)
+
+	ok := false
+	for _, pillar := range pillarList {
+		if pillar.Name == param.Name && pillar.StakeAddress == sendBlock.Address {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		commonLog.Debug("unable to find pillar", "param", param, "send-block-address", sendBlock.Address)
+		return nil, constants.ErrForbiddenParam
+	}
+
+	param.Save(context.Storage())
+
+	commonLog.Debug("voted for hash", "pillar-vote", param)
+	return nil, nil
+}
+
+type VoteByProdAddressMethod struct {
+	MethodName string
+}
+
+func (p *VoteByProdAddressMethod) Fee() (*big.Int, error) {
+	return big.NewInt(0), nil
+}
+func (p *VoteByProdAddressMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+	return plasmaTable.EmbeddedSimple, nil
+}
+func (p *VoteByProdAddressMethod) ValidateSendBlock(block *nom.AccountBlock) error {
+	var err error
+
+	param := new(definition.PillarVote)
+	if err := definition.ABICommon.UnpackMethod(param, p.MethodName, block.Data); err != nil {
+		return constants.ErrUnpackError
+	}
+
+	if param.Vote >= definition.VoteNotValid {
+		return constants.ErrForbiddenParam
+	}
+
+	if block.Amount.Sign() != 0 {
+		return constants.ErrInvalidTokenOrAmount
+	}
+
+	block.Data, err = definition.ABICommon.PackMethod(p.MethodName, param.Id, param.Vote)
+	return err
+}
+func (p *VoteByProdAddressMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+	if err := p.ValidateSendBlock(sendBlock); err != nil {
+		return nil, err
+	}
+
+	param := new(definition.PillarVote)
+	if err := definition.ABICommon.UnpackMethod(param, p.MethodName, sendBlock.Data); err != nil {
+		return nil, constants.ErrUnpackError
+	}
+
+	if _, err := definition.GetVotableHash(context.Storage(), param.Id); err == constants.ErrDataNonExistent {
+		return nil, err
+	} else {
+		common.DealWithErr(err)
+	}
+
+	pillarList, err := context.MomentumStore().GetActivePillars()
+	common.DealWithErr(err)
+
+	ok := false
+	for _, pillar := range pillarList {
+		if pillar.BlockProducingAddress == sendBlock.Address {
+			param.Name = pillar.Name
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		commonLog.Debug("unable to find pillar", "param", param, "send-block-address", sendBlock.Address)
+		return nil, constants.ErrForbiddenParam
+	}
+
+	param.Save(context.Storage())
+
+	commonLog.Debug("voted for hash", "pillar-vote", param)
 	return nil, nil
 }

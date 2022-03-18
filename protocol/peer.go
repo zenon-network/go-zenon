@@ -346,7 +346,7 @@ func (ps *peerSet) BestPeer() *peer {
 		bestTd   uint64
 	)
 	for _, p := range ps.peers {
-		if td := p.Td(); bestPeer == nil || bestTd > td {
+		if td := p.Td(); bestPeer == nil || bestTd < td {
 			bestPeer, bestTd = p, td
 		}
 	}

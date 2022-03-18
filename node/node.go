@@ -81,18 +81,19 @@ func NewNode(conf *Config) (*Node, error) {
 	}
 
 	node.server = &p2p.Server{
-		PrivateKey:      netConfig.PrivateKey(),
-		Name:            netConfig.Name,
-		MaxPeers:        netConfig.MaxPeers,
-		MaxPendingPeers: netConfig.MaxPendingPeers,
-		Discovery:       true,
-		NoDial:          false,
-		StaticNodes:     nodes,
-		BootstrapNodes:  nodes,
-		TrustedNodes:    nodes,
-		NodeDatabase:    netConfig.NodeDatabase,
-		ListenAddr:      fmt.Sprintf("%v:%v", netConfig.ListenAddr, netConfig.ListenPort),
-		Protocols:       node.z.Protocol().SubProtocols,
+		PrivateKey:        netConfig.PrivateKey(),
+		Name:              netConfig.Name,
+		MaxPeers:          netConfig.MaxPeers,
+		MinConnectedPeers: netConfig.MinConnectedPeers,
+		MaxPendingPeers:   netConfig.MaxPendingPeers,
+		Discovery:         true,
+		NoDial:            false,
+		StaticNodes:       nil,
+		BootstrapNodes:    nodes,
+		TrustedNodes:      nil,
+		NodeDatabase:      netConfig.NodeDatabase,
+		ListenAddr:        fmt.Sprintf("%v:%v", netConfig.ListenAddr, netConfig.ListenPort),
+		Protocols:         node.z.Protocol().SubProtocols,
 	}
 	return node, nil
 }

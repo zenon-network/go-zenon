@@ -1,6 +1,8 @@
 package zenon
 
 import (
+	"github.com/syndtr/goleveldb/leveldb"
+
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/pillar"
@@ -21,6 +23,7 @@ type zenon struct {
 	consensus   consensus.Consensus
 	evPrinter   EventPrinter
 	broadcaster protocol.Broadcaster
+	levelDb     *leveldb.DB
 }
 
 func NewZenon(cfg *Config) (Zenon, error) {
@@ -29,8 +32,10 @@ func NewZenon(cfg *Config) (Zenon, error) {
 	}
 
 	z.chain = chain.NewChain(cfg.NewDBManager("nom"), cfg.GenesisConfig)
-	z.consensus = consensus.NewConsensus(cfg.NewLevelDB("consensus"), z.chain, false)
+	db, levelDb := cfg.NewLevelDB("consensus")
+	z.consensus = consensus.NewConsensus(db, z.chain, false)
 	z.verifier = verifier.NewVerifier(z.chain, z.consensus)
+	z.levelDb = levelDb
 
 	chainBridge := protocol.NewChainBridge(z.chain, z.consensus, z.verifier, vm.NewSupervisor(z.chain, z.consensus))
 	z.protocol = protocol.NewProtocolManager(cfg.MinPeers, z.chain.ChainIdentifier(), chainBridge)
@@ -80,18 +85,18 @@ func (z *zenon) Start() error {
 	if err := z.subscribe.Start(); err != nil {
 		return err
 	}
-	z.protocol.Start()
 	if err := z.pillar.Start(); err != nil {
 		return err
 	}
+	z.protocol.Start()
 
 	return nil
 }
 func (z *zenon) Stop() error {
+	z.protocol.Stop()
 	if err := z.pillar.Stop(); err != nil {
 		return err
 	}
-	z.protocol.Stop()
 	if err := z.subscribe.Stop(); err != nil {
 		return err
 	}
@@ -102,6 +107,9 @@ func (z *zenon) Stop() error {
 		return err
 	}
 	if err := z.chain.Stop(); err != nil {
+		return err
+	}
+	if err := z.levelDb.Close(); err != nil {
 		return err
 	}
 

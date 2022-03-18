@@ -24,6 +24,11 @@ var (
 	ErrUpdateTooRecent      = errors.New("last update was too recent")
 	ErrEpochUpdateTooRecent = errors.New("epoch update was too recent")
 
+	// Accelerator
+	ErrAcceleratorEnded        = errors.New("accelerator period ended")
+	ErrAcceleratorInvalidFunds = errors.New("invalid accelerator funds")
+	ErrInvalidDescription      = errors.New("invalid description")
+
 	// Pillar
 	ErrInvalidName = errors.New("invalid name")
 	ErrNotUnique   = errors.New("name or producing address not unique")

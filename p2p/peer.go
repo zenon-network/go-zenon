@@ -110,6 +110,7 @@ func (p *Peer) Disconnect(reason DiscReason) {
 	select {
 	case p.disc <- reason:
 	case <-p.closed:
+		return
 	}
 }
 
@@ -138,9 +139,18 @@ func (p *Peer) run() DiscReason {
 		reason     DiscReason
 		requested  bool
 	)
-	p.wg.Add(2)
-	go p.readLoop(readErr)
-	go p.pingLoop()
+
+	p.wg.Add(1)
+	go func() {
+		p.readLoop(readErr)
+		p.wg.Done()
+	}()
+
+	p.wg.Add(1)
+	go func() {
+		p.pingLoop()
+		p.wg.Done()
+	}()
 
 	// Start all protocol handlers.
 	writeStart <- struct{}{}
@@ -179,9 +189,11 @@ loop:
 		}
 	}
 
-	close(p.closed)
 	p.rw.close(reason)
-	p.wg.Wait()
+	close(p.closed)
+	common.P2PLogger.Debug("wg.Wait() peer.run()")
+	// p.wg.Wait()
+	common.P2PLogger.Debug("wg.Wait() peer.run() finished")
 	if requested {
 		reason = DiscRequested
 	}
@@ -190,7 +202,6 @@ loop:
 
 func (p *Peer) pingLoop() {
 	ping := time.NewTicker(pingInterval)
-	defer p.wg.Done()
 	defer ping.Stop()
 	for {
 		select {
@@ -206,7 +217,6 @@ func (p *Peer) pingLoop() {
 }
 
 func (p *Peer) readLoop(errc chan<- error) {
-	defer p.wg.Done()
 	for {
 		msg, err := p.rw.ReadMsg()
 		if err != nil {
@@ -225,7 +235,11 @@ func (p *Peer) handle(msg Msg) error {
 	switch {
 	case msg.Code == pingMsg:
 		msg.Discard()
-		go SendItems(p.rw, pongMsg)
+		p.wg.Add(1)
+		go func() {
+			SendItems(p.rw, pongMsg)
+			p.wg.Done()
+		}()
 	case msg.Code == discMsg:
 		var reason [1]DiscReason
 		// This is the last message. We don't need to discard or
@@ -298,6 +312,7 @@ func (p *Peer) startProtocols(writeStart <-chan struct{}, writeErr chan<- error)
 		common.P2PLogger.Debug(fmt.Sprintf("%v: Starting protocol %s/%d\n", p, proto.Name, proto.Version))
 		go func() {
 			err := proto.Run(p, proto)
+			p.wg.Done()
 			if err == nil {
 				common.P2PLogger.Debug(fmt.Sprintf("%v: Protocol %s/%d returned\n", p, proto.Name, proto.Version))
 				err = errors.New("protocol returned")
@@ -305,7 +320,6 @@ func (p *Peer) startProtocols(writeStart <-chan struct{}, writeErr chan<- error)
 				common.P2PLogger.Debug(fmt.Sprintf("%v: Protocol %s/%d error: %v\n", p, proto.Name, proto.Version, err))
 			}
 			p.protoErr <- err
-			p.wg.Done()
 		}()
 	}
 }

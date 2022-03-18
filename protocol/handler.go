@@ -102,7 +102,8 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 		return nil
 	}
 	heighter := func() uint64 {
-		return manager.chainman.CurrentBlock().Height
+		momentum := manager.chainman.CurrentBlock()
+		return momentum.Height
 	}
 	manager.fetcher = fetcher.New(
 		manager.chainman.GetBlock,
@@ -136,8 +137,15 @@ func (pm *ProtocolManager) removePeer(id string) {
 
 func (pm *ProtocolManager) Start() {
 	// start sync handlers
-	go pm.syncer()
-	go pm.txsyncLoop()
+	pm.wg.Add(1)
+	go func() {
+		pm.syncer()
+		pm.wg.Done()
+	}()
+
+	go func() {
+		pm.txsyncLoop()
+	}()
 }
 
 func (pm *ProtocolManager) Stop() {
@@ -199,6 +207,13 @@ func (pm *ProtocolManager) handle(p *peer) error {
 // peer. The remote connection is torn down upon returning any error.
 func (pm *ProtocolManager) handleMsg(p *peer) error {
 	// Read the next message from the remote peer, and ensure it's fully consumed
+	go func() {
+		select {
+		case <-pm.quitSync:
+			p.Disconnect(ErrNoStatusMsg)
+		}
+	}()
+
 	msg, err := p.rw.ReadMsg()
 	if err != nil {
 		return err
@@ -384,12 +399,16 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		p.MarkBlock(detailed.Momentum.Hash)
 		p.SetHead(detailed.Momentum.Hash)
 
-		pm.fetcher.Enqueue(p.id, detailed)
+		if pm.SyncInfo().State == SyncDone {
+			pm.fetcher.Enqueue(p.id, detailed)
 
-		// TODO: Schedule a sync to cover potential gaps (this needs proto update)
-		if detailed.Momentum.Height > p.Td() {
-			p.SetTd(detailed.Momentum.Height)
-			go pm.synchronise(p)
+			// TODO: Schedule a sync to cover potential gaps (this needs proto update)
+			if detailed.Momentum.Height > p.Td() {
+				p.SetTd(detailed.Momentum.Height)
+				go func() {
+					pm.synchronise(p)
+				}()
+			}
 		}
 
 	case TxMsg:
@@ -405,9 +424,9 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 			}
 			p.MarkTransaction(tx.Hash)
 		}
-
+		pm.wg.Add(1)
 		pm.txpool.AddAccountBlocks(txs)
-
+		pm.wg.Done()
 	default:
 		return errResp(ErrInvalidMsgCode, "%v", msg.Code)
 	}

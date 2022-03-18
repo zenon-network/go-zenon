@@ -31,7 +31,7 @@ func (w *worker) updateContracts(momentumStore store.Momentum) error {
 			} else {
 				w.broadcaster.CreateAccountBlock(block)
 			}
-		} else if err == constants.ErrUpdateTooRecent {
+		} else if err == constants.ErrUpdateTooRecent || err == constants.ErrContractMethodNotFound {
 		} else {
 			return err
 		}

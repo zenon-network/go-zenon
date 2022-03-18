@@ -1,6 +1,8 @@
 package db
 
 import (
+	"runtime"
+
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 	"github.com/syndtr/goleveldb/leveldb/opt"
@@ -8,6 +10,17 @@ import (
 
 	"github.com/zenon-network/go-zenon/common"
 )
+
+func getConsensusOpenFilesCacheCapacity() int {
+	switch runtime.GOOS {
+	case "darwin":
+		return 20
+	case "windows":
+		return 200
+	default:
+		return 200
+	}
+}
 
 type LevelDBLikeRO interface {
 	Get(key []byte, ro *opt.ReadOptions) (value []byte, err error)
@@ -86,8 +99,9 @@ func NewLevelDBWrapper(db *leveldb.DB) DB {
 		})
 }
 
-func NewLevelDB(dirname string) DB {
-	db, err := leveldb.OpenFile(dirname, nil)
+func NewLevelDB(dirname string) (DB, *leveldb.DB) {
+	opts := &opt.Options{OpenFilesCacheCapacity: getConsensusOpenFilesCacheCapacity()}
+	db, err := leveldb.OpenFile(dirname, opts)
 	common.DealWithErr(err)
-	return NewLevelDBWrapper(db)
+	return NewLevelDBWrapper(db), db
 }

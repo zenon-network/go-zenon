@@ -1,3 +1,5 @@
+// +build !libznn
+
 package main
 
 import (

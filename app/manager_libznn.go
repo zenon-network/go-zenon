@@ -1,13 +1,11 @@
-//go:build !libznn
-// +build !libznn
+//go:build libznn
+// +build libznn
 
 package app
 
 import (
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"gopkg.in/urfave/cli.v1"
 
@@ -58,29 +56,6 @@ func (nodeManager *Manager) Start() error {
 		}
 	}
 
-	// Listening event closes the node
-	go func() {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
-		defer signal.Stop(c)
-		<-c
-		fmt.Println("Shutting down znnd")
-
-		go func() {
-			nodeManager.Stop()
-		}()
-
-		for i := 10; i > 0; i-- {
-			<-c
-			if i > 1 {
-				log.Warn("Please DO NOT interrupt the shutdown process, panic may occur.", "times", i-1)
-			}
-		}
-	}()
-
-	// Waiting for node to close
-	nodeManager.node.Wait()
-
 	return nil
 }
 func (nodeManager *Manager) Stop() error {
@@ -89,5 +64,9 @@ func (nodeManager *Manager) Stop() error {
 	if err := nodeManager.node.Stop(); err != nil {
 		log.Error("Failed to stop node", "reason", err)
 	}
+
+	// Waiting for node to close
+	nodeManager.node.Wait()
+
 	return nil
 }

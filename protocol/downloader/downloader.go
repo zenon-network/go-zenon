@@ -136,6 +136,8 @@ type Downloader struct {
 
 	cancelCh   chan struct{} // Channel to cancel mid-flight syncs
 	cancelLock sync.RWMutex  // Lock to protect the cancel channel in delivers
+
+	wg sync.WaitGroup
 }
 
 // Block is an origin-tagged blockchain block.
@@ -316,8 +318,13 @@ func (d *Downloader) syncWithPeer(p *peer, hash types.Hash, td uint64) (err erro
 			return err
 		}
 		errc := make(chan error, 2)
-		go func() { errc <- d.fetchHashes(p, td, number+1) }()
-		go func() { errc <- d.fetchBlocks(number + 1) }()
+		go func() {
+			errc <- d.fetchHashes(p, td, number+1)
+		}()
+
+		go func() {
+			errc <- d.fetchBlocks(number + 1)
+		}()
 
 		// If any fetcher fails, cancel the other
 		if err := <-errc; err != nil {
@@ -358,6 +365,7 @@ func (d *Downloader) cancel() {
 func (d *Downloader) Terminate() {
 	atomic.StoreInt32(&d.interrupt, 1)
 	d.cancel()
+	d.wg.Wait()
 }
 
 // findAncestor tries to locate the common ancestor block of the local chain and
@@ -487,11 +495,11 @@ func (d *Downloader) fetchHashes(p *peer, td uint64, from uint64) error {
 		log.Debug("fetching hashes", "peer", p, MaxHashFetch, from)
 
 		go p.getAbsHashes(from, MaxHashFetch)
+
 		timeout.Reset(hashTTL)
 	}
 	// Start pulling hashes, until all are exhausted
 	getHashes(from)
-	//gotHashes := false
 
 	for {
 		select {
@@ -514,26 +522,8 @@ func (d *Downloader) fetchHashes(p *peer, td uint64, from uint64) error {
 				case d.processCh <- false:
 				case <-d.cancelCh:
 				}
-				// If no hashes were retrieved at all, the peer violated it's TD promise that it had a
-				// better chain compared to ours. The only exception is if it's promised blocks were
-				// already imported by other means (e.g. fecher):
-				//
-				// R <remote peer>, L <local node>: Both at block 10
-				// R: Mine block 11, and propagate it to L
-				// L: Queue block 11 for import
-				// L: Notice that R's head and TD increased compared to ours, start sync
-				// L: Import of block 11 finishes
-				// L: Sync begins, and finds common ancestor at 11
-				// L: Request new hashes up from 11 (R's TD was higher, it must have something)
-				// R: Nothing to give
-
-				// TODO: fix this
-				//if !gotHashes && td.Cmp(d.headBlock().Td) > 0 {
-				//	return errStallingPeer
-				//}
 				return nil
 			}
-			//gotHashes = true
 
 			// Otherwise insert all the new hashes, aborting in case of junk
 			log.Debug("inserting momentums", "peer", p, "num-momentums", len(hashPack.hashes), "from-height", from)
@@ -604,7 +594,11 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 					peer.Promote()
 					peer.SetIdle()
 					log.Debug("delivered blocks", "peer", peer, "num-blocks", len(blockPack.blocks))
-					go d.process()
+					d.wg.Add(1)
+					go func() {
+						d.process()
+						d.wg.Done()
+					}()
 
 				case errInvalidChain:
 					// The hash chain is invalid (blocks are not ordered properly), abort
@@ -630,7 +624,11 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 					peer.Demote()
 					peer.SetIdle()
 					log.Debug("delivery partially failed", "peer", peer, "reason", err)
-					go d.process()
+					d.wg.Add(1)
+					go func() {
+						d.process()
+						d.wg.Done()
+					}()
 				}
 			}
 			// Blocks arrived, try to update the progress
@@ -699,7 +697,7 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 			}
 			// Make sure that we have peers available for fetching. If all peers have been tried
 			// and all failed throw an error
-			if !d.queue.Throttle() && d.queue.InFlight() == 0 {
+			if !d.queue.Throttle() && d.queue.InFlight() == 0 && ((len(d.queue.blockCache)/2)-len(d.queue.blockPool)) > 0 {
 				return errPeersUnavailable
 			}
 		}

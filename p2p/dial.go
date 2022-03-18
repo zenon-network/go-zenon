@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/zenon-network/go-zenon/common"
@@ -47,18 +48,18 @@ type dialstate struct {
 	lookupRunning bool
 	bootstrapped  bool
 
-	dialing     map[discover.NodeID]connFlag
 	lookupBuf   []*discover.Node // current discovery lookup results
 	randomNodes []*discover.Node // filled from Table
 	static      map[discover.NodeID]*discover.Node
 	hist        *dialHistory
+	dialing     *dialHistory
 }
 
 type discoverTable interface {
 	Self() *discover.Node
 	Close()
 	Bootstrap([]*discover.Node)
-	Lookup(target discover.NodeID) []*discover.Node
+	Lookup(target discover.NodeID, wg *sync.WaitGroup, forceSeed bool) []*discover.Node
 	ReadRandomNodes([]*discover.Node) int
 }
 
@@ -103,7 +104,7 @@ func newDialState(static []*discover.Node, ntab discoverTable, maxdyn int) *dial
 		maxDynDials: maxdyn,
 		ntab:        ntab,
 		static:      make(map[discover.NodeID]*discover.Node),
-		dialing:     make(map[discover.NodeID]connFlag),
+		dialing:     new(dialHistory),
 		randomNodes: make([]*discover.Node, maxdyn/2),
 		hist:        new(dialHistory),
 	}
@@ -120,11 +121,10 @@ func (s *dialstate) addStatic(n *discover.Node) {
 func (s *dialstate) newTasks(nRunning int, peers map[discover.NodeID]*Peer, now time.Time) []task {
 	var newtasks []task
 	addDial := func(flag connFlag, n *discover.Node) bool {
-		_, dialing := s.dialing[n.ID]
-		if dialing || peers[n.ID] != nil || s.hist.contains(n.ID) {
+		if s.dialing.contains(n.ID) || peers[n.ID] != nil || s.hist.contains(n.ID) {
 			return false
 		}
-		s.dialing[n.ID] = flag
+		s.dialing.add(n.ID, now.Add(dialHistoryExpiration*10))
 		newtasks = append(newtasks, &dialTask{flags: flag, dest: n})
 		return true
 	}
@@ -136,14 +136,12 @@ func (s *dialstate) newTasks(nRunning int, peers map[discover.NodeID]*Peer, now 
 			needDynDials--
 		}
 	}
-	for _, flag := range s.dialing {
-		if flag&dynDialedConn != 0 {
-			needDynDials--
-		}
-	}
+
+	needDynDials = needDynDials - s.dialing.Len()
 
 	// Expire the dial history on every invocation.
 	s.hist.expire(now)
+	s.dialing.expire(now)
 
 	// Create dials for static nodes if they are not connected.
 	for _, n := range s.static {
@@ -193,7 +191,7 @@ func (s *dialstate) taskDone(t task, now time.Time) {
 	switch t := t.(type) {
 	case *dialTask:
 		s.hist.add(t.dest.ID, now.Add(dialHistoryExpiration))
-		delete(s.dialing, t.dest.ID)
+		s.dialing.remove(t.dest.ID)
 	case *discoverTask:
 		if t.bootstrap {
 			s.bootstrapped = true
@@ -234,7 +232,7 @@ func (t *discoverTask) Do(srv *Server) {
 	srv.lastLookup = time.Now()
 	var target discover.NodeID
 	rand.Read(target[:])
-	t.results = srv.ntab.Lookup(target)
+	t.results = srv.ntab.Lookup(target, &srv.loopWG, false)
 }
 
 func (t *discoverTask) String() (s string) {
@@ -262,6 +260,18 @@ func (h dialHistory) min() pastDial {
 }
 func (h *dialHistory) add(id discover.NodeID, exp time.Time) {
 	heap.Push(h, pastDial{id, exp})
+}
+func (h *dialHistory) remove(id discover.NodeID) {
+	if h.Len() == 0 {
+		return
+	}
+
+	for i, v := range *h {
+		if v.id == id {
+			heap.Remove(h, i)
+			break
+		}
+	}
 }
 func (h dialHistory) contains(id discover.NodeID) bool {
 	for _, v := range h {

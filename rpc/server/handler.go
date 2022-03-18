@@ -281,7 +281,11 @@ func (h *handler) handleResponse(msg *jsonrpcMessage) {
 		return
 	}
 	if op.err = json.Unmarshal(msg.Result, &op.sub.subid); op.err == nil {
-		go op.sub.run()
+		h.callWG.Add(1)
+		go func() {
+			op.sub.run()
+			h.callWG.Done()
+		}()
 		h.clientSubs[op.sub.subid] = op.sub
 	}
 }

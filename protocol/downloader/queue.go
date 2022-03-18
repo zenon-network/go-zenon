@@ -32,7 +32,7 @@ import (
 )
 
 var (
-	blockCacheLimit = 8 * MaxBlockFetch // Maximum number of blocks to cache before throttling the download
+	blockCacheLimit = 32 * MaxBlockFetch // Maximum number of blocks to cache before throttling the download
 )
 
 var (
@@ -241,7 +241,11 @@ func (q *queue) Reserve(p *peer, count int) *fetchRequest {
 		return nil
 	}
 	// Calculate an upper limit on the hashes we might fetch (i.e. throttling)
-	space := len(q.blockCache) - len(q.blockPool)
+	space := (len(q.blockCache) / 2) - len(q.blockPool)
+	if space == 0 {
+		return nil
+	}
+	
 	for _, request := range q.pendPool {
 		space -= len(request.Hashes)
 	}

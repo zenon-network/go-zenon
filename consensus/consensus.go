@@ -102,11 +102,11 @@ func (cs *consensus) Start() error {
 
 	// enable
 	if cs.testing == false {
+		cs.wg.Add(1)
 		go func() {
 			defer common.RecoverStack()
-			cs.wg.Add(1)
-			defer cs.wg.Done()
 			cs.work()
+			cs.wg.Done()
 		}()
 	}
 

@@ -24,7 +24,7 @@ func aesGCMEncrypt(key, inText []byte) (outText, nonce []byte, err error) {
 		return nil, nil, err
 	}
 
-	nonce = getEntropyCSPRNG(12)
+	nonce = GetEntropyCSPRNG(12)
 
 	outText = stream.Seal(nil, nonce, inText, []byte(gcmAdditionData))
 	return outText, nonce, err
@@ -47,7 +47,7 @@ func aesGCMDecrypt(key, cipherText, nonce []byte) ([]byte, error) {
 
 	return outText, err
 }
-func getEntropyCSPRNG(n int) []byte {
+func GetEntropyCSPRNG(n int) []byte {
 	mainBuff := make([]byte, n)
 	_, err := io.ReadFull(rand.Reader, mainBuff)
 	if err != nil {

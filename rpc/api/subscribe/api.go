@@ -68,6 +68,8 @@ type Server struct {
 	mCh           chan *Momentum
 	stopped       chan struct{}
 	subscriptions map[SubscriptionType]map[rpc.ID]*Subscription
+
+	wg sync.WaitGroup
 }
 
 func GetSubscribeServer(chain chain.Chain) *Server {
@@ -116,7 +118,11 @@ func (s *Server) Start() error {
 	defer s.log.Info("finish start")
 	s.started = true
 	s.chain.Register(s)
-	go s.work()
+	s.wg.Add(1)
+	go func() {
+		s.work()
+		s.wg.Done()
+	}()
 	return nil
 }
 func (s *Server) Stop() error {
@@ -125,6 +131,10 @@ func (s *Server) Stop() error {
 	s.started = false
 	s.chain.UnRegister(s)
 	close(s.stopped)
+	singleton = nil
+	s.log.Debug("wg.Wait() api Server.Stop()")
+	s.wg.Wait()
+	s.log.Debug("wg.Wait() api Server.Stop() finish")
 	return nil
 }
 

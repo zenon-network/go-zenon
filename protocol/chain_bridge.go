@@ -92,8 +92,10 @@ func (c chainBridge) GetBlock(hash types.Hash) *nom.DetailedMomentum {
 	}
 }
 func (c chainBridge) CurrentBlock() *nom.Momentum {
-	momentum, err := c.chain.GetFrontierMomentumStore().GetFrontierMomentum()
+	store := c.chain.GetFrontierMomentumStore()
+	momentum, err := store.GetFrontierMomentum()
 	common.DealWithErr(err)
+	
 	return momentum
 }
 func (c chainBridge) GetBlockByNumber(num uint64) (*nom.Momentum, error) {

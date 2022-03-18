@@ -41,9 +41,10 @@ type NetConfig struct {
 	ListenHost string
 	ListenPort int
 
-	MinPeers        int
-	MaxPeers        int
-	MaxPendingPeers int
+	MinPeers          int
+	MinConnectedPeers int
+	MaxPeers          int
+	MaxPendingPeers   int
 
 	Seeders []string
 }
@@ -103,10 +104,11 @@ func (c *Config) makeZenonConfig(walletManager *wallet.Manager) (*zenon.Config, 
 	}
 
 	return &zenon.Config{
-		MinPeers:         c.Net.MinPeers,
-		ProducingKeyPair: pillarCoinbase,
-		GenesisConfig:    c.makeGenesisConfig(),
-		DataDir:          c.DataPath,
+		MinPeers:          c.Net.MinPeers,
+		MinConnectedPeers: c.Net.MinConnectedPeers,
+		ProducingKeyPair:  pillarCoinbase,
+		GenesisConfig:     c.makeGenesisConfig(),
+		DataDir:           c.DataPath,
 	}, nil
 }
 func (c *Config) makeGenesisConfig() (genesisConfig store.Genesis) {
@@ -190,14 +192,15 @@ func (c *Config) makeNetConfig() *p2p.Net {
 	privateKeyFile := filepath.Join(c.DataPath, p2p.DefaultNetPrivateKeyFile)
 
 	return &p2p.Net{
-		PrivateKeyFile:  privateKeyFile,
-		MaxPeers:        c.Net.MaxPeers,
-		MaxPendingPeers: c.Net.MaxPendingPeers,
-		Name:            fmt.Sprintf("%v %v", metadata.Version, c.Name),
-		Seeders:         c.Net.Seeders,
-		NodeDatabase:    networkDataDir,
-		ListenAddr:      c.Net.ListenHost,
-		ListenPort:      c.Net.ListenPort,
+		PrivateKeyFile:    privateKeyFile,
+		MaxPeers:          c.Net.MaxPeers,
+		MaxPendingPeers:   c.Net.MaxPendingPeers,
+		MinConnectedPeers: c.Net.MinConnectedPeers,
+		Name:              fmt.Sprintf("%v %v", metadata.Version, c.Name),
+		Seeders:           c.Net.Seeders,
+		NodeDatabase:      networkDataDir,
+		ListenAddr:        c.Net.ListenHost,
+		ListenPort:        c.Net.ListenPort,
 	}
 }
 func (c *Config) HTTPEndpoint() string {

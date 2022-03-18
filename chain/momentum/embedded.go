@@ -10,7 +10,7 @@ import (
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
-func (ms *momentumStore) getActivePillars() ([]*definition.PillarInfo, error) {
+func (ms *momentumStore) GetActivePillars() ([]*definition.PillarInfo, error) {
 	sd, err := ms.getEmbeddedStore(types.PillarContract)
 	if err != nil {
 		return nil, fmt.Errorf("getEmbeddedStore failed: %w", err)
@@ -64,7 +64,7 @@ func (ms *momentumStore) ComputePillarDelegations() ([]*types.PillarDelegationDe
 	}
 
 	// query register info
-	registerList, _ := ms.getActivePillars()
+	registerList, _ := ms.GetActivePillars()
 	pillarDelegationDetails := make([]*types.PillarDelegationDetail, 0, len(registerList))
 	for _, registration := range registerList {
 		pillarDelegationDetails = append(pillarDelegationDetails, &types.PillarDelegationDetail{

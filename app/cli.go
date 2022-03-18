@@ -15,8 +15,9 @@ import (
 )
 
 var (
-	log = common.ZenonLogger.New()
-	app = cli.NewApp()
+	log         = common.ZenonLogger.New()
+	app         = cli.NewApp()
+	nodeManager *Manager
 )
 
 func Run() {
@@ -25,6 +26,12 @@ func Run() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func Stop() {
+	err := nodeManager.Stop()
+	common.DealWithErr(err)
+	fmt.Println("znnd successfully stopped")
 }
 
 func init() {
@@ -71,8 +78,8 @@ func action(ctx *cli.Context) error {
 	if args := ctx.Args(); len(args) > 0 {
 		return fmt.Errorf("invalid command: %q", args[0])
 	}
-
-	nodeManager, err := NewNodeManager(ctx)
+	var err error
+	nodeManager, err = NewNodeManager(ctx)
 	if err != nil {
 		return err
 	}

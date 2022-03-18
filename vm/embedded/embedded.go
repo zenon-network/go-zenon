@@ -32,8 +32,33 @@ type embeddedImplementation struct {
 }
 
 var (
-	originEmbedded = getOrigin()
+	originEmbedded      = getOrigin()
+	acceleratorEmbedded = getAccelerator()
 )
+
+func getAccelerator() map[types.Address]*embeddedImplementation {
+	contracts := getOrigin()
+	contracts[types.AcceleratorContract] = &embeddedImplementation{
+		map[string]Method{
+			cabi.DonateMethodName:        &implementation.DonateMethod{cabi.DonateMethodName},
+			cabi.CreateProjectMethodName: &implementation.CreateProjectMethod{cabi.CreateProjectMethodName},
+			cabi.AddPhaseMethodName:      &implementation.AddPhaseMethod{cabi.AddPhaseMethodName},
+			cabi.UpdateMethodName:        &implementation.UpdateEmbeddedAcceleratorMethod{cabi.UpdateMethodName},
+			cabi.UpdatePhaseMethodName:   &implementation.UpdatePhaseMethod{cabi.UpdatePhaseMethodName},
+			// common
+			cabi.VoteByNameMethodName:        &implementation.VoteByNameMethod{cabi.VoteByNameMethodName},
+			cabi.VoteByProdAddressMethodName: &implementation.VoteByProdAddressMethod{cabi.VoteByProdAddressMethodName},
+		},
+		cabi.ABIAccelerator,
+	}
+	contracts[types.PillarContract].m[cabi.CollectRewardMethodName] = &implementation.CollectRewardMethod{cabi.CollectRewardMethodName, constants.AlphanetPlasmaTable.EmbeddedSimple}
+	contracts[types.SentinelContract].m[cabi.CollectRewardMethodName] = &implementation.CollectRewardMethod{cabi.CollectRewardMethodName, constants.AlphanetPlasmaTable.EmbeddedSimple}
+	contracts[types.StakeContract].m[cabi.CollectRewardMethodName] = &implementation.CollectRewardMethod{cabi.CollectRewardMethodName, constants.AlphanetPlasmaTable.EmbeddedSimple}
+	contracts[types.LiquidityContract].m[cabi.FundMethodName] = &implementation.FundMethod{cabi.FundMethodName}
+	contracts[types.LiquidityContract].m[cabi.BurnZnnMethodName] = &implementation.BurnZnnMethod{cabi.BurnZnnMethodName}
+
+	return contracts
+}
 
 func getOrigin() map[types.Address]*embeddedImplementation {
 	return map[types.Address]*embeddedImplementation{
@@ -56,7 +81,7 @@ func getOrigin() map[types.Address]*embeddedImplementation {
 				// common
 				cabi.DepositQsrMethodName:    &implementation.DepositQsrMethod{cabi.DepositQsrMethodName},
 				cabi.WithdrawQsrMethodName:   &implementation.WithdrawQsrMethod{cabi.WithdrawQsrMethodName},
-				cabi.CollectRewardMethodName: &implementation.CollectRewardMethod{cabi.CollectRewardMethodName},
+				cabi.CollectRewardMethodName: &implementation.CollectRewardMethod{cabi.CollectRewardMethodName, constants.AlphanetPlasmaTable.EmbeddedSimple + constants.AlphanetPlasmaTable.EmbeddedWWithdraw},
 			},
 			cabi.ABIPillars,
 		},
@@ -77,7 +102,7 @@ func getOrigin() map[types.Address]*embeddedImplementation {
 				// common
 				cabi.DepositQsrMethodName:    &implementation.DepositQsrMethod{cabi.DepositQsrMethodName},
 				cabi.WithdrawQsrMethodName:   &implementation.WithdrawQsrMethod{cabi.WithdrawQsrMethodName},
-				cabi.CollectRewardMethodName: &implementation.CollectRewardMethod{cabi.CollectRewardMethodName},
+				cabi.CollectRewardMethodName: &implementation.CollectRewardMethod{cabi.CollectRewardMethodName, constants.AlphanetPlasmaTable.EmbeddedSimple + constants.AlphanetPlasmaTable.EmbeddedWWithdraw},
 			},
 			cabi.ABISentinel,
 		},
@@ -93,7 +118,7 @@ func getOrigin() map[types.Address]*embeddedImplementation {
 				cabi.CancelStakeMethodName: &implementation.CancelStakeMethod{cabi.CancelStakeMethodName},
 				cabi.UpdateMethodName:      &implementation.UpdateEmbeddedStakeMethod{cabi.UpdateMethodName},
 				// common
-				cabi.CollectRewardMethodName: &implementation.CollectRewardMethod{cabi.CollectRewardMethodName},
+				cabi.CollectRewardMethodName: &implementation.CollectRewardMethod{cabi.CollectRewardMethodName, constants.AlphanetPlasmaTable.EmbeddedSimple + constants.AlphanetPlasmaTable.EmbeddedWWithdraw},
 			},
 			cabi.ABIStake,
 		},
@@ -129,7 +154,12 @@ func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Addres
 		return nil, constants.ErrNotContractAddress
 	}
 
-	contractsMap := originEmbedded
+	var contractsMap map[types.Address]*embeddedImplementation
+	if context.IsAcceleratorSporkEnforced() {
+		contractsMap = acceleratorEmbedded
+	} else {
+		contractsMap = originEmbedded
+	}
 
 	if p, found := contractsMap[address]; found {
 		if method, err := p.abi.MethodById(abiSelector); err == nil {

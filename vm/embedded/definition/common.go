@@ -8,6 +8,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/crypto"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/abi"
@@ -15,6 +16,11 @@ import (
 )
 
 const (
+	VoteYes uint8 = iota
+	VoteNo
+	VoteAbstain
+	VoteNotValid
+
 	jsonCommon = `
 	[	
 		{"type":"variable","name":"lastUpdate","inputs":[{"name":"height","type":"uint64"}]},
@@ -30,12 +36,31 @@ const (
 		{"type":"variable","name":"qsrDeposit","inputs":[
 			{"name":"qsr","type":"uint256"}
 		]},
+		{"type":"variable","name":"pillarVote","inputs":[
+			{"name":"id","type":"hash"},
+			{"name":"name","type":"string"},
+			{"name":"vote","type":"uint8"}
+		]},
+		{"type":"variable","name":"votableHash","inputs":[
+			{"name":"exists","type":"bool"}
+		]},
+
 
 		{"type":"function","name":"Update", "inputs":[]},
 		{"type":"function","name":"CollectReward","inputs":[]},
 		{"type":"function","name":"DepositQsr", "inputs":[]},
 		{"type":"function","name":"WithdrawQsr", "inputs":[]},
-		{"type":"function","name":"Donate", "inputs":[]}
+		{"type":"function","name":"Donate", "inputs":[]},
+
+		{"type":"function","name":"VoteByName","inputs":[
+			{"name":"id","type":"hash"},
+			{"name":"name","type":"string"},
+			{"name":"vote","type":"uint8"}
+		]},
+		{"type":"function","name":"VoteByProdAddress","inputs":[
+			{"name":"id","type":"hash"},
+			{"name":"vote","type":"uint8"}
+		]}
 	]`
 
 	RewardDepositVariableName        = "rewardDeposit"
@@ -43,12 +68,16 @@ const (
 	LastUpdateVariableName           = "lastUpdate"
 	QsrDepositVariableName           = "qsrDeposit"
 	LastEpochUpdateVariableName      = "lastEpochUpdate"
+	PillarVoteVariableName           = "pillarVote"
+	VotableHashVariableName          = "votableHash"
 
-	UpdateMethodName        = "Update"
-	CollectRewardMethodName = "CollectReward"
-	DepositQsrMethodName    = "DepositQsr"
-	WithdrawQsrMethodName   = "WithdrawQsr"
-	DonateMethodName        = "Donate"
+	UpdateMethodName            = "Update"
+	CollectRewardMethodName     = "CollectReward"
+	DepositQsrMethodName        = "DepositQsr"
+	WithdrawQsrMethodName       = "WithdrawQsr"
+	DonateMethodName            = "Donate"
+	VoteByNameMethodName        = "VoteByName"
+	VoteByProdAddressMethodName = "VoteByProdAddress"
 )
 
 var (
@@ -60,6 +89,8 @@ var (
 	qsrDepositKeyPrefix           = []byte{130}
 	lastEpochUpdateKey            = []byte{131}
 	rewardDepositHistoryKeyPrefix = []byte{132}
+	pillarVoteKeyPrefix           = []byte{133}
+	votableHashKeyPrefix          = []byte{134}
 )
 
 type RewardDeposit struct {
@@ -363,4 +394,150 @@ func GetRewardDepositHistory(context db.DB, epoch uint64, address *types.Address
 		}
 		return deposit, err
 	}
+}
+
+type PillarVote struct {
+	Id   types.Hash `json:"id"`
+	Name string     `json:"name"`
+	Vote uint8      `json:"vote"`
+}
+
+func (vote *PillarVote) Save(context db.DB) {
+	common.DealWithErr(context.Put(vote.Key(), vote.Data()))
+}
+func (vote *PillarVote) Delete(context db.DB) {
+	common.DealWithErr(context.Delete(vote.Key()))
+}
+func (vote *PillarVote) Key() []byte {
+	nameHash := crypto.Hash([]byte(vote.Name))[:20]
+	return common.JoinBytes(pillarVoteKeyPrefix, vote.Id.Bytes(), nameHash)
+}
+func (vote *PillarVote) Data() []byte {
+	return ABICommon.PackVariablePanic(
+		PillarVoteVariableName,
+		vote.Id,
+		vote.Name,
+		vote.Vote,
+	)
+}
+
+func parsePillarVote(data []byte) (*PillarVote, error) {
+	if len(data) > 0 {
+		pillarVote := new(PillarVote)
+		ABICommon.UnpackVariablePanic(pillarVote, PillarVoteVariableName, data)
+		return pillarVote, nil
+	} else {
+		return nil, constants.ErrDataNonExistent
+	}
+}
+
+func GetAllPillarVotes(context db.DB, id types.Hash) []*PillarVote {
+	iterator := context.NewIterator(pillarVoteKeyPrefix)
+	defer iterator.Release()
+
+	pillarVoteList := make([]*PillarVote, 0)
+	for {
+		if !iterator.Next() {
+			common.DealWithErr(iterator.Error())
+			break
+		}
+		pillarVote, err := parsePillarVote(iterator.Value())
+		if err != nil {
+			continue
+		}
+		if pillarVote.Id == id {
+			pillarVoteList = append(pillarVoteList, pillarVote)
+		}
+	}
+	return pillarVoteList
+}
+
+func GetPillarVote(context db.DB, id types.Hash, name string) (*PillarVote, error) {
+	key := (&PillarVote{Id: id, Name: name}).Key()
+	if data, err := context.Get(key); err != nil {
+		return nil, err
+	} else {
+		return parsePillarVote(data)
+	}
+}
+
+type VotableHash struct {
+	Id     types.Hash
+	Exists bool
+}
+
+func (votable *VotableHash) Save(context db.DB) {
+	common.DealWithErr(context.Put(votable.Key(), votable.Data()))
+}
+func (votable *VotableHash) Delete(context db.DB) {
+	common.DealWithErr(context.Delete(votable.Key()))
+}
+func (votable *VotableHash) Key() []byte {
+	return common.JoinBytes(votableHashKeyPrefix, votable.Id.Bytes())
+}
+func (votable *VotableHash) Data() []byte {
+	return ABICommon.PackVariablePanic(
+		VotableHashVariableName,
+		true,
+	)
+}
+
+func unmarshalVotableHashKey(key []byte) (*types.Hash, error) {
+	id := new(types.Hash)
+	if err := id.SetBytes(key[1 : types.HashSize+1]); err != nil {
+		return nil, err
+	}
+	return id, nil
+}
+
+func parseVotableHash(data []byte, key []byte) (*VotableHash, error) {
+	if len(data) > 0 {
+		votableHash := new(VotableHash)
+		if err := ABICommon.UnpackVariable(votableHash, VotableHashVariableName, data); err != nil {
+			return nil, err
+		}
+		if h, err := unmarshalVotableHashKey(key); err != nil {
+			return nil, err
+		} else {
+			votableHash.Id = *h
+		}
+		return votableHash, nil
+	} else {
+		return nil, constants.ErrDataNonExistent
+	}
+}
+
+func GetVotableHash(context db.DB, id types.Hash) (*VotableHash, error) {
+	key := (&VotableHash{Id: id}).Key()
+	if data, err := context.Get(key); err != nil {
+		return nil, err
+	} else {
+		return parseVotableHash(data, key)
+	}
+}
+
+type VoteBreakdown struct {
+	Id    types.Hash `json:"id"`
+	Total uint32     `json:"total"`
+	Yes   uint32     `json:"yes"`
+	No    uint32     `json:"no"`
+}
+
+func GetVoteBreakdown(context db.DB, id types.Hash) *VoteBreakdown {
+	votes := GetAllPillarVotes(context, id)
+	voteBreakdown := &VoteBreakdown{
+		Id:    id,
+		Total: 0,
+		Yes:   0,
+		No:    0,
+	}
+	for _, vote := range votes {
+		voteBreakdown.Total += 1
+		if vote.Vote == VoteYes {
+			voteBreakdown.Yes += 1
+		} else if vote.Vote == VoteNo {
+			voteBreakdown.No += 1
+		}
+	}
+	return voteBreakdown
 }

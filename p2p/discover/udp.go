@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/rlp"
@@ -53,7 +54,7 @@ const (
 	sendTimeout = 500 * time.Millisecond
 	expiration  = 20 * time.Second
 
-	refreshInterval = 1 * time.Hour
+	refreshInterval = 30 * time.Minute
 )
 
 // RPC packet types
@@ -153,6 +154,8 @@ type udp struct {
 	closing chan struct{}
 	nat     nat.Interface
 
+	wg sync.WaitGroup
+
 	*Table
 }
 
@@ -219,7 +222,11 @@ func newUDP(priv *ecdsa.PrivateKey, c conn, natm nat.Interface, nodeDBPath strin
 	realaddr := c.LocalAddr().(*net.UDPAddr)
 	if natm != nil {
 		if !realaddr.IP.IsLoopback() {
-			go nat.Map(natm, udp.closing, "udp", realaddr.Port, realaddr.Port, "ethereum discovery")
+			udp.wg.Add(1)
+			go func() {
+				nat.Map(natm, udp.closing, "udp", realaddr.Port, realaddr.Port, "ethereum discovery")
+				udp.wg.Done()
+			}()
 		}
 		// TODO: react to external IP changes over time.
 		if ext, err := natm.ExternalIP(); err == nil {
@@ -229,14 +236,25 @@ func newUDP(priv *ecdsa.PrivateKey, c conn, natm nat.Interface, nodeDBPath strin
 	// TODO: separate TCP port
 	udp.ourEndpoint = makeEndpoint(realaddr, uint16(realaddr.Port))
 	udp.Table = newTable(udp, PubkeyID(&priv.PublicKey), realaddr, nodeDBPath)
-	go udp.loop()
-	go udp.readLoop()
+	udp.wg.Add(1)
+	go func() {
+		udp.loop()
+		udp.wg.Done()
+	}()
+	udp.wg.Add(1)
+	go func() {
+		udp.readLoop()
+		udp.wg.Done()
+	}()
 	return udp.Table, udp
 }
 
 func (t *udp) close() {
 	close(t.closing)
-	t.conn.Close()
+	err := t.conn.Close()
+	if err != nil {
+		panic(err)
+	}
 	// TODO: wait for the loops to end.
 }
 
@@ -330,7 +348,11 @@ func (t *udp) loop() {
 	for {
 		select {
 		case <-refresh.C:
-			go t.refresh()
+			t.wg.Add(1)
+			go func() {
+				t.refresh(false)
+				t.wg.Done()
+			}()
 
 		case <-t.closing:
 			for _, p := range pending {
@@ -515,7 +537,11 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromID NodeID, mac []byte) er
 	})
 	if !t.handleReply(fromID, pingPacket, req) {
 		// Note: we're ignoring the provided IP address right now
-		go t.bond(true, fromID, from, req.From.TCP)
+		t.wg.Add(1)
+		go func() {
+			t.bond(true, fromID, from, req.From.TCP)
+			t.wg.Done()
+		}()
 	}
 	return nil
 }

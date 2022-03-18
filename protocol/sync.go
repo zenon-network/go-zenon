@@ -73,7 +73,9 @@ func (pm *ProtocolManager) txsyncLoop() {
 		// Send the pack in the background.
 		log.Debug("sending transactions", "peer-id", s.p.Peer.ID(), "num-blocks", len(pack.txs))
 		sending = true
-		go func() { done <- pack.p.SendTransactions(pack.txs) }()
+		go func() {
+			done <- pack.p.SendTransactions(pack.txs)
+		}()
 	}
 
 	// pick chooses the next pending sync.
@@ -131,14 +133,18 @@ func (pm *ProtocolManager) syncer() {
 			if pm.peers.Len() < pm.minPeers {
 				break
 			}
-			go pm.synchronise(pm.peers.BestPeer())
+			go func() {
+				pm.synchronise(pm.peers.BestPeer())
+			}()
 
 		case <-forceSync:
 			// Force a sync even if not enough peers are present
 			if pm.peers.Len() < pm.minPeers {
 				break
 			}
-			go pm.synchronise(pm.peers.BestPeer())
+			go func() {
+				pm.synchronise(pm.peers.BestPeer())
+			}()
 
 		case <-pm.quitSync:
 			return

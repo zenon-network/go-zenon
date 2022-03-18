@@ -42,6 +42,7 @@ type Momentum interface {
 	// Embedded
 
 	GetAllDefinedSporks() ([]*definition.Spork, error)
+	GetActivePillars() ([]*definition.PillarInfo, error)
 	IsSporkActive(*types.ImplementedSpork) (bool, error)
 	GetStakeBeneficialAmount(addr types.Address) (*big.Int, error)
 	GetTokenInfoByTs(ts types.ZenonTokenStandard) (*definition.TokenInfo, error)

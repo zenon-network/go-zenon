@@ -64,6 +64,9 @@ type Server struct {
 	// connected. It must be greater than zero.
 	MaxPeers int
 
+	// MinConnectedPeers is the minimum number of peers that can be connected.
+	MinConnectedPeers int
+
 	// MaxPendingPeers is the maximum number of peers that can be pending in the
 	// handshake phase, counted separately for inbound and outbound connections.
 	// Zero defaults to preset values.
@@ -284,16 +287,17 @@ func (srv *Server) Self() *discover.Node {
 func (srv *Server) Stop() {
 	srv.lock.Lock()
 	defer srv.lock.Unlock()
+
 	if !srv.running {
 		return
 	}
+
 	srv.running = false
 	if srv.listener != nil {
 		// this unblocks listener Accept
 		srv.listener.Close()
 	}
 	close(srv.quit)
-	srv.loopWG.Wait()
 }
 
 // Start starts running the server.
@@ -334,7 +338,7 @@ func (srv *Server) Start() (err error) {
 		srv.ntab = ntab
 	}
 
-	dynPeers := srv.MaxPeers / 2
+	dynPeers := srv.MinConnectedPeers
 	if !srv.Discovery {
 		dynPeers = 0
 	}
@@ -356,7 +360,10 @@ func (srv *Server) Start() (err error) {
 	}
 
 	srv.loopWG.Add(1)
-	go srv.run(dialer)
+	go func() {
+		srv.run(dialer)
+		srv.loopWG.Done()
+	}()
 	srv.running = true
 	return nil
 }
@@ -371,7 +378,10 @@ func (srv *Server) startListening() error {
 	srv.ListenAddr = laddr.String()
 	srv.listener = listener
 	srv.loopWG.Add(1)
-	go srv.listenLoop()
+	go func() {
+		srv.listenLoop()
+		srv.loopWG.Done()
+	}()
 	// Map the TCP listening port if NAT is configured.
 	if !laddr.IP.IsLoopback() && srv.NAT != nil {
 		srv.loopWG.Add(1)
@@ -390,14 +400,12 @@ type dialer interface {
 }
 
 func (srv *Server) run(dialstate dialer) {
-	defer srv.loopWG.Done()
 	var (
-		peers   = make(map[discover.NodeID]*Peer)
-		trusted = make(map[discover.NodeID]bool, len(srv.TrustedNodes))
-
-		tasks        []task
-		pendingTasks []task
+		peers        = make(map[discover.NodeID]*Peer)
+		trusted      = make(map[discover.NodeID]bool, len(srv.TrustedNodes))
 		taskdone     = make(chan task, maxActiveDialTasks)
+		runningTasks []task
+		queuedTasks  []task // tasks that can't run yet
 	)
 	// Put trusted nodes into a map to speed up checks.
 	// Trusted peers are loaded on startup and cannot be
@@ -406,30 +414,44 @@ func (srv *Server) run(dialstate dialer) {
 		trusted[n.ID] = true
 	}
 
-	// Some task list helpers.
+	// removes t from runningTasks
 	delTask := func(t task) {
-		for i := range tasks {
-			if tasks[i] == t {
-				tasks = append(tasks[:i], tasks[i+1:]...)
+		for i := range runningTasks {
+			if runningTasks[i] == t {
+				runningTasks = append(runningTasks[:i], runningTasks[i+1:]...)
 				break
 			}
 		}
 	}
-	scheduleTasks := func(new []task) {
-		pt := append(pendingTasks, new...)
-		start := maxActiveDialTasks - len(tasks)
-		if len(pt) < start {
-			start = len(pt)
+
+	// starts until max number of active tasks is satisfied
+	startTasks := func(ts []task) (rest []task) {
+		i := 0
+		for ; len(runningTasks) < maxActiveDialTasks && i < len(ts); i++ {
+			t := ts[i]
+			common.P2PLogger.Debug("new task", "task", t)
+			srv.loopWG.Add(1)
+			go func() {
+				t.Do(srv)
+				srv.loopWG.Done()
+				taskdone <- t
+			}()
+			runningTasks = append(runningTasks, t)
 		}
-		if start > 0 {
-			tasks = append(tasks, pt[:start]...)
-			for _, t := range pt[:start] {
-				t := t
-				common.P2PLogger.Debug(fmt.Sprintf("new task:", t))
-				go func() { t.Do(srv); taskdone <- t }()
-			}
-			copy(pt, pt[start:])
-			pendingTasks = pt[:len(pt)-start]
+		return ts[i:]
+	}
+
+	scheduleTasks := func() {
+		if !srv.running {
+			return
+		}
+
+		// Start from queue first.
+		queuedTasks = append(queuedTasks[:0], startTasks(queuedTasks)...)
+		// Query dialer for new tasks and start as many as possible now.
+		if len(runningTasks) < maxActiveDialTasks {
+			nt := dialstate.newTasks(len(runningTasks)+len(queuedTasks), peers, time.Now())
+			queuedTasks = append(queuedTasks, startTasks(nt)...)
 		}
 	}
 
@@ -437,19 +459,18 @@ running:
 	for {
 		// Query the dialer for new tasks and launch them.
 		now := time.Now()
-		nt := dialstate.newTasks(len(pendingTasks)+len(tasks), peers, now)
-		scheduleTasks(nt)
+		scheduleTasks()
 
 		select {
 		case <-srv.quit:
 			// The server was stopped. Run the cleanup logic.
-			common.P2PLogger.Debug(fmt.Sprintf("<-quit: spinning down"))
+			common.P2PLogger.Debug("<-quit: spinning down")
 			break running
 		case n := <-srv.addstatic:
 			// This channel is used by AddPeer to add to the
 			// ephemeral static peer list. Add it to the dialer,
 			// it will keep the node connected.
-			common.P2PLogger.Debug(fmt.Sprintf("<-addstatic:", n))
+			common.P2PLogger.Debug("<-addstatic:", "peer", n)
 			dialstate.addStatic(n)
 		case op := <-srv.peerOp:
 			// This channel is used by Peers and PeerCount.
@@ -459,7 +480,7 @@ running:
 			// A task got done. Tell dialstate about it so it
 			// can update its state and remove it from the active
 			// tasks list.
-			common.P2PLogger.Debug(fmt.Sprintf("<-taskdone:", t))
+			common.P2PLogger.Debug("<-taskdone:", "task", t)
 			dialstate.taskDone(t, now)
 			delTask(t)
 		case c := <-srv.posthandshake:
@@ -469,13 +490,13 @@ running:
 				// Ensure that the trusted flag is set before checking against MaxPeers.
 				c.flags |= trustedConn
 			}
-			common.P2PLogger.Debug(fmt.Sprintf("<-posthandshake:", c))
+			common.P2PLogger.Debug("<-posthandshake:", c)
 			// TODO: track in-progress inbound node IDs (pre-Peer) to avoid dialing them.
 			c.cont <- srv.encHandshakeChecks(peers, c)
 		case c := <-srv.addpeer:
 			// At this point the connection is past the protocol handshake.
 			// Its capabilities are known and the remote identity is verified.
-			common.P2PLogger.Debug(fmt.Sprintf("<-addpeer:", c))
+			common.P2PLogger.Debug("<-addpeer:", "connection", c)
 			err := srv.protoHandshakeChecks(peers, c)
 			if err != nil {
 				common.P2PLogger.Debug(fmt.Sprintf("Not adding %v as peer: %v", c, err))
@@ -483,7 +504,12 @@ running:
 				// The handshakes are done and it passed all checks.
 				p := newPeer(c, srv.Protocols)
 				peers[c.id] = p
-				go srv.runPeer(p)
+				srv.loopWG.Add(1)
+				go func() {
+					srv.runPeer(p)
+					srv.loopWG.Done()
+					common.P2PLogger.Debug("wg.Done() srv.runPeer(p)")
+				}()
 			}
 			// The dialer logic relies on the assumption that
 			// dial tasks complete after the peer has been added or
@@ -491,26 +517,26 @@ running:
 			c.cont <- err
 		case p := <-srv.delpeer:
 			// A peer disconnected.
-			common.P2PLogger.Debug(fmt.Sprintf("<-delpeer:", p))
+			common.P2PLogger.Debug("<-delpeer:", "peer", p)
 			delete(peers, p.ID())
 		}
+	}
+	// Disconnect all peers.
+	for _, p := range peers {
+		p.Disconnect(DiscQuitting)
 	}
 
 	// Terminate discovery. If there is a running lookup it will terminate soon.
 	if srv.ntab != nil {
 		srv.ntab.Close()
 	}
-	// Disconnect all peers.
-	for _, p := range peers {
-		p.Disconnect(DiscQuitting)
-	}
 	// Wait for peers to shut down. Pending connections and tasks are
 	// not handled here and will terminate soon-ish because srv.quit
 	// is closed.
-	common.P2PLogger.Debug(fmt.Sprintf("ignoring %d pending tasks at spindown", len(tasks)))
+	common.P2PLogger.Debug(fmt.Sprintf("ignoring %d pending tasks at spindown", len(runningTasks)))
 	for len(peers) > 0 {
 		p := <-srv.delpeer
-		common.P2PLogger.Debug(fmt.Sprintf("<-delpeer (spindown):", p))
+		common.P2PLogger.Debug("<-delpeer (spindown):", "peer", p)
 		delete(peers, p.ID())
 	}
 }
@@ -541,8 +567,7 @@ func (srv *Server) encHandshakeChecks(peers map[discover.NodeID]*Peer, c *conn) 
 // listenLoop runs in its own goroutine and accepts
 // inbound connections.
 func (srv *Server) listenLoop() {
-	defer srv.loopWG.Done()
-	common.P2PLogger.Info(fmt.Sprintf("Listening on", srv.listener.Addr()))
+	common.P2PLogger.Info("Listening on", "address", srv.listener.Addr())
 
 	// This channel acts as a semaphore limiting
 	// active inbound connections that are lingering pre-handshake.
@@ -565,9 +590,13 @@ func (srv *Server) listenLoop() {
 		mfd := newMeteredConn(fd, true)
 
 		common.P2PLogger.Debug(fmt.Sprintf("Accepted conn %v\n", mfd.RemoteAddr()))
+		srv.loopWG.Add(1)
 		go func() {
+			common.P2PLogger.Debug("start routine srv.setupConn()")
 			srv.setupConn(mfd, inboundConn, nil)
+			srv.loopWG.Done()
 			slots <- struct{}{}
+			common.P2PLogger.Debug("wg.Done() srv.setupConn()")
 		}()
 	}
 }
@@ -585,6 +614,16 @@ func (srv *Server) setupConn(fd net.Conn, flags connFlag, dialDest *discover.Nod
 		c.close(errServerStopped)
 		return
 	}
+	timeout := time.NewTimer(dialHistoryExpiration * 9)
+	defer timeout.Stop()
+	go func() {
+		select {
+		case <-timeout.C:
+			c.close(DiscReadTimeout)
+		case <-srv.quit:
+			c.close(errServerStopped)
+		}
+	}()
 	// Run the encryption handshake.
 	var err error
 	if c.id, err = c.doEncHandshake(srv.PrivateKey, dialDest); err != nil {

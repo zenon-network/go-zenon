@@ -29,4 +29,8 @@ type AccountVmContext interface {
 
 	AddBalance(ts *types.ZenonTokenStandard, amount *big.Int)
 	SubBalance(ts *types.ZenonTokenStandard, amount *big.Int)
+
+	// ====== Spork ======
+
+	IsAcceleratorSporkEnforced() bool
 }

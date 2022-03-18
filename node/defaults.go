@@ -32,12 +32,13 @@ var DefaultNodeConfig = Config{
 		WSOrigins: []string{"*"},
 	},
 	Net: NetConfig{
-		ListenHost:      p2p.DefaultListenHost,
-		ListenPort:      p2p.DefaultListenPort,
-		MinPeers:        p2p.DefaultMinPeers,
-		MaxPeers:        p2p.DefaultMaxPeers,
-		MaxPendingPeers: p2p.DefaultMaxPendingPeers,
-		Seeders:         p2p.DefaultSeeders,
+		ListenHost:        p2p.DefaultListenHost,
+		ListenPort:        p2p.DefaultListenPort,
+		MinPeers:          p2p.DefaultMinPeers,
+		MinConnectedPeers: p2p.DefaultMinConnectedPeers,
+		MaxPeers:          p2p.DefaultMaxPeers,
+		MaxPendingPeers:   p2p.DefaultMaxPendingPeers,
+		Seeders:           p2p.DefaultSeeders,
 	},
 }
 

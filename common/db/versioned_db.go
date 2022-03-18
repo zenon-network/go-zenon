@@ -1,11 +1,13 @@
 package db
 
 import (
+	"runtime"
 	"sync"
 
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pkg/errors"
 	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/opt"
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -28,6 +30,17 @@ func absDiff(x, y uint64) uint64 {
 		return y - x
 	}
 	return x - y
+}
+
+func getOpenFilesCacheCapacity() int {
+	switch runtime.GOOS {
+	case "darwin":
+		return 100
+	case "windows":
+		return 200
+	default:
+		return 200
+	}
 }
 
 type Manager interface {
@@ -181,7 +194,8 @@ type ldbManager struct {
 }
 
 func NewLevelDBManager(dir string) Manager {
-	ldb, err := leveldb.OpenFile(dir, nil)
+	opts := &opt.Options{OpenFilesCacheCapacity: getOpenFilesCacheCapacity()}
+	ldb, err := leveldb.OpenFile(dir, opts)
 	common.DealWithErr(err)
 	l1Cache, err := lru.New(l1CacheSize)
 	common.DealWithErr(err)

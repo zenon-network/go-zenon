@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"sync"
 	"time"
 
 	"gopkg.in/karalabe/cookiejar.v2/collections/prque"
@@ -113,6 +114,8 @@ type Fetcher struct {
 	// Testing hooks
 	fetchingHook func([]types.Hash)  // Method to call upon starting a block fetch
 	importedHook func(*nom.Momentum) // Method to call upon successful block import
+
+	wg sync.WaitGroup
 }
 
 // New creates a block fetcher to retrieve blocks based on hash announcements.
@@ -141,13 +144,16 @@ func New(getBlock blockRetrievalFn, validateBlock blockValidatorFn, broadcastBlo
 // Start boots up the announcement based synchoniser, accepting and processing
 // hash notifications and block fetches until termination requested.
 func (f *Fetcher) Start() {
-	go f.loop()
+	go func() {
+		f.loop()
+	}()
 }
 
 // Stop terminates the announcement based synchroniser, canceling all pending
 // operations.
 func (f *Fetcher) Stop() {
 	close(f.quit)
+	f.wg.Wait()
 }
 
 // Notify announces the fetcher of the potential availability of a new block in
@@ -407,7 +413,6 @@ func (f *Fetcher) enqueue(peer string, detailed *nom.DetailedMomentum) {
 func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 	momentum := detailed.Momentum
 	hash := momentum.Hash
-
 	// Run the import on a new thread
 	log.Info("Peer importing momentum", "peer", peer, "momentum", momentum.Height, "hash", hash[:4])
 	go func() {
@@ -422,7 +427,9 @@ func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 		switch err := f.validateBlock(momentum, parent.Momentum); err {
 		case nil:
 			// All ok, quickly propagate to our peers
-			go f.broadcastBlock(detailed, true)
+			go func() {
+				f.broadcastBlock(detailed, true)
+			}()
 
 		default:
 			// Something went very wrong, drop the peer
@@ -431,12 +438,18 @@ func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 			return
 		}
 		// Run the actual import and log any issues
+		f.wg.Add(1)
 		if _, err := f.insertChain([]*nom.DetailedMomentum{detailed}); err != nil {
 			log.Warn("momentum import failed", "peer", peer, "momentum", momentum.Height, "hash", hash[:4], "reason", err)
+			f.wg.Done()
 			return
+		} else {
+			f.wg.Done()
 		}
 		// If import succeeded, broadcast the momentum
-		go f.broadcastBlock(detailed, false)
+		go func() {
+			f.broadcastBlock(detailed, false)
+		}()
 
 		// Invoke the testing hook if needed
 		if f.importedHook != nil {
