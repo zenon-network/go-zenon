@@ -116,10 +116,10 @@ func (p *IssueMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBloc
 
 	tokenStandard := newTokenID(sendBlock.Hash)
 	if _, err := definition.GetTokenInfo(context.Storage(), tokenStandard); err == constants.ErrDataNonExistent {
-	} else if err != constants.ErrDataNonExistent {
-		common.DealWithErr(err)
 	} else if err == nil {
 		return nil, constants.ErrIDNotUnique
+	} else if err != constants.ErrDataNonExistent {
+		common.DealWithErr(err)
 	}
 
 	tokenInfo := definition.TokenInfo{

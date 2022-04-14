@@ -160,7 +160,7 @@ func (method *UpdateEmbeddedSentinelMethod) GetPlasma(plasmaTable *constants.Pla
 func (method *UpdateEmbeddedSentinelMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
-	if err := definition.ABIStake.UnpackEmptyMethod(method.MethodName, block.Data); err != nil {
+	if err := definition.ABISentinel.UnpackEmptyMethod(method.MethodName, block.Data); err != nil {
 		return constants.ErrUnpackError
 	}
 
@@ -168,7 +168,7 @@ func (method *UpdateEmbeddedSentinelMethod) ValidateSendBlock(block *nom.Account
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	block.Data, err = definition.ABIStake.PackMethod(method.MethodName)
+	block.Data, err = definition.ABISentinel.PackMethod(method.MethodName)
 	return err
 }
 func (method *UpdateEmbeddedSentinelMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {

@@ -1,7 +1,7 @@
 package types
 
 var (
-	AcceleratorSpork     = NewImplementedSpork("97f0a9636a5cc633dfa3814e431f19c1974536eef3d1ebb713db50464dc5e750")
+	AcceleratorSpork     = NewImplementedSpork("6d2b1e6cb4025f2f45533f0fe22e9b7ce2014d91cc960471045fa64eee5a6ba3")
 	ImplementedSporksMap = map[Hash]bool{
 		AcceleratorSpork.SporkId: true,
 	}

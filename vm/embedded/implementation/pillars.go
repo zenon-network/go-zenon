@@ -75,7 +75,7 @@ func checkAndRegisterPillar(context vm_context.AccountVmContext, param *definiti
 	// check if pillar name is used
 	_, err := definition.GetPillarInfo(context.Storage(), param.Name)
 	if err == constants.ErrDataNonExistent {
-		// ok, does not exists
+		// ok, does not exist
 	} else if err == nil {
 		return constants.ErrNotUnique
 	} else {

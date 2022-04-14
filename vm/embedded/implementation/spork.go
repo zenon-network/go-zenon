@@ -59,7 +59,7 @@ func (p *CreateSporkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 }
 func (p *CreateSporkMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
-		sentinelLog.Debug("invalid create - syntactic validation failed", "address", sendBlock.Address, "reason", err)
+		sporkLog.Debug("invalid create - syntactic validation failed", "address", sendBlock.Address, "reason", err)
 		return nil, err
 	}
 
@@ -110,6 +110,11 @@ func (p *ActivateSporkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	return err
 }
 func (p *ActivateSporkMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+	if err := p.ValidateSendBlock(sendBlock); err != nil {
+		sporkLog.Debug("invalid spork activation - syntactic validation failed", "address", sendBlock.Address, "reason", err)
+		return nil, err
+	}
+
 	id := new(types.Hash)
 	err := definition.ABISpork.UnpackMethod(id, p.MethodName, sendBlock.Data)
 	if err != nil {

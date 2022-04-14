@@ -56,7 +56,7 @@ type Config struct {
 
 	Name string
 
-	LogLevel string // "debug", "dbug" | "info" | "warn" | "error", "eror" | "crit"
+	LogLevel string // "debug", "dbug" | "info" | "warn" | "error", "error" | "crit"
 
 	Producer *ProducerConfig
 	RPC      RPCConfig

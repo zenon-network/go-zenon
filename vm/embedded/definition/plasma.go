@@ -73,7 +73,7 @@ func (entry *FusionInfo) Delete(context db.DB) error {
 }
 
 func getFusionInfoKey(addr types.Address, hash types.Hash) []byte {
-	return common.JoinBytes(tokenInfoKeyPrefix, addr.Bytes(), hash.Bytes())
+	return common.JoinBytes(fusionInfoKeyPrefix, addr.Bytes(), hash.Bytes())
 }
 func isFusionInfoKey(key []byte) bool {
 	return key[0] == fusionInfoKeyPrefix[0]

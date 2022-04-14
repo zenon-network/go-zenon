@@ -51,8 +51,8 @@ func checkMetaDataStatic(param *definition.AcceleratorParam) error {
 }
 
 func checkReceivedFunds(context vm_context.AccountVmContext, project *definition.Project) bool {
-	znnFunds := project.ZnnFundsNeeded
-	qsrFunds := project.QsrFundsNeeded
+	znnFunds := new(big.Int).Set(project.ZnnFundsNeeded)
+	qsrFunds := new(big.Int).Set(project.QsrFundsNeeded)
 	for _, phaseId := range project.PhaseIds {
 		phase, err := definition.GetPhaseEntry(context.Storage(), phaseId)
 		if err != nil {
@@ -201,7 +201,7 @@ func (p *AddPhaseMethod) ReceiveBlock(context vm_context.AccountVmContext, sendB
 	err := definition.ABIAccelerator.UnpackMethod(param, p.MethodName, sendBlock.Data)
 	common.DealWithErr(err)
 
-	// Check project exists and block is send by owner
+	// Check project exists and block is sent by owner
 	project, err := definition.GetProjectEntry(context.Storage(), param.Id)
 	if err != nil {
 		return nil, constants.ErrDataNonExistent
@@ -317,14 +317,16 @@ func (p *UpdateEmbeddedAcceleratorMethod) ReceiveBlock(context vm_context.Accoun
 	}
 
 	blocks := make([]*nom.AccountBlock, 0)
-	znnBalance, err := context.GetBalance(types.ZnnTokenStandard)
+	balanceZnn, err := context.GetBalance(types.ZnnTokenStandard)
 	if err != nil {
 		return nil, err
 	}
-	qsrBalance, err := context.GetBalance(types.QsrTokenStandard)
+	znnBalance := new(big.Int).Set(balanceZnn)
+	balanceQsr, err := context.GetBalance(types.QsrTokenStandard)
 	if err != nil {
 		return nil, err
 	}
+	qsrBalance := new(big.Int).Set(balanceQsr)
 
 	sort.Slice(projectList, func(i, j int) bool {
 		var phaseITimestamp, phaseJTimestamp int64
@@ -345,7 +347,7 @@ func (p *UpdateEmbeddedAcceleratorMethod) ReceiveBlock(context vm_context.Accoun
 	for _, project := range projectList {
 		if project.Status == definition.VotingStatus {
 			// Check if project voting period has ended
-			if project.CreationTimestamp+constants.AcceleratorProjectVotingPeriod > frontierMomentum.Timestamp.Unix() {
+			if project.CreationTimestamp+constants.AcceleratorProjectVotingPeriod >= frontierMomentum.Timestamp.Unix() {
 				ok := checkAcceleratorVotes(context, project.Id, numPillars)
 				acceleratorLog.Debug("project passed voting period", "project-id", project.Id, "passed-votes", ok)
 				if ok {
@@ -485,6 +487,7 @@ func (p *UpdatePhaseMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	newPhase.QsrFundsNeeded = param.QsrFundsNeeded
 	newPhase.CreationTimestamp = frontierMomentum.Timestamp.Unix()
 	newPhase.Status = definition.VotingStatus
+	newPhase.ProjectId = project.Id
 	newPhase.Save(context.Storage())
 
 	project.PhaseIds[len(project.PhaseIds)-1] = newPhase.Id

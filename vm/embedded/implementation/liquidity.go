@@ -148,7 +148,7 @@ func (p *FundMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock
 		if err != nil {
 			return nil, err
 		}
-		if znnBalance.Cmp(param.ZnnReward) > 0 && qsrBalance.Cmp(param.QsrReward) > 0 {
+		if znnBalance.Cmp(param.ZnnReward) != -1 && qsrBalance.Cmp(param.QsrReward) != -1 {
 			znnReward := &nom.AccountBlock{
 				Address:       types.LiquidityContract,
 				ToAddress:     types.AcceleratorContract,
@@ -157,7 +157,7 @@ func (p *FundMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock
 				Amount:        param.ZnnReward,
 			}
 			blocks = append(blocks, znnReward)
-			znnBalance = znnBalance.Sub(znnBalance, znnReward.Amount)
+
 			qsrReward := &nom.AccountBlock{
 				Address:       types.LiquidityContract,
 				ToAddress:     types.AcceleratorContract,
@@ -215,7 +215,7 @@ func (p *BurnZnnMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBl
 		if err != nil {
 			return nil, err
 		}
-		if znnBalance.Cmp(param.BurnAmount) > 0 {
+		if znnBalance.Cmp(param.BurnAmount) != -1 {
 			burnBlock := &nom.AccountBlock{
 				Address:       types.LiquidityContract,
 				ToAddress:     types.TokenContract,

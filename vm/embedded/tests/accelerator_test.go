@@ -908,6 +908,335 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	z.ExpectBalance(g.User1.Address, types.QsrTokenStandard, 12000000000000)
 }
 
+func TestAccelerator_DoublePhases(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
+t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:34d8229bd07586c243c6e74122a18d6d2002694c72964a7186111026a9cec6ab Name:spork-accelerator Description:activate spork for accelerator Activated:false EnforcementHeight:0}"
+t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:34d8229bd07586c243c6e74122a18d6d2002694c72964a7186111026a9cec6ab Name:spork-accelerator Description:activate spork for accelerator Activated:true EnforcementHeight:9}"
+t=2001-09-09T01:50:00+0000 lvl=dbug msg="successfully create project" module=embedded contract=accelerator project="&{Id:3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f Owner:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz Name:Test Project 1 Description:TEST DESCRIPTION Url:test.com ZnnFundsNeeded:+100 QsrFundsNeeded:+0 CreationTimestamp:1000000200 LastUpdateTimestamp:1000000200 Status:0 PhaseIds:[]}"
+t=2001-09-09T01:50:20+0000 lvl=dbug msg="voted for hash" module=embedded contract=common pillar-vote="&{Id:3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f Name:TEST-pillar-1 Vote:0}"
+t=2001-09-09T01:50:40+0000 lvl=dbug msg="voted for hash" module=embedded contract=common pillar-vote="&{Id:3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f Name:TEST-pillar-cool Vote:0}"
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg current-height=361 last-update-height=0
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="computer pillar-reward" module=embedded contract=pillar epoch=0 pillar-name=TEST-pillar-1 reward="&{DelegationReward:+11995123837 BlockReward:+9916666627 TotalReward:+21911790464 ProducedBlockNum:119 ExpectedBlockNum:120 Weight:+2099916666666}" total-weight=2499916666666 self-weight=2099916666666
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="computer pillar-reward" module=embedded contract=pillar epoch=0 pillar-name=TEST-pillar-cool reward="&{DelegationReward:+1152038401 BlockReward:+9999999960 TotalReward:+11152038361 ProducedBlockNum:120 ExpectedBlockNum:120 Weight:+200000000000}" total-weight=2499916666666 self-weight=200000000000
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="computer pillar-reward" module=embedded contract=pillar epoch=0 pillar-name=TEST-pillar-znn reward="&{DelegationReward:+1152038401 BlockReward:+9999999960 TotalReward:+11152038361 ProducedBlockNum:120 ExpectedBlockNum:120 Weight:+200000000000}" total-weight=2499916666666 self-weight=200000000000
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=pillar epoch=1
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxsentynelxxxxxxxxxxxxxwy0r2r current-height=361 last-update-height=0
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating sentinel reward" module=embedded contract=sentinel epoch=0 total-znn-reward=187200000000 total-qsr-reward=500000000000 cumulated-sentinel=0 start-time=1000000000 end-time=1000003600
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=sentinel epoch=1
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 current-height=361 last-update-height=0
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating stake reward" module=embedded contract=stake epoch=0 total-reward=1000000000000 cumulated-stake=0 start-time=1000000000 end-time=1000003600
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=stake epoch=1
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae current-height=361 last-update-height=0
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating liquidity reward" module=embedded contract=liquidity epoch=0 znn-amount=187200000000 qsr-amount=500000000000
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=liquidity epoch=1
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22 current-height=361 last-update-height=0
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="check accelerator votes" module=embedded contract=accelerator votes="&{Id:3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f Total:2 Yes:2 No:0}" status=true
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="project passed voting period" module=embedded contract=accelerator project-id=3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f passed-votes=true
+t=2001-09-09T02:46:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg TokenName:Zenon Coin TokenSymbol:ZNN TokenDomain:zenon.network TotalSupply:+19687200000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx}" minted-amount=187200000000 to-address=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae
+t=2001-09-09T02:46:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 TokenName:QuasarCoin TokenSymbol:QSR TokenDomain:zenon.network TotalSupply:+181050000000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll}" minted-amount=500000000000 to-address=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae
+t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1znnxxxxxxxxxxxxx9z4ulx amount=187200000000
+t=2001-09-09T02:47:00+0000 lvl=dbug msg="successfully created phase" module=embedded contract=accelerator phase="&{Id:3364612a108e4490ab1c789583e0cbd451597e889a441bdcf4fcc8a6e95c705f ProjectId:3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f Name:Phase 1 Description:Description for phase 1 Url:www.phase1.com ZnnFundsNeeded:+50 QsrFundsNeeded:+0 CreationTimestamp:1000003620 AcceptedTimestamp:0 Status:0}"
+t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1qsrxxxxxxxxxxxxxmrhjll amount=500000000000
+t=2001-09-09T02:47:20+0000 lvl=dbug msg="voted for hash" module=embedded contract=common pillar-vote="&{Id:3364612a108e4490ab1c789583e0cbd451597e889a441bdcf4fcc8a6e95c705f Name:TEST-pillar-1 Vote:0}"
+t=2001-09-09T02:47:40+0000 lvl=dbug msg="voted for hash" module=embedded contract=common pillar-vote="&{Id:3364612a108e4490ab1c789583e0cbd451597e889a441bdcf4fcc8a6e95c705f Name:TEST-pillar-cool Vote:0}"
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg current-height=722 last-update-height=361
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="computer pillar-reward" module=embedded contract=pillar epoch=1 pillar-name=TEST-pillar-1 reward="&{DelegationReward:+12095907836 BlockReward:+9999999960 TotalReward:+22095907796 ProducedBlockNum:120 ExpectedBlockNum:120 Weight:+2099900000000}" total-weight=2499900000000 self-weight=2099900000000
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="computer pillar-reward" module=embedded contract=pillar epoch=1 pillar-name=TEST-pillar-cool reward="&{DelegationReward:+1152046081 BlockReward:+9999999960 TotalReward:+11152046041 ProducedBlockNum:120 ExpectedBlockNum:120 Weight:+200000000000}" total-weight=2499900000000 self-weight=200000000000
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="computer pillar-reward" module=embedded contract=pillar epoch=1 pillar-name=TEST-pillar-znn reward="&{DelegationReward:+1152046081 BlockReward:+9999999960 TotalReward:+11152046041 ProducedBlockNum:120 ExpectedBlockNum:120 Weight:+200000000000}" total-weight=2499900000000 self-weight=200000000000
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=pillar epoch=2
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxsentynelxxxxxxxxxxxxxwy0r2r current-height=722 last-update-height=361
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating sentinel reward" module=embedded contract=sentinel epoch=1 total-znn-reward=187200000000 total-qsr-reward=500000000000 cumulated-sentinel=0 start-time=1000003600 end-time=1000007200
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=sentinel epoch=2
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 current-height=722 last-update-height=361
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating stake reward" module=embedded contract=stake epoch=1 total-reward=1000000000000 cumulated-stake=0 start-time=1000003600 end-time=1000007200
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=stake epoch=2
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae current-height=722 last-update-height=361
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating liquidity reward" module=embedded contract=liquidity epoch=1 znn-amount=187200000000 qsr-amount=500000000000
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=liquidity epoch=2
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22 current-height=722 last-update-height=361
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="check accelerator votes" module=embedded contract=accelerator votes="&{Id:3364612a108e4490ab1c789583e0cbd451597e889a441bdcf4fcc8a6e95c705f Total:2 Yes:2 No:0}" status=true
+t=2001-09-09T03:46:50+0000 lvl=dbug msg="finishing and paying phase" module=embedded contract=accelerator project-id=3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f phase-id=3364612a108e4490ab1c789583e0cbd451597e889a441bdcf4fcc8a6e95c705f znn-amount=50 qsr-amount=0
+t=2001-09-09T03:47:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg TokenName:Zenon Coin TokenSymbol:ZNN TokenDomain:zenon.network TotalSupply:+19874400000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx}" minted-amount=187200000000 to-address=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae
+t=2001-09-09T03:47:00+0000 lvl=dbug msg="successfully created phase" module=embedded contract=accelerator phase="&{Id:8bf0d7d086296ea2c90224094e26f41e68a2896f8cb4d010eda01937fc1ef830 ProjectId:3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f Name:Phase 2 Description:Description for phase 2 Url:www.phase1.com ZnnFundsNeeded:+50 QsrFundsNeeded:+0 CreationTimestamp:1000007220 AcceptedTimestamp:0 Status:0}"
+t=2001-09-09T03:47:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 TokenName:QuasarCoin TokenSymbol:QSR TokenDomain:zenon.network TotalSupply:+181550000000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll}" minted-amount=500000000000 to-address=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae
+t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1znnxxxxxxxxxxxxx9z4ulx amount=187200000000
+t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1qsrxxxxxxxxxxxxxmrhjll amount=500000000000
+t=2001-09-09T03:47:20+0000 lvl=dbug msg="voted for hash" module=embedded contract=common pillar-vote="&{Id:8bf0d7d086296ea2c90224094e26f41e68a2896f8cb4d010eda01937fc1ef830 Name:TEST-pillar-1 Vote:0}"
+t=2001-09-09T03:47:40+0000 lvl=dbug msg="voted for hash" module=embedded contract=common pillar-vote="&{Id:8bf0d7d086296ea2c90224094e26f41e68a2896f8cb4d010eda01937fc1ef830 Name:TEST-pillar-cool Vote:0}"
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg current-height=1083 last-update-height=722
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="computer pillar-reward" module=embedded contract=pillar epoch=2 pillar-name=TEST-pillar-1 reward="&{DelegationReward:+12095907836 BlockReward:+9999999960 TotalReward:+22095907796 ProducedBlockNum:120 ExpectedBlockNum:120 Weight:+2099900000000}" total-weight=2499900000000 self-weight=2099900000000
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="computer pillar-reward" module=embedded contract=pillar epoch=2 pillar-name=TEST-pillar-cool reward="&{DelegationReward:+1152046081 BlockReward:+9999999960 TotalReward:+11152046041 ProducedBlockNum:120 ExpectedBlockNum:120 Weight:+200000000000}" total-weight=2499900000000 self-weight=200000000000
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="computer pillar-reward" module=embedded contract=pillar epoch=2 pillar-name=TEST-pillar-znn reward="&{DelegationReward:+1152046081 BlockReward:+9999999960 TotalReward:+11152046041 ProducedBlockNum:120 ExpectedBlockNum:120 Weight:+200000000000}" total-weight=2499900000000 self-weight=200000000000
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=pillar epoch=3
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxsentynelxxxxxxxxxxxxxwy0r2r current-height=1083 last-update-height=722
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="updating sentinel reward" module=embedded contract=sentinel epoch=2 total-znn-reward=187200000000 total-qsr-reward=500000000000 cumulated-sentinel=0 start-time=1000007200 end-time=1000010800
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=sentinel epoch=3
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 current-height=1083 last-update-height=722
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="updating stake reward" module=embedded contract=stake epoch=2 total-reward=1000000000000 cumulated-stake=0 start-time=1000007200 end-time=1000010800
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=stake epoch=3
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae current-height=1083 last-update-height=722
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="updating liquidity reward" module=embedded contract=liquidity epoch=2 znn-amount=187200000000 qsr-amount=500000000000
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=liquidity epoch=3
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22 current-height=1083 last-update-height=722
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="check accelerator votes" module=embedded contract=accelerator votes="&{Id:8bf0d7d086296ea2c90224094e26f41e68a2896f8cb4d010eda01937fc1ef830 Total:2 Yes:2 No:0}" status=true
+t=2001-09-09T04:47:00+0000 lvl=dbug msg="finishing and paying phase" module=embedded contract=accelerator project-id=3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f phase-id=8bf0d7d086296ea2c90224094e26f41e68a2896f8cb4d010eda01937fc1ef830 znn-amount=50 qsr-amount=0
+t=2001-09-09T04:47:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg TokenName:Zenon Coin TokenSymbol:ZNN TokenDomain:zenon.network TotalSupply:+20061600000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx}" minted-amount=187200000000 to-address=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae
+t=2001-09-09T04:47:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 TokenName:QuasarCoin TokenSymbol:QSR TokenDomain:zenon.network TotalSupply:+182050000000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll}" minted-amount=500000000000 to-address=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae
+`)
+
+	activateAccelerator(z)
+	acceleratorAPI := embedded.NewAcceleratorApi(z)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.AcceleratorContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        constants.ProjectCreationAmount,
+		Data: definition.ABIAccelerator.PackMethodPanic(definition.CreateProjectMethodName,
+			"Test Project 1",   //param.Name
+			"TEST DESCRIPTION", //param.Description
+			"test.com",         //param.Url
+			big.NewInt(100),    //param.ZnnFundsNeeded
+			big.NewInt(0),      //param.QsrFundsNeeded
+		),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+
+	projectList, err := acceleratorAPI.GetAll(0, 10)
+	common.FailIfErr(t, err)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.Pillar1.Address,
+		ToAddress: types.AcceleratorContract,
+		Data: definition.ABIAccelerator.PackMethodPanic(definition.VoteByProdAddressMethodName,
+			projectList.List[0].Id,
+			definition.VoteYes,
+		),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.Pillar2.Address,
+		ToAddress: types.AcceleratorContract,
+		Data: definition.ABIAccelerator.PackMethodPanic(definition.VoteByProdAddressMethodName,
+			projectList.List[0].Id,
+			definition.VoteYes,
+		),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+
+	z.InsertMomentumsTo(60*6 + 2)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.User1.Address,
+		ToAddress: types.AcceleratorContract,
+		Data: definition.ABIAccelerator.PackMethodPanic(definition.AddPhaseMethodName,
+			projectList.List[0].Id,    //param.Hash
+			"Phase 1",                 //param.Name
+			"Description for phase 1", //param.Description
+			"www.phase1.com",          //param.Url
+			big.NewInt(50),            //param.ZnnFundsNeeded
+			big.NewInt(0),             //param.QsrFundsNeeded
+		),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+	projectList, err = acceleratorAPI.GetAll(0, 10)
+	common.FailIfErr(t, err)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.Pillar1.Address,
+		ToAddress: types.AcceleratorContract,
+		Data: definition.ABIAccelerator.PackMethodPanic(definition.VoteByProdAddressMethodName,
+			projectList.List[0].PhaseIds[0],
+			definition.VoteYes,
+		),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.Pillar2.Address,
+		ToAddress: types.AcceleratorContract,
+		Data: definition.ABIAccelerator.PackMethodPanic(definition.VoteByProdAddressMethodName,
+			projectList.List[0].PhaseIds[0],
+			definition.VoteYes,
+		),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+
+	z.InsertMomentumsTo(60*6*2 + 2)
+
+	z.ExpectBalance(types.AcceleratorContract, types.ZnnTokenStandard, 99999950)
+	common.Json(acceleratorAPI.GetAll(0, 10)).Equals(t, `
+{
+	"count": 1,
+	"list": [
+		{
+			"id": "3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f",
+			"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
+			"name": "Test Project 1",
+			"description": "TEST DESCRIPTION",
+			"url": "test.com",
+			"znnFundsNeeded": 100,
+			"qsrFundsNeeded": 0,
+			"creationTimestamp": 1000000200,
+			"lastUpdateTimestamp": 1000007210,
+			"status": 1,
+			"phaseIds": [
+				"3364612a108e4490ab1c789583e0cbd451597e889a441bdcf4fcc8a6e95c705f"
+			],
+			"votes": {
+				"id": "3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f",
+				"total": 2,
+				"yes": 2,
+				"no": 0
+			},
+			"phases": [
+				{
+					"phase": {
+						"id": "3364612a108e4490ab1c789583e0cbd451597e889a441bdcf4fcc8a6e95c705f",
+						"projectID": "3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f",
+						"name": "Phase 1",
+						"description": "Description for phase 1",
+						"url": "www.phase1.com",
+						"znnFundsNeeded": 50,
+						"qsrFundsNeeded": 0,
+						"creationTimestamp": 1000003620,
+						"acceptedTimestamp": 1000007210,
+						"status": 2
+					},
+					"votes": {
+						"id": "3364612a108e4490ab1c789583e0cbd451597e889a441bdcf4fcc8a6e95c705f",
+						"total": 2,
+						"yes": 2,
+						"no": 0
+					}
+				}
+			]
+		}
+	]
+}`)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.User1.Address,
+		ToAddress: types.AcceleratorContract,
+		Data: definition.ABIAccelerator.PackMethodPanic(definition.AddPhaseMethodName,
+			projectList.List[0].Id,    //param.Hash
+			"Phase 2",                 //param.Name
+			"Description for phase 2", //param.Description
+			"www.phase1.com",          //param.Url
+			big.NewInt(50),            //param.ZnnFundsNeeded
+			big.NewInt(0),             //param.QsrFundsNeeded
+		),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+	projectList, err = acceleratorAPI.GetAll(0, 10)
+	common.FailIfErr(t, err)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.Pillar1.Address,
+		ToAddress: types.AcceleratorContract,
+		Data: definition.ABIAccelerator.PackMethodPanic(definition.VoteByProdAddressMethodName,
+			projectList.List[0].PhaseIds[1],
+			definition.VoteYes,
+		),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.Pillar2.Address,
+		ToAddress: types.AcceleratorContract,
+		Data: definition.ABIAccelerator.PackMethodPanic(definition.VoteByProdAddressMethodName,
+			projectList.List[0].PhaseIds[1],
+			definition.VoteYes,
+		),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+
+	z.InsertMomentumsTo(60*6*3 + 2*2)
+	z.ExpectBalance(types.AcceleratorContract, types.ZnnTokenStandard, 99999900)
+	common.Json(acceleratorAPI.GetAll(0, 10)).Equals(t, `
+{
+	"count": 1,
+	"list": [
+		{
+			"id": "3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f",
+			"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
+			"name": "Test Project 1",
+			"description": "TEST DESCRIPTION",
+			"url": "test.com",
+			"znnFundsNeeded": 100,
+			"qsrFundsNeeded": 0,
+			"creationTimestamp": 1000000200,
+			"lastUpdateTimestamp": 1000010820,
+			"status": 4,
+			"phaseIds": [
+				"3364612a108e4490ab1c789583e0cbd451597e889a441bdcf4fcc8a6e95c705f",
+				"8bf0d7d086296ea2c90224094e26f41e68a2896f8cb4d010eda01937fc1ef830"
+			],
+			"votes": {
+				"id": "3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f",
+				"total": 2,
+				"yes": 2,
+				"no": 0
+			},
+			"phases": [
+				{
+					"phase": {
+						"id": "3364612a108e4490ab1c789583e0cbd451597e889a441bdcf4fcc8a6e95c705f",
+						"projectID": "3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f",
+						"name": "Phase 1",
+						"description": "Description for phase 1",
+						"url": "www.phase1.com",
+						"znnFundsNeeded": 50,
+						"qsrFundsNeeded": 0,
+						"creationTimestamp": 1000003620,
+						"acceptedTimestamp": 1000007210,
+						"status": 2
+					},
+					"votes": {
+						"id": "3364612a108e4490ab1c789583e0cbd451597e889a441bdcf4fcc8a6e95c705f",
+						"total": 2,
+						"yes": 2,
+						"no": 0
+					}
+				},
+				{
+					"phase": {
+						"id": "8bf0d7d086296ea2c90224094e26f41e68a2896f8cb4d010eda01937fc1ef830",
+						"projectID": "3821d3a7f16d0155b476bdfbc8ccb849651d5b9c2a2bef3767675f0cb297ff4f",
+						"name": "Phase 2",
+						"description": "Description for phase 2",
+						"url": "www.phase1.com",
+						"znnFundsNeeded": 50,
+						"qsrFundsNeeded": 0,
+						"creationTimestamp": 1000007220,
+						"acceptedTimestamp": 1000010820,
+						"status": 2
+					},
+					"votes": {
+						"id": "8bf0d7d086296ea2c90224094e26f41e68a2896f8cb4d010eda01937fc1ef830",
+						"total": 2,
+						"yes": 2,
+						"no": 0
+					}
+				}
+			]
+		}
+	]
+}`)
+}
+
 func TestAccelerator_CreatePhaseWithInvalidAmount(t *testing.T) {
 	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
 	defer z.StopPanic()
@@ -1533,6 +1862,55 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 	z.InsertNewMomentum() // cemented token-receive-block
 	projectList, err = acceleratorAPI.GetAll(0, 10)
 	common.FailIfErr(t, err)
+	common.Json(acceleratorAPI.GetAll(0, 10)).Equals(t, `
+{
+	"count": 1,
+	"list": [
+		{
+			"id": "c24a5a6166c8948aba23d68aa39e206fc1410138ad218500749b75e2ae92d730",
+			"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
+			"name": "Test Project 1",
+			"description": "TEST DESCRIPTION",
+			"url": "test.com",
+			"znnFundsNeeded": 100,
+			"qsrFundsNeeded": 1000,
+			"creationTimestamp": 1000000200,
+			"lastUpdateTimestamp": 1000003620,
+			"status": 1,
+			"phaseIds": [
+				"05f123c4e83b1cf5559638e2acfb1c2eb8575797b34b2d4b8d95490a7251f4b5"
+			],
+			"votes": {
+				"id": "c24a5a6166c8948aba23d68aa39e206fc1410138ad218500749b75e2ae92d730",
+				"total": 2,
+				"yes": 2,
+				"no": 0
+			},
+			"phases": [
+				{
+					"phase": {
+						"id": "05f123c4e83b1cf5559638e2acfb1c2eb8575797b34b2d4b8d95490a7251f4b5",
+						"projectID": "c24a5a6166c8948aba23d68aa39e206fc1410138ad218500749b75e2ae92d730",
+						"name": "Phase 1",
+						"description": "Description for phase 1",
+						"url": "www.phase1.com",
+						"znnFundsNeeded": 10,
+						"qsrFundsNeeded": 0,
+						"creationTimestamp": 1000003620,
+						"acceptedTimestamp": 0,
+						"status": 0
+					},
+					"votes": {
+						"id": "05f123c4e83b1cf5559638e2acfb1c2eb8575797b34b2d4b8d95490a7251f4b5",
+						"total": 0,
+						"yes": 0,
+						"no": 0
+					}
+				}
+			]
+		}
+	]
+}`)
 
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.Pillar1.Address,
@@ -1644,7 +2022,7 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 			"confirmationDetail": {
 				"numConfirmations": 2,
 				"momentumHeight": 723,
-				"momentumHash": "9d444f8c8fa72cf672096ff00ba1689668df8408a9e2f4bd94b2fb0d711aceea",
+				"momentumHash": "ed5609e0ab225c50c6466b377e7fe18d059eb17e4153b707527c41b63ead8d0f",
 				"momentumTimestamp": 1000007220
 			},
 			"pairedAccountBlock": null
@@ -1691,7 +2069,7 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 			"confirmationDetail": {
 				"numConfirmations": 2,
 				"momentumHeight": 723,
-				"momentumHash": "9d444f8c8fa72cf672096ff00ba1689668df8408a9e2f4bd94b2fb0d711aceea",
+				"momentumHash": "ed5609e0ab225c50c6466b377e7fe18d059eb17e4153b707527c41b63ead8d0f",
 				"momentumTimestamp": 1000007220
 			},
 			"pairedAccountBlock": null
