@@ -18,3 +18,10 @@ func (kp *KeyPair) Sign(message []byte) []byte {
 func (kp *KeyPair) Signer(data []byte) (signedData []byte, address *types.Address, pubkey []byte, err error) {
 	return kp.Sign(data), &kp.Address, kp.Public, nil
 }
+
+func (kp *KeyPair) Address() *types.Address {
+	return &kp.Address
+}
+func (kp *KeyPair) PublicKey() []byte {
+	return kp.Public	
+}
