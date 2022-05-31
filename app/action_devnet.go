@@ -7,6 +7,8 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
@@ -15,18 +17,28 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/node"
 	"github.com/zenon-network/go-zenon/p2p"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/wallet"
 	"gopkg.in/urfave/cli.v1"
 )
 
 var (
+	GenesisBlockFlag = cli.StringSliceFlag{
+		Name:  "genesis-block",
+		Usage: "<address>,<ZnnAmount>,<QsrAmount>",
+	}
+
 	devnetCommand = cli.Command{
 		Action:    devnetAction,
 		Name:      "generate-devnet",
 		Usage:     "Generates config for devnet",
 		ArgsUsage: " ",
 		Category:  "DEVELOPER COMMANDS",
+
+		Flags: []cli.Flag{
+			GenesisBlockFlag,
+		},
 	}
 )
 
@@ -59,7 +71,7 @@ func devnetAction(ctx *cli.Context) error {
 	}
 
 	// 6. Generate Genesis Config
-	if err := createDevGenesis(&cfg); err != nil {
+	if err := createDevGenesis(ctx, &cfg); err != nil {
 		return err
 	}
 
@@ -86,9 +98,9 @@ func checkCreatePaths(cfg *node.Config) error {
 }
 
 func createDevProducer(cfg *node.Config) error {
-	// TODO randomly generate this
-	mnemonic := "route become dream access impulse price inform obtain engage ski believe awful absent pig thing vibrant possible exotic flee pepper marble rural fire fancy"
-	entropy, _ := bip39.EntropyFromMnemonic(mnemonic)
+	entropy, _ := bip39.NewEntropy(256)
+	mnemonic, _ := bip39.NewMnemonic(entropy)
+
 	ks := &wallet.KeyStore{
 		Entropy:  entropy,
 		Seed:     bip39.NewSeed(mnemonic, ""),
@@ -135,12 +147,39 @@ func createDevNet(cfg *node.Config) error {
 	return nil
 }
 
-func createDevGenesis(cfg *node.Config) error {
+func createDevGenesis(ctx *cli.Context, cfg *node.Config) error {
 	if cfg.GenesisFile == "" {
 		cfg.GenesisFile = filepath.Join(cfg.DataPath, "genesis.json")
 	}
 
 	localPillar, _ := types.ParseAddress(cfg.Producer.Address)
+
+	znnStandard := definition.TokenInfo{
+		Decimals:      8,
+		IsBurnable:    true,
+		IsMintable:    true,
+		IsUtility:     true,
+		MaxSupply:     big.NewInt(9007199254740991),
+		Owner:         types.TokenContract,
+		TokenDomain:   "biginches.club",
+		TokenName:     "tZNN",
+		TokenStandard: types.ZnnTokenStandard,
+		TokenSymbol:   "tZNN",
+		TotalSupply:   big.NewInt(78713599988800),
+	}
+	qsrStandard := definition.TokenInfo{
+		Decimals:      8,
+		IsBurnable:    true,
+		IsMintable:    true,
+		IsUtility:     true,
+		MaxSupply:     big.NewInt(9007199254740991),
+		Owner:         types.TokenContract,
+		TokenDomain:   "biginches.club",
+		TokenName:     "tQSR",
+		TokenStandard: types.QsrTokenStandard,
+		TokenSymbol:   "tQSR",
+		TotalSupply:   big.NewInt(772135999888000),
+	}
 
 	gen := genesis.GenesisConfig{
 		ChainIdentifier:     321,
@@ -166,40 +205,23 @@ func createDevGenesis(cfg *node.Config) error {
 			}},
 		TokenConfig: &genesis.TokenContractConfig{
 			Tokens: []*definition.TokenInfo{
-				&definition.TokenInfo{
-					Decimals:      8,
-					IsBurnable:    true,
-					IsMintable:    true,
-					IsUtility:     true,
-					MaxSupply:     big.NewInt(9007199254740991),
-					Owner:         types.TokenContract,
-					TokenDomain:   "biginches.club",
-					TokenName:     "tZNN",
-					TokenStandard: types.ZnnTokenStandard,
-					TokenSymbol:   "tZNN",
-					TotalSupply:   big.NewInt(78713599988800),
-				},
-				&definition.TokenInfo{
-					Decimals:      8,
-					IsBurnable:    true,
-					IsMintable:    true,
-					IsUtility:     true,
-					MaxSupply:     big.NewInt(9007199254740991),
-					Owner:         types.TokenContract,
-					TokenDomain:   "biginches.club",
-					TokenName:     "tQSR",
-					TokenStandard: types.QsrTokenStandard,
-					TokenSymbol:   "tQSR",
-					TotalSupply:   big.NewInt(772135999888000),
-				},
+				&znnStandard,
+				&qsrStandard,
 			}},
 		PlasmaConfig: &genesis.PlasmaContractConfig{
 			Fusions: []*definition.FusionInfo{}},
 		SwapConfig: &genesis.SwapContractConfig{
 			Entries: []*definition.SwapAssets{}},
 		SporkConfig: &genesis.SporkConfig{
-			Sporks: []*definition.Spork{}},
-		// TODO add accelerator-z spork
+			Sporks: []*definition.Spork{
+				&definition.Spork{
+					Id:                types.HexToHashPanic("6d2b1e6cb4025f2f45533f0fe22e9b7ce2014d91cc960471045fa64eee5a6ba3"),
+					Name:              "AZ",
+					Description:       "AZ",
+					Activated:         true,
+					EnforcementHeight: 0,
+				},
+			}},
 
 		GenesisBlocks: &genesis.GenesisBlocksConfig{
 			Blocks: []*genesis.GenesisBlockConfig{
@@ -218,6 +240,32 @@ func createDevGenesis(cfg *node.Config) error {
 				},
 			},
 		}}
+
+	if ctx.IsSet(GenesisBlockFlag.Name) {
+		input := ctx.StringSlice(GenesisBlockFlag.Name)
+		for _, s := range input {
+			// todo check and handle errors
+			// e.g. can't use same account twice
+			ss := strings.Split(s, ",")
+			a, _ := types.ParseAddress(ss[0])
+			z, _ := strconv.ParseInt(ss[1], 10, 64)
+			q, _ := strconv.ParseInt(ss[2], 10, 64)
+			znn := big.NewInt(z * constants.Decimals)
+			qsr := big.NewInt(q * constants.Decimals)
+
+			znnStandard.TotalSupply.Add(znnStandard.TotalSupply, znn)
+			qsrStandard.TotalSupply.Add(qsrStandard.TotalSupply, qsr)
+			block := genesis.GenesisBlockConfig{
+				Address: a,
+				BalanceList: map[types.ZenonTokenStandard]*big.Int{
+					types.ZnnTokenStandard: znn,
+					types.QsrTokenStandard: qsr,
+				},
+			}
+			gen.GenesisBlocks.Blocks = append(gen.GenesisBlocks.Blocks, &block)
+
+		}
+	}
 
 	// TODO add checks
 
