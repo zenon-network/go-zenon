@@ -308,9 +308,11 @@ func (tab *Table) refresh(forceSeed bool) {
 
 		nodes := append(tab.nursery, seeds...)
 
-		for i := uint32(len(nodes)) - 1; i > 0; i-- {
-			j := randUint(i)
-			nodes[i], nodes[j] = nodes[j], nodes[i]
+		if len(nodes) > 0 {
+			for i := uint32(len(nodes)) - 1; i > 0; i-- {
+				j := randUint(i)
+				nodes[i], nodes[j] = nodes[j], nodes[i]
+			}
 		}
 
 		// Bond with all the seed nodes (will pingpong only if failed recently)
