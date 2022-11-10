@@ -29,6 +29,11 @@ var (
 		Usage: "<address>,<ZnnAmount>,<QsrAmount>",
 	}
 
+	GenesisFusionFlag = cli.StringSliceFlag{
+		Name:  "genesis-fusion",
+		Usage: "<address>,<QsrAmount>",
+	}
+
 	devnetCommand = cli.Command{
 		Action:    devnetAction,
 		Name:      "generate-devnet",
@@ -38,6 +43,7 @@ var (
 
 		Flags: []cli.Flag{
 			GenesisBlockFlag,
+			GenesisFusionFlag,
 		},
 	}
 )
@@ -48,6 +54,10 @@ func devnetAction(ctx *cli.Context) error {
 
 	// 1: Apply flags, Overwrite the configuration file configuration
 	applyFlagsToConfig(ctx, &cfg)
+	// validate custom flags
+	if err := validateDevnetFlags(ctx); err != nil {
+		return err
+	}
 
 	// 2: Make dir paths absolute
 	if err := cfg.MakePathsAbsolute(); err != nil {
@@ -109,6 +119,7 @@ func createDevProducer(cfg *node.Config) error {
 	_, kp, _ := ks.DeriveForIndexPath(0)
 	ks.BaseAddress = kp.Address
 
+	// TODO make this random
 	password := "Don'tTrust.Verify"
 	kf, _ := ks.Encrypt(password)
 	kf.Path = filepath.Join(cfg.WalletPath, ks.BaseAddress.String())
@@ -144,6 +155,82 @@ func createDevNet(cfg *node.Config) error {
 	cfg.Net.MinPeers = 0
 	cfg.Net.MinConnectedPeers = 0
 	cfg.Net.Seeders = []string{}
+	return nil
+}
+
+func validateDevnetFlags(ctx *cli.Context) error {
+	if ctx.IsSet(GenesisBlockFlag.Name) {
+		input := ctx.StringSlice(GenesisBlockFlag.Name)
+		exists := make(map[types.Address]bool)
+		for _, s := range input {
+
+			ss := strings.Split(s, ",")
+			if len(ss) != 3 {
+				return errors.New("genesis-block flags must be in the format --genesis-block=<address>,<znnAmount>,<qsrAmount>")
+			}
+
+			a, err := types.ParseAddress(ss[0])
+			if err != nil {
+				return err
+			}
+			if types.IsEmbeddedAddress(a) {
+				return errors.New("genesis-block flag can only be set for user addresses")
+			}
+
+			z, err := strconv.ParseUint(ss[1], 10, 64)
+			if err != nil {
+				return err
+			}
+			q, err := strconv.ParseUint(ss[2], 10, 64)
+			if err != nil {
+				return err
+			}
+
+			if z == 0 && q == 0 {
+				return errors.New("genesis-block znn and qsr amount cannot both be 0")
+			}
+			// TODO maximum? and check for total token supply exceeds cap
+
+			if _, ok := exists[a]; ok {
+				return errors.New("genesis-block addresses must be unique")
+			}
+			exists[a] = true
+		}
+	}
+
+	if ctx.IsSet(GenesisFusionFlag.Name) {
+		input := ctx.StringSlice(GenesisFusionFlag.Name)
+		exists := make(map[types.Address]bool)
+		for _, s := range input {
+
+			ss := strings.Split(s, ",")
+			if len(ss) != 2 {
+				return errors.New("genesis-fusion flags must be in the format --genesis-fusion=<address>,<qsrAmount>")
+			}
+
+			a, err := types.ParseAddress(ss[0])
+			if err != nil {
+				return err
+			}
+			if types.IsEmbeddedAddress(a) {
+				return errors.New("genesis-fusion flag can only be set for user addresses")
+			}
+
+			q, err := strconv.ParseUint(ss[1], 10, 64)
+			if err != nil {
+				return err
+			}
+
+			if q == 0 || q > 5000 {
+				return errors.New("genesis-fusion amount must be between min:1 max:5000")
+			}
+
+			if _, ok := exists[a]; ok {
+				return errors.New("genesis-fusion addresses must be unique")
+			}
+			exists[a] = true
+		}
+	}
 	return nil
 }
 
@@ -244,8 +331,7 @@ func createDevGenesis(ctx *cli.Context, cfg *node.Config) error {
 	if ctx.IsSet(GenesisBlockFlag.Name) {
 		input := ctx.StringSlice(GenesisBlockFlag.Name)
 		for _, s := range input {
-			// todo check and handle errors
-			// e.g. can't use same account twice
+
 			ss := strings.Split(s, ",")
 			a, _ := types.ParseAddress(ss[0])
 			z, _ := strconv.ParseInt(ss[1], 10, 64)
@@ -267,7 +353,36 @@ func createDevGenesis(ctx *cli.Context, cfg *node.Config) error {
 		}
 	}
 
-	// TODO add checks
+	if ctx.IsSet(GenesisFusionFlag.Name) {
+		plasmaAddress := big.NewInt(0)
+		input := ctx.StringSlice(GenesisFusionFlag.Name)
+		for _, s := range input {
+
+			ss := strings.Split(s, ",")
+			a, _ := types.ParseAddress(ss[0])
+			q, _ := strconv.ParseInt(ss[1], 10, 64)
+			qsr := big.NewInt(q * constants.Decimals)
+
+			qsrStandard.TotalSupply.Add(qsrStandard.TotalSupply, qsr)
+			plasmaAddress.Add(plasmaAddress, qsr)
+			fusion := definition.FusionInfo{
+				Owner:            a,
+				Id:               types.NewHash(a.Bytes()),
+				Amount:           qsr,
+				ExpirationHeight: 1,
+				Beneficiary:      a,
+			}
+			gen.PlasmaConfig.Fusions = append(gen.PlasmaConfig.Fusions, &fusion)
+		}
+		block := genesis.GenesisBlockConfig{
+			Address: types.PlasmaContract,
+			BalanceList: map[types.ZenonTokenStandard]*big.Int{
+				types.QsrTokenStandard: plasmaAddress,
+			},
+		}
+		gen.GenesisBlocks.Blocks = append(gen.GenesisBlocks.Blocks, &block)
+
+	}
 
 	file, _ := json.MarshalIndent(gen, "", " ")
 	_ = ioutil.WriteFile(cfg.GenesisFile, file, 0644)
