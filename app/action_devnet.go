@@ -34,6 +34,18 @@ var (
 		Usage: "<address>,<QsrAmount>",
 	}
 
+	// TODO
+	SporkAddressFlag = cli.StringFlag{
+		Name: "spork-address",
+		Usage: "<address>",
+	}
+
+	// TODO
+	GenesisSporkFlag = cli.StringSliceFlag{
+		Name:  "genesis-spork",
+		Usage: "<hashId>,<activationStatus: true,false>",
+	}
+
 	devnetCommand = cli.Command{
 		Action:    devnetAction,
 		Name:      "generate-devnet",
@@ -44,6 +56,8 @@ var (
 		Flags: []cli.Flag{
 			GenesisBlockFlag,
 			GenesisFusionFlag,
+			SporkAddressFlag,
+			GenesisSporkFlag,
 		},
 	}
 )
@@ -268,6 +282,25 @@ func createDevGenesis(ctx *cli.Context, cfg *node.Config) error {
 		TotalSupply:   big.NewInt(772135999888000),
 	}
 
+	// by default activate all implemented sporks at height 0
+	// can be overriden by --genesis-spork
+	genesisSporksMap := make(map[types.Hash]bool)
+	for sporkId, status := range types.ImplementedSporksMap {
+		genesisSporksMap[sporkId] = status
+	}
+	// apply genesis sporks flag
+	genesisSporks := make([]*definition.Spork, 0)
+	for sporkId, status := range genesisSporksMap {
+			spork := definition.Spork{
+					Id:                sporkId,
+					Name:              "genesis-spork",
+					Description:       "genesis-spork",
+					Activated:         status,
+					EnforcementHeight: 0,
+			}
+			genesisSporks = append(genesisSporks, &spork)
+	}
+
 	gen := genesis.GenesisConfig{
 		ChainIdentifier:     321,
 		ExtraData:           "/thank_you_bich_dao",
@@ -300,16 +333,8 @@ func createDevGenesis(ctx *cli.Context, cfg *node.Config) error {
 		SwapConfig: &genesis.SwapContractConfig{
 			Entries: []*definition.SwapAssets{}},
 		SporkConfig: &genesis.SporkConfig{
-			Sporks: []*definition.Spork{
-				&definition.Spork{
-					Id:                types.HexToHashPanic("6d2b1e6cb4025f2f45533f0fe22e9b7ce2014d91cc960471045fa64eee5a6ba3"),
-					Name:              "AZ",
-					Description:       "AZ",
-					Activated:         true,
-					EnforcementHeight: 0,
-				},
-			}},
-
+			Sporks: genesisSporks,
+		},
 		GenesisBlocks: &genesis.GenesisBlocksConfig{
 			Blocks: []*genesis.GenesisBlockConfig{
 				&genesis.GenesisBlockConfig{
