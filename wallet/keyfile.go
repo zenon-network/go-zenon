@@ -70,7 +70,7 @@ func (kf *KeyFile) Write() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(kf.Path, keyFileJson, 700)
+	return os.WriteFile(kf.Path, keyFileJson, 0700)
 }
 
 func (kf *KeyFile) Decrypt(password string) (*KeyStore, error) {
