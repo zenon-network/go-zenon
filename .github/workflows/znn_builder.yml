@@ -1,3 +1,5 @@
+name: Build and release znnd and libznn
+
 on:
   push:
     branches:
@@ -9,13 +11,14 @@ jobs:
   xgo:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v3
       - name: Check for Go vulnerabilities
         uses: opzkit/govulncheck-action@v1.0.0
         with:
           govuln-version: 'latest'
           packages: './...'
-      - name: Checkout
-        uses: actions/checkout@v3
+      
       - name: Build znnd
         uses: crazy-max/ghaction-xgo@v2.2.0
         with:
@@ -47,17 +50,17 @@ jobs:
           buildmode: c-shared
           trimpath: true
       - name: Run makefat for darwin builds
-        run: cd .. && git clone https://github.com/randall77/makefat.git && cd ./makefat && go build -o mainfat makefat.go && ./mainfat ../go-zenon/build/libznn.dylib ../go-zenon/build/libznn-darwin-amd64.dylib ../go-zenon/build/libznn-darwin-arm64.dylib && ./mainfat ../go-zenon/build/znnd-darwin-universal ../go-zenon/build/znnd-darwin-amd64 ../go-zenon/build/znnd-darwin-arm64 && ls -alh ../go-zenon/build/
-      - name: Go back to build directory and remove header files
-        run: pwd && cd ./build && rm ./*.h
-      - name: Generate SHA256 checksum
+        run: cd .. && git clone https://github.com/randall77/makefat.git && cd ./makefat && go build -o mainfat makefat.go && ./mainfat ../go-zenon/build/libznn-darwin-universal.dylib ../go-zenon/build/libznn-darwin-amd64.dylib ../go-zenon/build/libznn-darwin-arm64.dylib && ./mainfat ../go-zenon/build/znnd-darwin-universal ../go-zenon/build/znnd-darwin-amd64 ../go-zenon/build/znnd-darwin-arm64 && ls -alh ../go-zenon/build/
+      - name: Go back to build directory, remove header files and add execute flag
+        run: pwd && cd ./build && rm ./*.h && chmod +x ./*
+      - name: Generate checksums
         run: cd build/ && sha256sum * > SHA256CHECKSUMS.txt
-      - name: Upload binaries to release
-        uses: svenstaro/upload-release-action@v2
+      - name: Upload files to a GitHub release
+        uses: svenstaro/upload-release-action@2.3.0
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: build/*
-          file_glob: true
           tag: ${{ github.ref }}
+          file_glob: true
           overwrite: true
-          body: "Test release"
+          body: ""
