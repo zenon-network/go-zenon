@@ -18,8 +18,8 @@ ifeq ($(detected_OS),Linux)
     EXECUTABLE=libznn.so
 endif
 
-SERVERMAIN = $(shell pwd)/main.go
-LIBMAIN = $(shell pwd)/main_libznn.go
+SERVERMAIN = $(shell pwd)/cmd/znnd/main.go
+LIBMAIN = $(shell pwd)/cmd/libznn/main_libznn.go
 BUILDDIR = $(shell pwd)/build
 
 
