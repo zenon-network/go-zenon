@@ -19,7 +19,7 @@ jobs:
 #           govuln-version: 'latest'
 #           packages: './...'
       - name: Install zip utility
-        run: apt-get update && apt-get install -y zip
+        run: sudo apt update && sudo apt install -y zip
       - name: Build znnd
         uses: crazy-max/ghaction-xgo@v2.2.0
         with:
