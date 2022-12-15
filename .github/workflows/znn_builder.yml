@@ -27,16 +27,16 @@ jobs:
           go_version: latest
           dest: build
           prefix: znnd
-          pkg: ./cmd/znnd
+          pkg: cmd/znnd
           targets: darwin/arm64,darwin/amd64,windows/amd64,linux/amd64,linux/arm64
-          v: false
-          x: false
+          v: true
+          x: true
           ldflags: -s -w
-          buildvcs: true
+          buildvcs: false
           buildmode: default
           trimpath: true
       - name: Remove cmd/znnd
-        run: rm -rf ./cmd/znnd
+        run: pwd && rm -rf ./cmd/znnd
       - name: Build libznn
         uses: crazy-max/ghaction-xgo@v2.2.0
         with:
@@ -44,12 +44,12 @@ jobs:
           go_version: latest
           dest: build
           prefix: libznn
-          pkg: ./cmd/libznn
+          pkg: cmd/libznn
           targets: darwin/arm64,darwin/amd64,windows/amd64,linux/amd64,linux/arm64
-          v: false
-          x: false
+          v: true
+          x: true
           ldflags: -s -w
-          buildvcs: true
+          buildvcs: false
           buildmode: c-shared
           trimpath: true
       - name: Run makefat for darwin builds
