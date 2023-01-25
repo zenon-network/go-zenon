@@ -26,7 +26,7 @@ jobs:
           govuln-version: 'latest'
           packages: './...'
       - name: Build znnd
-        uses: crazy-max/ghaction-xgo@v2.2.0
+        uses: crazy-max/ghaction-xgo@v2.3.0
         with:
           xgo_version: latest
           go_version: latest
@@ -41,7 +41,7 @@ jobs:
           buildmode: default
           trimpath: true
       - name: Build libznn
-        uses: crazy-max/ghaction-xgo@v2.2.0
+        uses: crazy-max/ghaction-xgo@v2.3.0
         with:
           xgo_version: latest
           go_version: latest
