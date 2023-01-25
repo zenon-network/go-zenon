@@ -1,4 +1,4 @@
-// +build !libznn
+//go:build !libznn
 
 package main
 
