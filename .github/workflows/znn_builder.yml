@@ -25,6 +25,8 @@ jobs:
         with:
           govuln-version: 'latest'
           packages: './...'
+      - name: Make version
+        run: make version
       - name: Build znnd
         uses: crazy-max/ghaction-xgo@v2.3.0
         with:

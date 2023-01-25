@@ -21,18 +21,25 @@ endif
 SERVERMAIN = $(shell pwd)/cmd/znnd/main.go
 LIBMAIN = $(shell pwd)/cmd/libznn/main_libznn.go
 BUILDDIR = $(shell pwd)/build
-
+GIT_COMMIT=$(shell git rev-parse HEAD)
+GIT_COMMIT_FILE=$(shell pwd)/metadata/git_commit.go
 
 $(EXECUTABLE):
 	go build -o $(BUILDDIR)/$(EXECUTABLE) -buildmode=c-shared -tags libznn $(LIBMAIN)
 
-libznn: $(EXECUTABLE) ## Build binaries
+libznn: $(EXECUTABLE)
 	@echo "Build libznn done."
 
 znnd:
 	go build -o $(BUILDDIR)/znnd $(SERVERMAIN)
 	@echo "Build server done."
 	@echo "Run \"$(BUILDDIR)/znnd\" to start server."
+
+version:
+	@echo "package metadata\n" > $(GIT_COMMIT_FILE)
+	@echo "const (" >> $(GIT_COMMIT_FILE)
+	@echo "\tGitCommit = \"${GIT_COMMIT}\"" >> $(GIT_COMMIT_FILE)
+	@echo ")" >> $(GIT_COMMIT_FILE)
 
 clean:
 	rm -r $(BUILDDIR)/
