@@ -19,7 +19,7 @@ jobs:
           sudo apt install -y zip
       - name: Run tests
         run: |
-          go test ./...
+          for s in $(go list ./...); do if ! go test -failfast -v -p 1 $s; then exit 1; fi; done
       - name: Check for Go vulnerabilities
         uses: opzkit/govulncheck-action@v1.0.0
         with:
@@ -79,12 +79,17 @@ jobs:
         run: | 
           cd build/
           sha256sum * > SHA256CHECKSUMS.txt
+      - name: Set version
+        run: |
+          GOZENON=$(cat metadata/version.go | grep Version | awk -F '"' '{print $2}')
+          echo "GOZENON_VERSION=$GOZENON" >> $GITHUB_ENV
       - name: Upload files to a GitHub release
         uses: svenstaro/upload-release-action@2.3.0
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: build/*
-          tag: ${{ github.ref }}
+          release_name: ${{ env.GOZENON_VERSION }}
+          tag: ${{ env.GOZENON_VERSION }}-alphanet
           file_glob: true
           overwrite: true
           body: ""

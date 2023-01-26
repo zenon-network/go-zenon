@@ -32,8 +32,8 @@ libznn: $(EXECUTABLE)
 
 znnd:
 	go build -o $(BUILDDIR)/znnd $(SERVERMAIN)
-	@echo "Build server done."
-	@echo "Run \"$(BUILDDIR)/znnd\" to start server."
+	@echo "Build znnd done."
+	@echo "Run \"$(BUILDDIR)/znnd\" to start znnd."
 
 version:
 	@echo "package metadata\n" > $(GIT_COMMIT_FILE)
@@ -44,4 +44,4 @@ version:
 clean:
 	rm -r $(BUILDDIR)/
 
-all: znnd
+all: znnd libznn
