@@ -1,6 +1,10 @@
 package definition
 
 import (
+	"github.com/pkg/errors"
+	"github.com/zenon-network/go-zenon/common/db"
+	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"math/big"
 	"strings"
 
@@ -18,16 +22,126 @@ const (
 		]},
 		{"type":"function","name":"BurnZnn", "inputs":[
 			{"name":"burnAmount","type":"uint256"}
-		]}
+		]},
+		{"type":"function","name":"SetTokenTuple", "inputs":[
+			{"name":"tokenStandards","type":"string[]"},
+			{"name":"znnPercentages","type":"uint32[]"},
+			{"name":"qsrPercentages","type":"uint32[]"}
+		]},
+		{"type":"variable","name":"liquidityInfo","inputs":[
+			{"name":"administratorPubKey","type":"string"},
+			{"name":"tokenTuples","type":"bytes[]"}
+		]},
+		{"type":"variable","name":"tokenTuple","inputs":[
+			{"name":"tokenStandard","type":"string"},
+			{"name":"znnPercentage","type":"uint32"},
+			{"name":"qsrPercentage","type":"uint32"}
+		]},
+		{"type":"variable", "name":"liquidityStakeEntry", "inputs":[
+			{"name":"amount", "type":"uint256"},
+			{"name":"tokenStandard", "type":"tokenStandard"},
+			{"name":"weightedAmount", "type":"uint256"},
+			{"name":"startTime", "type":"int64"},
+			{"name":"revokeTime", "type":"int64"},
+			{"name":"expirationTime", "type":"int64"}
+		]},
+		{"type":"function","name":"LiquidityStake","inputs":[{"name":"durationInSec", "type":"int64"}]}
 	]`
 
-	FundMethodName    = "Fund"
-	BurnZnnMethodName = "BurnZnn"
+	FundMethodName           = "Fund"
+	BurnZnnMethodName        = "BurnZnn"
+	SetTokenTupleMethodName  = "SetTokenTuple"
+	LiquidityStakeMethodName = "LiquidityStake"
+
+	liquidityInfoVariableName       = "liquidityInfo"
+	tokenTupleVariableName          = "tokenTuple"
+	liquidityStakeEntryVariableName = "liquidityStakeEntry"
 )
 
 var (
 	ABILiquidity = abi.JSONToABIContract(strings.NewReader(jsonLiquidity))
+
+	LiquidityInfoKeyPrefix       = []byte{1}
+	LiquidityStakeEntryKeyPrefix = []byte{2}
 )
+
+type LiquidityInfoVariable struct {
+	AdministratorPubKey string   `json:"administratorPubKey"`
+	TokenTuples         [][]byte `json:"tokenTuples"`
+}
+type LiquidityInfo struct {
+	AdministratorPubKey string       `json:"administratorPubKey"`
+	TokenTuples         []TokenTuple `json:"tokenTuples"`
+}
+
+func (liq *LiquidityInfoVariable) Save(context db.DB) error {
+	data, err := ABILiquidity.PackVariable(
+		liquidityInfoVariableName,
+		liq.AdministratorPubKey,
+		liq.TokenTuples,
+	)
+	if err != nil {
+		return err
+	}
+	return context.Put(
+		LiquidityInfoKeyPrefix,
+		data,
+	)
+}
+func parseLiquidityInfo(data []byte) (*LiquidityInfo, error) {
+	if len(data) > 0 {
+		liquidityInfoVariable := new(LiquidityInfoVariable)
+		if err := ABILiquidity.UnpackVariable(liquidityInfoVariable, liquidityInfoVariableName, data); err != nil {
+			return nil, err
+		}
+		tokenTuples := make([]TokenTuple, 0)
+		for _, token := range liquidityInfoVariable.TokenTuples {
+			tokenTuple := new(TokenTuple)
+			if err := ABILiquidity.UnpackVariable(tokenTuple, tokenTupleVariableName, token); err != nil {
+				continue
+			}
+			tokenTuples = append(tokenTuples, *tokenTuple)
+		}
+		liquidityInfo := &LiquidityInfo{
+			AdministratorPubKey: liquidityInfoVariable.AdministratorPubKey,
+			TokenTuples:         tokenTuples,
+		}
+		return liquidityInfo, nil
+	} else {
+		return &LiquidityInfo{
+			AdministratorPubKey: constants.InitialBridgeAdministratorPubKey,
+			TokenTuples:         nil,
+		}, nil
+	}
+}
+func GetLiquidityInfo(context db.DB) (*LiquidityInfo, error) {
+	if data, err := context.Get(LiquidityInfoKeyPrefix); err != nil {
+		return nil, err
+	} else {
+		upd, err := parseLiquidityInfo(data)
+		return upd, err
+	}
+}
+func EncodeLiquidityInfo(liquidityInfo *LiquidityInfo) (*LiquidityInfoVariable, error) {
+	liquidityInfoVariable := new(LiquidityInfoVariable)
+	liquidityInfoVariable.AdministratorPubKey = liquidityInfo.AdministratorPubKey
+	tokenTuples := make([][]byte, 0)
+	for _, token := range liquidityInfo.TokenTuples {
+		if tokenTuple, err := ABILiquidity.PackVariable(tokenTupleVariableName, token.TokenStandard, token.ZnnPercentage, token.QsrPercentage); err != nil {
+			return nil, err
+		} else {
+			tokenTuples = append(tokenTuples, tokenTuple)
+		}
+	}
+	liquidityInfoVariable.TokenTuples = tokenTuples
+	return liquidityInfoVariable, nil
+}
+
+type TokenTuple struct {
+	TokenStandard string `json:"tokenStandard"`
+	ZnnPercentage uint32 `json:"znnPercentage"`
+	QsrPercentage uint32 `json:"qsrPercentage"`
+}
 
 type FundParam struct {
 	ZnnReward *big.Int
@@ -36,4 +150,90 @@ type FundParam struct {
 
 type BurnParam struct {
 	BurnAmount *big.Int
+}
+
+type TokenTuplesParam struct {
+	TokenStandards []string
+	ZnnPercentages []uint32
+	QsrPercentages []uint32
+}
+
+type LiquidityStakeEntry struct {
+	Amount         *big.Int                 `json:"amount"`
+	TokenStandard  types.ZenonTokenStandard `json:"tokenStandard"`
+	WeightedAmount *big.Int                 `json:"weightedAmount"`
+	StartTime      int64                    `json:"startTime"`
+	RevokeTime     int64                    `json:"revokeTime"`
+	ExpirationTime int64                    `json:"expirationTime"`
+	StakeAddress   types.Address            `json:"stakeAddress"`
+	Id             types.Hash               `json:"id"`
+}
+
+func (stake *LiquidityStakeEntry) Save(context db.DB) error {
+	return context.Put(
+		getLiquidityStakeEntryKey(stake.Id, stake.StakeAddress),
+		ABILiquidity.PackVariablePanic(
+			liquidityStakeEntryVariableName,
+			stake.Amount,
+			stake.TokenStandard,
+			stake.WeightedAmount,
+			stake.StartTime,
+			stake.RevokeTime,
+			stake.ExpirationTime,
+		))
+}
+func (stake *LiquidityStakeEntry) Delete(context db.DB) error {
+	return context.Delete(getLiquidityStakeEntryKey(stake.Id, stake.StakeAddress))
+}
+
+func getLiquidityStakeEntryKey(id types.Hash, address types.Address) []byte {
+	return append(append(LiquidityStakeEntryKeyPrefix, address.Bytes()...), id.Bytes()...)
+}
+func isLiquidityStakeEntryKey(key []byte) bool {
+	return key[0] == LiquidityStakeEntryKeyPrefix[0]
+}
+func unmarshalLiquidityStakeEntryKey(key []byte) (*types.Hash, *types.Address, error) {
+	if !isLiquidityStakeEntryKey(key) {
+		return nil, nil, errors.Errorf("invalid key! Not liquidity stake entry key")
+	}
+	h := new(types.Hash)
+	err := h.SetBytes(key[1+types.AddressSize:])
+	if err != nil {
+		return nil, nil, err
+	}
+
+	addr := new(types.Address)
+	err = addr.SetBytes(key[1 : 1+types.AddressSize])
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return h, addr, nil
+}
+func parseLiquidityStakeEntry(key []byte, data []byte) (*LiquidityStakeEntry, error) {
+	if len(data) > 0 {
+		entry := new(LiquidityStakeEntry)
+		err := ABILiquidity.UnpackVariable(entry, liquidityStakeEntryVariableName, data)
+		if err != nil {
+			return nil, err
+		}
+
+		id, address, err := unmarshalLiquidityStakeEntryKey(key)
+		if err != nil {
+			return nil, err
+		}
+		entry.Id = *id
+		entry.StakeAddress = *address
+		return entry, err
+	} else {
+		return nil, constants.ErrDataNonExistent
+	}
+}
+func GetLiquidityStakeEntry(context db.DB, id types.Hash, address types.Address) (*LiquidityStakeEntry, error) {
+	key := getLiquidityStakeEntryKey(id, address)
+	if data, err := context.Get(key); err != nil {
+		return nil, err
+	} else {
+		return parseLiquidityStakeEntry(key, data)
+	}
 }

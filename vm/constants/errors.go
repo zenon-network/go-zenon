@@ -16,6 +16,7 @@ var (
 	ErrUnpackError            = errors.New("invalid unpack method data")
 	ErrInsufficientBalance    = errors.New("insufficient balance for transfer")
 	ErrPermissionDenied       = errors.New("address cannot call this method")
+	ErrInvalidArguments       = errors.New("invalid arguments")
 	ErrInvalidB64Decode       = errors.New("invalid b64 decode")
 	ErrForbiddenParam         = errors.New("forbidden parameter")
 	ErrNotEnoughSlots         = errors.New("not enough slots left")
@@ -58,4 +59,34 @@ var (
 
 	// Spork
 	ErrAlreadyActivated = errors.New("spork is already activated")
+
+	// Bridge
+	ErrUnknownNetwork                       = errors.New("unknown network")
+	ErrInvalidToAddress                     = errors.New("invalid destination address")
+	ErrBridgeNotInitialized                 = errors.New("bridge info is not initialized")
+	ErrOrchestratorNotInitialized           = errors.New("orchestrator info is not initialized")
+	ErrTokenNotBridgeable                   = errors.New("token not bridgeable")
+	ErrTokenNotRedeemable                   = errors.New("token not redeemable")
+	ErrBridgeHalted                         = errors.New("bridge is halted")
+	ErrInvalidRedeemPeriod                  = errors.New("invalid redeem period")
+	ErrInvalidRedeemRequest                 = errors.New("invalid request")
+	ErrInvalidTransactionHash               = errors.New("invalid transaction hash")
+	ErrInvalidNetworkName                   = errors.New("invalid network name")
+	ErrInvalidContractAddress               = errors.New("invalid contract address")
+	ErrInvalidToken                         = errors.New("invalid token standard or token address")
+	ErrTokenNotFound                        = errors.New("token not found")
+	ErrInvalidEDDSASignature                = errors.New("invalid ed25519 signature")
+	ErrInvalidEDDSAPubKey                   = errors.New("invalid eddsa public key")
+	ErrInvalidECDSASignature                = errors.New("invalid secp256k1 signature")
+	ErrInvalidDecompressedECDSAPubKeyLength = errors.New("invalid decompressed secp256k1 public key length")
+	ErrInvalidCompressedECDSAPubKeyLength   = errors.New("invalid compressed secp256k1 public key length")
+	ErrNotAllowedToChangeSignature          = errors.New("changing the signature is not allowed")
+	ErrInvalidJsonContent                   = errors.New("metadata does not respect the JSON format")
+	ErrInvalidMinAmount                     = errors.New("invalid min amount")
+	ErrInvalidFee                           = errors.New("invalid fee")
+	ErrInvalidKeySignThreshold              = errors.New("invalid threshold for key sign")
+	ErrNotEmergency                         = errors.New("bridge not in emergency")
+
+	// Liquidity
+	ErrInvalidPercentages = errors.New("invalid percentages")
 )

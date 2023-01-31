@@ -1,6 +1,9 @@
 package tests
 
 import (
+	"encoding/base64"
+	"github.com/zenon-network/go-zenon/rpc/api/embedded"
+	"math/big"
 	"testing"
 	"time"
 
@@ -314,4 +317,160 @@ t=2001-09-09T02:47:30+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 187200000000-1)
 	z.ExpectBalance(types.LiquidityContract, types.QsrTokenStandard, 500000000000)
+}
+
+func TestLiquidity_SetTokenTuples(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
+t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:false EnforcementHeight:0}"
+t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:true EnforcementHeight:9}"
+`)
+	sporkAPI := embedded.NewSporkApi(z)
+	liquidityAPI := embedded.NewLiquidityApi(z)
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:   g.Spork.Address,
+		ToAddress: types.SporkContract,
+		Data: definition.ABISpork.PackMethodPanic(definition.SporkCreateMethodName,
+			"spork-bridge",              // name
+			"activate spork for bridge", // description
+		),
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+
+	sporkList, _ := sporkAPI.GetAll(0, 10)
+	id := sporkList.List[0].Id
+	constants.MinUnhaltDurationInMomentums = 30
+	constants.MinAdministratorDelay = 30
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:   g.Spork.Address,
+		ToAddress: types.SporkContract,
+		Data: definition.ABISpork.PackMethodPanic(definition.SporkActivateMethodName,
+			id, // id
+		),
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+	types.BridgeSpork.SporkId = id
+	types.ImplementedSporksMap[id] = true
+	z.InsertMomentumsTo(10)
+	constants.InitialBridgeAdministratorPubKey = base64.StdEncoding.EncodeToString(g.User1.Public)
+	tokens := []string{
+		types.ZnnTokenStandard.String(),
+		types.QsrTokenStandard.String(),
+	}
+	percentages := []uint32{
+		uint32(5000),
+		uint32(5000),
+	}
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:   g.User1.Address,
+		ToAddress: types.LiquidityContract,
+		Data: definition.ABILiquidity.PackMethodPanic(definition.SetTokenTupleMethodName,
+			tokens,
+			percentages,
+			percentages,
+		),
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+	z.InsertNewMomentum()
+	common.Json(liquidityAPI.GetLiquidityInfo()).Equals(t, `
+{
+	"administratorPubKey": "GYyn77OXTL31zPbDBCe/eKir+VCF3hv+LxiOUF3XcJY=",
+	"tokenTuples": [
+		{
+			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
+			"znnPercentage": 5000,
+			"qsrPercentage": 5000
+		},
+		{
+			"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
+			"znnPercentage": 5000,
+			"qsrPercentage": 5000
+		}
+	]
+}`)
+}
+
+func TestLiquidity_SimpleLiquidityStake(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
+t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:false EnforcementHeight:0}"
+t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:true EnforcementHeight:9}"
+t=2001-09-09T01:48:40+0000 lvl=dbug msg="created liquidity stake entry" module=embedded contract=stake id=e27191ea29348623f40127a54c12e4f66ca7bf09d514369a6311ba244607d7c6 owner=z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz amount=1000000000 weighted-amount=1000000000 duration-in-days=0
+`)
+	sporkAPI := embedded.NewSporkApi(z)
+	liquidityAPI := embedded.NewLiquidityApi(z)
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:   g.Spork.Address,
+		ToAddress: types.SporkContract,
+		Data: definition.ABISpork.PackMethodPanic(definition.SporkCreateMethodName,
+			"spork-bridge",              // name
+			"activate spork for bridge", // description
+		),
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+
+	sporkList, _ := sporkAPI.GetAll(0, 10)
+	id := sporkList.List[0].Id
+	constants.MinUnhaltDurationInMomentums = 30
+	constants.MinAdministratorDelay = 30
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:   g.Spork.Address,
+		ToAddress: types.SporkContract,
+		Data: definition.ABISpork.PackMethodPanic(definition.SporkActivateMethodName,
+			id, // id
+		),
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+	types.BridgeSpork.SporkId = id
+	types.ImplementedSporksMap[id] = true
+	z.InsertMomentumsTo(10)
+	constants.InitialBridgeAdministratorPubKey = base64.StdEncoding.EncodeToString(g.User1.Public)
+	tokens := []string{
+		types.ZnnTokenStandard.String(),
+		types.QsrTokenStandard.String(),
+	}
+	percentages := []uint32{
+		uint32(5000),
+		uint32(5000),
+	}
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:   g.User1.Address,
+		ToAddress: types.LiquidityContract,
+		Data: definition.ABILiquidity.PackMethodPanic(definition.SetTokenTupleMethodName,
+			tokens,
+			percentages,
+			percentages,
+		),
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+	z.InsertNewMomentum()
+	common.Json(liquidityAPI.GetLiquidityInfo()).Equals(t, `
+{
+	"administratorPubKey": "GYyn77OXTL31zPbDBCe/eKir+VCF3hv+LxiOUF3XcJY=",
+	"tokenTuples": [
+		{
+			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
+			"znnPercentage": 5000,
+			"qsrPercentage": 5000
+		},
+		{
+			"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
+			"znnPercentage": 5000,
+			"qsrPercentage": 5000
+		}
+	]
+}`)
+	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 12000*g.Zexp)
+	defer z.CallContract(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.LiquidityContract,
+		Data:          definition.ABILiquidity.PackMethodPanic(definition.LiquidityStakeMethodName, constants.StakeTimeMinSec),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(10 * g.Zexp),
+	}).Error(t, nil)
+	z.InsertNewMomentum()
+	z.InsertNewMomentum()
+	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 11990*g.Zexp)
 }

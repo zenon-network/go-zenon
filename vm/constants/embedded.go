@@ -19,7 +19,8 @@ var (
 	RewardTimeLimit   int64 = 3600
 
 	// UpdateMinNumMomentums is the number momentums between 2 UpdateEmbedded* calls which will execute, used for all applicable contracts
-	UpdateMinNumMomentums = uint64(MomentumsPerHour * 5 / 6)
+	// TODO -> change (initial value MomentumsPerHour * 5 / 6)
+	UpdateMinNumMomentums = uint64(MomentumsPerHour / 6)
 	MaxEpochsPerUpdate    = 20
 
 	// === Accelerator ===
@@ -89,6 +90,24 @@ var (
 	// SwapAssetDecayTickValuePercentage is the percentage that is lost after in each tick, equal to 10% per SwapAssetDecayTickEpochs, after SwapAssetDecayEpochsOffset
 	SwapAssetDecayTickValuePercentage = 10
 
+	/// === Bridge constants ===
+
+	// todo change
+	InitialBridgeAdministratorPubKey = "KN9QLn/FpPmE4ceOLtaoq5+8IB+32B2A3gbqcmiFDtM="
+	MaximumFee                       = uint32(10000)
+	//MinUnhaltDurationInMomentums     = uint64(6 * MomentumsPerHour)
+	//MinAdministratorDelay        = uint64(7 * MomentumsPerEpoch) // 7 days
+	// MinGuardians                  = 5
+	//MinTssDelay = uint64(MomentumsPerEpoch) // 1 day
+	MinUnhaltDurationInMomentums  = uint64(1) // testnet
+	MinGuardians                  = 1         // testnet
+	MinAdministratorDelay         = uint64(1) // 1 for testnet
+	MinTssDelay                   = uint64(1) // 0.5 minutes
+	DecompressedECDSAPubKeyLength = 65
+	CompressedECDSAPubKeyLength   = 33
+	ECDSASignatureLength          = 65
+	EdDSAPubKeyLength             = 32
+
 	/// === Reward constants ===
 
 	// RewardTickDurationInEpochs represents the duration (in epochs) for each reward tick
@@ -119,14 +138,16 @@ var (
 		5000 * Decimals,
 	}
 
-	DelegationZnnRewardPercentage        int64 = 24
-	MomentumProducingZnnRewardPercentage int64 = 50
-	SentinelZnnRewardPercentage          int64 = 13
-	LiquidityZnnRewardPercentage         int64 = 13
+	DelegationZnnRewardPercentage        int64  = 24
+	MomentumProducingZnnRewardPercentage int64  = 50
+	SentinelZnnRewardPercentage          int64  = 13
+	LiquidityZnnRewardPercentage         int64  = 13
+	LiquidityZnnTotalPercentages         uint32 = 10000
 
-	StakingQsrRewardPercentage   int64 = 50
-	SentinelQsrRewardPercentage  int64 = 25
-	LiquidityQsrRewardPercentage int64 = 25
+	StakingQsrRewardPercentage   int64  = 50
+	SentinelQsrRewardPercentage  int64  = 25
+	LiquidityQsrRewardPercentage int64  = 25
+	LiquidityQsrTotalPercentages uint32 = 10000
 )
 
 func NetworkZnnRewardPerEpoch(epoch uint64) int64 {

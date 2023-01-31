@@ -126,14 +126,14 @@ func toGoType(index int, t Type, output []byte) (interface{}, error) {
 	}
 
 	var (
-		returnOutput []byte
-		begin, end   int
-		err          error
+		returnOutput  []byte
+		begin, length int
+		err           error
 	)
 
 	// if we require a length prefix, find the beginning word and size returned.
 	if t.requiresLengthPrefix() {
-		begin, end, err = lengthPrefixPointsTo(index, output)
+		begin, length, err = lengthPrefixPointsTo(index, output)
 		if err != nil {
 			return nil, err
 		}
@@ -143,11 +143,11 @@ func toGoType(index int, t Type, output []byte) (interface{}, error) {
 
 	switch t.T {
 	case SliceTy:
-		return forEachUnpack(t, output, begin, end)
+		return forEachUnpack(t, output[begin:], 0, length)
 	case ArrayTy:
 		return forEachUnpack(t, output, index, t.Size)
-	case StringTy: // variable arrays are written at the end of the return bytes
-		return string(output[begin : begin+end]), nil
+	case StringTy: // variable arrays are written at the length of the return bytes
+		return string(output[begin : begin+length]), nil
 	case IntTy, UintTy:
 		return readInteger(t.Kind, returnOutput), nil
 	case BoolTy:
@@ -159,7 +159,7 @@ func toGoType(index int, t Type, output []byte) (interface{}, error) {
 		tokenId, _ := types.BytesToZTS(returnOutput[WordSize-types.ZenonTokenStandardSize : WordSize])
 		return tokenId, nil
 	case BytesTy:
-		return output[begin : begin+end], nil
+		return output[begin : begin+length], nil
 	case FixedBytesTy:
 		return readFixedBytes(t, returnOutput)
 	case HashTy:
@@ -195,6 +195,7 @@ func lengthPrefixPointsTo(index int, output []byte) (start int, length int, err 
 	defer intpool.Put(totalSize)
 	totalSize.Add(totalSize, bigOffsetEnd)
 	totalSize.Add(totalSize, lengthBig)
+	totalSize.SetInt64(64)
 	if totalSize.BitLen() > 63 {
 		return 0, 0, errBigLengthOverflow(totalSize)
 	}

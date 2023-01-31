@@ -173,17 +173,34 @@ func (t Type) pack(v reflect.Value) ([]byte, error) {
 	if err := typeCheck(t, v); err != nil {
 		return nil, err
 	}
-
 	if t.T == SliceTy || t.T == ArrayTy {
+		var offsets []byte
 		var packed []byte
+
+		offset := 0
+		offsetReq := t.Elem.requiresLengthPrefix()
+		if offsetReq {
+			offset = getTypeSize(*t.Elem) * v.Len()
+		}
 
 		for i := 0; i < v.Len(); i++ {
 			val, err := t.Elem.pack(v.Index(i))
 			if err != nil {
 				return nil, err
 			}
+
+			if offsetReq {
+				offsetPacked, err := packNum(reflect.ValueOf(offset))
+				if err != nil {
+					return nil, err
+				}
+				offsets = append(offsets, offsetPacked...)
+				offset += len(val)
+			}
+
 			packed = append(packed, val...)
 		}
+		packed = append(offsets, packed...)
 		if t.T == SliceTy {
 			return packBytesSlice(packed, v.Len())
 		} else if t.T == ArrayTy {
@@ -197,4 +214,23 @@ func (t Type) pack(v reflect.Value) ([]byte, error) {
 // prefixing.
 func (t Type) requiresLengthPrefix() bool {
 	return t.T == StringTy || t.T == BytesTy || t.T == SliceTy
+}
+
+// getTypeSize returns the size that this type needs to occupy.
+// We distinguish static and dynamic types. Static types are encoded in-place
+// and dynamic types are encoded at a separately allocated location after the
+// current block.
+// So for a static variable, the size returned represents the size that the
+// variable actually occupies.
+// For a dynamic variable, the returned size is fixed 32 bytes, which is used
+// to store the location reference for actual value storage.
+func getTypeSize(t Type) int {
+	if t.T == ArrayTy && !t.Elem.requiresLengthPrefix() {
+		// Recursively calculate type size if it is a nested array
+		if t.Elem.T == ArrayTy {
+			return t.Size * getTypeSize(*t.Elem)
+		}
+		return t.Size * 32
+	}
+	return 32
 }

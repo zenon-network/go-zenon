@@ -34,7 +34,49 @@ type embeddedImplementation struct {
 var (
 	originEmbedded      = getOrigin()
 	acceleratorEmbedded = getAccelerator()
+	// todo implement it with spork
+	bridgeEmbedded = getBridge()
 )
+
+func getBridge() map[types.Address]*embeddedImplementation {
+	contracts := getAccelerator()
+	contracts[types.BridgeContract] = &embeddedImplementation{
+		map[string]Method{
+			cabi.WrapTokenMethodName:                      &implementation.WrapTokenMethod{cabi.WrapTokenMethodName},
+			cabi.UpdateWrapRequestMethodName:              &implementation.UpdateWrapRequestMethod{cabi.UpdateWrapRequestMethodName},
+			cabi.RedeemUnwrapMethodName:                   &implementation.RedeemMethod{cabi.RedeemUnwrapMethodName},
+			cabi.UnwrapTokenMethodName:                    &implementation.UnwrapTokenMethod{cabi.UnwrapTokenMethodName},
+			cabi.RevokeUnwrapRequestMethodName:            &implementation.RevokeUnwrapRequestMethod{cabi.RevokeUnwrapRequestMethodName},
+			cabi.AddNetworkMethodName:                     &implementation.AddNetworkMethod{cabi.AddNetworkMethodName},
+			cabi.RemoveNetworkMethodName:                  &implementation.RemoveNetworkMethod{cabi.RemoveNetworkMethodName},
+			cabi.SetTokenPairMethod:                       &implementation.SetTokenPairMethod{cabi.SetTokenPairMethod},
+			cabi.RemoveTokenPairMethodName:                &implementation.RemoveTokenPairMethod{cabi.RemoveTokenPairMethodName},
+			cabi.HaltMethodName:                           &implementation.HaltMethod{cabi.HaltMethodName},
+			cabi.NominateGuardiansMethodName:              &implementation.NominateGuardiansMethod{cabi.NominateGuardiansMethodName},
+			cabi.UnhaltMethodName:                         &implementation.UnhaltMethod{cabi.UnhaltMethodName},
+			cabi.ProposeAdministratorMethodName:           &implementation.ProposeAdministratorMethod{cabi.ProposeAdministratorMethodName},
+			cabi.EmergencyMethodName:                      &implementation.EmergencyMethod{cabi.EmergencyMethodName},
+			cabi.ChangeTssECDSAPubKeyMethodName:           &implementation.ChangeTssECDSAPubKeyMethod{cabi.ChangeTssECDSAPubKeyMethodName},
+			cabi.ChangeAdministratorEDDSAPubKeyMethodName: &implementation.ChangeAdministratorEDDSAPubKeyMethod{cabi.ChangeAdministratorEDDSAPubKeyMethodName},
+			cabi.AllowKeygenMethodName:                    &implementation.AllowKeygenMethod{cabi.AllowKeygenMethodName},
+			cabi.SetUnhaltDurationMethodName:              &implementation.SetUnhaltDurationMethod{cabi.SetUnhaltDurationMethodName},
+			cabi.SetOrchestratorInfoMethodName:            &implementation.SetOrchestratorInfoMethod{cabi.SetOrchestratorInfoMethodName},
+			cabi.UpdateBridgeMetadataMethodName:           &implementation.UpdateBridgeMetadataMethod{cabi.UpdateBridgeMetadataMethodName},
+			cabi.UpdateNetworkMetadataMethodName:          &implementation.UpdateNetworkMetadataMethod{cabi.UpdateNetworkMetadataMethodName},
+		},
+		cabi.ABIBridge,
+	}
+	contracts[types.LiquidityContract] = &embeddedImplementation{
+		map[string]Method{
+			// liquidity
+			cabi.SetTokenTupleMethodName:  &implementation.SetTokenTupleMethod{cabi.SetTokenTupleMethodName},
+			cabi.LiquidityStakeMethodName: &implementation.LiquidityStakeMethod{cabi.LiquidityStakeMethodName},
+		},
+		cabi.ABILiquidity,
+	}
+
+	return contracts
+}
 
 func getAccelerator() map[types.Address]*embeddedImplementation {
 	contracts := getOrigin()
@@ -155,7 +197,9 @@ func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Addres
 	}
 
 	var contractsMap map[types.Address]*embeddedImplementation
-	if context.IsAcceleratorSporkEnforced() {
+	if context.IsBridgeSporkEnforced() {
+		contractsMap = bridgeEmbedded
+	} else if context.IsAcceleratorSporkEnforced() {
 		contractsMap = acceleratorEmbedded
 	} else {
 		contractsMap = originEmbedded
