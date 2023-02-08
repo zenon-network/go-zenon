@@ -70,13 +70,13 @@ func (a *BridgeApi) GetOrchestratorInfo() (*definition.OrchestratorInfo, error) 
 	return orchestratorInfo, nil
 }
 
-func (a *BridgeApi) GetNetworkInfo(networkType uint32, chainId uint32) (*definition.NetworkInfo, error) {
+func (a *BridgeApi) GetNetworkInfo(networkClass uint32, chainId uint32) (*definition.NetworkInfo, error) {
 	_, context, err := api.GetFrontierContext(a.chain, types.BridgeContract)
 	if err != nil {
 		return nil, err
 	}
 
-	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), networkType, chainId)
+	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), networkClass, chainId)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (a *BridgeApi) toRequest(context vm_context.AccountVmContext, abiRequest *d
 	if abiRequest == nil {
 		return nil
 	}
-	networkInfoVariable, err := definition.GetNetworkInfoVariable(context.Storage(), abiRequest.NetworkType, abiRequest.ChainId)
+	networkInfoVariable, err := definition.GetNetworkInfoVariable(context.Storage(), abiRequest.NetworkClass, abiRequest.ChainId)
 	if err != nil {
 		return nil
 	}
@@ -130,7 +130,7 @@ func (a *BridgeApi) toRequest(context vm_context.AccountVmContext, abiRequest *d
 		return nil
 	}
 	request := &definition.WrapTokenRequest{
-		NetworkType:  abiRequest.NetworkType,
+		NetworkClass: abiRequest.NetworkClass,
 		ChainId:      abiRequest.ChainId,
 		Id:           abiRequest.Id,
 		ToAddress:    abiRequest.ToAddress,
@@ -314,7 +314,7 @@ func (a *BridgeApi) GetAllWrapTokenRequestsByToAddress(toAddress string, pageInd
 	return result, nil
 }
 
-func (a *BridgeApi) GetAllWrapTokenRequestsByToAddressNetworkTypeAndChainId(toAddress string, networkType, chainId uint32, pageIndex, pageSize uint32) (*WrapTokenRequestList, error) {
+func (a *BridgeApi) GetAllWrapTokenRequestsByToAddressNetworkClassAndChainId(toAddress string, networkClass, chainId uint32, pageIndex, pageSize uint32) (*WrapTokenRequestList, error) {
 	_, context, err := api.GetFrontierContext(a.chain, types.BridgeContract)
 	if err != nil {
 		return nil, err
@@ -331,7 +331,7 @@ func (a *BridgeApi) GetAllWrapTokenRequestsByToAddressNetworkTypeAndChainId(toAd
 
 	specificRequests := make([]*definition.WrapTokenRequest, 0)
 	for _, request := range requests {
-		if request.NetworkType == networkType && request.ChainId == chainId && (toAddress == "" || request.ToAddress == toAddress) {
+		if request.NetworkClass == networkClass && request.ChainId == chainId && (toAddress == "" || request.ToAddress == toAddress) {
 			specificRequests = append(specificRequests, request)
 		}
 	}
@@ -424,7 +424,7 @@ type UnwrapTokenRequestList struct {
 }
 
 func (a *BridgeApi) getTokenStandard(request *definition.UnwrapTokenRequest) (*types.ZenonTokenStandard, error) {
-	networkInfo, err := a.GetNetworkInfo(request.NetworkType, request.ChainId)
+	networkInfo, err := a.GetNetworkInfo(request.NetworkClass, request.ChainId)
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +464,7 @@ func (a *BridgeApi) GetUnwrapTokenRequestByHashAndLog(txHash types.Hash, logInde
 	if err != nil {
 		return nil, err
 	}
-	tokenPair, err := implementation.CheckNetworkAndPairExist(context, request.NetworkType, request.ChainId, request.TokenAddress)
+	tokenPair, err := implementation.CheckNetworkAndPairExist(context, request.NetworkClass, request.ChainId, request.TokenAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +508,7 @@ func (a *BridgeApi) GetAllUnwrapTokenRequests(pageIndex, pageSize uint32) (*Unwr
 		if err != nil {
 			continue
 		}
-		tokenPair, err := implementation.CheckNetworkAndPairExist(context, requests[i].NetworkType, requests[i].ChainId, requests[i].TokenAddress)
+		tokenPair, err := implementation.CheckNetworkAndPairExist(context, requests[i].NetworkClass, requests[i].ChainId, requests[i].TokenAddress)
 		if err != nil {
 			return nil, err
 		}
@@ -561,7 +561,7 @@ func (a *BridgeApi) GetAllUnwrapTokenRequestsByToAddress(toAddress string, pageI
 		if err != nil {
 			continue
 		}
-		tokenPair, err := implementation.CheckNetworkAndPairExist(context, specificRequests[i].NetworkType, specificRequests[i].ChainId, specificRequests[i].TokenAddress)
+		tokenPair, err := implementation.CheckNetworkAndPairExist(context, specificRequests[i].NetworkClass, specificRequests[i].ChainId, specificRequests[i].TokenAddress)
 		if err != nil {
 			return nil, err
 		}

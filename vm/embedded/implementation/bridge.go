@@ -157,8 +157,8 @@ func CheckBridgeHalted(bridgeInfo *definition.BridgeInfoVariable, context vm_con
 
 // CheckNetworkAndPairExist for unwrapping we return the associated zts
 // for wrapping we return the associated tokenAddress
-func CheckNetworkAndPairExist(context vm_context.AccountVmContext, networkType uint32, chainId uint32, ztsOrToken string) (*definition.TokenPair, error) {
-	network, err := definition.GetNetworkInfoVariable(context.Storage(), networkType, chainId)
+func CheckNetworkAndPairExist(context vm_context.AccountVmContext, networkClass uint32, chainId uint32, ztsOrToken string) (*definition.TokenPair, error) {
+	network, err := definition.GetNetworkInfoVariable(context.Storage(), networkClass, chainId)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +206,7 @@ func (p *WrapTokenMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkType, param.ChainId, param.ToAddress)
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId, param.ToAddress)
 	return err
 }
 func (p *WrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -224,7 +224,7 @@ func (p *WrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, send
 		return nil, err
 	}
 
-	tokenPair, err := CheckNetworkAndPairExist(context, param.NetworkType, param.ChainId, sendBlock.TokenStandard.String())
+	tokenPair, err := CheckNetworkAndPairExist(context, param.NetworkClass, param.ChainId, sendBlock.TokenStandard.String())
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +240,7 @@ func (p *WrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, send
 	common.DealWithErr(err)
 
 	request := new(definition.WrapTokenRequest)
-	request.NetworkType = param.NetworkType
+	request.NetworkClass = param.NetworkClass
 	request.ChainId = param.ChainId
 	request.Id = sendBlock.Hash
 	request.ToAddress = strings.ToLower(param.ToAddress)
@@ -285,8 +285,8 @@ func GetMessageToSignEvm(data []byte) ([]byte, error) {
 	return crypto.Keccak256([]byte(msg)), nil
 }
 
-func hashByNetworkType(data []byte, networkType uint32) ([]byte, error) {
-	switch networkType {
+func hashByNetworkClass(data []byte, networkClass uint32) ([]byte, error) {
+	switch networkClass {
 	case definition.NoMClass:
 		return crypto.Hash(data), nil
 	case definition.EvmClass:
@@ -301,8 +301,8 @@ func GetWrapTokenRequestMessage(request *definition.WrapTokenRequest, contractAd
 	values := make([]interface{}, 0)
 	amount := new(big.Int).Set(request.Amount)
 	values = append(values,
-		big.NewInt(0).SetUint64(uint64(request.NetworkType)), // network type
-		big.NewInt(0).SetUint64(uint64(request.ChainId)),     // network chain id
+		big.NewInt(0).SetUint64(uint64(request.NetworkClass)), // network type
+		big.NewInt(0).SetUint64(uint64(request.ChainId)),      // network chain id
 		contractAddress, // contract address so if we ever redeploy, not a single signature can be reused
 		big.NewInt(0).SetBytes(request.Id.Bytes()), // id which is unique
 		ecommon.HexToAddress(request.ToAddress),    // destination address
@@ -316,7 +316,7 @@ func GetWrapTokenRequestMessage(request *definition.WrapTokenRequest, contractAd
 	}
 
 	//bridgeLog.Info("CheckECDSASignature", "message", message)
-	return hashByNetworkType(messageBytes, request.NetworkType)
+	return hashByNetworkClass(messageBytes, request.NetworkClass)
 }
 
 type UpdateWrapRequestMethod struct {
@@ -357,7 +357,7 @@ func (p *UpdateWrapRequestMethod) ReceiveBlock(context vm_context.AccountVmConte
 		return nil, err
 	}
 
-	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), request.NetworkType, request.ChainId)
+	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), request.NetworkClass, request.ChainId)
 	if err != nil {
 		return nil, err
 	} else if len(networkInfo.Name) == 0 {
@@ -385,7 +385,7 @@ func GetUnwrapTokenRequestMessage(param *definition.UnwrapTokenParam) ([]byte, e
 	args := eabi.Arguments{{Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}, {Type: definition.AddressTy}, {Type: definition.Uint256Ty}}
 	values := make([]interface{}, 0)
 	values = append(values,
-		big.NewInt(0).SetUint64(uint64(param.NetworkType)),    // network type
+		big.NewInt(0).SetUint64(uint64(param.NetworkClass)),   // network type
 		big.NewInt(0).SetUint64(uint64(param.ChainId)),        // network chain id
 		big.NewInt(0).SetBytes(param.TransactionHash.Bytes()), // unique tx hash
 		big.NewInt(int64(param.LogIndex)),                     // unique logIndex for the tx
@@ -413,7 +413,7 @@ func checkUnwrapMetadataStatic(param *definition.UnwrapTokenParam) error {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	if param.NetworkType == 0 || param.ChainId == 0 {
+	if param.NetworkClass == 0 || param.ChainId == 0 {
 		return constants.ErrForbiddenParam
 	}
 
@@ -444,7 +444,7 @@ func (p *UnwrapTokenMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkType, param.ChainId, param.TransactionHash, param.LogIndex, param.ToAddress, param.TokenAddress, param.Amount, param.Signature)
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId, param.TransactionHash, param.LogIndex, param.ToAddress, param.TokenAddress, param.Amount, param.Signature)
 	return err
 }
 func (p *UnwrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -470,15 +470,15 @@ func (p *UnwrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 		common.DealWithErr(err)
 	}
 
-	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkType, param.ChainId)
+	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkClass, param.ChainId)
 	if err != nil {
 		bridgeLog.Error("Unwrap", "error", err)
 		return nil, err
-	} else if networkInfo.Type != param.NetworkType || networkInfo.Id != param.ChainId {
+	} else if networkInfo.Class != param.NetworkClass || networkInfo.Id != param.ChainId {
 		return nil, constants.ErrForbiddenParam
 	}
 
-	tokenPair, err := CheckNetworkAndPairExist(context, param.NetworkType, param.ChainId, param.TokenAddress)
+	tokenPair, err := CheckNetworkAndPairExist(context, param.NetworkClass, param.ChainId, param.TokenAddress)
 	if err != nil {
 		return nil, err
 	} else if tokenPair == nil {
@@ -503,7 +503,7 @@ func (p *UnwrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 
 	request = &definition.UnwrapTokenRequest{
 		RegistrationMomentumHeight: momentum.Height,
-		NetworkType:                param.NetworkType,
+		NetworkClass:               param.NetworkClass,
 		ChainId:                    param.ChainId,
 		TransactionHash:            param.TransactionHash,
 		LogIndex:                   param.LogIndex,
@@ -545,7 +545,7 @@ func (p *AddNetworkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidJsonContent
 	}
 
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.Type, param.ChainId, param.Name, param.ContractAddress, param.Metadata)
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.Class, param.ChainId, param.Name, param.ContractAddress, param.Metadata)
 	return err
 }
 func (p *AddNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -577,12 +577,12 @@ func (p *AddNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 		return nil, constants.ErrInvalidContractAddress
 	}
 
-	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.Type, param.ChainId)
+	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.Class, param.ChainId)
 	if err != nil {
 		return nil, err
 	}
 
-	networkInfo.Type = param.Type
+	networkInfo.Class = param.Class
 	networkInfo.Id = param.ChainId
 	networkInfo.Name = param.Name
 	networkInfo.ContractAddress = param.ContractAddress
@@ -616,7 +616,7 @@ func (p *RemoveNetworkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.Type, param.ChainId)
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.Class, param.ChainId)
 	return err
 }
 func (p *RemoveNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -640,11 +640,11 @@ func (p *RemoveNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 		return nil, constants.ErrPermissionDenied
 	}
 
-	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.Type, param.ChainId)
+	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.Class, param.ChainId)
 	if err != nil {
 		return nil, err
 	}
-	if networkInfo.Name == "" || networkInfo.Type != param.Type || networkInfo.Id != param.ChainId {
+	if networkInfo.Name == "" || networkInfo.Class != param.Class || networkInfo.Id != param.ChainId {
 		// todo implement error
 		return nil, constants.ErrPermissionDenied
 	}
@@ -684,7 +684,7 @@ func (p *SetTokenPairMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidJsonContent
 	}
 
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkType, param.ChainId, param.TokenStandard, param.TokenAddress, param.Bridgeable, param.Redeemable, param.Owned, param.MinAmount, param.FeePercentage, param.RedeemDelay, param.Metadata)
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId, param.TokenStandard, param.TokenAddress, param.Bridgeable, param.Redeemable, param.Owned, param.MinAmount, param.FeePercentage, param.RedeemDelay, param.Metadata)
 	return err
 }
 func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -720,11 +720,11 @@ func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, s
 		return nil, constants.ErrPermissionDenied
 	}
 
-	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkType, param.ChainId)
+	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkClass, param.ChainId)
 	if err != nil {
 		return nil, err
 	}
-	if networkInfo.Name == "" || networkInfo.Type != param.NetworkType || networkInfo.Id != param.ChainId {
+	if networkInfo.Name == "" || networkInfo.Class != param.NetworkClass || networkInfo.Id != param.ChainId {
 		// todo implement error
 		return nil, constants.ErrInvalidArguments
 	}
@@ -780,7 +780,7 @@ func (p *RemoveTokenPairMethod) ValidateSendBlock(block *nom.AccountBlock) error
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkType, param.ChainId, param.TokenStandard, param.TokenAddress)
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId, param.TokenStandard, param.TokenAddress)
 	return err
 }
 func (p *RemoveTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -804,11 +804,11 @@ func (p *RemoveTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext
 		return nil, constants.ErrPermissionDenied
 	}
 
-	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkType, param.ChainId)
+	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkClass, param.ChainId)
 	if err != nil {
 		return nil, err
 	}
-	if networkInfo.Name == "" || networkInfo.Type != param.NetworkType || networkInfo.Id != param.ChainId {
+	if networkInfo.Name == "" || networkInfo.Class != param.NetworkClass || networkInfo.Id != param.ChainId {
 		// todo implement error
 		return nil, constants.ErrPermissionDenied
 	}
@@ -854,7 +854,7 @@ func (p *UpdateNetworkMetadataMethod) ValidateSendBlock(block *nom.AccountBlock)
 		return constants.ErrInvalidJsonContent
 	}
 
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkType, param.ChainId, param.Metadata)
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId, param.Metadata)
 	return err
 }
 func (p *UpdateNetworkMetadataMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -878,11 +878,11 @@ func (p *UpdateNetworkMetadataMethod) ReceiveBlock(context vm_context.AccountVmC
 		return nil, constants.ErrPermissionDenied
 	}
 
-	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkType, param.ChainId)
+	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkClass, param.ChainId)
 	if err != nil {
 		return nil, err
 	}
-	if networkInfo.Name == "" || networkInfo.Type != param.NetworkType || networkInfo.Id != param.ChainId {
+	if networkInfo.Name == "" || networkInfo.Class != param.NetworkClass || networkInfo.Id != param.ChainId {
 		// todo implement error
 		return nil, constants.ErrPermissionDenied
 	}
@@ -896,12 +896,12 @@ func (p *UpdateNetworkMetadataMethod) ReceiveBlock(context vm_context.AccountVmC
 	return nil, nil
 }
 
-func GetBasicMethodMessage(methodName string, tssNonce uint64, networkType, chainId uint32) ([]byte, error) {
+func GetBasicMethodMessage(methodName string, tssNonce uint64, networkClass, chainId uint32) ([]byte, error) {
 	args := eabi.Arguments{{Type: definition.StringTy}, {Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}}
 	values := make([]interface{}, 0)
 	values = append(values,
 		methodName,
-		big.NewInt(0).SetUint64(uint64(networkType)),
+		big.NewInt(0).SetUint64(uint64(networkClass)),
 		big.NewInt(0).SetUint64(uint64(chainId)),
 		big.NewInt(0).SetUint64(tssNonce), // nonce
 	)
@@ -913,7 +913,7 @@ func GetBasicMethodMessage(methodName string, tssNonce uint64, networkType, chai
 
 	//bridgeLog.Info("CheckECDSASignature", "message", message)
 
-	return hashByNetworkType(messageBytes, networkType)
+	return hashByNetworkClass(messageBytes, networkClass)
 }
 
 type HaltMethod struct {
@@ -1073,12 +1073,12 @@ func (p *EmergencyMethod) ReceiveBlock(context vm_context.AccountVmContext, send
 	return nil, nil
 }
 
-func GetChangePubKeyMessage(methodName string, networkType uint32, chainId, tssNonce uint64, pubKey string) ([]byte, error) {
+func GetChangePubKeyMessage(methodName string, networkClass uint32, chainId, tssNonce uint64, pubKey string) ([]byte, error) {
 	args := eabi.Arguments{{Type: definition.StringTy}, {Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}}
 	values := make([]interface{}, 0)
 	values = append(values,
 		methodName,
-		big.NewInt(0).SetUint64(uint64(networkType)),
+		big.NewInt(0).SetUint64(uint64(networkClass)),
 		big.NewInt(0).SetUint64(chainId),
 		big.NewInt(0).SetUint64(tssNonce), // nonce
 	)
@@ -1693,7 +1693,7 @@ func (p *RedeemMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 		return nil, constants.ErrInvalidRedeemRequest
 	}
 
-	tokenPair, err := CheckNetworkAndPairExist(context, request.NetworkType, request.ChainId, request.TokenAddress)
+	tokenPair, err := CheckNetworkAndPairExist(context, request.NetworkClass, request.ChainId, request.TokenAddress)
 	if err != nil {
 		return nil, err
 	} else if tokenPair == nil {

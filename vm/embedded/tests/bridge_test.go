@@ -398,7 +398,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 }`)
 }
 
-func addNetwork(t *testing.T, z mock.MockZenon, networkType, chainId uint32, name, contractAddress, metadata string) {
+func addNetwork(t *testing.T, z mock.MockZenon, networkClass, chainId uint32, name, contractAddress, metadata string) {
 	bridgeAPI := embedded.NewBridgeApi(z)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User5.Address,
@@ -406,7 +406,7 @@ func addNetwork(t *testing.T, z mock.MockZenon, networkType, chainId uint32, nam
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.AddNetworkMethodName,
-			networkType, // evm
+			networkClass, // evm
 			chainId,
 			name,            //Network name
 			contractAddress, // Contract address
@@ -415,21 +415,21 @@ func addNetwork(t *testing.T, z mock.MockZenon, networkType, chainId uint32, nam
 	}).Error(t, nil)
 	z.InsertNewMomentum() // cemented send block
 	z.InsertNewMomentum() // cemented token-receive-block
-	networkInfo, err := bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err := bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 	common.Json(networkInfo.Id, err).Equals(t, strconv.Itoa(int(chainId)))
-	common.Json(networkInfo.Type, err).Equals(t, strconv.Itoa(int(networkType)))
+	common.Json(networkInfo.Class, err).Equals(t, strconv.Itoa(int(networkClass)))
 	common.ExpectString(t, networkInfo.Name, name)
 	common.ExpectString(t, networkInfo.Metadata, metadata)
 }
-func addTokenPair(t *testing.T, z mock.MockZenon, networkType, chainId uint32, zts types.ZenonTokenStandard, tokenAddress string, bridgeable, redeemable, owned bool, minAmount *big.Int, feePercentage, redeemDelay uint32, metadata string) {
+func addTokenPair(t *testing.T, z mock.MockZenon, networkClass, chainId uint32, zts types.ZenonTokenStandard, tokenAddress string, bridgeable, redeemable, owned bool, minAmount *big.Int, feePercentage, redeemDelay uint32, metadata string) {
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User5.Address,
 		ToAddress:     types.BridgeContract,
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.SetTokenPairMethod,
-			networkType,
+			networkClass,
 			chainId,
 			zts,
 			tokenAddress,
@@ -446,14 +446,14 @@ func addTokenPair(t *testing.T, z mock.MockZenon, networkType, chainId uint32, z
 	z.InsertNewMomentum() // cemented token-receive-block
 }
 func addNetworkInfo(t *testing.T, z mock.MockZenon) {
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(31337)
 	networkName := "Ethereum"
 	tokenAddress := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
 
-	addNetwork(t, z, networkType, chainId, networkName, contractAddress, "{}")
-	addTokenPair(t, z, networkType, chainId, types.ZnnTokenStandard, tokenAddress, true, true, true,
+	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, tokenAddress, true, true, true,
 		big.NewInt(1000), uint32(10), uint32(40), `{}`)
 }
 
@@ -467,15 +467,15 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	activateBridge(t, z)
 	bridgeAPI := embedded.NewBridgeApi(z)
 
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(123)
-	addNetwork(t, z, networkType, chainId, "Ethereum", "0x323b5d4c32345ced77393b3530b1eed0f346429d", "{}")
+	addNetwork(t, z, networkClass, chainId, "Ethereum", "0x323b5d4c32345ced77393b3530b1eed0f346429d", "{}")
 
-	networkInfo, err := bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err := bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -494,18 +494,18 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	activateBridge(t, z)
 	bridgeAPI := embedded.NewBridgeApi(z)
 
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(123)
 	networkName := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346428d"
-	addNetwork(t, z, networkType, chainId, networkName, contractAddress, "{}")
+	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
 
-	networkInfo, err := bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err := bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346428d",
@@ -513,14 +513,14 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": []
 }`)
 
-	addTokenPair(t, z, networkType, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
 		big.NewInt(100), uint32(15), uint32(20), `{"APR": 15, "LockingPeriod": 100}`)
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346428d",
@@ -546,7 +546,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.RemoveTokenPairMethodName,
-			networkType,
+			networkClass,
 			chainId,
 			types.ZnnTokenStandard,
 			"0x5FbDB2315678afecb367f032d93F642f64180aa3",
@@ -555,11 +555,11 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	z.InsertNewMomentum() // cemented send block
 	z.InsertNewMomentum() // cemented token-receive-block
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346428d",
@@ -573,19 +573,19 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.RemoveNetworkMethodName,
-			networkType,
+			networkClass,
 			chainId,
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum() // cemented send block
 	z.InsertNewMomentum() // cemented token-receive-block
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 0,
+	"networkClass": 0,
 	"chainId": 0,
 	"name": "",
 	"contractAddress": "",
@@ -604,18 +604,18 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	activateBridge(t, z)
 	bridgeAPI := embedded.NewBridgeApi(z)
 
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(123)
 	networkName := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346427d"
 
-	addNetwork(t, z, networkType, chainId, networkName, contractAddress, "{}")
-	networkInfo, err := bridgeAPI.GetNetworkInfo(networkType, chainId)
+	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
+	networkInfo, err := bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346427d",
@@ -623,15 +623,15 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": []
 }`)
 
-	addTokenPair(t, z, networkType, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
 		big.NewInt(200), uint32(25), uint32(20), `{"decimals": 8}`)
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346427d",
@@ -651,15 +651,15 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	]
 }`)
 
-	addTokenPair(t, z, networkType, chainId, types.QsrTokenStandard, "0x6AbDB2315678afecb367f032d93F642f64180ab4", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.QsrTokenStandard, "0x6AbDB2315678afecb367f032d93F642f64180ab4", true, true, true,
 		big.NewInt(200), uint32(25), uint32(15), `{"decimals": 8}`)
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346427d",
@@ -696,7 +696,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.RemoveTokenPairMethodName,
-			networkType,
+			networkClass,
 			chainId,
 			types.ZnnTokenStandard,
 			"0x5FbDB2315678afecb367f032d93F642f64180aa3",
@@ -705,12 +705,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	z.InsertNewMomentum() // cemented send block
 	z.InsertNewMomentum() // cemented token-receive-block
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346427d",
@@ -741,18 +741,18 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	activateBridge(t, z)
 	bridgeAPI := embedded.NewBridgeApi(z)
 
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(123)
 	networkName := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346426d"
 
-	addNetwork(t, z, networkType, chainId, networkName, contractAddress, "{}")
-	networkInfo, err := bridgeAPI.GetNetworkInfo(networkType, chainId)
+	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
+	networkInfo, err := bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346426d",
@@ -760,15 +760,15 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": []
 }`)
 
-	addTokenPair(t, z, networkType, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
 		big.NewInt(200), uint32(25), uint32(15), `{"decimals": 8}`)
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346426d",
@@ -789,12 +789,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 }`)
 	common.FailIfErr(t, err)
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346426d",
@@ -825,19 +825,19 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 `)
 	activateBridge(t, z)
 	bridgeAPI := embedded.NewBridgeApi(z)
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(123)
 	networkName := "Ethereum"
 	// todo add method for testing that adds a network instead of adding it in every test
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
 
-	addNetwork(t, z, networkType, chainId, networkName, contractAddress, "{}")
-	networkInfo, err := bridgeAPI.GetNetworkInfo(networkType, chainId)
+	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
+	networkInfo, err := bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -845,10 +845,10 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": []
 }`)
 
-	addTokenPair(t, z, networkType, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
 		big.NewInt(98745), uint32(85), uint32(40), "{}")
 
-	//addTokenPair(t, z, networkType, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa4", true, true, false,
+	//addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa4", true, true, false,
 	//	big.NewInt(456), uint32(75), uint32(17), "{}")
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User5.Address,
@@ -856,7 +856,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.SetTokenPairMethod,
-			networkType,
+			networkClass,
 			chainId,
 			types.ZnnTokenStandard,
 			"0x5FbDB2315678afecb367f032d93F642f64180aa4",
@@ -872,11 +872,11 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	z.InsertNewMomentum() // cemented send block
 	z.InsertNewMomentum() // cemented token-receive-block
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -906,18 +906,18 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 `)
 	activateBridge(t, z)
 	bridgeAPI := embedded.NewBridgeApi(z)
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(123)
 	networkName := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
 
-	addNetwork(t, z, networkType, chainId, networkName, contractAddress, "{}")
+	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
 
-	networkInfo, err := bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err := bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -925,18 +925,18 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": []
 }`)
 
-	networkType2 := uint32(1) // znn
+	networkClass2 := uint32(1) // znn
 	chainId2 := uint32(1234)
 	networkName2 := "ZnnTestnet"
 	contractAddress2 := "0x423b5d4c32345ced77393b3530b1eed0f346429d"
 
-	addNetwork(t, z, networkType2, chainId2, networkName2, contractAddress2, "{}")
+	addNetwork(t, z, networkClass2, chainId2, networkName2, contractAddress2, "{}")
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType2, chainId2)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass2, chainId2)
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 1,
+	"networkClass": 1,
 	"chainId": 1234,
 	"name": "ZnnTestnet",
 	"contractAddress": "0x423b5d4c32345ced77393b3530b1eed0f346429d",
@@ -951,7 +951,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"count": 2,
 	"list": [
 		{
-			"networkType": 1,
+			"networkClass": 1,
 			"chainId": 1234,
 			"name": "ZnnTestnet",
 			"contractAddress": "0x423b5d4c32345ced77393b3530b1eed0f346429d",
@@ -959,7 +959,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 			"tokenPairs": []
 		},
 		{
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 123,
 			"name": "Ethereum",
 			"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -979,18 +979,18 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 `)
 	activateBridge(t, z)
 	bridgeAPI := embedded.NewBridgeApi(z)
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(123)
 	networkName := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346425d"
 
-	addNetwork(t, z, networkType, chainId, networkName, contractAddress, "{}")
+	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
 
-	networkInfo, err := bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err := bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346425d",
@@ -998,15 +998,15 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": []
 }`)
 
-	addTokenPair(t, z, networkType, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
 		big.NewInt(5789), uint32(24), uint32(10), "{}")
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346425d",
@@ -1032,19 +1032,19 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.RemoveNetworkMethodName,
-			networkType,
+			networkClass,
 			chainId,
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum() // cemented send block
 	z.InsertNewMomentum() // cemented token-receive-block
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 0,
+	"networkClass": 0,
 	"chainId": 0,
 	"name": "",
 	"contractAddress": "",
@@ -1052,13 +1052,13 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": null
 }`)
 
-	addNetwork(t, z, networkType, chainId, networkName, contractAddress, "{}")
+	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
 
-	networkInfo, err = bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346425d",
@@ -1068,14 +1068,14 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 }
 
 func unwrapToken(z mock.MockZenon, t *testing.T) {
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(31337)
 	tokenAddress := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
 
 	amount := big.NewInt(100 * 1e8)
 	hash := types.HexToHashPanic("0123456789012345678901234567890123456789012345678901234567890123")
 	unwrapVar := &definition.UnwrapTokenParam{
-		NetworkType:     networkType,
+		NetworkClass:    networkClass,
 		ChainId:         chainId,
 		TransactionHash: hash,
 		LogIndex:        5,
@@ -1094,7 +1094,7 @@ func unwrapToken(z mock.MockZenon, t *testing.T) {
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.UnwrapTokenMethodName,
-			networkType,
+			networkClass,
 			chainId,
 			hash,            // TransactionHash
 			uint32(5),       // LogIndex
@@ -1116,7 +1116,7 @@ func unwrapToken(z mock.MockZenon, t *testing.T) {
 	"list": [
 		{
 			"registrationMomentumHeight": 99,
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 5,
@@ -1159,7 +1159,7 @@ func generateKeysAndAddress() (string, string, []byte) {
 func wrapToken(z mock.MockZenon, t *testing.T) {
 	bridgeAPI := embedded.NewBridgeApi(z)
 	//address := []byte{43, 80, 192, 173, 21, 180, 157, 231, 112, 3, 20, 93, 189, 154, 20, 167, 142, 66, 99, 32}
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(31337)
 
 	defer z.CallContract(&nom.AccountBlock{
@@ -1168,7 +1168,7 @@ func wrapToken(z mock.MockZenon, t *testing.T) {
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(150 * 1e8),
 		Data: definition.ABIBridge.PackMethodPanic(definition.WrapTokenMethodName,
-			networkType,
+			networkClass,
 			chainId,
 			"0xb794f5ea0ba39494ce839613fffba74279579268", // ToAddress
 		),
@@ -1181,7 +1181,7 @@ func wrapToken(z mock.MockZenon, t *testing.T) {
 	"count": 1,
 	"list": [
 		{
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
@@ -1214,7 +1214,7 @@ func wrapToken(z mock.MockZenon, t *testing.T) {
 	"count": 1,
 	"list": [
 		{
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
@@ -1301,7 +1301,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"list": [
 		{
 			"registrationMomentumHeight": 99,
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 5,
@@ -1352,7 +1352,7 @@ func updateWrapToken(z mock.MockZenon, t *testing.T) {
 	common.DealWithErr(err)
 
 	wrapReqVar := &definition.WrapTokenRequest{
-		NetworkType:   wrapRequests.List[0].NetworkType,
+		NetworkClass:  wrapRequests.List[0].NetworkClass,
 		ChainId:       wrapRequests.List[0].ChainId,
 		Id:            wrapRequests.List[0].Id,
 		ToAddress:     wrapRequests.List[0].ToAddress,
@@ -1384,7 +1384,7 @@ func updateWrapToken(z mock.MockZenon, t *testing.T) {
 	"count": 1,
 	"list": [
 		{
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
@@ -1541,7 +1541,7 @@ t=2001-09-09T02:10:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	"list": [
 		{
 			"registrationMomentumHeight": 99,
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "0123456789012345678901234567890123456789012345678901234567890123",
 			"logIndex": 0,
@@ -1571,14 +1571,14 @@ t=2001-09-09T02:10:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 }
 
 func multipleWrapToken(z mock.MockZenon, t *testing.T) {
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(31337)
 	name := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
 
-	addNetwork(t, z, networkType, chainId, name, contractAddress, "{}")
+	addNetwork(t, z, networkClass, chainId, name, contractAddress, "{}")
 
-	addTokenPair(t, z, networkType, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
 		big.NewInt(9876), uint32(20), uint32(40), "{}")
 
 	for i := 1; i < 20; i++ {
@@ -1588,7 +1588,7 @@ func multipleWrapToken(z mock.MockZenon, t *testing.T) {
 			TokenStandard: types.ZnnTokenStandard,
 			Amount:        big.NewInt(int64(i * 1e8)),
 			Data: definition.ABIBridge.PackMethodPanic(definition.WrapTokenMethodName,
-				networkType,
+				networkClass,
 				chainId,
 				"0xb794f5ea0ba39494ce839613fffba74279579268", // ToAddress
 			),
@@ -1635,7 +1635,7 @@ t=2001-09-09T02:09:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 	"count": 19,
 	"list": [
 		{
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
@@ -1661,7 +1661,7 @@ t=2001-09-09T02:09:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"confirmationsToFinality": 14
 		},
 		{
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
@@ -1687,7 +1687,7 @@ t=2001-09-09T02:09:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"confirmationsToFinality": 12
 		},
 		{
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
@@ -1721,7 +1721,7 @@ t=2001-09-09T02:09:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 	"count": 19,
 	"list": [
 		{
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
@@ -1747,7 +1747,7 @@ t=2001-09-09T02:09:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"confirmationsToFinality": 8
 		},
 		{
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
@@ -1773,7 +1773,7 @@ t=2001-09-09T02:09:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"confirmationsToFinality": 10
 		},
 		{
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
@@ -1822,14 +1822,14 @@ func RandStringRunes(n int) string {
 }
 
 func multipleUnwrapToken(z mock.MockZenon, t *testing.T) {
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(31337)
 	name := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
 	tokenAddress := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
-	addNetwork(t, z, networkType, chainId, name, contractAddress, "{}")
+	addNetwork(t, z, networkClass, chainId, name, contractAddress, "{}")
 
-	addTokenPair(t, z, networkType, chainId, types.ZnnTokenStandard, tokenAddress, true, true, false,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, tokenAddress, true, true, false,
 		big.NewInt(1478), uint32(96), uint32(10), "{}")
 
 	rand.Seed(123456)
@@ -1837,7 +1837,7 @@ func multipleUnwrapToken(z mock.MockZenon, t *testing.T) {
 		amount := big.NewInt(int64(i * 1e8))
 		hash := types.HexToHashPanic(RandStringRunes(64))
 		unwrapVar := &definition.UnwrapTokenParam{
-			NetworkType:     networkType,
+			NetworkClass:    networkClass,
 			ChainId:         chainId,
 			TransactionHash: hash,
 			LogIndex:        uint32(i),
@@ -1857,7 +1857,7 @@ func multipleUnwrapToken(z mock.MockZenon, t *testing.T) {
 			TokenStandard: types.ZnnTokenStandard,
 			Amount:        big.NewInt(0),
 			Data: definition.ABIBridge.PackMethodPanic(definition.UnwrapTokenMethodName,
-				networkType,
+				networkClass,
 				chainId,
 				unwrapVar.TransactionHash, // TransactionHash
 				unwrapVar.LogIndex,
@@ -1892,7 +1892,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"list": [
 		{
 			"registrationMomentumHeight": 135,
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 19,
@@ -1919,7 +1919,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		},
 		{
 			"registrationMomentumHeight": 133,
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 18,
@@ -1946,7 +1946,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		},
 		{
 			"registrationMomentumHeight": 131,
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 17,
@@ -1982,7 +1982,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"list": [
 		{
 			"registrationMomentumHeight": 105,
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 0,
@@ -2009,7 +2009,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		},
 		{
 			"registrationMomentumHeight": 103,
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 0,
@@ -2036,7 +2036,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		},
 		{
 			"registrationMomentumHeight": 101,
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 0,
@@ -2080,18 +2080,18 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	activateBridge(t, z)
 	bridgeAPI := embedded.NewBridgeApi(z)
 
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(123)
 	name := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
 
-	addNetwork(t, z, networkType, chainId, name, contractAddress, "{}")
+	addNetwork(t, z, networkClass, chainId, name, contractAddress, "{}")
 
-	networkInfo, err := bridgeAPI.GetNetworkInfo(networkType, chainId)
+	networkInfo, err := bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -2105,16 +2105,16 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.UpdateNetworkMetadataMethodName,
-			networkType, // evm
+			networkClass, // evm
 			chainId,
 			`{"contractAddress":"0x0834eFec9672e5953fbda13B36339A726fBcaA8F","contractDeploymentHeight":7790553,"estimatedBlockTime":12,"confirmationsToFinality":5}`,
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum() // cemented send block
 	z.InsertNewMomentum() // cemented token-receive-block
-	common.Json(bridgeAPI.GetNetworkInfo(networkType, chainId)).Equals(t, `
+	common.Json(bridgeAPI.GetNetworkInfo(networkClass, chainId)).Equals(t, `
 {
-	"networkType": 2,
+	"networkClass": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -2132,7 +2132,7 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork s
 t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:true EnforcementHeight:9}"
 `)
 	activateBridge(t, z)
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(31337)
 
 	defer z.CallContract(&nom.AccountBlock{
@@ -2165,7 +2165,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(150 * 1e8),
 		Data: definition.ABIBridge.PackMethodPanic(definition.WrapTokenMethodName,
-			networkType,
+			networkClass,
 			chainId,
 			"0xb794f5ea0ba39494ce839613fffba74279579268", // ToAddress
 		),
@@ -2175,7 +2175,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 }
 
 type NetworkInfoParam struct {
-	Type       uint32   `json:"networkType"`
+	Type       uint32   `json:"networkClass"`
 	Id         uint32   `json:"chainId"`
 	Name       string   `json:"name"`
 	Metadata   string   `json:"metadata"`
@@ -2250,12 +2250,12 @@ t=2001-09-09T02:03:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 	activateBridge(t, z)
 	tokenAPI := embedded.NewTokenApi(z)
 
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(123)
 	name := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
-	addNetwork(t, z, networkType, chainId, name, contractAddress, "{}")
-	addTokenPair(t, z, networkType, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addNetwork(t, z, networkClass, chainId, name, contractAddress, "{}")
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
 		big.NewInt(100), uint32(15), uint32(20), `{"APR": 15, "LockingPeriod": 100}`)
 
 	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 1200000000000)
@@ -2283,7 +2283,7 @@ t=2001-09-09T02:03:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(150 * 1e8),
 		Data: definition.ABIBridge.PackMethodPanic(definition.WrapTokenMethodName,
-			networkType,
+			networkClass,
 			chainId,
 			"0xb794f5ea0ba39494ce839613fffba74279579268", // ToAddress
 		),
@@ -2320,12 +2320,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	activateBridge(t, z)
 	tokenAPI := embedded.NewTokenApi(z)
 
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(123)
 	name := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
-	addNetwork(t, z, networkType, chainId, name, contractAddress, "{}")
-	addTokenPair(t, z, networkType, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, false,
+	addNetwork(t, z, networkClass, chainId, name, contractAddress, "{}")
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, false,
 		big.NewInt(100), uint32(15), uint32(20), `{"APR": 15, "LockingPeriod": 100}`)
 
 	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 1200000000000)
@@ -2353,7 +2353,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(150 * 1e8),
 		Data: definition.ABIBridge.PackMethodPanic(definition.WrapTokenMethodName,
-			networkType,
+			networkClass,
 			chainId,
 			"0xb794f5ea0ba39494ce839613fffba74279579268", // ToAddress
 		),
@@ -2389,14 +2389,14 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 `)
 	bridgeAPI := embedded.NewBridgeApi(z)
 	activateBridge(t, z)
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(31337)
 	networkName := "Ethereum"
 	tokenAddress := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
 
-	addNetwork(t, z, networkType, chainId, networkName, contractAddress, "{}")
-	addTokenPair(t, z, networkType, chainId, types.ZnnTokenStandard, tokenAddress, true, true, false,
+	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, tokenAddress, true, true, false,
 		big.NewInt(1000), uint32(10), uint32(40), `{ "contractAddress":"aaa", "contractDeploymentHeight": 100, "estimatedBlockTime": 200, "confirmationsToFinality": 300, "decimals": 8 }`)
 
 	unwrapToken(z, t)
@@ -2406,7 +2406,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(150 * 1e8),
 		Data: definition.ABIBridge.PackMethodPanic(definition.WrapTokenMethodName,
-			networkType,
+			networkClass,
 			chainId,
 			"0xb794f5ea0ba39494ce839613fffba74279579268", // ToAddress
 		),
@@ -2445,7 +2445,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"list": [
 		{
 			"registrationMomentumHeight": 99,
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "0123456789012345678901234567890123456789012345678901234567890123",
 			"logIndex": 0,
@@ -2486,7 +2486,7 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	bridgeAPI := embedded.NewBridgeApi(z)
 	tokenAPI := embedded.NewTokenApi(z)
 	activateBridge(t, z)
-	networkType := uint32(2) // evm
+	networkClass := uint32(2) // evm
 	chainId := uint32(31337)
 	networkName := "Ethereum"
 	tokenAddress := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
@@ -2526,14 +2526,14 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	autoreceive(t, z, g.User1.Address)
 	z.ExpectBalance(g.User1.Address, tokenList.List[0].ZenonTokenStandard, 1100)
 
-	addNetwork(t, z, networkType, chainId, networkName, contractAddress, "{}")
-	addTokenPair(t, z, networkType, chainId, tokenList.List[0].ZenonTokenStandard, tokenAddress, true, true, false,
+	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
+	addTokenPair(t, z, networkClass, chainId, tokenList.List[0].ZenonTokenStandard, tokenAddress, true, true, false,
 		big.NewInt(1), uint32(10), uint32(40), `{ "contractAddress":"aaa", "contractDeploymentHeight": 100, "estimatedBlockTime": 200, "confirmationsToFinality": 300, "decimals": 1 }`)
 
 	amount := big.NewInt(3)
 	hash := types.HexToHashPanic("0123456789012345678901234567890123456789012345678901234567890123")
 	unwrapVar := &definition.UnwrapTokenParam{
-		NetworkType:     networkType,
+		NetworkClass:    networkClass,
 		ChainId:         chainId,
 		TransactionHash: hash,
 		ToAddress:       g.User2.Address,
@@ -2551,7 +2551,7 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.UnwrapTokenMethodName,
-			networkType,
+			networkClass,
 			chainId,
 			hash, // TransactionHash
 			uint32(0),
@@ -2572,7 +2572,7 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	"list": [
 		{
 			"registrationMomentumHeight": 103,
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 0,
@@ -2606,7 +2606,7 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 		TokenStandard: tokenList.List[0].ZenonTokenStandard,
 		Amount:        big.NewInt(3),
 		Data: definition.ABIBridge.PackMethodPanic(definition.WrapTokenMethodName,
-			networkType,
+			networkClass,
 			chainId,
 			"0xb794f5ea0ba39494ce839613fffba74279579268", // ToAddress
 		),
@@ -2645,7 +2645,7 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	"list": [
 		{
 			"registrationMomentumHeight": 103,
-			"networkType": 2,
+			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "0123456789012345678901234567890123456789012345678901234567890123",
 			"logIndex": 0,

@@ -20,7 +20,7 @@ const (
 	jsonBridge = `
 	[
 		{"type":"function","name":"WrapToken", "inputs":[
-			{"name":"networkType","type":"uint32"},
+			{"name":"networkClass","type":"uint32"},
 			{"name":"chainId","type":"uint32"},
 			{"name":"toAddress","type":"string"}
 		]},
@@ -31,7 +31,7 @@ const (
 		]},
 
 		{"type":"function","name":"AddNetwork", "inputs":[
-			{"name":"type","type":"uint32"},
+			{"name":"class","type":"uint32"},
 			{"name":"chainId","type":"uint32"},
 			{"name":"name","type":"string"},
 			{"name":"contractAddress","type":"string"},
@@ -39,12 +39,12 @@ const (
 		]},
 
 		{"type":"function","name":"RemoveNetwork", "inputs":[
-			{"name":"type","type":"uint32"},
+			{"name":"class","type":"uint32"},
 			{"name":"chainId","type":"uint32"}
 		]},
 
 		{"type":"function","name":"SetTokenPair","inputs":[
-			{"name":"networkType","type":"uint32"},
+			{"name":"networkClass","type":"uint32"},
 			{"name":"chainId","type":"uint32"},
 			{"name":"tokenStandard","type":"tokenStandard"},
 			{"name":"tokenAddress","type":"string"},
@@ -58,13 +58,13 @@ const (
 		]},
 
 		{"type":"function","name":"UpdateNetworkMetadata","inputs":[
-			{"name":"networkType","type":"uint32"},
+			{"name":"networkClass","type":"uint32"},
 			{"name":"chainId","type":"uint32"},
 			{"name":"metadata","type":"string"}
 		]},
 
 		{"type":"function","name":"RemoveTokenPair","inputs":[
-			{"name":"networkType","type":"uint32"},
+			{"name":"networkClass","type":"uint32"},
 			{"name":"chainId","type":"uint32"},
 			{"name":"tokenStandard","type":"tokenStandard"},
 			{"name":"tokenAddress","type":"string"}
@@ -112,7 +112,7 @@ const (
 		]},
 
 		{"type":"function","name":"UnwrapToken","inputs":[
-			{"name":"networkType","type":"uint32"},
+			{"name":"networkClass","type":"uint32"},
 			{"name":"chainId","type":"uint32"},
 			{"name":"transactionHash","type":"hash"},
 			{"name":"logIndex","type":"uint32"},
@@ -145,7 +145,7 @@ const (
 		]},
 
 		{"type":"variable","name":"wrapRequest","inputs":[
-			{"name":"networkType","type":"uint32"},
+			{"name":"networkClass","type":"uint32"},
 			{"name":"chainId", "type":"uint32"},
 			{"name":"toAddress","type":"string"},
 			{"name":"tokenStandard","type":"tokenStandard"},
@@ -162,7 +162,7 @@ const (
 
 		{"type":"variable","name":"unwrapRequest","inputs":[
 			{"name":"registrationMomentumHeight","type":"uint64"},
-			{"name":"networkType","type":"uint32"},
+			{"name":"networkClass","type":"uint32"},
 			{"name":"chainId", "type":"uint32"},
 			{"name":"toAddress","type":"address"},
 			{"name":"tokenAddress","type":"string"},
@@ -208,7 +208,7 @@ const (
 		]},
 
 		{"type":"variable","name":"networkInfo","inputs":[
-			{"name":"type","type":"uint32"},
+			{"name":"class","type":"uint32"},
 			{"name":"id","type":"uint32"},
 			{"name":"name","type":"string"},
 			{"name":"contractAddress","type":"string"},
@@ -437,7 +437,7 @@ func GetSecurityInfoVariable(context db.DB) (*SecurityInfoVariable, error) {
 
 // NetworkInfoVariable One network will always be znn, so we just need the other one
 type NetworkInfoVariable struct {
-	Type            uint32   `json:"networkType"`
+	Class           uint32   `json:"networkClass"`
 	Id              uint32   `json:"chainId"`
 	Name            string   `json:"name"`
 	ContractAddress string   `json:"contractAddress"`
@@ -458,7 +458,7 @@ type TokenPair struct {
 }
 
 type NetworkInfo struct {
-	Type            uint32      `json:"networkType"`
+	Class           uint32      `json:"class"`
 	Id              uint32      `json:"chainId"`
 	Name            string      `json:"name"`
 	ContractAddress string      `json:"contractAddress"`
@@ -532,9 +532,9 @@ func GetZtsFeesInfoVariable(context db.DB, tokenStandard string) (*ZtsFeesInfo, 
 	}
 }
 
-func GetNetworkInfoKey(networkType uint32, chainId uint32) []byte {
+func GetNetworkInfoKey(networkClass uint32, chainId uint32) []byte {
 	networkIdBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(networkIdBytes, networkType)
+	binary.BigEndian.PutUint32(networkIdBytes, networkClass)
 
 	chainIdBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(chainIdBytes, chainId)
@@ -545,7 +545,7 @@ func GetNetworkInfoKey(networkType uint32, chainId uint32) []byte {
 func (nI *NetworkInfoVariable) Save(context db.DB) error {
 	data, err := ABIBridge.PackVariable(
 		networkInfoVariableName,
-		nI.Type,
+		nI.Class,
 		nI.Id,
 		nI.Name,
 		nI.ContractAddress,
@@ -562,7 +562,7 @@ func (nI *NetworkInfoVariable) Save(context db.DB) error {
 }
 func (nI *NetworkInfoVariable) Key() []byte {
 	networkIdBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(networkIdBytes, nI.Type)
+	binary.BigEndian.PutUint32(networkIdBytes, nI.Class)
 
 	chainIdBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(chainIdBytes, nI.Id)
@@ -588,7 +588,7 @@ func parseNetworkInfoVariable(data []byte) (*NetworkInfo, error) {
 			tokenPairs = append(tokenPairs, *tokenPair)
 		}
 		networkInfo := &NetworkInfo{
-			Type:            networkInfoVariable.Type,
+			Class:           networkInfoVariable.Class,
 			Id:              networkInfoVariable.Id,
 			Name:            networkInfoVariable.Name,
 			ContractAddress: networkInfoVariable.ContractAddress,
@@ -604,7 +604,7 @@ func parseNetworkInfoVariable(data []byte) (*NetworkInfo, error) {
 func EncodeNetworkInfo(networkInfo *NetworkInfo) (*NetworkInfoVariable, error) {
 	networkInfoVariable := new(NetworkInfoVariable)
 	networkInfoVariable.Id = networkInfo.Id
-	networkInfoVariable.Type = networkInfo.Type
+	networkInfoVariable.Class = networkInfo.Class
 	networkInfoVariable.Name = networkInfo.Name
 	networkInfoVariable.ContractAddress = networkInfo.ContractAddress
 	networkInfoVariable.Metadata = networkInfo.Metadata
@@ -620,13 +620,13 @@ func EncodeNetworkInfo(networkInfo *NetworkInfo) (*NetworkInfoVariable, error) {
 	networkInfoVariable.TokenPairs = tokenPairs
 	return networkInfoVariable, nil
 }
-func GetNetworkInfoVariable(context db.DB, networkType uint32, chainId uint32) (*NetworkInfo, error) {
-	if data, err := context.Get(GetNetworkInfoKey(networkType, chainId)); err != nil {
+func GetNetworkInfoVariable(context db.DB, networkClass uint32, chainId uint32) (*NetworkInfo, error) {
+	if data, err := context.Get(GetNetworkInfoKey(networkClass, chainId)); err != nil {
 		return nil, err
 	} else {
 		upd, err := parseNetworkInfoVariable(data)
 		if err == constants.ErrDataNonExistent {
-			return &NetworkInfo{Type: 0, Id: 0, Name: "", ContractAddress: "", Metadata: "{}"}, nil
+			return &NetworkInfo{Class: 0, Id: 0, Name: "", ContractAddress: "", Metadata: "{}"}, nil
 		}
 		return upd, err
 	}
@@ -651,8 +651,8 @@ func GetNetworkList(context db.DB) ([]*NetworkInfo, error) {
 	return networkList, nil
 }
 
-func GetTokenPairVariable(context db.DB, networkType uint32, chainId uint32, zts types.ZenonTokenStandard) (*TokenPair, error) {
-	networkInfo, err := GetNetworkInfoVariable(context, networkType, chainId)
+func GetTokenPairVariable(context db.DB, networkClass uint32, chainId uint32, zts types.ZenonTokenStandard) (*TokenPair, error) {
+	networkInfo, err := GetNetworkInfoVariable(context, networkClass, chainId)
 	if err != nil {
 		return nil, err
 	}
@@ -708,7 +708,7 @@ func GetRequestPairById(context db.DB, Id types.Hash) (*RequestPair, error) {
 }
 
 type WrapTokenRequest struct {
-	NetworkType            uint32                   `json:"networkType"`
+	NetworkClass           uint32                   `json:"networkClass"`
 	ChainId                uint32                   `json:"chainId"`
 	Id                     types.Hash               `json:"id"`
 	ToAddress              string                   `json:"toAddress"`
@@ -723,7 +723,7 @@ type WrapTokenRequest struct {
 func (wrapRequest *WrapTokenRequest) Save(context db.DB) error {
 	data, err := ABIBridge.PackVariable(
 		wrapRequestVariableName,
-		wrapRequest.NetworkType,
+		wrapRequest.NetworkClass,
 		wrapRequest.ChainId,
 		wrapRequest.ToAddress,
 		wrapRequest.TokenStandard,
@@ -804,7 +804,7 @@ func GetWrapTokenRequests(context db.DB) ([]*WrapTokenRequest, error) {
 
 type UnwrapTokenRequest struct {
 	RegistrationMomentumHeight uint64        `json:"registrationMomentumHeight"`
-	NetworkType                uint32        `json:"networkType"`
+	NetworkClass               uint32        `json:"networkClass"`
 	ChainId                    uint32        `json:"chainId"`
 	TransactionHash            types.Hash    `json:"transactionHash"`
 	LogIndex                   uint32        `json:"logIndex"`
@@ -820,7 +820,7 @@ func (unwrapRequest *UnwrapTokenRequest) Save(context db.DB) error {
 	data, err := ABIBridge.PackVariable(
 		unwrapRequestVariableName,
 		unwrapRequest.RegistrationMomentumHeight,
-		unwrapRequest.NetworkType,
+		unwrapRequest.NetworkClass,
 		unwrapRequest.ChainId,
 		unwrapRequest.ToAddress,
 		unwrapRequest.TokenAddress,
@@ -974,9 +974,9 @@ func (oI *OrchestratorInfo) Delete(context db.DB) error {
 }
 
 type WrapTokenParam struct {
-	NetworkType uint32
-	ChainId     uint32
-	ToAddress   string
+	NetworkClass uint32
+	ChainId      uint32
+	ToAddress    string
 }
 
 type UpdateWrapRequestParam struct {
@@ -985,7 +985,7 @@ type UpdateWrapRequestParam struct {
 }
 
 type UnwrapTokenParam struct {
-	NetworkType     uint32
+	NetworkClass    uint32
 	ChainId         uint32
 	TransactionHash types.Hash
 	LogIndex        uint32
@@ -1007,7 +1007,7 @@ type RedeemParam struct {
 }
 
 type TokenPairParam struct {
-	NetworkType   uint32
+	NetworkClass  uint32
 	ChainId       uint32
 	TokenStandard types.ZenonTokenStandard
 	TokenAddress  string
@@ -1021,7 +1021,7 @@ type TokenPairParam struct {
 }
 
 type UpdateTokenPairParam struct {
-	NetworkType   uint32
+	NetworkClass  uint32
 	ChainId       uint32
 	TokenStandard types.ZenonTokenStandard
 	Owned         bool
@@ -1032,17 +1032,18 @@ type UpdateTokenPairParam struct {
 }
 
 type NetworkInfoParam struct {
-	Type            uint32
+	Class           uint32
 	ChainId         uint32
 	Name            string
 	ContractAddress string
 	Metadata        string
 }
 
+// todo remove??
 type UpdateNetworkMetadataParam struct {
-	NetworkType uint32
-	ChainId     uint32
-	Metadata    string
+	NetworkClass uint32
+	ChainId      uint32
+	Metadata     string
 }
 
 type ChangeECDSAPubKeyParam struct {
