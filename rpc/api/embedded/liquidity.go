@@ -8,6 +8,8 @@ import (
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/zenon"
+	"math/big"
+	"sort"
 )
 
 type LiquidityApi struct {
@@ -34,4 +36,48 @@ func (a *LiquidityApi) GetLiquidityInfo() (*definition.LiquidityInfo, error) {
 	}
 
 	return liquidityInfo, nil
+}
+
+type LiquidityStakeList struct {
+	TotalAmount         *big.Int                          `json:"totalAmount"`
+	TotalWeightedAmount *big.Int                          `json:"totalWeightedAmount"`
+	Count               int                               `json:"count"`
+	Entries             []*definition.LiquidityStakeEntry `json:"list"`
+}
+
+func (a *LiquidityApi) GetLiquidityStakeEntriesByAddress(address types.Address, pageIndex, pageSize uint32) (*LiquidityStakeList, error) {
+	if pageSize > api.RpcMaxPageSize {
+		return nil, api.ErrPageSizeParamTooBig
+	}
+
+	_, context, err := api.GetFrontierContext(a.chain, types.LiquidityContract)
+	if err != nil {
+		return nil, err
+	}
+	list, total, totalWeighted, err := definition.GetLiquidityStakeListByAddress(context.Storage(), address)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Sort(definition.LiquidityStakeByExpirationTime(list))
+
+	listLen := len(list)
+	start, end := api.GetRange(pageIndex, pageSize, uint32(listLen))
+
+	return &LiquidityStakeList{
+		TotalAmount:         total,
+		TotalWeightedAmount: totalWeighted,
+		Count:               listLen,
+		Entries:             list[start:end],
+	}, nil
+}
+
+func (a *LiquidityApi) GetUncollectedReward(address types.Address) (*definition.RewardDeposit, error) {
+	return getUncollectedReward(a.chain, types.LiquidityContract, address)
+}
+func (a *LiquidityApi) GetFrontierRewardByPage(address types.Address, pageIndex, pageSize uint32) (*RewardHistoryList, error) {
+	if pageSize > api.RpcMaxPageSize {
+		return nil, api.ErrPageSizeParamTooBig
+	}
+	return getFrontierRewardByPage(a.chain, types.LiquidityContract, address, pageIndex, pageSize)
 }

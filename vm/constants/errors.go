@@ -89,4 +89,5 @@ var (
 
 	// Liquidity
 	ErrInvalidPercentages = errors.New("invalid percentages")
+	ErrInvalidRewards     = errors.New("invalid liquidity stake rewards")
 )

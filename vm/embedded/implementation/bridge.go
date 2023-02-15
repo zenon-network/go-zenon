@@ -111,7 +111,7 @@ func CheckBridgeInitialized(context vm_context.AccountVmContext) (*definition.Br
 	if err != nil {
 		return nil, err
 	}
-	if len(bridgeInfo.CompressedTssECDSAPubKey) == 0 || len(bridgeInfo.AdministratorEDDSAPubKey) == 0 {
+	if len(bridgeInfo.CompressedTssECDSAPubKey) == 0 || bridgeInfo.Administrator.IsZero() {
 		return nil, constants.ErrBridgeNotInitialized
 	}
 
@@ -213,7 +213,6 @@ func (p *WrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, send
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
 	}
-
 	param := new(definition.WrapTokenParam)
 	err := definition.ABIBridge.UnpackMethod(param, p.MethodName, sendBlock.Data)
 	if err != nil {
@@ -238,7 +237,6 @@ func (p *WrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, send
 
 	frontierMomentum, err := context.GetFrontierMomentum()
 	common.DealWithErr(err)
-
 	request := new(definition.WrapTokenRequest)
 	request.NetworkClass = param.NetworkClass
 	request.ChainId = param.ChainId
@@ -258,6 +256,7 @@ func (p *WrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, send
 	if err != nil {
 		return nil, err
 	}
+
 	ztsFeesInfo.AccumulatedFee = ztsFeesInfo.AccumulatedFee.Add(ztsFeesInfo.AccumulatedFee, request.Fee)
 	common.DealWithErr(ztsFeesInfo.Save(context.Storage()))
 	common.DealWithErr(request.Save(context.Storage()))
@@ -363,6 +362,7 @@ func (p *UpdateWrapRequestMethod) ReceiveBlock(context vm_context.AccountVmConte
 	} else if len(networkInfo.Name) == 0 {
 		return nil, constants.ErrDataNonExistent
 	}
+	// todo check that the token pair exists
 	contractAddress := ecommon.HexToAddress(networkInfo.ContractAddress)
 
 	message, err := GetWrapTokenRequestMessage(request, &contractAddress)
@@ -451,7 +451,6 @@ func (p *UnwrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
 	}
-
 	bridgeInfo, _, err := CanPerformAction(context)
 	if err != nil {
 		return nil, err
@@ -478,15 +477,17 @@ func (p *UnwrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 		return nil, constants.ErrForbiddenParam
 	}
 
-	tokenPair, err := CheckNetworkAndPairExist(context, param.NetworkClass, param.ChainId, param.TokenAddress)
+	tokenPair, err := CheckNetworkAndPairExist(context, param.NetworkClass, param.ChainId, strings.ToLower(param.TokenAddress))
 	if err != nil {
 		return nil, err
 	} else if tokenPair == nil {
 		return nil, errors.New("token pair not found")
 	}
+
 	if tokenPair.Redeemable == false {
 		return nil, constants.ErrTokenNotRedeemable
 	}
+
 	message, err := GetUnwrapTokenRequestMessage(param)
 	if err != nil {
 		return nil, err
@@ -496,6 +497,7 @@ func (p *UnwrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 		bridgeLog.Error("Unwrap-ErrInvalidSignature", "error", err, "result", result, "signature", param.Signature)
 		return nil, constants.ErrInvalidECDSASignature
 	}
+
 	momentum, err := context.GetFrontierMomentum()
 	if err != nil {
 		return nil, err
@@ -564,8 +566,7 @@ func (p *AddNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 		return nil, err
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -635,8 +636,7 @@ func (p *RemoveNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 		return nil, err
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -715,8 +715,7 @@ func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, s
 		return nil, constants.ErrInvalidArguments
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -731,7 +730,7 @@ func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, s
 
 	tokenPair := definition.TokenPair{
 		TokenStandard: param.TokenStandard.String(),
-		TokenAddress:  param.TokenAddress,
+		TokenAddress:  strings.ToLower(param.TokenAddress),
 		Bridgeable:    param.Bridgeable,
 		Redeemable:    param.Redeemable,
 		Owned:         param.Owned,
@@ -742,6 +741,8 @@ func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, s
 	}
 	found := false
 
+	// todo do not allow two token pairs on the same network with the same erc20 address
+	// todo implement time challenge for updating a token pair - only one
 	for i := 0; i < len(networkInfo.TokenPairs); i++ {
 		if networkInfo.TokenPairs[i].TokenStandard == param.TokenStandard.String() {
 			networkInfo.TokenPairs[i] = tokenPair
@@ -799,8 +800,7 @@ func (p *RemoveTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext
 		return nil, err
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -873,8 +873,7 @@ func (p *UpdateNetworkMetadataMethod) ReceiveBlock(context vm_context.AccountVmC
 		return nil, err
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -954,8 +953,7 @@ func (p *HaltMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock
 		return nil, err
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		// todo get znn chainIdentifier from variable
 		message, err := GetBasicMethodMessage(p.MethodName, bridgeInfo.TssNonce, definition.NoMClass, 1)
 		if err != nil {
@@ -1012,8 +1010,7 @@ func (p *UnhaltMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 		return nil, errors.New("bridge not halted")
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1060,12 +1057,13 @@ func (p *EmergencyMethod) ReceiveBlock(context vm_context.AccountVmContext, send
 		return nil, err
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
-	bridgeInfo.AdministratorEDDSAPubKey = ""
+	if errSet := bridgeInfo.Administrator.SetBytes(types.ZeroAddress.Bytes()); errSet != nil {
+		return nil, errSet
+	}
 	bridgeInfo.CompressedTssECDSAPubKey = ""
 	bridgeInfo.DecompressedTssECDSAPubKey = ""
 	bridgeInfo.Halted = true
@@ -1090,7 +1088,7 @@ func GetChangePubKeyMessage(methodName string, networkClass uint32, chainId, tss
 	if methodName == definition.ChangeTssECDSAPubKeyMethodName {
 		// pubkey will always have 33 bytes as it comes compressed, we checked
 		values = append(values, big.NewInt(0).SetBytes(pubKeyBytes[1:]))
-	} else if methodName == definition.ChangeAdministratorEDDSAPubKeyMethodName {
+	} else if methodName == definition.ChangeAdministratorMethodName {
 		// pubkey will have 32 bytes
 		values = append(values, big.NewInt(0).SetBytes(pubKeyBytes))
 	}
@@ -1178,8 +1176,7 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 	dPubKeyBytes = append(dPubKeyBytes, Y.Bytes()...)
 	newDecompressedPubKey := base64.StdEncoding.EncodeToString(dPubKeyBytes)
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		// this only applies to non administrator calls
 		if !bridgeInfo.AllowKeyGen {
 			return nil, constants.ErrNotAllowedToChangeSignature
@@ -1235,50 +1232,33 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 	return nil, nil
 }
 
-type ChangeAdministratorEDDSAPubKeyMethod struct {
+type ChangeAdministratorMethod struct {
 	MethodName string
 }
 
-func (p *ChangeAdministratorEDDSAPubKeyMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+func (p *ChangeAdministratorMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
-func (p *ChangeAdministratorEDDSAPubKeyMethod) ValidateSendBlock(block *nom.AccountBlock) error {
+func (p *ChangeAdministratorMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
-	param := new(definition.ChangeEDDSAPubKeyParam)
-	if err = definition.ABIBridge.UnpackMethod(param, p.MethodName, block.Data); err != nil {
+	address := new(types.Address)
+	if err = definition.ABIBridge.UnpackMethod(address, p.MethodName, block.Data); err != nil {
 		return constants.ErrUnpackError
 	}
 
 	if block.Amount.Sign() != 0 {
 		return constants.ErrInvalidTokenOrAmount
 	}
-
-	pubKey, err := base64.StdEncoding.DecodeString(param.PubKey)
-	if err != nil {
-		return constants.ErrInvalidB64Decode
-	}
-	if len(pubKey) != constants.EdDSAPubKeyLength {
-		return constants.ErrInvalidEDDSAPubKey
-	}
-
-	signature, err := base64.StdEncoding.DecodeString(param.Signature)
-	if err != nil {
-		return constants.ErrInvalidB64Decode
-	}
-	if len(signature) != 64 {
-		return constants.ErrInvalidEDDSASignature
-	}
-
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.PubKey, param.Signature)
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, address)
 	return err
 }
-func (p *ChangeAdministratorEDDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+func (p *ChangeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
 	}
 
-	param := new(definition.ChangeEDDSAPubKeyParam)
-	err := definition.ABIBridge.UnpackMethod(param, p.MethodName, sendBlock.Data)
+	address := new(types.Address)
+	err := definition.ABIBridge.UnpackMethod(address, p.MethodName, sendBlock.Data)
 	if err != nil {
 		return nil, err
 	}
@@ -1288,9 +1268,7 @@ func (p *ChangeAdministratorEDDSAPubKeyMethod) ReceiveBlock(context vm_context.A
 		return nil, err
 	}
 
-	// todo check address instead of PubKey because it may be a contract (eg governance contract)
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1299,29 +1277,18 @@ func (p *ChangeAdministratorEDDSAPubKeyMethod) ReceiveBlock(context vm_context.A
 		return nil, err
 	}
 
-	// todo get chainid as variable
-	// todo don't check signature for new admin public key because it may be a contract (eg governance contract)
-	message, err := GetChangePubKeyMessage(p.MethodName, definition.NoMClass, 1, bridgeInfo.TssNonce, param.PubKey)
-	if err != nil {
-		return nil, err
-	}
-	result, err := CheckEDDSASignature(message, param.PubKey, param.Signature)
-	if err != nil || !result {
-		return nil, constants.ErrInvalidEDDSASignature
-	}
-
 	securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
 	common.DealWithErr(err)
 
 	// If we try to change the pubKey with another one than the one requested, the timer restarts
-	if securityInfo.RequestedAdministratorPubKey != param.PubKey {
-		securityInfo.RequestedAdministratorPubKey = param.PubKey
+	if securityInfo.RequestedAdministrator.String() != address.String() {
+		securityInfo.RequestedAdministrator.SetBytes(address.Bytes())
 		securityInfo.AdministratorChangeMomentum = momentum.Height
 	} else {
 		// if the delay has passed, we can change the pub key
 		if securityInfo.AdministratorChangeMomentum+securityInfo.AdministratorDelay < momentum.Height {
-			bridgeInfo.AdministratorEDDSAPubKey = param.PubKey
-			securityInfo.RequestedAdministratorPubKey = ""
+			bridgeInfo.Administrator.SetBytes(address.Bytes())
+			securityInfo.RequestedAdministrator = types.Address{}
 			common.DealWithErr(bridgeInfo.Save(context.Storage()))
 		}
 	}
@@ -1371,9 +1338,7 @@ func (p *AllowKeygenMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 		return nil, err
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1440,8 +1405,7 @@ func (p *SetUnhaltDurationMethod) ReceiveBlock(context vm_context.AccountVmConte
 		return nil, err
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1493,8 +1457,7 @@ func (p *SetOrchestratorInfoMethod) ReceiveBlock(context vm_context.AccountVmCon
 		return nil, err
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1554,8 +1517,7 @@ func (p *UpdateBridgeMetadataMethod) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, err
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1626,8 +1588,7 @@ func (p *RevokeUnwrapRequestMethod) ReceiveBlock(context vm_context.AccountVmCon
 		return nil, err
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		message, err := GetRevokeUnwrapMessage(param, p.MethodName, bridgeInfo.TssNonce)
 		if err != nil {
 			return nil, err
@@ -1795,8 +1756,7 @@ func (p *NominateGuardiansMethod) ReceiveBlock(context vm_context.AccountVmConte
 		return nil, err
 	}
 
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
-	if senderPubKey != bridgeInfo.AdministratorEDDSAPubKey {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1850,23 +1810,20 @@ func (p *ProposeAdministratorMethod) GetPlasma(plasmaTable *constants.PlasmaTabl
 func (p *ProposeAdministratorMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
-	pubKey := new(string)
-	if err := definition.ABIBridge.UnpackMethod(pubKey, p.MethodName, block.Data); err != nil {
+	address := new(types.Address)
+	if err := definition.ABIBridge.UnpackMethod(address, p.MethodName, block.Data); err != nil {
 		return constants.ErrUnpackError
-	}
-	strPubKey, err := base64.StdEncoding.DecodeString(*pubKey)
-	if err != nil {
-		return constants.ErrInvalidB64Decode
-	}
-	if len(strPubKey) != constants.EdDSAPubKeyLength {
-		return constants.ErrInvalidEDDSAPubKey
 	}
 
 	if block.Amount.Sign() != 0 {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, *pubKey)
+	if address.IsZero() {
+		return constants.ErrForbiddenParam
+	}
+
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, *address)
 	return err
 }
 func (p *ProposeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -1874,8 +1831,8 @@ func (p *ProposeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, err
 	}
 
-	pubKey := new(string)
-	if err := definition.ABIBridge.UnpackMethod(pubKey, p.MethodName, sendBlock.Data); err != nil {
+	address := new(types.Address)
+	if err := definition.ABIBridge.UnpackMethod(address, p.MethodName, sendBlock.Data); err != nil {
 		return nil, constants.ErrUnpackError
 	}
 
@@ -1884,7 +1841,7 @@ func (p *ProposeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, err
 	}
 
-	if len(bridgeInfo.AdministratorEDDSAPubKey) > 0 {
+	if !bridgeInfo.Administrator.IsZero() {
 		return nil, constants.ErrNotEmergency
 	}
 
@@ -1896,7 +1853,7 @@ func (p *ProposeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmCo
 	for idx, guardian := range securityInfo.Guardians {
 		if guardian == senderPubKey {
 			found = true
-			securityInfo.GuardiansVotes[idx] = *pubKey
+			securityInfo.GuardiansVotes[idx] = address.String()
 			break
 		}
 	}
@@ -1912,7 +1869,13 @@ func (p *ProposeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmCo
 			votes[vote] += 1
 			// we got a majority, so we change the administrator pub key
 			if votes[vote] > threshold {
-				bridgeInfo.AdministratorEDDSAPubKey = vote
+				votedAddress, errParse := types.ParseAddress(vote)
+				if errParse != nil {
+					return nil, errParse
+				}
+				if errSet := bridgeInfo.Administrator.SetBytes(votedAddress.Bytes()); errSet != nil {
+					return nil, errSet
+				}
 				common.DealWithErr(bridgeInfo.Save(context.Storage()))
 				for idx, _ := range securityInfo.GuardiansVotes {
 					securityInfo.GuardiansVotes[idx] = ""

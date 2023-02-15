@@ -447,7 +447,6 @@ func (a *BridgeApi) GetUnwrapTokenRequestByHashAndLog(txHash types.Hash, logInde
 	if err != nil {
 		return nil, err
 	}
-
 	request, err := definition.GetUnwrapTokenRequestByTxHashAndLog(context.Storage(), txHash, logIndex)
 	if err != nil {
 		return nil, err
@@ -471,7 +470,6 @@ func (a *BridgeApi) GetUnwrapTokenRequestByHashAndLog(txHash types.Hash, logInde
 	if tokenPair == nil {
 		return nil, errors.New("token pair not found")
 	}
-
 	redeemableIn := a.getRedeemableIn(*request, *tokenPair, *momentum)
 	unwrapRequest := &UnwrapTokenRequest{request, token, redeemableIn}
 

@@ -2,6 +2,7 @@ package definition
 
 import (
 	"github.com/pkg/errors"
+	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/constants"
@@ -26,16 +27,21 @@ const (
 		{"type":"function","name":"SetTokenTuple", "inputs":[
 			{"name":"tokenStandards","type":"string[]"},
 			{"name":"znnPercentages","type":"uint32[]"},
-			{"name":"qsrPercentages","type":"uint32[]"}
+			{"name":"qsrPercentages","type":"uint32[]"},
+			{"name":"minAmounts","type":"uint256[]"}
 		]},
 		{"type":"variable","name":"liquidityInfo","inputs":[
-			{"name":"administratorPubKey","type":"string"},
+			{"name":"administrator","type":"address"},
+			{"name":"isHalted","type":"bool"},
+			{"name":"znnReward","type":"uint256"},
+			{"name":"qsrReward","type":"uint256"},
 			{"name":"tokenTuples","type":"bytes[]"}
 		]},
 		{"type":"variable","name":"tokenTuple","inputs":[
 			{"name":"tokenStandard","type":"string"},
 			{"name":"znnPercentage","type":"uint32"},
-			{"name":"qsrPercentage","type":"uint32"}
+			{"name":"qsrPercentage","type":"uint32"},
+			{"name":"minAmount","type":"uint256"}
 		]},
 		{"type":"variable", "name":"liquidityStakeEntry", "inputs":[
 			{"name":"amount", "type":"uint256"},
@@ -45,13 +51,31 @@ const (
 			{"name":"revokeTime", "type":"int64"},
 			{"name":"expirationTime", "type":"int64"}
 		]},
-		{"type":"function","name":"LiquidityStake","inputs":[{"name":"durationInSec", "type":"int64"}]}
+		{"type":"function","name":"StartLiquidityStake","inputs":[]},
+		{"type":"function","name":"StopLiquidityStake","inputs":[]},
+		{"type":"function","name":"LiquidityStake","inputs":[{"name":"durationInSec", "type":"int64"}]},
+		{"type":"function","name":"CancelLiquidityStake","inputs":[{"name":"id","type":"hash"}]},
+		{"type":"function","name":"UnlockLiquidityStakeEntries","inputs":[{"name":"tokenStandard", "type":"tokenStandard"}]},
+		{"type":"function","name":"SetAdditionalReward","inputs":[
+			{"name":"znnReward", "type":"uint256"},
+			{"name":"qsrReward", "type":"uint256"}
+		]},
+		{"type":"function","name":"CollectReward","inputs":[]},
+		{"type":"function","name":"ChangeLiquidityAdministrator","inputs":[
+			{"name":"administrator","type":"address"}
+		]}
 	]`
 
-	FundMethodName           = "Fund"
-	BurnZnnMethodName        = "BurnZnn"
-	SetTokenTupleMethodName  = "SetTokenTuple"
-	LiquidityStakeMethodName = "LiquidityStake"
+	FundMethodName                         = "Fund"
+	BurnZnnMethodName                      = "BurnZnn"
+	SetTokenTupleMethodName                = "SetTokenTuple"
+	LiquidityStakeMethodName               = "LiquidityStake"
+	CancelLiquidityStakeMethodName         = "CancelLiquidityStake"
+	UnlockLiquidityStakeEntriesMethodName  = "UnlockLiquidityStakeEntries"
+	SetAdditionalRewardMethodName          = "SetAdditionalReward"
+	StartLiquidityStakeMethodName          = "StartLiquidityStake"
+	StopLiquidityStakeMethodName           = "StopLiquidityStake"
+	ChangeLiquidityAdministratorMethodName = "ChangeLiquidityAdministrator"
 
 	liquidityInfoVariableName       = "liquidityInfo"
 	tokenTupleVariableName          = "tokenTuple"
@@ -66,18 +90,27 @@ var (
 )
 
 type LiquidityInfoVariable struct {
-	AdministratorPubKey string   `json:"administratorPubKey"`
-	TokenTuples         [][]byte `json:"tokenTuples"`
+	Administrator types.Address `json:"administrator"`
+	IsHalted      bool          `json:"isHalted"`
+	ZnnReward     *big.Int      `json:"znnReward"`
+	QsrReward     *big.Int      `json:"qsrReward"`
+	TokenTuples   [][]byte      `json:"tokenTuples"`
 }
 type LiquidityInfo struct {
-	AdministratorPubKey string       `json:"administratorPubKey"`
-	TokenTuples         []TokenTuple `json:"tokenTuples"`
+	Administrator types.Address `json:"administrator"`
+	IsHalted      bool          `json:"isHalted"`
+	ZnnReward     *big.Int      `json:"znnReward"`
+	QsrReward     *big.Int      `json:"qsrReward"`
+	TokenTuples   []TokenTuple  `json:"tokenTuples"`
 }
 
 func (liq *LiquidityInfoVariable) Save(context db.DB) error {
 	data, err := ABILiquidity.PackVariable(
 		liquidityInfoVariableName,
-		liq.AdministratorPubKey,
+		liq.Administrator,
+		liq.IsHalted,
+		liq.ZnnReward,
+		liq.QsrReward,
 		liq.TokenTuples,
 	)
 	if err != nil {
@@ -103,14 +136,20 @@ func parseLiquidityInfo(data []byte) (*LiquidityInfo, error) {
 			tokenTuples = append(tokenTuples, *tokenTuple)
 		}
 		liquidityInfo := &LiquidityInfo{
-			AdministratorPubKey: liquidityInfoVariable.AdministratorPubKey,
-			TokenTuples:         tokenTuples,
+			Administrator: liquidityInfoVariable.Administrator,
+			TokenTuples:   tokenTuples,
+			IsHalted:      liquidityInfoVariable.IsHalted,
+			ZnnReward:     liquidityInfoVariable.ZnnReward,
+			QsrReward:     liquidityInfoVariable.QsrReward,
 		}
 		return liquidityInfo, nil
 	} else {
 		return &LiquidityInfo{
-			AdministratorPubKey: constants.InitialBridgeAdministratorPubKey,
-			TokenTuples:         nil,
+			Administrator: constants.InitialBridgeAdministrator,
+			TokenTuples:   nil,
+			IsHalted:      false,
+			ZnnReward:     common.Big0,
+			QsrReward:     common.Big0,
 		}, nil
 	}
 }
@@ -124,10 +163,13 @@ func GetLiquidityInfo(context db.DB) (*LiquidityInfo, error) {
 }
 func EncodeLiquidityInfo(liquidityInfo *LiquidityInfo) (*LiquidityInfoVariable, error) {
 	liquidityInfoVariable := new(LiquidityInfoVariable)
-	liquidityInfoVariable.AdministratorPubKey = liquidityInfo.AdministratorPubKey
+	liquidityInfoVariable.Administrator = liquidityInfo.Administrator
+	liquidityInfoVariable.IsHalted = liquidityInfo.IsHalted
+	liquidityInfoVariable.ZnnReward = liquidityInfo.ZnnReward
+	liquidityInfoVariable.QsrReward = liquidityInfo.QsrReward
 	tokenTuples := make([][]byte, 0)
 	for _, token := range liquidityInfo.TokenTuples {
-		if tokenTuple, err := ABILiquidity.PackVariable(tokenTupleVariableName, token.TokenStandard, token.ZnnPercentage, token.QsrPercentage); err != nil {
+		if tokenTuple, err := ABILiquidity.PackVariable(tokenTupleVariableName, token.TokenStandard, token.ZnnPercentage, token.QsrPercentage, token.MinAmount); err != nil {
 			return nil, err
 		} else {
 			tokenTuples = append(tokenTuples, tokenTuple)
@@ -138,9 +180,10 @@ func EncodeLiquidityInfo(liquidityInfo *LiquidityInfo) (*LiquidityInfoVariable, 
 }
 
 type TokenTuple struct {
-	TokenStandard string `json:"tokenStandard"`
-	ZnnPercentage uint32 `json:"znnPercentage"`
-	QsrPercentage uint32 `json:"qsrPercentage"`
+	TokenStandard string   `json:"tokenStandard"`
+	ZnnPercentage uint32   `json:"znnPercentage"`
+	QsrPercentage uint32   `json:"qsrPercentage"`
+	MinAmount     *big.Int `json:"minAmount"`
 }
 
 type FundParam struct {
@@ -156,6 +199,12 @@ type TokenTuplesParam struct {
 	TokenStandards []string
 	ZnnPercentages []uint32
 	QsrPercentages []uint32
+	MinAmounts     []*big.Int
+}
+
+type SetAdditionalRewardParam struct {
+	ZnnReward *big.Int
+	QsrReward *big.Int
 }
 
 type LiquidityStakeEntry struct {
@@ -236,4 +285,79 @@ func GetLiquidityStakeEntry(context db.DB, id types.Hash, address types.Address)
 	} else {
 		return parseLiquidityStakeEntry(key, data)
 	}
+}
+
+func IterateLiquidityStakeEntries(context db.DB, f func(entry *LiquidityStakeEntry) error) error {
+	iterator := context.NewIterator(LiquidityStakeEntryKeyPrefix)
+	defer iterator.Release()
+
+	for {
+		if !iterator.Next() {
+			if iterator.Error() != nil {
+				return iterator.Error()
+			}
+			break
+		}
+
+		if stakeEntry, err := parseLiquidityStakeEntry(iterator.Key(), iterator.Value()); err == nil {
+			if err := f(stakeEntry); err != nil {
+				return err
+			}
+		} else if err == constants.ErrDataNonExistent {
+		} else {
+			return err
+		}
+	}
+	return nil
+}
+
+// Returns all *active* stake entries for an address
+func GetLiquidityStakeListByAddress(context db.DB, address types.Address) ([]*LiquidityStakeEntry, *big.Int, *big.Int, error) {
+	total := big.NewInt(0)
+	weighted := big.NewInt(0)
+	list := make([]*LiquidityStakeEntry, 0)
+
+	err := IterateLiquidityStakeEntries(context, func(stakeEntry *LiquidityStakeEntry) error {
+		if stakeEntry.RevokeTime == 0 && stakeEntry.StakeAddress == address {
+			list = append(list, stakeEntry)
+			total.Add(total, stakeEntry.Amount)
+			weighted.Add(weighted, stakeEntry.WeightedAmount)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	} else {
+		return list, total, weighted, nil
+	}
+}
+
+func GetAllLiquidityStakeEntries(context db.DB) []*LiquidityStakeEntry {
+	iterator := context.NewIterator(LiquidityStakeEntryKeyPrefix)
+	defer iterator.Release()
+
+	liquidityStakeEntries := make([]*LiquidityStakeEntry, 0)
+	for {
+		if !iterator.Next() {
+			common.DealWithErr(iterator.Error())
+			break
+		}
+		liquidityStakeEntry, err := parseLiquidityStakeEntry(iterator.Key(), iterator.Value())
+		if err != nil {
+			continue
+		}
+		liquidityStakeEntries = append(liquidityStakeEntries, liquidityStakeEntry)
+	}
+	return liquidityStakeEntries
+}
+
+type LiquidityStakeByExpirationTime []*LiquidityStakeEntry
+
+func (a LiquidityStakeByExpirationTime) Len() int      { return len(a) }
+func (a LiquidityStakeByExpirationTime) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+func (a LiquidityStakeByExpirationTime) Less(i, j int) bool {
+	if a[i].ExpirationTime == a[j].ExpirationTime {
+		return a[i].Id.String() < a[j].Id.String()
+	}
+	return a[i].ExpirationTime < a[j].ExpirationTime
 }

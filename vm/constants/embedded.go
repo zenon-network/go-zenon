@@ -1,6 +1,7 @@
 package constants
 
 import (
+	"github.com/zenon-network/go-zenon/common/types"
 	"math/big"
 
 	"github.com/zenon-network/go-zenon/common"
@@ -55,7 +56,8 @@ var (
 
 	/// === Staking constants ===
 
-	StakeTimeUnitSec int64 = 30 * SecsInDay
+	// todo -> change to the initial value 30 * SecsInDay
+	StakeTimeUnitSec int64 = 30
 	StakeTimeMinSec        = StakeTimeUnitSec * 1
 	StakeTimeMaxSec        = StakeTimeUnitSec * 12
 	StakeMinAmount         = big.NewInt(1 * Decimals)
@@ -93,8 +95,8 @@ var (
 	/// === Bridge constants ===
 
 	// todo change
-	InitialBridgeAdministratorPubKey = "KN9QLn/FpPmE4ceOLtaoq5+8IB+32B2A3gbqcmiFDtM="
-	MaximumFee                       = uint32(10000)
+	InitialBridgeAdministrator = types.ParseAddressPanic("z1qz8q0x3rs36z2kw8eltf8r323hlcn64jnujkuz")
+	MaximumFee                 = uint32(10000)
 	//MinUnhaltDurationInMomentums     = uint64(6 * MomentumsPerHour)
 	//MinAdministratorDelay        = uint64(7 * MomentumsPerEpoch) // 7 days
 	// MinGuardians                  = 5
@@ -148,6 +150,9 @@ var (
 	SentinelQsrRewardPercentage  int64  = 25
 	LiquidityQsrRewardPercentage int64  = 25
 	LiquidityQsrTotalPercentages uint32 = 10000
+	LiquidityStakeWeights               = []int64{
+		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+	}
 )
 
 func NetworkZnnRewardPerEpoch(epoch uint64) int64 {

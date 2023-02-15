@@ -11,7 +11,6 @@ import (
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/vm/abi"
 	"github.com/zenon-network/go-zenon/vm/embedded/implementation"
-	"golang.org/x/crypto/ed25519"
 	"math/big"
 	"math/rand"
 	"strconv"
@@ -58,18 +57,13 @@ func activateBridge(t *testing.T, z mock.MockZenon) {
 	z.InsertMomentumsTo(10)
 
 	bridgeAPI := embedded.NewBridgeApi(z)
+	constants.InitialBridgeAdministrator.SetBytes(g.User5.Address.Bytes())
 
-	message, err := implementation.GetChangePubKeyMessage(definition.ChangeAdministratorEDDSAPubKeyMethodName, definition.NoMClass, 1, 0, base64.StdEncoding.EncodeToString(g.User5.Public))
-	common.FailIfErr(t, err)
-	signatureEDDSA := ed25519.Sign(g.User5.Private, message)
-	signatureStr := base64.StdEncoding.EncodeToString(signatureEDDSA)
-	constants.InitialBridgeAdministratorPubKey = base64.StdEncoding.EncodeToString(g.User5.Public)
 	z.InsertSendBlock(&nom.AccountBlock{
 		Address:   g.User5.Address,
 		ToAddress: types.BridgeContract,
-		Data: definition.ABIBridge.PackMethodPanic(definition.ChangeAdministratorEDDSAPubKeyMethodName,
-			base64.StdEncoding.EncodeToString(g.User5.Public),
-			signatureStr,
+		Data: definition.ABIBridge.PackMethodPanic(definition.ChangeAdministratorMethodName,
+			g.User5.Address,
 		),
 	}, nil, mock.SkipVmChanges)
 	z.InsertNewMomentum()
@@ -79,12 +73,12 @@ func activateBridge(t *testing.T, z mock.MockZenon) {
 	common.FailIfErr(t, err)
 	common.Json(secInfo, err).Equals(t, `
 {
-	"requestedAdministratorPubKey": "CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
+	"requestedAdministrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 0,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [],
 	"guardiansVotes": [],
 	"nominatedGuardians": [],
@@ -95,7 +89,7 @@ func activateBridge(t *testing.T, z mock.MockZenon) {
 	common.FailIfErr(t, err)
 	common.Json(bridgeInfo, err).Equals(t, `
 {
-	"administratorEDDSAPubKey": "CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
+	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"compressedTssECDSAPubKey": "",
 	"decompressedTssECDSAPubKey": "",
 	"allowKeyGen": false,
@@ -152,12 +146,12 @@ func activateBridge(t *testing.T, z mock.MockZenon) {
 	common.FailIfErr(t, err)
 	common.Json(securityInfo, err).Equals(t, `
 {
-	"requestedAdministratorPubKey": "CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
+	"requestedAdministrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 0,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [],
 	"guardiansVotes": [],
 	"nominatedGuardians": [
@@ -173,9 +167,8 @@ func activateBridge(t *testing.T, z mock.MockZenon) {
 	z.InsertSendBlock(&nom.AccountBlock{
 		Address:   g.User5.Address,
 		ToAddress: types.BridgeContract,
-		Data: definition.ABIBridge.PackMethodPanic(definition.ChangeAdministratorEDDSAPubKeyMethodName,
-			base64.StdEncoding.EncodeToString(g.User5.Public),
-			signatureStr,
+		Data: definition.ABIBridge.PackMethodPanic(definition.ChangeAdministratorMethodName,
+			g.User5.Address,
 		),
 	}, nil, mock.SkipVmChanges)
 	z.InsertNewMomentum()
@@ -185,12 +178,12 @@ func activateBridge(t *testing.T, z mock.MockZenon) {
 	common.FailIfErr(t, err)
 	common.Json(securityInfo, err).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 0,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [],
 	"guardiansVotes": [],
 	"nominatedGuardians": [
@@ -218,12 +211,12 @@ func activateBridge(t *testing.T, z mock.MockZenon) {
 	common.FailIfErr(t, err)
 	common.Json(securityInfo, err).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 0,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [
 		"B8uNQ2UGKIG1aMMYo1keh3DBMH0rrlBa4e9+maM8w2E=",
 		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
@@ -255,7 +248,7 @@ func activateBridge(t *testing.T, z mock.MockZenon) {
 	common.FailIfErr(t, err)
 	common.Json(bridgeInfo, err).Equals(t, `
 {
-	"administratorEDDSAPubKey": "CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
+	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"compressedTssECDSAPubKey": "",
 	"decompressedTssECDSAPubKey": "",
 	"allowKeyGen": false,
@@ -291,12 +284,12 @@ func activateBridge(t *testing.T, z mock.MockZenon) {
 	common.FailIfErr(t, err)
 	common.Json(securityInfo, err).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "AsAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzT",
 	"tssChangeMomentum": 70,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [
 		"B8uNQ2UGKIG1aMMYo1keh3DBMH0rrlBa4e9+maM8w2E=",
 		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
@@ -333,12 +326,12 @@ func activateBridge(t *testing.T, z mock.MockZenon) {
 	common.FailIfErr(t, err)
 	common.Json(securityInfo, err).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 70,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [
 		"B8uNQ2UGKIG1aMMYo1keh3DBMH0rrlBa4e9+maM8w2E=",
 		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
@@ -361,7 +354,7 @@ func activateBridge(t *testing.T, z mock.MockZenon) {
 	common.FailIfErr(t, err)
 	common.Json(bridgeInfo, err).Equals(t, `
 {
-	"administratorEDDSAPubKey": "CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
+	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"compressedTssECDSAPubKey": "AsAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzT",
 	"decompressedTssECDSAPubKey": "BMAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzTnQAT1qOPAkuPzu6yoewss9XbnTmZmb9JQNGXmkPYtK4=",
 	"allowKeyGen": false,
@@ -386,7 +379,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(bridgeInfo, err).Equals(t, `
 {
-	"administratorEDDSAPubKey": "CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
+	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"compressedTssECDSAPubKey": "AsAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzT",
 	"decompressedTssECDSAPubKey": "BMAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzTnQAT1qOPAkuPzu6yoewss9XbnTmZmb9JQNGXmkPYtK4=",
 	"allowKeyGen": false,
@@ -449,7 +442,7 @@ func addNetworkInfo(t *testing.T, z mock.MockZenon) {
 	networkClass := uint32(2) // evm
 	chainId := uint32(31337)
 	networkName := "Ethereum"
-	tokenAddress := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+	tokenAddress := "0x5fbdb2315678afecb367f032d93f642f64180aa3"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
 
 	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
@@ -475,7 +468,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -505,7 +498,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346428d",
@@ -513,14 +506,14 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": []
 }`)
 
-	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5fbdb2315678afecb367f032d93f642f64180aa3", true, true, true,
 		big.NewInt(100), uint32(15), uint32(20), `{"APR": 15, "LockingPeriod": 100}`)
 
 	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346428d",
@@ -528,7 +521,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": [
 		{
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": true,
@@ -549,7 +542,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 			networkClass,
 			chainId,
 			types.ZnnTokenStandard,
-			"0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"0x5fbdb2315678afecb367f032d93f642f64180aa3",
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum() // cemented send block
@@ -559,7 +552,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346428d",
@@ -585,7 +578,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 0,
+	"class": 0,
 	"chainId": 0,
 	"name": "",
 	"contractAddress": "",
@@ -615,7 +608,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346427d",
@@ -623,7 +616,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": []
 }`)
 
-	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5fbdb2315678afecb367f032d93f642f64180aa3", true, true, true,
 		big.NewInt(200), uint32(25), uint32(20), `{"decimals": 8}`)
 
 	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
@@ -631,7 +624,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346427d",
@@ -639,7 +632,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": [
 		{
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": true,
@@ -659,7 +652,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346427d",
@@ -667,7 +660,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": [
 		{
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": true,
@@ -678,7 +671,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		},
 		{
 			"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-			"tokenAddress": "0x6AbDB2315678afecb367f032d93F642f64180ab4",
+			"tokenAddress": "0x6abdb2315678afecb367f032d93f642f64180ab4",
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": true,
@@ -699,7 +692,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 			networkClass,
 			chainId,
 			types.ZnnTokenStandard,
-			"0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"0x5fbdb2315678afecb367f032d93f642f64180aa3",
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum() // cemented send block
@@ -710,7 +703,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346427d",
@@ -718,7 +711,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": [
 		{
 			"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-			"tokenAddress": "0x6AbDB2315678afecb367f032d93F642f64180ab4",
+			"tokenAddress": "0x6abdb2315678afecb367f032d93f642f64180ab4",
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": true,
@@ -752,7 +745,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346426d",
@@ -760,7 +753,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": []
 }`)
 
-	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5fbdb2315678afecb367f032d93f642f64180aa3", true, true, true,
 		big.NewInt(200), uint32(25), uint32(15), `{"decimals": 8}`)
 
 	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
@@ -768,7 +761,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346426d",
@@ -776,7 +769,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": [
 		{
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": true,
@@ -794,7 +787,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346426d",
@@ -802,7 +795,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": [
 		{
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": true,
@@ -837,7 +830,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -845,7 +838,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": []
 }`)
 
-	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5fbdb2315678afecb367f032d93f642f64180aa3", true, true, true,
 		big.NewInt(98745), uint32(85), uint32(40), "{}")
 
 	//addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa4", true, true, false,
@@ -876,7 +869,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -884,7 +877,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": [
 		{
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa4",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa4",
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": false,
@@ -917,7 +910,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -936,7 +929,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 1,
+	"class": 1,
 	"chainId": 1234,
 	"name": "ZnnTestnet",
 	"contractAddress": "0x423b5d4c32345ced77393b3530b1eed0f346429d",
@@ -951,7 +944,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"count": 2,
 	"list": [
 		{
-			"networkClass": 1,
+			"class": 1,
 			"chainId": 1234,
 			"name": "ZnnTestnet",
 			"contractAddress": "0x423b5d4c32345ced77393b3530b1eed0f346429d",
@@ -959,7 +952,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 			"tokenPairs": []
 		},
 		{
-			"networkClass": 2,
+			"class": 2,
 			"chainId": 123,
 			"name": "Ethereum",
 			"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -990,7 +983,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346425d",
@@ -998,7 +991,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": []
 }`)
 
-	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5fbdb2315678afecb367f032d93f642f64180aa3", true, true, true,
 		big.NewInt(5789), uint32(24), uint32(10), "{}")
 
 	networkInfo, err = bridgeAPI.GetNetworkInfo(networkClass, chainId)
@@ -1006,7 +999,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346425d",
@@ -1014,7 +1007,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tokenPairs": [
 		{
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": true,
@@ -1044,7 +1037,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 0,
+	"class": 0,
 	"chainId": 0,
 	"name": "",
 	"contractAddress": "",
@@ -1058,7 +1051,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346425d",
@@ -1070,7 +1063,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 func unwrapToken(z mock.MockZenon, t *testing.T) {
 	networkClass := uint32(2) // evm
 	chainId := uint32(31337)
-	tokenAddress := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+	tokenAddress := "0x5fbdb2315678afecb367f032d93f642f64180aa3"
 
 	amount := big.NewInt(100 * 1e8)
 	hash := types.HexToHashPanic("0123456789012345678901234567890123456789012345678901234567890123")
@@ -1121,7 +1114,7 @@ func unwrapToken(z mock.MockZenon, t *testing.T) {
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 5,
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 10000000000,
 			"signature": "wzYSqwcLr8EUIgaKu/2NGxg8uSLQrVIyjtc/HxplRFkKYhwRNDiM9/8g3ErRE8ulLQFXgSjo4ByV++t+NJkihwA=",
 			"redeemed": 0,
@@ -1186,7 +1179,7 @@ func wrapToken(z mock.MockZenon, t *testing.T) {
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 15000000000,
 			"fee": 15000000,
 			"signature": "",
@@ -1219,7 +1212,7 @@ func wrapToken(z mock.MockZenon, t *testing.T) {
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 15000000000,
 			"fee": 15000000,
 			"signature": "",
@@ -1273,7 +1266,7 @@ func updateWrap(z mock.MockZenon, t *testing.T) {
 			"id": "cbe71cb113d7cbb02587266103e889853c2e7de0de0a03250de2e9a0f49215c8",
 			"network": "Ethereum",
 			"toAddress": "b794f5ea0ba39494ce839613fffba74279579268",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 50,
 			"signature": ""
 		}
@@ -1306,7 +1299,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 5,
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 10000000000,
 			"signature": "wzYSqwcLr8EUIgaKu/2NGxg8uSLQrVIyjtc/HxplRFkKYhwRNDiM9/8g3ErRE8ulLQFXgSjo4ByV++t+NJkihwA=",
 			"redeemed": 0,
@@ -1389,10 +1382,10 @@ func updateWrapToken(z mock.MockZenon, t *testing.T) {
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 15000000000,
 			"fee": 15000000,
-			"signature": "7Z8mo4Sit1B9SigFcYY85mQWe9757EkdEzmdXPy3Xf16L0cwg/78dp1IKCTTiFLqJ4VBdEJEo8QnbK1QPNJ1fgA=",
+			"signature": "UmOqP7DdOwuzeUeV40Nkvv/SYBGg/IAv03L2PJjk+X9yi0i4dejhV0GJqzRSJhxmlH3ROEIdXQVRVlknecHtAAE=",
 			"creationMomentumHeight": 101,
 			"token": {
 				"name": "Zenon Coin",
@@ -1496,7 +1489,7 @@ t=2001-09-09T02:10:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	wrapToken(z, t)
 	hash, err := types.HexToHash("0123456789012345678901234567890123456789012345678901234567890123")
 	common.DealWithErr(err)
-	unwrapToken, err := bridgeAPI.GetUnwrapTokenRequestByHashAndLog(hash, 0)
+	unwrapToken, err := bridgeAPI.GetUnwrapTokenRequestByHashAndLog(hash, 5)
 	common.DealWithErr(err)
 	ledgerApi := api.NewLedgerApi(z)
 	frontierMomentum, err := ledgerApi.GetFrontierMomentum()
@@ -1508,7 +1501,7 @@ t=2001-09-09T02:10:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.RedeemUnwrapMethodName,
 			hash,
-			uint32(0),
+			uint32(5),
 		),
 	}).Error(t, constants.ErrInvalidRedeemPeriod)
 	z.InsertNewMomentum() // cemented send block
@@ -1523,7 +1516,7 @@ t=2001-09-09T02:10:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.RedeemUnwrapMethodName,
 			hash,
-			uint32(0),
+			uint32(5),
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum() // cemented send block
@@ -1544,9 +1537,9 @@ t=2001-09-09T02:10:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "0123456789012345678901234567890123456789012345678901234567890123",
-			"logIndex": 0,
+			"logIndex": 5,
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 10000000000,
 			"signature": "wzYSqwcLr8EUIgaKu/2NGxg8uSLQrVIyjtc/HxplRFkKYhwRNDiM9/8g3ErRE8ulLQFXgSjo4ByV++t+NJkihwA=",
 			"redeemed": 1,
@@ -1578,7 +1571,7 @@ func multipleWrapToken(z mock.MockZenon, t *testing.T) {
 
 	addNetwork(t, z, networkClass, chainId, name, contractAddress, "{}")
 
-	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5fbdb2315678afecb367f032d93f642f64180aa3", true, true, true,
 		big.NewInt(9876), uint32(20), uint32(40), "{}")
 
 	for i := 1; i < 20; i++ {
@@ -1640,7 +1633,7 @@ t=2001-09-09T02:09:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 1900000000,
 			"fee": 3800000,
 			"signature": "",
@@ -1666,7 +1659,7 @@ t=2001-09-09T02:09:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 1800000000,
 			"fee": 3600000,
 			"signature": "",
@@ -1692,7 +1685,7 @@ t=2001-09-09T02:09:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 1700000000,
 			"fee": 3400000,
 			"signature": "",
@@ -1726,7 +1719,7 @@ t=2001-09-09T02:09:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 1600000000,
 			"fee": 3200000,
 			"signature": "",
@@ -1752,7 +1745,7 @@ t=2001-09-09T02:09:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 1700000000,
 			"fee": 3400000,
 			"signature": "",
@@ -1778,7 +1771,7 @@ t=2001-09-09T02:09:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 1800000000,
 			"fee": 3600000,
 			"signature": "",
@@ -1826,7 +1819,7 @@ func multipleUnwrapToken(z mock.MockZenon, t *testing.T) {
 	chainId := uint32(31337)
 	name := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
-	tokenAddress := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+	tokenAddress := "0x5fbdb2315678afecb367f032d93f642f64180aa3"
 	addNetwork(t, z, networkClass, chainId, name, contractAddress, "{}")
 
 	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, tokenAddress, true, true, false,
@@ -1886,6 +1879,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	requests, err := bridgeAPI.GetAllUnwrapTokenRequests(0, 3)
 	common.Json(requests, err).Error(t, nil)
+	// todo check why requests come with non consecutive logIndexes
 	common.Json(requests, err).HideHashes().Equals(t, `        
 {
 	"count": 19,
@@ -1897,7 +1891,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 19,
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 1900000000,
 			"signature": "8w2voLF6YNhkYy07wqFswXXJkVx7NTTVeOHH9fJJct1CSX1otk8XX7SsP74hK9ZRsESn0QCqMxc2j3biNHW2zQA=",
 			"redeemed": 0,
@@ -1924,7 +1918,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 18,
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 1800000000,
 			"signature": "1cxpcON6OxidSngt3kiM7uvJdJYtAGK+S2SGyGbw33wbBu+nvrJRvuMTqz3FstO8OyUge3TRLQ53pTJuutskrgE=",
 			"redeemed": 0,
@@ -1951,7 +1945,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 17,
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 1700000000,
 			"signature": "XLVmPpzATtLH2WqmJuEpirRLixx+sx4uoJtCps8e3NBUXmPQCen1jIn5tZ0tu2vTNUMNCiFqSuGDtBDouzBsgwA=",
 			"redeemed": 0,
@@ -1982,12 +1976,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"list": [
 		{
 			"registrationMomentumHeight": 105,
-			"networkClass": 2,
+			"class": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 0,
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 400000000,
 			"signature": "cC8aY3BI8jt4Jh+jBtCtcoNhiI4U6WVp1vCKsY632f9LP6gIV40gIdn0dyRo3FvLEPl0d5l/YiZgi9QFdThyjwE=",
 			"redeemed": 0,
@@ -2009,12 +2003,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		},
 		{
 			"registrationMomentumHeight": 103,
-			"networkClass": 2,
+			"class": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 0,
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 300000000,
 			"signature": "dZwto03/t5HlfwmRDKng8CKvFQrA87baAoXkX/mIPExjZLdLLe4ouF/UW7aIvXl1pLGkYd8JM7vFCGmoxivvoQE=",
 			"redeemed": 0,
@@ -2036,12 +2030,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		},
 		{
 			"registrationMomentumHeight": 101,
-			"networkClass": 2,
+			"class": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"logIndex": 0,
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 200000000,
 			"signature": "gS1OvdW7uL7S2yZ+iANszF6srBVUiSn0B1lB4OPlbsRe2+ly5gA08UA76Ao4CTPrLkQyxa1X36JPc+/XmdlydAE=",
 			"redeemed": 0,
@@ -2091,7 +2085,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.FailIfErr(t, err)
 	common.Json(networkInfo, err).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -2114,7 +2108,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	z.InsertNewMomentum() // cemented token-receive-block
 	common.Json(bridgeAPI.GetNetworkInfo(networkClass, chainId)).Equals(t, `
 {
-	"networkClass": 2,
+	"class": 2,
 	"chainId": 123,
 	"name": "Ethereum",
 	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
@@ -2132,9 +2126,6 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork s
 t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:true EnforcementHeight:9}"
 `)
 	activateBridge(t, z)
-	networkClass := uint32(2) // evm
-	chainId := uint32(31337)
-
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User5.Address,
 		ToAddress:     types.BridgeContract,
@@ -2149,7 +2140,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(bridgeAPI.GetBridgeInfo()).Equals(t, `
 {
-	"administratorEDDSAPubKey": "CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
+	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"compressedTssECDSAPubKey": "AsAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzT",
 	"decompressedTssECDSAPubKey": "BMAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzTnQAT1qOPAkuPzu6yoewss9XbnTmZmb9JQNGXmkPYtK4=",
 	"allowKeyGen": false,
@@ -2159,23 +2150,10 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	"tssNonce": 0,
 	"metadata": "{}"
 }`)
-	defer z.CallContract(&nom.AccountBlock{
-		Address:       g.User1.Address,
-		ToAddress:     types.BridgeContract,
-		TokenStandard: types.ZnnTokenStandard,
-		Amount:        big.NewInt(150 * 1e8),
-		Data: definition.ABIBridge.PackMethodPanic(definition.WrapTokenMethodName,
-			networkClass,
-			chainId,
-			"0xb794f5ea0ba39494ce839613fffba74279579268", // ToAddress
-		),
-	}).Error(t, constants.ErrBridgeHalted)
-	z.InsertNewMomentum() // cemented send block
-	z.InsertNewMomentum() // cemented token-receive-block
 }
 
 type NetworkInfoParam struct {
-	Type       uint32   `json:"networkClass"`
+	Type       uint32   `json:"class"`
 	Id         uint32   `json:"chainId"`
 	Name       string   `json:"name"`
 	Metadata   string   `json:"metadata"`
@@ -2198,7 +2176,7 @@ func TestBridge_CheckABI(t *testing.T) {
 	bridgeInfo := &definition.BridgeInfoVariable{
 		AllowKeyGen:              true,
 		CompressedTssECDSAPubKey: "ECDSA",
-		AdministratorEDDSAPubKey: constants.InitialBridgeAdministratorPubKey,
+		Administrator:            constants.InitialBridgeAdministrator,
 		TssNonce:                 3,
 		Metadata:                 "{}",
 		Halted:                   true,
@@ -2208,7 +2186,7 @@ func TestBridge_CheckABI(t *testing.T) {
 		bridgeInfo.AllowKeyGen,
 		bridgeInfo.UnhaltedAt,
 		bridgeInfo.CompressedTssECDSAPubKey,
-		bridgeInfo.AdministratorEDDSAPubKey,
+		bridgeInfo.Administrator,
 		bridgeInfo.TssNonce,
 		bridgeInfo.UnhaltDurationInMomentums,
 		bridgeInfo.Metadata,
@@ -2255,7 +2233,7 @@ t=2001-09-09T02:03:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 	name := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
 	addNetwork(t, z, networkClass, chainId, name, contractAddress, "{}")
-	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, true,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5fbdb2315678afecb367f032d93f642f64180aa3", true, true, true,
 		big.NewInt(100), uint32(15), uint32(20), `{"APR": 15, "LockingPeriod": 100}`)
 
 	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 1200000000000)
@@ -2325,7 +2303,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	name := "Ethereum"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
 	addNetwork(t, z, networkClass, chainId, name, contractAddress, "{}")
-	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5FbDB2315678afecb367f032d93F642f64180aa3", true, true, false,
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, "0x5fbdb2315678afecb367f032d93f642f64180aa3", true, true, false,
 		big.NewInt(100), uint32(15), uint32(20), `{"APR": 15, "LockingPeriod": 100}`)
 
 	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 1200000000000)
@@ -2392,7 +2370,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	networkClass := uint32(2) // evm
 	chainId := uint32(31337)
 	networkName := "Ethereum"
-	tokenAddress := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+	tokenAddress := "0x5fbdb2315678afecb367f032d93f642f64180aa3"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
 
 	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
@@ -2415,7 +2393,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	z.InsertNewMomentum() // cemented token-receive-block
 	hash, err := types.HexToHash("0123456789012345678901234567890123456789012345678901234567890123")
 	common.DealWithErr(err)
-	unwrapToken, err := bridgeAPI.GetUnwrapTokenRequestByHashAndLog(hash, 0)
+	unwrapToken, err := bridgeAPI.GetUnwrapTokenRequestByHashAndLog(hash, 5)
 	common.DealWithErr(err)
 	ledgerApi := api.NewLedgerApi(z)
 	frontierMomentum, err := ledgerApi.GetFrontierMomentum()
@@ -2430,7 +2408,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.RedeemUnwrapMethodName,
 			hash,
-			uint32(0),
+			uint32(5),
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum() // cemented send block
@@ -2448,9 +2426,9 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "0123456789012345678901234567890123456789012345678901234567890123",
-			"logIndex": 0,
+			"logIndex": 5,
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 10000000000,
 			"signature": "wzYSqwcLr8EUIgaKu/2NGxg8uSLQrVIyjtc/HxplRFkKYhwRNDiM9/8g3ErRE8ulLQFXgSjo4ByV++t+NJkihwA=",
 			"redeemed": 1,
@@ -2489,7 +2467,7 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	networkClass := uint32(2) // evm
 	chainId := uint32(31337)
 	networkName := "Ethereum"
-	tokenAddress := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+	tokenAddress := "0x5fbdb2315678afecb367f032d93f642f64180aa3"
 	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
 
 	defer z.CallContract(&nom.AccountBlock{
@@ -2536,6 +2514,7 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 		NetworkClass:    networkClass,
 		ChainId:         chainId,
 		TransactionHash: hash,
+		LogIndex:        5,
 		ToAddress:       g.User2.Address,
 		TokenAddress:    tokenAddress,
 		Amount:          amount,
@@ -2554,7 +2533,7 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			networkClass,
 			chainId,
 			hash, // TransactionHash
-			uint32(0),
+			uint32(5),
 			g.User2.Address, // ToAddress
 			tokenAddress,    // TokenAddress
 			amount,          // Amount
@@ -2575,11 +2554,11 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-			"logIndex": 0,
+			"logIndex": 5,
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 3,
-			"signature": "+HlcXaZDwMRvCVxqcKdGdfg1ZHkqPcK1M4CAAt2Sh59ghlTUxAE64mXHoJZjuHgNGzKJ8ZJswkaKLBknqjz1hwA=",
+			"signature": "Igjy7PXatZJ+X37dPOojHLSruPMcdLlSdtLGHCv2xY8C1hQNsEXVL8lBCs7iXueFeZ3O1AOdekIKhmLar5/8NQA=",
 			"redeemed": 0,
 			"revoked": 0,
 			"token": {
@@ -2589,7 +2568,7 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 				"totalSupply": 1100,
 				"decimals": 1,
 				"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-				"tokenStandard": "zts10u47l27k874s2lec33m6ww",
+				"tokenStandard": "zts1ed5yz7fuhnftyasvf3625q",
 				"maxSupply": 10000,
 				"isBurnable": true,
 				"isMintable": true,
@@ -2615,13 +2594,14 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	z.InsertNewMomentum() // cemented token-receive-block
 	txHash, err := types.HexToHash("0123456789012345678901234567890123456789012345678901234567890123")
 	common.DealWithErr(err)
-	unwrapToken, err := bridgeAPI.GetUnwrapTokenRequestByHashAndLog(txHash, 0)
+	unwrapToken, err := bridgeAPI.GetUnwrapTokenRequestByHashAndLog(txHash, 5)
 	common.DealWithErr(err)
 	ledgerApi := api.NewLedgerApi(z)
 	frontierMomentum, err := ledgerApi.GetFrontierMomentum()
 	common.FailIfErr(t, err)
 	z.InsertMomentumsTo(frontierMomentum.Height + unwrapToken.RedeemableIn)
-	z.ExpectBalance(g.User2.Address, tokenList.List[0].ZenonTokenStandard, 0)
+	// todo maybe we need to redeem first?
+	z.ExpectBalance(g.User2.Address, tokenList.List[0].ZenonTokenStandard, 5)
 	z.ExpectBalance(types.BridgeContract, tokenList.List[0].ZenonTokenStandard, 3)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -2648,9 +2628,9 @@ t=2001-09-09T02:02:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			"networkClass": 2,
 			"chainId": 31337,
 			"transactionHash": "0123456789012345678901234567890123456789012345678901234567890123",
-			"logIndex": 0,
+			"logIndex": 5,
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"tokenAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"amount": 3,
 			"signature": "+HlcXaZDwMRvCVxqcKdGdfg1ZHkqPcK1M4CAAt2Sh59ghlTUxAE64mXHoJZjuHgNGzKJ8ZJswkaKLBknqjz1hwA=",
 			"redeemed": 1,
@@ -2695,7 +2675,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	z.InsertNewMomentum()
 	common.Json(bridgeAPI.GetBridgeInfo()).Equals(t, `
 {
-	"administratorEDDSAPubKey": "CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
+	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"compressedTssECDSAPubKey": "AsAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzT",
 	"decompressedTssECDSAPubKey": "BMAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzTnQAT1qOPAkuPzu6yoewss9XbnTmZmb9JQNGXmkPYtK4=",
 	"allowKeyGen": false,
@@ -2718,7 +2698,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(bridgeAPI.GetBridgeInfo()).Equals(t, `
 {
-	"administratorEDDSAPubKey": "",
+	"administrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"compressedTssECDSAPubKey": "",
 	"decompressedTssECDSAPubKey": "",
 	"allowKeyGen": false,
@@ -2806,7 +2786,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName,
-			base64.StdEncoding.EncodeToString(g.User5.Public),
+			g.User5.Address,
 		),
 	}).Error(t, constants.ErrNotEmergency)
 	z.InsertNewMomentum()
@@ -2828,7 +2808,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName,
-			base64.StdEncoding.EncodeToString(g.User5.Public),
+			g.User5.Address,
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum()
@@ -2836,12 +2816,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(bridgeAPI.GetSecurityInfo()).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 70,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [
 		"B8uNQ2UGKIG1aMMYo1keh3DBMH0rrlBa4e9+maM8w2E=",
 		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
@@ -2851,7 +2831,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	],
 	"guardiansVotes": [
 		"",
-		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
+		"z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 		"",
 		"",
 		""
@@ -2877,7 +2857,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName,
-			base64.StdEncoding.EncodeToString(g.User5.Public),
+			g.User5.Address,
 		),
 	}).Error(t, constants.ErrNotEmergency)
 	z.InsertNewMomentum()
@@ -2899,7 +2879,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName,
-			base64.StdEncoding.EncodeToString(g.User5.Public),
+			g.User5.Address,
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum()
@@ -2907,12 +2887,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(bridgeAPI.GetSecurityInfo()).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 70,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [
 		"B8uNQ2UGKIG1aMMYo1keh3DBMH0rrlBa4e9+maM8w2E=",
 		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
@@ -2922,7 +2902,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	],
 	"guardiansVotes": [
 		"",
-		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
+		"z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 		"",
 		"",
 		""
@@ -2937,7 +2917,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName,
-			base64.StdEncoding.EncodeToString(g.User1.Public),
+			g.User1.Address,
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum()
@@ -2945,12 +2925,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(bridgeAPI.GetSecurityInfo()).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 70,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [
 		"B8uNQ2UGKIG1aMMYo1keh3DBMH0rrlBa4e9+maM8w2E=",
 		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
@@ -2960,7 +2940,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	],
 	"guardiansVotes": [
 		"",
-		"GYyn77OXTL31zPbDBCe/eKir+VCF3hv+LxiOUF3XcJY=",
+		"z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 		"",
 		"",
 		""
@@ -2975,7 +2955,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName,
-			base64.StdEncoding.EncodeToString(g.User5.Public),
+			g.User5.Address,
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum()
@@ -2987,7 +2967,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName,
-			base64.StdEncoding.EncodeToString(g.User3.Public),
+			g.User3.Address,
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum()
@@ -2999,7 +2979,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName,
-			base64.StdEncoding.EncodeToString(g.User1.Public),
+			g.User1.Address,
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum()
@@ -3007,12 +2987,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(bridgeAPI.GetSecurityInfo()).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 70,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [
 		"B8uNQ2UGKIG1aMMYo1keh3DBMH0rrlBa4e9+maM8w2E=",
 		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
@@ -3022,10 +3002,10 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	],
 	"guardiansVotes": [
 		"",
-		"GYyn77OXTL31zPbDBCe/eKir+VCF3hv+LxiOUF3XcJY=",
-		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
-		"GYyn77OXTL31zPbDBCe/eKir+VCF3hv+LxiOUF3XcJY=",
-		"i0rZDoLUpl3vCI+5eMbFih7vh3VTWm3u+y2KXqO6Qh0="
+		"z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
+		"z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
+		"z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
+		"z1qrs2lpccnsneglhnnfwvlsj0qncnxjnwlfmjac"
 	],
 	"nominatedGuardians": [],
 	"guardiansNominationHeight": 15
@@ -3048,7 +3028,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName,
-			base64.StdEncoding.EncodeToString(g.User5.Public),
+			g.User5.Address,
 		),
 	}).Error(t, constants.ErrNotEmergency)
 	z.InsertNewMomentum()
@@ -3070,7 +3050,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName,
-			base64.StdEncoding.EncodeToString(g.User1.Public),
+			g.User1.Address,
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum()
@@ -3082,7 +3062,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName,
-			base64.StdEncoding.EncodeToString(g.User1.Public),
+			g.User1.Address,
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum()
@@ -3090,12 +3070,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(bridgeAPI.GetSecurityInfo()).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 70,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [
 		"B8uNQ2UGKIG1aMMYo1keh3DBMH0rrlBa4e9+maM8w2E=",
 		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
@@ -3105,8 +3085,8 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	],
 	"guardiansVotes": [
 		"",
-		"GYyn77OXTL31zPbDBCe/eKir+VCF3hv+LxiOUF3XcJY=",
-		"GYyn77OXTL31zPbDBCe/eKir+VCF3hv+LxiOUF3XcJY=",
+		"z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
+		"z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 		"",
 		""
 	],
@@ -3120,7 +3100,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
 		Data: definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName,
-			base64.StdEncoding.EncodeToString(g.User1.Public),
+			g.User1.Address,
 		),
 	}).Error(t, nil)
 	z.InsertNewMomentum()
@@ -3128,12 +3108,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(bridgeAPI.GetSecurityInfo()).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 70,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [
 		"B8uNQ2UGKIG1aMMYo1keh3DBMH0rrlBa4e9+maM8w2E=",
 		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
@@ -3153,7 +3133,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 }`)
 	common.Json(bridgeAPI.GetBridgeInfo()).Equals(t, `
 {
-	"administratorEDDSAPubKey": "GYyn77OXTL31zPbDBCe/eKir+VCF3hv+LxiOUF3XcJY=",
+	"administrator": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"compressedTssECDSAPubKey": "",
 	"decompressedTssECDSAPubKey": "",
 	"allowKeyGen": false,
@@ -3183,7 +3163,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	z.InsertNewMomentum()
 	common.Json(bridgeAPI.GetBridgeInfo()).Equals(t, `
 {
-	"administratorEDDSAPubKey": "GYyn77OXTL31zPbDBCe/eKir+VCF3hv+LxiOUF3XcJY=",
+	"administrator": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"compressedTssECDSAPubKey": "",
 	"decompressedTssECDSAPubKey": "",
 	"allowKeyGen": true,
@@ -3209,12 +3189,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	z.InsertNewMomentum()
 	common.Json(bridgeAPI.GetSecurityInfo()).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "AsAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzT",
 	"tssChangeMomentum": 109,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [
 		"B8uNQ2UGKIG1aMMYo1keh3DBMH0rrlBa4e9+maM8w2E=",
 		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
@@ -3249,12 +3229,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	z.InsertNewMomentum()
 	common.Json(bridgeAPI.GetSecurityInfo()).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 109,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [
 		"B8uNQ2UGKIG1aMMYo1keh3DBMH0rrlBa4e9+maM8w2E=",
 		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
@@ -3285,7 +3265,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(bridgeAPI.GetBridgeInfo()).Equals(t, `
 {
-	"administratorEDDSAPubKey": "GYyn77OXTL31zPbDBCe/eKir+VCF3hv+LxiOUF3XcJY=",
+	"administrator": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"compressedTssECDSAPubKey": "AsAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzT",
 	"decompressedTssECDSAPubKey": "BMAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzTnQAT1qOPAkuPzu6yoewss9XbnTmZmb9JQNGXmkPYtK4=",
 	"allowKeyGen": false,
@@ -3326,12 +3306,12 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	common.Json(bridgeAPI.GetSecurityInfo()).Equals(t, `
 {
-	"requestedAdministratorPubKey": "",
+	"requestedAdministrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"administratorChangeMomentum": 11,
 	"administratorDelay": 30,
 	"requestedTssPubKey": "",
 	"tssChangeMomentum": 70,
-	"tssDelay": 21,
+	"tssDelay": 1,
 	"guardians": [
 		"B8uNQ2UGKIG1aMMYo1keh3DBMH0rrlBa4e9+maM8w2E=",
 		"CyJWr3uy4niOIG1BDGjmurWOo/czaiErqb0EpZLrMAQ=",
@@ -3354,5 +3334,337 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		"d7V1bTzlSu1Y5pBDBcK1Dzr1YGgt69RaRRGdpdho8wU="
 	],
 	"guardiansNominationHeight": 95
+}`)
+}
+
+func TestBridge_HaltAndWrap(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
+t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:false EnforcementHeight:0}"
+t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:true EnforcementHeight:9}"
+`)
+	activateBridge(t, z)
+	networkClass := uint32(2) // evm
+	chainId := uint32(31337)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:       g.User5.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data: definition.ABIBridge.PackMethodPanic(definition.HaltMethodName,
+			""),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+	bridgeAPI := embedded.NewBridgeApi(z)
+
+	common.Json(bridgeAPI.GetBridgeInfo()).Equals(t, `
+{
+	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
+	"compressedTssECDSAPubKey": "AsAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzT",
+	"decompressedTssECDSAPubKey": "BMAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzTnQAT1qOPAkuPzu6yoewss9XbnTmZmb9JQNGXmkPYtK4=",
+	"allowKeyGen": false,
+	"halted": true,
+	"unhaltedAt": 0,
+	"unhaltDurationInMomentums": 35,
+	"tssNonce": 0,
+	"metadata": "{}"
+}`)
+	defer z.CallContract(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(150 * 1e8),
+		Data: definition.ABIBridge.PackMethodPanic(definition.WrapTokenMethodName,
+			networkClass,
+			chainId,
+			"0xb794f5ea0ba39494ce839613fffba74279579268", // ToAddress
+		),
+	}).Error(t, constants.ErrBridgeHalted)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+}
+
+func TestBridge_HaltAndUnwrap(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
+t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:false EnforcementHeight:0}"
+t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:true EnforcementHeight:9}"
+`)
+	activateBridge(t, z)
+	networkClass := uint32(2) // evm
+	chainId := uint32(31337)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:       g.User5.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data: definition.ABIBridge.PackMethodPanic(definition.HaltMethodName,
+			""),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+	bridgeAPI := embedded.NewBridgeApi(z)
+
+	common.Json(bridgeAPI.GetBridgeInfo()).Equals(t, `
+{
+	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
+	"compressedTssECDSAPubKey": "AsAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzT",
+	"decompressedTssECDSAPubKey": "BMAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzTnQAT1qOPAkuPzu6yoewss9XbnTmZmb9JQNGXmkPYtK4=",
+	"allowKeyGen": false,
+	"halted": true,
+	"unhaltedAt": 0,
+	"unhaltDurationInMomentums": 35,
+	"tssNonce": 0,
+	"metadata": "{}"
+}`)
+	tokenAddress := "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+
+	amount := big.NewInt(100 * 1e8)
+	hash := types.HexToHashPanic("0123456789012345678901234567890123456789012345678901234567890123")
+	unwrapVar := &definition.UnwrapTokenParam{
+		NetworkClass:    networkClass,
+		ChainId:         chainId,
+		TransactionHash: hash,
+		LogIndex:        5,
+		ToAddress:       g.User2.Address,
+		TokenAddress:    tokenAddress,
+		Amount:          amount,
+	}
+	message, err := implementation.GetUnwrapTokenRequestMessage(unwrapVar)
+	common.FailIfErr(t, err)
+	signature, err := Sign(message, "tuSwrTEUyJI1/3y5J8L8DSjzT/AQG2IK3JG+93qhhhI=")
+	common.FailIfErr(t, err)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data: definition.ABIBridge.PackMethodPanic(definition.UnwrapTokenMethodName,
+			networkClass,
+			chainId,
+			hash,            // TransactionHash
+			uint32(5),       // LogIndex
+			g.User2.Address, // ToAddress
+			tokenAddress,    // TokenAddress
+			amount,          // Amount
+			signature,
+		),
+	}).Error(t, constants.ErrBridgeHalted)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+}
+
+func TestBridge_HaltAndRedeem(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
+t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:false EnforcementHeight:0}"
+t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:true EnforcementHeight:9}"
+`)
+	bridgeAPI := embedded.NewBridgeApi(z)
+	activateBridge(t, z)
+	networkClass := uint32(2) // evm
+	chainId := uint32(31337)
+	networkName := "Ethereum"
+	tokenAddress := "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+	contractAddress := "0x323b5d4c32345ced77393b3530b1eed0f346429d"
+
+	addNetwork(t, z, networkClass, chainId, networkName, contractAddress, "{}")
+	addTokenPair(t, z, networkClass, chainId, types.ZnnTokenStandard, tokenAddress, true, true, false,
+		big.NewInt(1000), uint32(10), uint32(40), `{ "contractAddress":"aaa", "contractDeploymentHeight": 100, "estimatedBlockTime": 200, "confirmationsToFinality": 300, "decimals": 8 }`)
+
+	unwrapToken(z, t)
+	defer z.CallContract(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(150 * 1e8),
+		Data: definition.ABIBridge.PackMethodPanic(definition.WrapTokenMethodName,
+			networkClass,
+			chainId,
+			"0xb794f5ea0ba39494ce839613fffba74279579268", // ToAddress
+		),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+	hash, err := types.HexToHash("0123456789012345678901234567890123456789012345678901234567890123")
+	common.DealWithErr(err)
+	unwrapToken, err := bridgeAPI.GetUnwrapTokenRequestByHashAndLog(hash, 5)
+	common.DealWithErr(err)
+	ledgerApi := api.NewLedgerApi(z)
+	frontierMomentum, err := ledgerApi.GetFrontierMomentum()
+	common.FailIfErr(t, err)
+	z.InsertMomentumsTo(frontierMomentum.Height + unwrapToken.RedeemableIn)
+	z.ExpectBalance(g.User2.Address, types.ZnnTokenStandard, 800000000000)
+	z.ExpectBalance(types.BridgeContract, types.ZnnTokenStandard, 15000000000)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:       g.User5.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data: definition.ABIBridge.PackMethodPanic(definition.HaltMethodName,
+			""),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+
+	common.Json(bridgeAPI.GetBridgeInfo()).Equals(t, `
+{
+	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
+	"compressedTssECDSAPubKey": "AsAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzT",
+	"decompressedTssECDSAPubKey": "BMAQx1M3LVXCuozDOqO5b9adj/PItYgwZFG/xTDBiZzTnQAT1qOPAkuPzu6yoewss9XbnTmZmb9JQNGXmkPYtK4=",
+	"allowKeyGen": false,
+	"halted": true,
+	"unhaltedAt": 0,
+	"unhaltDurationInMomentums": 35,
+	"tssNonce": 0,
+	"metadata": "{}"
+}`)
+	defer z.CallContract(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data: definition.ABIBridge.PackMethodPanic(definition.RedeemUnwrapMethodName,
+			hash,
+			uint32(5),
+		),
+	}).Error(t, constants.ErrBridgeHalted)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+	autoreceive(t, z, g.User2.Address)
+	z.ExpectBalance(g.User2.Address, types.ZnnTokenStandard, 800000000000)
+	z.ExpectBalance(types.BridgeContract, types.ZnnTokenStandard, 15000000000)
+	unwrapRequests, err := bridgeAPI.GetAllUnwrapTokenRequests(0, 10)
+	common.Json(unwrapRequests, err).Equals(t, `
+{
+	"count": 1,
+	"list": [
+		{
+			"registrationMomentumHeight": 99,
+			"networkClass": 2,
+			"chainId": 31337,
+			"transactionHash": "0123456789012345678901234567890123456789012345678901234567890123",
+			"logIndex": 5,
+			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+			"amount": 10000000000,
+			"signature": "wzYSqwcLr8EUIgaKu/2NGxg8uSLQrVIyjtc/HxplRFkKYhwRNDiM9/8g3ErRE8ulLQFXgSjo4ByV++t+NJkihwA=",
+			"redeemed": 0,
+			"revoked": 0,
+			"token": {
+				"name": "Zenon Coin",
+				"symbol": "ZNN",
+				"domain": "zenon.network",
+				"totalSupply": 19500000000000,
+				"decimals": 8,
+				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
+				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
+				"maxSupply": 4611686018427387903,
+				"isBurnable": true,
+				"isMintable": true,
+				"isUtility": true
+			},
+			"redeemableIn": 0
+		}
+	]
+}`)
+}
+
+func TestBridge_HaltAndUpdate(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
+t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:false EnforcementHeight:0}"
+t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:c6a597f757168bd5c9fddf52b16b3bf38e2ef781fb8edeea1bf2ae0d3225230d Name:spork-bridge Description:activate spork for bridge Activated:true EnforcementHeight:9}"
+t=2001-09-09T02:03:30+0000 lvl=dbug msg="burned ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg TokenName:Zenon Coin TokenSymbol:ZNN TokenDomain:zenon.network TotalSupply:+19485015000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx}" burned-amount=14985000000
+`)
+	activateBridge(t, z)
+	addNetworkInfo(t, z)
+	unwrapToken(z, t)
+	wrapToken(z, t)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:       g.User5.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data: definition.ABIBridge.PackMethodPanic(definition.HaltMethodName,
+			""),
+	}).Error(t, nil)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+
+	contractAddress := ecommon.HexToAddress("0x323b5d4c32345ced77393b3530b1eed0f346429d")
+	bridgeAPI := embedded.NewBridgeApi(z)
+	wrapRequests, err := bridgeAPI.GetAllWrapTokenRequests(0, 5)
+	common.DealWithErr(err)
+
+	wrapReqVar := &definition.WrapTokenRequest{
+		NetworkClass:  wrapRequests.List[0].NetworkClass,
+		ChainId:       wrapRequests.List[0].ChainId,
+		Id:            wrapRequests.List[0].Id,
+		ToAddress:     wrapRequests.List[0].ToAddress,
+		TokenStandard: wrapRequests.List[0].TokenStandard,
+		TokenAddress:  wrapRequests.List[0].TokenAddress,
+		Amount:        wrapRequests.List[0].Amount,
+		Fee:           wrapRequests.List[0].Fee,
+	}
+	message, err := implementation.GetWrapTokenRequestMessage(wrapReqVar, &contractAddress)
+	common.FailIfErr(t, err)
+	signature, err := Sign(message, "tuSwrTEUyJI1/3y5J8L8DSjzT/AQG2IK3JG+93qhhhI=")
+	common.FailIfErr(t, err)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(50),
+		Data: definition.ABIBridge.PackMethodPanic(definition.UpdateWrapRequestMethodName,
+			wrapRequests.List[0].Id,
+			signature,
+		),
+	}).Error(t, constants.ErrBridgeHalted)
+	z.InsertNewMomentum() // cemented send block
+	z.InsertNewMomentum() // cemented token-receive-block
+
+	common.Json(bridgeAPI.GetAllWrapTokenRequests(0, 5)).HideHashes().Equals(t, `
+{
+	"count": 1,
+	"list": [
+		{
+			"networkClass": 2,
+			"chainId": 31337,
+			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
+			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
+			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+			"amount": 15000000000,
+			"fee": 15000000,
+			"signature": "",
+			"creationMomentumHeight": 101,
+			"token": {
+				"name": "Zenon Coin",
+				"symbol": "ZNN",
+				"domain": "zenon.network",
+				"totalSupply": 19485015000000,
+				"decimals": 8,
+				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
+				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
+				"maxSupply": 4611686018427387903,
+				"isBurnable": true,
+				"isMintable": true,
+				"isUtility": true
+			},
+			"confirmationsToFinality": 9
+		}
+	]
 }`)
 }
