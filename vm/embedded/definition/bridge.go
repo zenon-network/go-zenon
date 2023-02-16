@@ -3,6 +3,7 @@ package definition
 import (
 	"encoding/binary"
 	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/zenon-network/go-zenon/common/crypto"
 	"math"
 	"math/big"
 	"strconv"
@@ -31,7 +32,7 @@ const (
 		]},
 
 		{"type":"function","name":"AddNetwork", "inputs":[
-			{"name":"class","type":"uint32"},
+			{"name":"networkClass","type":"uint32"},
 			{"name":"chainId","type":"uint32"},
 			{"name":"name","type":"string"},
 			{"name":"contractAddress","type":"string"},
@@ -39,7 +40,7 @@ const (
 		]},
 
 		{"type":"function","name":"RemoveNetwork", "inputs":[
-			{"name":"class","type":"uint32"},
+			{"name":"networkClass","type":"uint32"},
 			{"name":"chainId","type":"uint32"}
 		]},
 
@@ -194,20 +195,14 @@ const (
 		]},
 
 		{"type":"variable","name":"securityInfo","inputs":[
-			{"name":"requestedAdministrator","type":"address"},
-			{"name":"administratorChangeMomentum","type":"uint64"},
-			{"name":"administratorDelay","type":"uint64"},
-			{"name":"requestedTssPubKey","type":"string"},
-			{"name":"tssChangeMomentum","type":"uint64"},
-			{"name":"tssDelay","type":"uint64"},
 			{"name":"guardians","type":"string[]"},
 			{"name":"guardiansVotes","type":"string[]"},
-			{"name":"nominatedGuardians","type":"string[]"},
-			{"name":"guardiansNominationHeight","type":"uint64"}
+			{"name":"administratorDelay","type":"uint64"},
+			{"name":"tssDelay","type":"uint64"}
 		]},
 
 		{"type":"variable","name":"networkInfo","inputs":[
-			{"name":"class","type":"uint32"},
+			{"name":"networkClass","type":"uint32"},
 			{"name":"id","type":"uint32"},
 			{"name":"name","type":"string"},
 			{"name":"contractAddress","type":"string"},
@@ -229,6 +224,12 @@ const (
 
 		{"type":"variable","name":"feeTokenPair","inputs":[
 			{"name":"accumulatedFee","type":"uint256"}
+		]},
+
+		{"type":"variable","name":"timeChallengeInfo","inputs":[
+			{"name":"methodName","type":"string"},
+			{"name":"paramsHash","type":"hash"},
+			{"name":"challengeStartHeight","type":"uint64"}
 		]}
 	]`
 
@@ -256,15 +257,16 @@ const (
 	UpdateBridgeMetadataMethodName       = "UpdateBridgeMetadata"
 	UpdateOrchestratorMetadataMethodName = "UpdateOrchestratorMetadata"
 
-	requestPairVariableName      = "requestPair"
-	wrapRequestVariableName      = "wrapRequest"
-	unwrapRequestVariableName    = "unwrapRequest"
-	bridgeInfoVariableName       = "bridgeInfo"
-	securityInfoVariableName     = "securityInfo"
-	orchestratorInfoVariableName = "orchestratorInfo"
-	networkInfoVariableName      = "networkInfo"
-	feeTokenPairVariableName     = "feeTokenPair"
-	tokenPairVariableName        = "tokenPair"
+	requestPairVariableName       = "requestPair"
+	wrapRequestVariableName       = "wrapRequest"
+	unwrapRequestVariableName     = "unwrapRequest"
+	bridgeInfoVariableName        = "bridgeInfo"
+	securityInfoVariableName      = "securityInfo"
+	orchestratorInfoVariableName  = "orchestratorInfo"
+	networkInfoVariableName       = "networkInfo"
+	feeTokenPairVariableName      = "feeTokenPair"
+	tokenPairVariableName         = "tokenPair"
+	timeChallengeInfoVariableName = "timeChallengeInfo"
 )
 
 var (
@@ -278,6 +280,7 @@ var (
 	NetworkInfoKeyPrefix        = []byte{6}
 	RequestPairKeyPrefix        = []byte{7}
 	FeeTokenPairKeyPrefix       = []byte{8}
+	TimeChallengeKeyPrefix      = []byte{8}
 
 	NoMClass = uint32(1)
 	EvmClass = uint32(2)
@@ -357,43 +360,25 @@ func GetBridgeInfoVariable(context db.DB) (*BridgeInfoVariable, error) {
 	}
 }
 
-// SecurityInfoVariable This reffers to time challange security
+// SecurityInfoVariable This refers to time challenge security
 type SecurityInfoVariable struct {
-	// the new tss address that the administrator wants to enforce
-	RequestedAdministrator types.Address `json:"requestedAdministrator"`
-	// the momentum at which an administrator pub key change was requested
-	AdministratorChangeMomentum uint64 `json:"administratorChangeMomentum"`
-	// delay upon which the new administrator pubKey will be active
-	AdministratorDelay uint64 `json:"administratorDelay"`
-	// the new tss address that the administrator wants to enforce
-	RequestedTssPubKey string `json:"requestedTssPubKey"`
-	// the momentum at which the tss pub key change was requested by the administrator
-	TssChangeMomentum uint64 `json:"tssChangeMomentum"`
-	// delay upon which the new tss pubKey will be active when the administrator changes it
-	TssDelay uint64 `json:"tssDelay"`
 	// pub keys that can vote for the new administrator pub key once the bridge is in emergency
 	Guardians []string `json:"guardians"`
 	// votes of the active guardians
 	GuardiansVotes []string `json:"guardiansVotes"`
-	//
-	NominatedGuardians []string `json:"nominatedGuardians"`
-	//
-	GuardiansNominationHeight uint64 `json:"guardiansNominationHeight"`
+	// delay upon which the new administrator pubKey will be active
+	AdministratorDelay uint64 `json:"administratorDelay"`
+	// delay upon which the new tss pubKey will be active when the administrator changes it
+	TssDelay uint64 `json:"tssDelay"`
 }
 
 func (s *SecurityInfoVariable) Save(context db.DB) error {
 	data, err := ABIBridge.PackVariable(
 		securityInfoVariableName,
-		s.RequestedAdministrator,
-		s.AdministratorChangeMomentum,
-		s.AdministratorDelay,
-		s.RequestedTssPubKey,
-		s.TssChangeMomentum,
-		s.TssDelay,
 		s.Guardians,
 		s.GuardiansVotes,
-		s.NominatedGuardians,
-		s.GuardiansNominationHeight,
+		s.AdministratorDelay,
+		s.TssDelay,
 	)
 	if err != nil {
 		return err
@@ -412,16 +397,10 @@ func parseSecurityInfoVariable(data []byte) (*SecurityInfoVariable, error) {
 		return SecurityInfo, nil
 	} else {
 		return &SecurityInfoVariable{
-			RequestedAdministrator:      types.ZeroAddress,
-			AdministratorDelay:          constants.MinAdministratorDelay,
-			AdministratorChangeMomentum: 0,
-			RequestedTssPubKey:          "",
-			TssDelay:                    constants.MinTssDelay,
-			TssChangeMomentum:           0,
-			Guardians:                   make([]string, 0),
-			GuardiansVotes:              make([]string, 0),
-			NominatedGuardians:          make([]string, 0),
-			GuardiansNominationHeight:   0,
+			Guardians:          make([]string, 0),
+			GuardiansVotes:     make([]string, 0),
+			AdministratorDelay: constants.MinAdministratorDelay,
+			TssDelay:           constants.MinTssDelay,
 		}, nil
 	}
 }
@@ -436,7 +415,7 @@ func GetSecurityInfoVariable(context db.DB) (*SecurityInfoVariable, error) {
 
 // NetworkInfoVariable One network will always be znn, so we just need the other one
 type NetworkInfoVariable struct {
-	Class           uint32   `json:"class"`
+	NetworkClass    uint32   `json:"networkClass"`
 	Id              uint32   `json:"chainId"`
 	Name            string   `json:"name"`
 	ContractAddress string   `json:"contractAddress"`
@@ -457,7 +436,7 @@ type TokenPair struct {
 }
 
 type NetworkInfo struct {
-	Class           uint32      `json:"class"`
+	NetworkClass    uint32      `json:"networkClass"`
 	Id              uint32      `json:"chainId"`
 	Name            string      `json:"name"`
 	ContractAddress string      `json:"contractAddress"`
@@ -544,7 +523,7 @@ func GetNetworkInfoKey(networkClass uint32, chainId uint32) []byte {
 func (nI *NetworkInfoVariable) Save(context db.DB) error {
 	data, err := ABIBridge.PackVariable(
 		networkInfoVariableName,
-		nI.Class,
+		nI.NetworkClass,
 		nI.Id,
 		nI.Name,
 		nI.ContractAddress,
@@ -561,7 +540,7 @@ func (nI *NetworkInfoVariable) Save(context db.DB) error {
 }
 func (nI *NetworkInfoVariable) Key() []byte {
 	networkIdBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(networkIdBytes, nI.Class)
+	binary.BigEndian.PutUint32(networkIdBytes, nI.NetworkClass)
 
 	chainIdBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(chainIdBytes, nI.Id)
@@ -587,7 +566,7 @@ func parseNetworkInfoVariable(data []byte) (*NetworkInfo, error) {
 			tokenPairs = append(tokenPairs, *tokenPair)
 		}
 		networkInfo := &NetworkInfo{
-			Class:           networkInfoVariable.Class,
+			NetworkClass:    networkInfoVariable.NetworkClass,
 			Id:              networkInfoVariable.Id,
 			Name:            networkInfoVariable.Name,
 			ContractAddress: networkInfoVariable.ContractAddress,
@@ -603,7 +582,7 @@ func parseNetworkInfoVariable(data []byte) (*NetworkInfo, error) {
 func EncodeNetworkInfo(networkInfo *NetworkInfo) (*NetworkInfoVariable, error) {
 	networkInfoVariable := new(NetworkInfoVariable)
 	networkInfoVariable.Id = networkInfo.Id
-	networkInfoVariable.Class = networkInfo.Class
+	networkInfoVariable.NetworkClass = networkInfo.NetworkClass
 	networkInfoVariable.Name = networkInfo.Name
 	networkInfoVariable.ContractAddress = networkInfo.ContractAddress
 	networkInfoVariable.Metadata = networkInfo.Metadata
@@ -625,7 +604,7 @@ func GetNetworkInfoVariable(context db.DB, networkClass uint32, chainId uint32) 
 	} else {
 		upd, err := parseNetworkInfoVariable(data)
 		if err == constants.ErrDataNonExistent {
-			return &NetworkInfo{Class: 0, Id: 0, Name: "", ContractAddress: "", Metadata: "{}"}, nil
+			return &NetworkInfo{NetworkClass: 0, Id: 0, Name: "", ContractAddress: "", Metadata: "{}"}, nil
 		}
 		return upd, err
 	}
@@ -972,6 +951,61 @@ func (oI *OrchestratorInfo) Delete(context db.DB) error {
 	return context.Delete(oI.Key())
 }
 
+type TimeChallengeInfo struct {
+	MethodName           string
+	ParamsHash           types.Hash
+	ChallengeStartHeight uint64
+}
+
+func (t *TimeChallengeInfo) Save(context db.DB) error {
+	data, err := ABIBridge.PackVariable(
+		timeChallengeInfoVariableName,
+		t.MethodName,
+		t.ParamsHash,
+		t.ChallengeStartHeight,
+	)
+	if err != nil {
+		return err
+	}
+	return context.Put(
+		t.Key(),
+		data,
+	)
+}
+func parseTimeChallengeInfoVariable(data []byte) (*TimeChallengeInfo, error) {
+	if len(data) > 0 {
+		timeChallengeInfo := new(TimeChallengeInfo)
+		if err := ABIBridge.UnpackVariable(timeChallengeInfo, timeChallengeInfoVariableName, data); err != nil {
+			return nil, err
+		}
+		return timeChallengeInfo, nil
+	} else {
+		return nil, constants.ErrDataNonExistent
+	}
+}
+
+func timeChallengeKey(methodName string) []byte {
+	return common.JoinBytes(TimeChallengeKeyPrefix, crypto.Hash([]byte(methodName)))
+}
+
+func GetTimeChallengeInfoVariable(context db.DB, methodName string) (*TimeChallengeInfo, error) {
+	if data, err := context.Get(timeChallengeKey(methodName)); err != nil {
+		return nil, err
+	} else {
+		upd, err := parseTimeChallengeInfoVariable(data)
+		if err == constants.ErrDataNonExistent {
+			return nil, nil
+		}
+		return upd, err
+	}
+}
+func (t *TimeChallengeInfo) Key() []byte {
+	return common.JoinBytes(TimeChallengeKeyPrefix, crypto.Hash([]byte(t.MethodName)))
+}
+func (t *TimeChallengeInfo) Delete(context db.DB) error {
+	return context.Delete(t.Key())
+}
+
 type WrapTokenParam struct {
 	NetworkClass uint32
 	ChainId      uint32
@@ -1019,6 +1053,35 @@ type TokenPairParam struct {
 	Metadata      string
 }
 
+func (p *TokenPairParam) Hash() []byte {
+	bridgeableByte := byte(0)
+	if p.Bridgeable {
+		bridgeableByte = 1
+	}
+
+	redeemableByte := byte(0)
+	if p.Redeemable {
+		redeemableByte = 1
+	}
+
+	ownedByte := byte(0)
+	if p.Owned {
+		ownedByte = 1
+	}
+
+	return crypto.Hash(common.JoinBytes(
+		common.Uint32ToBytes(p.NetworkClass),
+		common.Uint32ToBytes(p.ChainId)),
+		p.TokenStandard.Bytes(),
+		[]byte(strings.ToLower(p.TokenAddress)),
+		[]byte{bridgeableByte, redeemableByte, ownedByte},
+		common.BigIntToBytes(p.MinAmount),
+		common.Uint32ToBytes(p.FeePercentage),
+		common.Uint32ToBytes(p.RedeemDelay),
+		crypto.Hash([]byte(p.Metadata)),
+	)
+}
+
 type UpdateTokenPairParam struct {
 	NetworkClass  uint32
 	ChainId       uint32
@@ -1031,7 +1094,7 @@ type UpdateTokenPairParam struct {
 }
 
 type NetworkInfoParam struct {
-	Class           uint32
+	NetworkClass    uint32
 	ChainId         uint32
 	Name            string
 	ContractAddress string

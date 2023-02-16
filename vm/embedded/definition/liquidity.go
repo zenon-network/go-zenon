@@ -163,7 +163,9 @@ func GetLiquidityInfo(context db.DB) (*LiquidityInfo, error) {
 }
 func EncodeLiquidityInfo(liquidityInfo *LiquidityInfo) (*LiquidityInfoVariable, error) {
 	liquidityInfoVariable := new(LiquidityInfoVariable)
-	liquidityInfoVariable.Administrator = liquidityInfo.Administrator
+	if err := liquidityInfoVariable.Administrator.SetBytes(liquidityInfo.Administrator.Bytes()); err != nil {
+		return nil, err
+	}
 	liquidityInfoVariable.IsHalted = liquidityInfo.IsHalted
 	liquidityInfoVariable.ZnnReward = liquidityInfo.ZnnReward
 	liquidityInfoVariable.QsrReward = liquidityInfo.QsrReward

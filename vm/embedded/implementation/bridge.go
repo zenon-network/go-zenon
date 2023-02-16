@@ -19,6 +19,7 @@ import (
 	"github.com/zenon-network/go-zenon/vm/vm_context"
 	"math"
 	"math/big"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -473,7 +474,7 @@ func (p *UnwrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	if err != nil {
 		bridgeLog.Error("Unwrap", "error", err)
 		return nil, err
-	} else if networkInfo.Class != param.NetworkClass || networkInfo.Id != param.ChainId {
+	} else if networkInfo.NetworkClass != param.NetworkClass || networkInfo.Id != param.ChainId {
 		return nil, constants.ErrForbiddenParam
 	}
 
@@ -547,7 +548,7 @@ func (p *AddNetworkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidJsonContent
 	}
 
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.Class, param.ChainId, param.Name, param.ContractAddress, param.Metadata)
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId, param.Name, param.ContractAddress, param.Metadata)
 	return err
 }
 func (p *AddNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -578,12 +579,12 @@ func (p *AddNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 		return nil, constants.ErrInvalidContractAddress
 	}
 
-	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.Class, param.ChainId)
+	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkClass, param.ChainId)
 	if err != nil {
 		return nil, err
 	}
 
-	networkInfo.Class = param.Class
+	networkInfo.NetworkClass = param.NetworkClass
 	networkInfo.Id = param.ChainId
 	networkInfo.Name = param.Name
 	networkInfo.ContractAddress = param.ContractAddress
@@ -617,7 +618,7 @@ func (p *RemoveNetworkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.Class, param.ChainId)
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId)
 	return err
 }
 func (p *RemoveNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -640,11 +641,11 @@ func (p *RemoveNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 		return nil, constants.ErrPermissionDenied
 	}
 
-	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.Class, param.ChainId)
+	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkClass, param.ChainId)
 	if err != nil {
 		return nil, err
 	}
-	if networkInfo.Name == "" || networkInfo.Class != param.Class || networkInfo.Id != param.ChainId {
+	if networkInfo.Name == "" || networkInfo.NetworkClass != param.NetworkClass || networkInfo.Id != param.ChainId {
 		// todo implement error
 		return nil, constants.ErrPermissionDenied
 	}
@@ -687,6 +688,47 @@ func (p *SetTokenPairMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId, param.TokenStandard, param.TokenAddress, param.Bridgeable, param.Redeemable, param.Owned, param.MinAmount, param.FeePercentage, param.RedeemDelay, param.Metadata)
 	return err
 }
+
+func timeChallenge(context vm_context.AccountVmContext, methodName string, hash []byte) (*definition.TimeChallengeInfo, error) {
+	timeChallengeInfo, err := definition.GetTimeChallengeInfoVariable(context.Storage(), methodName)
+	if err != nil {
+		return nil, err
+	}
+	if timeChallengeInfo == nil {
+		timeChallengeInfo = &definition.TimeChallengeInfo{
+			MethodName:           methodName,
+			ParamsHash:           types.Hash{},
+			ChallengeStartHeight: 0,
+		}
+	}
+	paramsHash, err := types.BytesToHash(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	momentum, err := context.GetFrontierMomentum()
+	common.DealWithErr(err)
+	// if true then we need to check the time challenge, otherwise we start a new challenge
+	if reflect.DeepEqual(timeChallengeInfo.ParamsHash, paramsHash) {
+		securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
+		common.DealWithErr(err)
+
+		if timeChallengeInfo.ChallengeStartHeight+securityInfo.TssDelay >= momentum.Height {
+			return nil, errors.New("challenge not due")
+		} else {
+			// challenge is ok, we can reset it
+			timeChallengeInfo.ParamsHash = types.Hash{}
+		}
+	} else {
+		if errSet := timeChallengeInfo.ParamsHash.SetBytes(paramsHash.Bytes()); errSet != nil {
+			return nil, errSet
+		}
+		timeChallengeInfo.ChallengeStartHeight = momentum.Height
+	}
+	common.DealWithErr(timeChallengeInfo.Save(context.Storage()))
+	return timeChallengeInfo, nil
+}
+
 func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -723,9 +765,18 @@ func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, s
 	if err != nil {
 		return nil, err
 	}
-	if networkInfo.Name == "" || networkInfo.Class != param.NetworkClass || networkInfo.Id != param.ChainId {
+	if networkInfo.Name == "" || networkInfo.NetworkClass != param.NetworkClass || networkInfo.Id != param.ChainId {
 		// todo implement error
 		return nil, constants.ErrInvalidArguments
+	}
+
+	if timeChallengeInfo, errTimeChallenge := timeChallenge(context, p.MethodName, param.Hash()); errTimeChallenge != nil {
+		return nil, errTimeChallenge
+	} else {
+		// if paramsHash is not zero it means we had a new challenge and we can't go further to save the change into local db
+		if !timeChallengeInfo.ParamsHash.IsZero() {
+			return nil, nil
+		}
 	}
 
 	tokenPair := definition.TokenPair{
@@ -808,7 +859,7 @@ func (p *RemoveTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext
 	if err != nil {
 		return nil, err
 	}
-	if networkInfo.Name == "" || networkInfo.Class != param.NetworkClass || networkInfo.Id != param.ChainId {
+	if networkInfo.Name == "" || networkInfo.NetworkClass != param.NetworkClass || networkInfo.Id != param.ChainId {
 		// todo implement error
 		return nil, constants.ErrPermissionDenied
 	}
@@ -817,8 +868,7 @@ func (p *RemoveTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext
 		zts := networkInfo.TokenPairs[i].TokenStandard
 		token := networkInfo.TokenPairs[i].TokenAddress
 		if param.TokenStandard.String() == zts && param.TokenAddress == token {
-			networkInfo.TokenPairs[i] = networkInfo.TokenPairs[len(networkInfo.TokenPairs)-1]
-			networkInfo.TokenPairs = networkInfo.TokenPairs[:len(networkInfo.TokenPairs)-1]
+			networkInfo.TokenPairs = append(networkInfo.TokenPairs[:i], networkInfo.TokenPairs[i+1:]...)
 			break
 		}
 	}
@@ -881,7 +931,7 @@ func (p *UpdateNetworkMetadataMethod) ReceiveBlock(context vm_context.AccountVmC
 	if err != nil {
 		return nil, err
 	}
-	if networkInfo.Name == "" || networkInfo.Class != param.NetworkClass || networkInfo.Id != param.ChainId {
+	if networkInfo.Name == "" || networkInfo.NetworkClass != param.NetworkClass || networkInfo.Id != param.ChainId {
 		// todo implement error
 		return nil, constants.ErrPermissionDenied
 	}
@@ -909,7 +959,6 @@ func GetBasicMethodMessage(methodName string, tssNonce uint64, networkClass, cha
 	if err != nil {
 		return nil, err
 	}
-
 	//bridgeLog.Info("CheckECDSASignature", "message", message)
 
 	return hashByNetworkClass(messageBytes, networkClass)
@@ -1200,27 +1249,15 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 
 		bridgeInfo.TssNonce += 1
 	} else {
-		securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
-		common.DealWithErr(err)
-
-		momentum, err := context.GetFrontierMomentum()
-		common.DealWithErr(err)
-
-		//
-		if securityInfo.RequestedTssPubKey != param.PubKey {
-			securityInfo.RequestedTssPubKey = param.PubKey
-			securityInfo.TssChangeMomentum = momentum.Height
-			common.DealWithErr(securityInfo.Save(context.Storage()))
-			return nil, nil
+		paramsHash := crypto.Hash(dPubKeyBytes)
+		if timeChallengeInfo, errTimeChallenge := timeChallenge(context, p.MethodName, paramsHash); errTimeChallenge != nil {
+			return nil, errTimeChallenge
 		} else {
-			// if the delay has passed, we can change the pub key
-			if securityInfo.TssChangeMomentum+securityInfo.TssDelay >= momentum.Height {
-				return nil, errors.New("change tss not due")
-			} else {
-				securityInfo.RequestedTssPubKey = ""
+			// if paramsHash is not zero it means we had a new challenge and we can't go further to save the change into local db
+			if !timeChallengeInfo.ParamsHash.IsZero() {
+				return nil, nil
 			}
 		}
-		common.DealWithErr(securityInfo.Save(context.Storage()))
 	}
 
 	bridgeInfo.CompressedTssECDSAPubKey = param.PubKey
@@ -1272,28 +1309,20 @@ func (p *ChangeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmCon
 		return nil, constants.ErrPermissionDenied
 	}
 
-	momentum, err := context.GetFrontierMomentum()
-	if err != nil {
-		return nil, err
-	}
-
-	securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
-	common.DealWithErr(err)
-
-	// If we try to change the pubKey with another one than the one requested, the timer restarts
-	if securityInfo.RequestedAdministrator.String() != address.String() {
-		securityInfo.RequestedAdministrator.SetBytes(address.Bytes())
-		securityInfo.AdministratorChangeMomentum = momentum.Height
+	paramsHash := crypto.Hash(address.Bytes())
+	if timeChallengeInfo, errTimeChallenge := timeChallenge(context, p.MethodName, paramsHash); errTimeChallenge != nil {
+		return nil, errTimeChallenge
 	} else {
-		// if the delay has passed, we can change the pub key
-		if securityInfo.AdministratorChangeMomentum+securityInfo.AdministratorDelay < momentum.Height {
-			bridgeInfo.Administrator.SetBytes(address.Bytes())
-			securityInfo.RequestedAdministrator = types.Address{}
-			common.DealWithErr(bridgeInfo.Save(context.Storage()))
+		// if paramsHash is not zero it means we had a new challenge and we can't go further to save the change into local db
+		if !timeChallengeInfo.ParamsHash.IsZero() {
+			return nil, nil
 		}
 	}
 
-	common.DealWithErr(securityInfo.Save(context.Storage()))
+	if errSet := bridgeInfo.Administrator.SetBytes(address.Bytes()); errSet != nil {
+		return nil, err
+	}
+	common.DealWithErr(bridgeInfo.Save(context.Storage()))
 	return nil, nil
 }
 
@@ -1764,37 +1793,31 @@ func (p *NominateGuardiansMethod) ReceiveBlock(context vm_context.AccountVmConte
 	common.DealWithErr(err)
 
 	sort.Strings(*guardians)
-	// todo change
 
-	// if len is 0 or arrays have diff length, we cannot have the same nominees
-	sameNominees := len(securityInfo.NominatedGuardians) >= 4 && (len(securityInfo.NominatedGuardians) == len(*guardians))
-	for idx, guardian := range securityInfo.NominatedGuardians {
-		if guardian != (*guardians)[idx] {
-			sameNominees = false
-			break
-		}
+	guardiansBytes := make([]byte, 0)
+	for _, g := range *guardians {
+		// we also checked this in the sendBlock so we should have no error
+		gPubKeyBytes, _ := base64.StdEncoding.DecodeString(g)
+		guardiansBytes = append(guardiansBytes, gPubKeyBytes...)
 	}
-	currentM, err := context.GetFrontierMomentum()
-	common.DealWithErr(err)
-
-	if sameNominees {
-		if securityInfo.GuardiansNominationHeight+securityInfo.AdministratorDelay < currentM.Height {
-			securityInfo.Guardians = make([]string, 0)
-			securityInfo.GuardiansVotes = make([]string, 0)
-			securityInfo.NominatedGuardians = make([]string, 0)
-			for _, guardian := range *guardians {
-				securityInfo.Guardians = append(securityInfo.Guardians, guardian)
-				// append empty vote
-				securityInfo.GuardiansVotes = append(securityInfo.GuardiansVotes, "")
-			}
-		}
+	paramsHash := crypto.Hash(guardiansBytes)
+	if timeChallengeInfo, errTimeChallenge := timeChallenge(context, p.MethodName, paramsHash); errTimeChallenge != nil {
+		return nil, errTimeChallenge
 	} else {
-		securityInfo.GuardiansNominationHeight = currentM.Height
-		securityInfo.NominatedGuardians = make([]string, 0)
-		for _, guardian := range *guardians {
-			securityInfo.NominatedGuardians = append(securityInfo.NominatedGuardians, guardian)
+		// if paramsHash is not zero it means we had a new challenge and we can't go further to save the change into local db
+		if !timeChallengeInfo.ParamsHash.IsZero() {
+			return nil, nil
 		}
 	}
+
+	securityInfo.Guardians = make([]string, 0)
+	securityInfo.GuardiansVotes = make([]string, 0)
+	for _, guardian := range *guardians {
+		securityInfo.Guardians = append(securityInfo.Guardians, guardian)
+		// append empty vote
+		securityInfo.GuardiansVotes = append(securityInfo.GuardiansVotes, "")
+	}
+
 	common.DealWithErr(securityInfo.Save(context.Storage()))
 	common.DealWithErr(bridgeInfo.Save(context.Storage()))
 	return nil, nil

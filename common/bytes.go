@@ -15,6 +15,12 @@ func JoinBytes(data ...[]byte) []byte {
 	return newData
 }
 
+func Uint32ToBytes(x uint32) []byte {
+	bytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(bytes, x)
+	return bytes
+}
+
 func Uint64ToBytes(height uint64) []byte {
 	bytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(bytes, height)
