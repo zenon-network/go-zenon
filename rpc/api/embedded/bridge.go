@@ -454,30 +454,6 @@ type UnwrapTokenRequestList struct {
 	List  []*UnwrapTokenRequest `json:"list"`
 }
 
-func (a *BridgeApi) getTokenStandard(request *definition.UnwrapTokenRequest) (*types.ZenonTokenStandard, error) {
-	networkInfo, err := a.GetNetworkInfo(request.NetworkClass, request.ChainId)
-	if err != nil {
-		return nil, err
-	}
-
-	found := false
-	tokenStandard := &types.ZenonTokenStandard{}
-	for _, pair := range networkInfo.TokenPairs {
-		if pair.TokenAddress == request.TokenAddress {
-			if err := tokenStandard.SetBytes(pair.TokenStandard.Bytes()); err != nil {
-				return nil, err
-			}
-			found = true
-			break
-		}
-	}
-	if !found {
-		return nil, constants.ErrInvalidToken
-	}
-
-	return tokenStandard, nil
-}
-
 func (a *BridgeApi) GetUnwrapTokenRequestByHashAndLog(txHash types.Hash, logIndex uint32) (*UnwrapTokenRequest, error) {
 	_, context, err := api.GetFrontierContext(a.chain, types.BridgeContract)
 	if err != nil {
@@ -487,11 +463,7 @@ func (a *BridgeApi) GetUnwrapTokenRequestByHashAndLog(txHash types.Hash, logInde
 	if err != nil {
 		return nil, err
 	}
-	tokenStandard, err := a.getTokenStandard(request)
-	if err != nil {
-		return nil, err
-	}
-	token, err := a.getToken(*tokenStandard)
+	token, err := a.getToken(request.TokenStandard)
 	if err != nil {
 		return nil, err
 	}
@@ -534,11 +506,7 @@ func (a *BridgeApi) GetAllUnwrapTokenRequests(pageIndex, pageSize uint32) (*Unwr
 		return nil, err
 	}
 	for i := start; i < end; i++ {
-		zts, err := a.getTokenStandard(requests[i])
-		if err != nil {
-			continue
-		}
-		token, err := a.getToken(*zts)
+		token, err := a.getToken(requests[i].TokenStandard)
 		if err != nil {
 			continue
 		}
@@ -587,11 +555,7 @@ func (a *BridgeApi) GetAllUnwrapTokenRequestsByToAddress(toAddress string, pageI
 		return nil, err
 	}
 	for i := start; i < end; i++ {
-		zts, err := a.getTokenStandard(specificRequests[i])
-		if err != nil {
-			continue
-		}
-		token, err := a.getToken(*zts)
+		token, err := a.getToken(specificRequests[i].TokenStandard)
 		if err != nil {
 			continue
 		}
