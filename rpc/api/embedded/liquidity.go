@@ -38,6 +38,20 @@ func (a *LiquidityApi) GetLiquidityInfo() (*definition.LiquidityInfo, error) {
 	return liquidityInfo, nil
 }
 
+func (a *LiquidityApi) GetSecurityInfo() (*definition.SecurityInfoVariable, error) {
+	_, context, err := api.GetFrontierContext(a.chain, types.LiquidityContract)
+	if err != nil {
+		return nil, err
+	}
+
+	security, err := definition.GetSecurityInfoVariable(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+
+	return security, nil
+}
+
 type LiquidityStakeList struct {
 	TotalAmount         *big.Int                          `json:"totalAmount"`
 	TotalWeightedAmount *big.Int                          `json:"totalWeightedAmount"`
@@ -80,4 +94,29 @@ func (a *LiquidityApi) GetFrontierRewardByPage(address types.Address, pageIndex,
 		return nil, api.ErrPageSizeParamTooBig
 	}
 	return getFrontierRewardByPage(a.chain, types.LiquidityContract, address, pageIndex, pageSize)
+}
+
+func (a *LiquidityApi) GetTimeChallengesInfo() (*TimeChallengesList, error) {
+	_, context, err := api.GetFrontierContext(a.chain, types.LiquidityContract)
+	if err != nil {
+		return nil, err
+	}
+
+	ans := make([]*definition.TimeChallengeInfo, 0)
+	methods := []string{"SetTokenTuple", "ChangeLiquidityAdministrator", "SetAdditionalReward"}
+
+	for _, m := range methods {
+		timeC, err := definition.GetTimeChallengeInfoVariable(context.Storage(), m)
+		if err != nil {
+			return nil, err
+		}
+		if timeC != nil {
+			ans = append(ans, timeC)
+		}
+	}
+
+	return &TimeChallengesList{
+		Count: len(ans),
+		List:  ans,
+	}, nil
 }

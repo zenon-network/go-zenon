@@ -1,14 +1,18 @@
 package implementation
 
 import (
-	"math/big"
-
+	"bytes"
+	eabi "github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/crypto"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/vm/vm_context"
+	"math/big"
+	"reflect"
+	"sort"
 )
 
 var (
@@ -252,24 +256,37 @@ func (p *SetTokenTupleMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	totalZnn := uint32(0)
-	for _, percentage := range param.ZnnPercentages {
-		totalZnn += percentage
-	}
-	if totalZnn != constants.LiquidityZnnTotalPercentages {
-		return constants.ErrInvalidPercentages
+	length := len(param.TokenStandards)
+	if length != len(param.ZnnPercentages) || length != len(param.QsrPercentages) || length != len(param.MinAmounts) {
+		return constants.ErrForbiddenParam
 	}
 
-	totalQsr := uint32(0)
-	for _, percentage := range param.QsrPercentages {
-		totalQsr += percentage
-	}
-	if totalQsr != constants.LiquidityQsrTotalPercentages {
-		return constants.ErrInvalidPercentages
-	}
+	if length != 0 {
+		totalZnn := uint32(0)
+		totalQsr := uint32(0)
 
-	if len(param.TokenStandards) != len(param.ZnnPercentages) || len(param.TokenStandards) != len(param.QsrPercentages) || len(param.ZnnPercentages) != len(param.QsrPercentages) {
-		return constants.ErrInvalidArguments
+		tokensMap := make(map[string]bool)
+		for index := 0; index < length; index++ {
+			zts, errParse := types.ParseZTS(param.TokenStandards[index])
+			if errParse != nil {
+				return errParse
+			} else if reflect.DeepEqual(zts.Bytes(), types.ZeroTokenStandard.Bytes()) {
+				return constants.ErrForbiddenParam
+			}
+			ok, _ := tokensMap[zts.String()]
+			if ok {
+				// duplicate zts
+				return constants.ErrForbiddenParam
+			}
+			tokensMap[zts.String()] = true
+
+			totalZnn += param.ZnnPercentages[index]
+			totalQsr += param.QsrPercentages[index]
+		}
+
+		if totalZnn != constants.LiquidityZnnTotalPercentages || totalQsr != constants.LiquidityQsrTotalPercentages {
+			return constants.ErrInvalidPercentages
+		}
 	}
 
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, param.TokenStandards, param.ZnnPercentages, param.QsrPercentages, param.MinAmounts)
@@ -286,6 +303,10 @@ func (p *SetTokenTupleMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 		return nil, err
 	}
 
+	if _, errSec := CheckSecurityInitialized(context); errSec != nil {
+		return nil, errSec
+	}
+
 	liquidityInfo, err := definition.GetLiquidityInfo(context.Storage())
 	if err != nil {
 		return nil, err
@@ -297,15 +318,11 @@ func (p *SetTokenTupleMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 
 	liquidityInfo.TokenTuples = make([]definition.TokenTuple, 0)
 	for i := 0; i < len(param.TokenStandards); i++ {
-		tokenStandard := param.TokenStandards[i]
-		znnPercentage := param.ZnnPercentages[i]
-		qsrPercentage := param.QsrPercentages[i]
-		minAmount := param.MinAmounts[i]
 		tokenTuple := definition.TokenTuple{
-			TokenStandard: tokenStandard,
-			ZnnPercentage: znnPercentage,
-			QsrPercentage: qsrPercentage,
-			MinAmount:     minAmount,
+			TokenStandard: param.TokenStandards[i],
+			ZnnPercentage: param.ZnnPercentages[i],
+			QsrPercentage: param.QsrPercentages[i],
+			MinAmount:     param.MinAmounts[i],
 		}
 		liquidityInfo.TokenTuples = append(liquidityInfo.TokenTuples, tokenTuple)
 	}
@@ -313,6 +330,22 @@ func (p *SetTokenTupleMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 	if err != nil {
 		return nil, err
 	}
+
+	securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+
+	paramsHash := crypto.Hash(liquidityInfoVariable.TokenTuples...)
+	if timeChallengeInfo, errTimeChallenge := TimeChallenge(context, p.MethodName, paramsHash, securityInfo.SoftDelay); errTimeChallenge != nil {
+		return nil, errTimeChallenge
+	} else {
+		// if paramsHash is not zero it means we had a new challenge and we can't go further to save the change into local db
+		if !timeChallengeInfo.ParamsHash.IsZero() {
+			return nil, nil
+		}
+	}
+
 	common.DealWithErr(liquidityInfoVariable.Save(context.Storage()))
 	return nil, nil
 }
@@ -339,9 +372,6 @@ func (p *LiquidityStakeMethod) ValidateSendBlock(block *nom.AccountBlock) error 
 		return constants.ErrUnpackError
 	}
 
-	if block.Amount.Cmp(constants.StakeMinAmount) == -1 {
-		return constants.ErrInvalidTokenOrAmount
-	}
 	if stakeTime < constants.StakeTimeMinSec || stakeTime > constants.StakeTimeMaxSec || stakeTime%constants.StakeTimeUnitSec != 0 {
 		return constants.ErrInvalidStakingPeriod
 	}
@@ -364,20 +394,18 @@ func (p *LiquidityStakeMethod) ReceiveBlock(context vm_context.AccountVmContext,
 	common.DealWithErr(err)
 
 	found := false
-	var token definition.TokenTuple
 	for _, tokenTuple := range liquidityInfo.TokenTuples {
 		if tokenTuple.TokenStandard == sendBlock.TokenStandard.String() {
+			if sendBlock.Amount.Cmp(tokenTuple.MinAmount) == -1 {
+				return nil, constants.ErrInvalidTokenOrAmount
+			}
+
 			found = true
-			token = tokenTuple
 			break
 		}
 	}
 	if !found {
 		return nil, constants.ErrInvalidToken
-	} else {
-		if sendBlock.Amount.Cmp(token.MinAmount) == -1 {
-			return nil, constants.ErrInvalidTokenOrAmount
-		}
 	}
 
 	stakeEntry := definition.LiquidityStakeEntry{
@@ -594,7 +622,6 @@ func computeLiquidityStakeRewardsForEpoch(context vm_context.AccountVmContext, e
 		znnReward := totalZnn.Mul(totalZnn, big.NewInt(int64(token.ZnnPercentage)))
 		znnReward = znnReward.Div(znnReward, big.NewInt(int64(constants.LiquidityZnnTotalPercentages)))
 		znnRewards[token.TokenStandard] = znnReward
-
 		qsrReward := totalQsr.Mul(totalQsr, big.NewInt(int64(token.QsrPercentage)))
 		qsrReward = qsrReward.Div(qsrReward, big.NewInt(int64(constants.LiquidityQsrTotalPercentages)))
 		qsrRewards[token.TokenStandard] = qsrReward
@@ -634,10 +661,12 @@ func computeLiquidityStakeRewardsForEpoch(context vm_context.AccountVmContext, e
 		if totalCumulatedStake.Sign() == 0 {
 			continue
 		}
-		znnAmount.Mul(znnAmount, getWeightedLiquidityStake(stakeEntry, startTime.Unix(), endTime.Unix()))
+
+		weight := getWeightedLiquidityStake(stakeEntry, startTime.Unix(), endTime.Unix())
+		znnAmount.Mul(znnAmount, weight)
 		znnAmount.Quo(znnAmount, totalCumulatedStake)
 
-		qsrAmount.Mul(qsrAmount, getWeightedLiquidityStake(stakeEntry, startTime.Unix(), endTime.Unix()))
+		qsrAmount.Mul(qsrAmount, weight)
 		qsrAmount.Quo(qsrAmount, totalCumulatedStake)
 
 		addReward(context, epoch, definition.RewardDeposit{
@@ -697,33 +726,33 @@ func updateLiquidityStakeRewards(context vm_context.AccountVmContext) ([]*nom.Ac
 
 	result := make([]*nom.AccountBlock, 0)
 
-	for {
-		if err := checkAndPerformUpdateEpoch(context, lastEpoch); err == constants.ErrEpochUpdateTooRecent || len(result) >= constants.MaxEpochsPerUpdate {
-			liquidityLog.Debug("invalid update - rewards not due yet", "epoch", lastEpoch.LastEpoch+1)
-			return result, nil
-		} else if err != nil {
-			liquidityLog.Error("unknown panic", "reason", err)
-			return nil, err
-		}
-		if blocks, err := computeLiquidityStakeRewardsForEpoch(context, uint64(lastEpoch.LastEpoch)); err != nil {
-			return nil, err
-		} else if blocks != nil {
-			result = append(result, blocks...)
-		}
+	if err := checkAndPerformUpdateEpoch(context, lastEpoch); err == constants.ErrEpochUpdateTooRecent {
+		liquidityLog.Debug("invalid update - rewards not due yet", "epoch", lastEpoch.LastEpoch+1)
+		return nil, nil
+	} else if err != nil {
+		liquidityLog.Error("unknown panic", "reason", err)
+		return nil, err
 	}
+	if blocks, err := computeLiquidityStakeRewardsForEpoch(context, uint64(lastEpoch.LastEpoch)); err != nil {
+		return nil, err
+	} else if blocks != nil {
+		result = append(result, blocks...)
+	}
+	return result, nil
 }
 
-type StopLiquidityStake struct {
+type SetIsHalted struct {
 	MethodName string
 }
 
-func (p *StopLiquidityStake) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+func (p *SetIsHalted) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
-func (p *StopLiquidityStake) ValidateSendBlock(block *nom.AccountBlock) error {
+func (p *SetIsHalted) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
-	if err := definition.ABILiquidity.UnpackEmptyMethod(p.MethodName, block.Data); err != nil {
+	param := new(bool)
+	if err := definition.ABILiquidity.UnpackMethod(param, p.MethodName, block.Data); err != nil {
 		return constants.ErrUnpackError
 	}
 
@@ -731,78 +760,28 @@ func (p *StopLiquidityStake) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName)
+	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, *param)
 	return err
 }
-func (p *StopLiquidityStake) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+func (p *SetIsHalted) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
 	}
 
-	err := definition.ABILiquidity.UnpackEmptyMethod(p.MethodName, sendBlock.Data)
-	if err != nil {
-		return nil, err
+	param := new(bool)
+	if err := definition.ABILiquidity.UnpackMethod(param, p.MethodName, sendBlock.Data); err != nil {
+		return nil, constants.ErrUnpackError
 	}
+
 	liquidityInfo, err := definition.GetLiquidityInfo(context.Storage())
 	if err != nil {
 		return nil, err
 	}
-
 	if sendBlock.Address.String() != liquidityInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
-	liquidityInfo.IsHalted = true
-
-	liquidityInfoVariable, err := definition.EncodeLiquidityInfo(liquidityInfo)
-	if err != nil {
-		return nil, err
-	}
-	common.DealWithErr(liquidityInfoVariable.Save(context.Storage()))
-	return nil, nil
-}
-
-type StartLiquidityStake struct {
-	MethodName string
-}
-
-func (p *StartLiquidityStake) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
-	return plasmaTable.EmbeddedSimple, nil
-}
-func (p *StartLiquidityStake) ValidateSendBlock(block *nom.AccountBlock) error {
-	var err error
-
-	if err := definition.ABILiquidity.UnpackEmptyMethod(p.MethodName, block.Data); err != nil {
-		return constants.ErrUnpackError
-	}
-
-	if block.Amount.Sign() != 0 {
-		return constants.ErrInvalidTokenOrAmount
-	}
-
-	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName)
-	return err
-}
-func (p *StartLiquidityStake) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
-	if err := p.ValidateSendBlock(sendBlock); err != nil {
-		return nil, err
-	}
-
-	err := definition.ABILiquidity.UnpackEmptyMethod(p.MethodName, sendBlock.Data)
-	if err != nil {
-		return nil, err
-	}
-	liquidityInfo, err := definition.GetLiquidityInfo(context.Storage())
-	if err != nil {
-		return nil, err
-	}
-
-	if sendBlock.Address.String() != liquidityInfo.Administrator.String() {
-		return nil, constants.ErrPermissionDenied
-	}
-
-	liquidityInfo.IsHalted = false
-
+	liquidityInfo.IsHalted = *param
 	liquidityInfoVariable, err := definition.EncodeLiquidityInfo(liquidityInfo)
 	if err != nil {
 		return nil, err
@@ -821,8 +800,7 @@ func (p *UnlockLiquidityStakeEntries) GetPlasma(plasmaTable *constants.PlasmaTab
 func (p *UnlockLiquidityStakeEntries) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
-	tokenStandard := types.ZnnTokenStandard
-	if err := definition.ABILiquidity.UnpackMethod(tokenStandard, p.MethodName, block.Data); err != nil {
+	if err := definition.ABILiquidity.UnpackEmptyMethod(p.MethodName, block.Data); err != nil {
 		return constants.ErrUnpackError
 	}
 
@@ -830,7 +808,7 @@ func (p *UnlockLiquidityStakeEntries) ValidateSendBlock(block *nom.AccountBlock)
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, tokenStandard)
+	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName)
 	return err
 }
 func (p *UnlockLiquidityStakeEntries) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -838,11 +816,6 @@ func (p *UnlockLiquidityStakeEntries) ReceiveBlock(context vm_context.AccountVmC
 		return nil, err
 	}
 
-	tokenStandard := types.ZnnTokenStandard
-	err := definition.ABILiquidity.UnpackMethod(tokenStandard, p.MethodName, sendBlock.Data)
-	if err != nil {
-		return nil, err
-	}
 	liquidityInfo, err := definition.GetLiquidityInfo(context.Storage())
 	if err != nil {
 		return nil, err
@@ -855,7 +828,7 @@ func (p *UnlockLiquidityStakeEntries) ReceiveBlock(context vm_context.AccountVmC
 	liquidityStakeList := definition.GetAllLiquidityStakeEntries(context.Storage())
 	momentum, _ := context.GetFrontierMomentum()
 	for _, entry := range liquidityStakeList {
-		if entry.TokenStandard.String() == tokenStandard.String() {
+		if entry.TokenStandard.String() == sendBlock.TokenStandard.String() {
 			if entry.ExpirationTime > momentum.Timestamp.Unix() {
 				entry.ExpirationTime = momentum.Timestamp.Unix()
 				common.DealWithErr(entry.Save(context.Storage()))
@@ -884,10 +857,6 @@ func (p *SetAdditionalReward) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	if param.ZnnReward.Sign() == -1 || param.QsrReward.Sign() == -1 {
-		return constants.ErrForbiddenParam
-	}
-
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, param.ZnnReward, param.QsrReward)
 	return err
 }
@@ -910,6 +879,31 @@ func (p *SetAdditionalReward) ReceiveBlock(context vm_context.AccountVmContext, 
 		return nil, constants.ErrPermissionDenied
 	}
 
+	args := eabi.Arguments{{Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}}
+	values := make([]interface{}, 0)
+	values = append(values,
+		big.NewInt(0).Set(param.ZnnReward),
+		big.NewInt(0).Set(param.QsrReward),
+	)
+	messageBytes, err := args.PackValues(values)
+	if err != nil {
+		return nil, err
+	}
+	paramsHash := crypto.Hash(messageBytes)
+
+	securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+	if timeChallengeInfo, errTimeChallenge := TimeChallenge(context, p.MethodName, paramsHash, securityInfo.SoftDelay); errTimeChallenge != nil {
+		return nil, errTimeChallenge
+	} else {
+		// if paramsHash is not zero it means we had a new challenge and we can't go further to save the change into local db
+		if !timeChallengeInfo.ParamsHash.IsZero() {
+			return nil, nil
+		}
+	}
+
 	liquidityInfo.ZnnReward = param.ZnnReward
 	liquidityInfo.QsrReward = param.QsrReward
 	liquidityInfoVariable, err := definition.EncodeLiquidityInfo(liquidityInfo)
@@ -920,14 +914,14 @@ func (p *SetAdditionalReward) ReceiveBlock(context vm_context.AccountVmContext, 
 	return nil, nil
 }
 
-type ChangeLiquidityAdministrator struct {
+type ChangeAdministratorLiquidity struct {
 	MethodName string
 }
 
-func (p *ChangeLiquidityAdministrator) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+func (p *ChangeAdministratorLiquidity) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
-func (p *ChangeLiquidityAdministrator) ValidateSendBlock(block *nom.AccountBlock) error {
+func (p *ChangeAdministratorLiquidity) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
 	address := new(types.Address)
@@ -938,16 +932,111 @@ func (p *ChangeLiquidityAdministrator) ValidateSendBlock(block *nom.AccountBlock
 	if block.Amount.Sign() != 0 {
 		return constants.ErrInvalidTokenOrAmount
 	}
+
+	// we also check with this method because in the abi the checksum is not verified
+	parsedAddress, err := types.ParseAddress(address.String())
+	if err != nil {
+		return err
+	} else if parsedAddress.IsZero() {
+		return constants.ErrForbiddenParam
+	}
+
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, address)
 	return err
 }
-func (p *ChangeLiquidityAdministrator) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+func (p *ChangeAdministratorLiquidity) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
 	}
 
 	address := new(types.Address)
 	err := definition.ABILiquidity.UnpackMethod(address, p.MethodName, sendBlock.Data)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, errSec := CheckSecurityInitialized(context); errSec != nil {
+		return nil, errSec
+	}
+
+	liquidityInfo, err := definition.GetLiquidityInfo(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+
+	if sendBlock.Address.String() != liquidityInfo.Administrator.String() {
+		return nil, constants.ErrPermissionDenied
+	}
+
+	securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+	paramsHash := crypto.Hash(address.Bytes())
+	if timeChallengeInfo, errTimeChallenge := TimeChallenge(context, p.MethodName, paramsHash, securityInfo.AdministratorDelay); errTimeChallenge != nil {
+		return nil, errTimeChallenge
+	} else {
+		// if paramsHash is not zero it means we had a new challenge and we can't go further to save the change into local db
+		if !timeChallengeInfo.ParamsHash.IsZero() {
+			return nil, nil
+		}
+	}
+
+	err = liquidityInfo.Administrator.SetBytes(address.Bytes())
+	if err != nil {
+		return nil, err
+	}
+
+	liquidityInfoVariable, err := definition.EncodeLiquidityInfo(liquidityInfo)
+	if err != nil {
+		return nil, err
+	}
+	common.DealWithErr(liquidityInfoVariable.Save(context.Storage()))
+	return nil, nil
+}
+
+type NominateGuardiansLiquidity struct {
+	MethodName string
+}
+
+func (p *NominateGuardiansLiquidity) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+	return plasmaTable.EmbeddedSimple, nil
+}
+func (p *NominateGuardiansLiquidity) ValidateSendBlock(block *nom.AccountBlock) error {
+	var err error
+
+	guardians := new([]types.Address)
+	if err := definition.ABILiquidity.UnpackMethod(guardians, p.MethodName, block.Data); err != nil {
+		return constants.ErrUnpackError
+	}
+
+	if block.Amount.Sign() != 0 {
+		return constants.ErrInvalidTokenOrAmount
+	}
+
+	if len(*guardians) < constants.MinGuardians {
+		return constants.ErrInvalidGuardians
+	}
+	for _, address := range *guardians {
+		// we also check with this method because in the abi the checksum is not verified
+		parsedAddress, err := types.ParseAddress(address.String())
+		if err != nil {
+			return err
+		} else if parsedAddress.IsZero() {
+			return constants.ErrForbiddenParam
+		}
+	}
+
+	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, guardians)
+	return err
+}
+func (p *NominateGuardiansLiquidity) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+	if err := p.ValidateSendBlock(sendBlock); err != nil {
+		return nil, err
+	}
+
+	guardians := new([]types.Address)
+	err := definition.ABILiquidity.UnpackMethod(guardians, p.MethodName, sendBlock.Data)
 	if err != nil {
 		return nil, err
 	}
@@ -961,10 +1050,189 @@ func (p *ChangeLiquidityAdministrator) ReceiveBlock(context vm_context.AccountVm
 		return nil, constants.ErrPermissionDenied
 	}
 
-	err = liquidityInfo.Administrator.SetBytes(address.Bytes())
+	securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
 	if err != nil {
 		return nil, err
 	}
+
+	sort.Slice(*guardians, func(i, j int) bool {
+		return (*guardians)[i].String() < (*guardians)[j].String()
+	})
+
+	guardiansBytes := make([]byte, 0)
+	for _, g := range *guardians {
+		guardiansBytes = append(guardiansBytes, g.Bytes()...)
+	}
+	paramsHash := crypto.Hash(guardiansBytes)
+	if timeChallengeInfo, errTimeChallenge := TimeChallenge(context, p.MethodName, paramsHash, securityInfo.AdministratorDelay); errTimeChallenge != nil {
+		return nil, errTimeChallenge
+	} else {
+		// if paramsHash is not zero it means we had a new challenge and we can't go further to save the change into local db
+		if !timeChallengeInfo.ParamsHash.IsZero() {
+			return nil, nil
+		}
+	}
+
+	securityInfo.Guardians = make([]types.Address, 0)
+	securityInfo.GuardiansVotes = make([]types.Address, 0)
+	for _, guardian := range *guardians {
+		securityInfo.Guardians = append(securityInfo.Guardians, guardian)
+		// append empty vote
+		securityInfo.GuardiansVotes = append(securityInfo.GuardiansVotes, types.Address{})
+	}
+
+	common.DealWithErr(securityInfo.Save(context.Storage()))
+	return nil, nil
+}
+
+type ProposeAdministratorLiquidity struct {
+	MethodName string
+}
+
+func (p *ProposeAdministratorLiquidity) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+	return plasmaTable.EmbeddedSimple, nil
+}
+func (p *ProposeAdministratorLiquidity) ValidateSendBlock(block *nom.AccountBlock) error {
+	var err error
+
+	address := new(types.Address)
+	if err := definition.ABILiquidity.UnpackMethod(address, p.MethodName, block.Data); err != nil {
+		return constants.ErrUnpackError
+	}
+
+	if block.Amount.Sign() != 0 {
+		return constants.ErrInvalidTokenOrAmount
+	}
+
+	// we also check with this method because in the abi the checksum is not verified
+	parsedAddress, err := types.ParseAddress(address.String())
+	if err != nil {
+		return err
+	} else if parsedAddress.IsZero() {
+		return constants.ErrForbiddenParam
+	}
+
+	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, *address)
+	return err
+}
+func (p *ProposeAdministratorLiquidity) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+	if err := p.ValidateSendBlock(sendBlock); err != nil {
+		return nil, err
+	}
+
+	proposedAddress := new(types.Address)
+	if err := definition.ABILiquidity.UnpackMethod(proposedAddress, p.MethodName, sendBlock.Data); err != nil {
+		return nil, constants.ErrUnpackError
+	}
+
+	liquidityInfo, err := definition.GetLiquidityInfo(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+
+	if !liquidityInfo.Administrator.IsZero() {
+		return nil, constants.ErrNotEmergency
+	}
+
+	securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+
+	found := false
+	for idx, guardian := range securityInfo.Guardians {
+		if bytes.Equal(guardian.Bytes(), sendBlock.Address.Bytes()) {
+			found = true
+			if err := securityInfo.GuardiansVotes[idx].SetBytes(proposedAddress.Bytes()); err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
+	if !found {
+		return nil, constants.ErrNotGuardian
+	}
+
+	votes := make(map[string]uint8)
+
+	threshold := uint8(len(securityInfo.Guardians) / 2)
+	for _, vote := range securityInfo.GuardiansVotes {
+		if !vote.IsZero() {
+			votes[vote.String()] += 1
+			// we got a majority, so we change the administrator pub key
+			if votes[vote.String()] > threshold {
+				votedAddress, errParse := types.ParseAddress(vote.String())
+				if errParse != nil {
+					return nil, errParse
+				} else if votedAddress.IsZero() {
+					return nil, constants.ErrForbiddenParam
+				}
+				if errSet := liquidityInfo.Administrator.SetBytes(votedAddress.Bytes()); errSet != nil {
+					return nil, errSet
+				}
+				liquidityInfoVariable, err := definition.EncodeLiquidityInfo(liquidityInfo)
+				if err != nil {
+					return nil, err
+				}
+				common.DealWithErr(liquidityInfoVariable.Save(context.Storage()))
+				for idx, _ := range securityInfo.GuardiansVotes {
+					securityInfo.GuardiansVotes[idx] = types.Address{}
+				}
+				break
+			}
+		}
+	}
+	common.DealWithErr(securityInfo.Save(context.Storage()))
+	return nil, nil
+}
+
+type EmergencyLiquidity struct {
+	MethodName string
+}
+
+func (p *EmergencyLiquidity) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+	return plasmaTable.EmbeddedSimple, nil
+}
+func (p *EmergencyLiquidity) ValidateSendBlock(block *nom.AccountBlock) error {
+	var err error
+	if err := definition.ABILiquidity.UnpackEmptyMethod(p.MethodName, block.Data); err != nil {
+		return constants.ErrUnpackError
+	}
+
+	if block.Amount.Sign() != 0 {
+		return constants.ErrInvalidTokenOrAmount
+	}
+
+	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName)
+	return err
+}
+func (p *EmergencyLiquidity) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+	if err := p.ValidateSendBlock(sendBlock); err != nil {
+		return nil, err
+	}
+
+	err := definition.ABILiquidity.UnpackEmptyMethod(p.MethodName, sendBlock.Data)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := CheckSecurityInitialized(context); err != nil {
+		return nil, err
+	}
+
+	liquidityInfo, err := definition.GetLiquidityInfo(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+
+	if sendBlock.Address.String() != liquidityInfo.Administrator.String() {
+		return nil, constants.ErrPermissionDenied
+	}
+
+	if errSet := liquidityInfo.Administrator.SetBytes(types.ZeroAddress.Bytes()); errSet != nil {
+		return nil, errSet
+	}
+	liquidityInfo.IsHalted = true
 
 	liquidityInfoVariable, err := definition.EncodeLiquidityInfo(liquidityInfo)
 	if err != nil {

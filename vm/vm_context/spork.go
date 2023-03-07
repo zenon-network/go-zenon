@@ -11,8 +11,8 @@ func (ctx *accountVmContext) IsAcceleratorSporkEnforced() bool {
 	return active
 }
 
-func (ctx *accountVmContext) IsBridgeSporkEnforced() bool {
-	active, err := ctx.momentumStore.IsSporkActive(types.BridgeSpork)
+func (ctx *accountVmContext) IsBridgeAndLiquiditySporkEnforced() bool {
+	active, err := ctx.momentumStore.IsSporkActive(types.BridgeAndLiquiditySpork)
 	common.DealWithErr(err)
 	return active
 }

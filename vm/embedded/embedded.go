@@ -32,50 +32,52 @@ type embeddedImplementation struct {
 }
 
 var (
-	originEmbedded      = getOrigin()
-	acceleratorEmbedded = getAccelerator()
-	// todo implement it with spork
-	bridgeEmbedded = getBridge()
+	originEmbedded             = getOrigin()
+	acceleratorEmbedded        = getAccelerator()
+	bridgeAndLiquidityEmbedded = getBridgeAndLiquidity()
 )
 
-func getBridge() map[types.Address]*embeddedImplementation {
+func getBridgeAndLiquidity() map[types.Address]*embeddedImplementation {
 	contracts := getAccelerator()
 	contracts[types.BridgeContract] = &embeddedImplementation{
 		map[string]Method{
-			cabi.WrapTokenMethodName:             &implementation.WrapTokenMethod{cabi.WrapTokenMethodName},
-			cabi.UpdateWrapRequestMethodName:     &implementation.UpdateWrapRequestMethod{cabi.UpdateWrapRequestMethodName},
-			cabi.RedeemUnwrapMethodName:          &implementation.RedeemMethod{cabi.RedeemUnwrapMethodName},
-			cabi.UnwrapTokenMethodName:           &implementation.UnwrapTokenMethod{cabi.UnwrapTokenMethodName},
-			cabi.RevokeUnwrapRequestMethodName:   &implementation.RevokeUnwrapRequestMethod{cabi.RevokeUnwrapRequestMethodName},
-			cabi.AddNetworkMethodName:            &implementation.AddNetworkMethod{cabi.AddNetworkMethodName},
-			cabi.RemoveNetworkMethodName:         &implementation.RemoveNetworkMethod{cabi.RemoveNetworkMethodName},
-			cabi.SetTokenPairMethod:              &implementation.SetTokenPairMethod{cabi.SetTokenPairMethod},
-			cabi.RemoveTokenPairMethodName:       &implementation.RemoveTokenPairMethod{cabi.RemoveTokenPairMethodName},
-			cabi.HaltMethodName:                  &implementation.HaltMethod{cabi.HaltMethodName},
-			cabi.NominateGuardiansMethodName:     &implementation.NominateGuardiansMethod{cabi.NominateGuardiansMethodName},
-			cabi.UnhaltMethodName:                &implementation.UnhaltMethod{cabi.UnhaltMethodName},
-			cabi.ProposeAdministratorMethodName:  &implementation.ProposeAdministratorMethod{cabi.ProposeAdministratorMethodName},
-			cabi.EmergencyMethodName:             &implementation.EmergencyMethod{cabi.EmergencyMethodName},
-			cabi.ChangeTssECDSAPubKeyMethodName:  &implementation.ChangeTssECDSAPubKeyMethod{cabi.ChangeTssECDSAPubKeyMethodName},
-			cabi.ChangeAdministratorMethodName:   &implementation.ChangeAdministratorMethod{cabi.ChangeAdministratorMethodName},
-			cabi.AllowKeygenMethodName:           &implementation.AllowKeygenMethod{cabi.AllowKeygenMethodName},
-			cabi.SetUnhaltDurationMethodName:     &implementation.SetUnhaltDurationMethod{cabi.SetUnhaltDurationMethodName},
-			cabi.SetOrchestratorInfoMethodName:   &implementation.SetOrchestratorInfoMethod{cabi.SetOrchestratorInfoMethodName},
-			cabi.UpdateBridgeMetadataMethodName:  &implementation.UpdateBridgeMetadataMethod{cabi.UpdateBridgeMetadataMethodName},
-			cabi.UpdateNetworkMetadataMethodName: &implementation.UpdateNetworkMetadataMethod{cabi.UpdateNetworkMetadataMethodName},
+			cabi.WrapTokenMethodName:            &implementation.WrapTokenMethod{cabi.WrapTokenMethodName},
+			cabi.UpdateWrapRequestMethodName:    &implementation.UpdateWrapRequestMethod{cabi.UpdateWrapRequestMethodName},
+			cabi.RedeemUnwrapMethodName:         &implementation.RedeemMethod{cabi.RedeemUnwrapMethodName},
+			cabi.UnwrapTokenMethodName:          &implementation.UnwrapTokenMethod{cabi.UnwrapTokenMethodName},
+			cabi.RevokeUnwrapRequestMethodName:  &implementation.RevokeUnwrapRequestMethod{cabi.RevokeUnwrapRequestMethodName},
+			cabi.SetNetworkMethodName:           &implementation.SetNetworkMethod{cabi.SetNetworkMethodName},
+			cabi.RemoveNetworkMethodName:        &implementation.RemoveNetworkMethod{cabi.RemoveNetworkMethodName},
+			cabi.SetTokenPairMethod:             &implementation.SetTokenPairMethod{cabi.SetTokenPairMethod},
+			cabi.RemoveTokenPairMethodName:      &implementation.RemoveTokenPairMethod{cabi.RemoveTokenPairMethodName},
+			cabi.HaltMethodName:                 &implementation.HaltMethod{cabi.HaltMethodName},
+			cabi.NominateGuardiansMethodName:    &implementation.NominateGuardiansMethod{cabi.NominateGuardiansMethodName},
+			cabi.UnhaltMethodName:               &implementation.UnhaltMethod{cabi.UnhaltMethodName},
+			cabi.ProposeAdministratorMethodName: &implementation.ProposeAdministratorMethod{cabi.ProposeAdministratorMethodName},
+			cabi.EmergencyMethodName:            &implementation.EmergencyMethod{cabi.EmergencyMethodName},
+			cabi.ChangeTssECDSAPubKeyMethodName: &implementation.ChangeTssECDSAPubKeyMethod{cabi.ChangeTssECDSAPubKeyMethodName},
+			cabi.ChangeAdministratorMethodName:  &implementation.ChangeAdministratorMethod{cabi.ChangeAdministratorMethodName},
+			cabi.SetAllowKeygenMethodName:       &implementation.SetAllowKeygenMethod{cabi.SetAllowKeygenMethodName},
+			cabi.SetOrchestratorInfoMethodName:  &implementation.SetOrchestratorInfoMethod{cabi.SetOrchestratorInfoMethodName},
+			cabi.SetBridgeMetadataMethodName:    &implementation.SetBridgeMetadataMethod{cabi.SetBridgeMetadataMethodName},
+			cabi.SetNetworkMetadataMethodName:   &implementation.SetNetworkMetadataMethod{cabi.SetNetworkMetadataMethodName},
 		},
 		cabi.ABIBridge,
 	}
+
 	contracts[types.LiquidityContract].m[cabi.SetTokenTupleMethodName] = &implementation.SetTokenTupleMethod{cabi.SetTokenTupleMethodName}
 	contracts[types.LiquidityContract].m[cabi.LiquidityStakeMethodName] = &implementation.LiquidityStakeMethod{cabi.LiquidityStakeMethodName}
 	contracts[types.LiquidityContract].m[cabi.CancelLiquidityStakeMethodName] = &implementation.CancelLiquidityStakeMethod{cabi.CancelLiquidityStakeMethodName}
 	contracts[types.LiquidityContract].m[cabi.UnlockLiquidityStakeEntriesMethodName] = &implementation.UnlockLiquidityStakeEntries{cabi.UnlockLiquidityStakeEntriesMethodName}
 	contracts[types.LiquidityContract].m[cabi.UpdateMethodName] = &implementation.UpdateRewardEmbeddedLiquidityMethod{cabi.UpdateMethodName}
 	contracts[types.LiquidityContract].m[cabi.CollectRewardMethodName] = &implementation.CollectRewardMethod{cabi.CollectRewardMethodName, constants.AlphanetPlasmaTable.EmbeddedWDoubleWithdraw}
-	contracts[types.LiquidityContract].m[cabi.StartLiquidityStakeMethodName] = &implementation.StartLiquidityStake{cabi.StartLiquidityStakeMethodName}
-	contracts[types.LiquidityContract].m[cabi.StopLiquidityStakeMethodName] = &implementation.StopLiquidityStake{cabi.StopLiquidityStakeMethodName}
+	contracts[types.LiquidityContract].m[cabi.SetIsHaltedMethodName] = &implementation.SetIsHalted{cabi.SetIsHaltedMethodName}
 	contracts[types.LiquidityContract].m[cabi.SetAdditionalRewardMethodName] = &implementation.SetAdditionalReward{cabi.SetAdditionalRewardMethodName}
-	contracts[types.LiquidityContract].m[cabi.ChangeLiquidityAdministratorMethodName] = &implementation.ChangeLiquidityAdministrator{cabi.ChangeLiquidityAdministratorMethodName}
+	contracts[types.LiquidityContract].m[cabi.ChangeAdministratorMethodName] = &implementation.ChangeAdministratorLiquidity{cabi.ChangeAdministratorMethodName}
+	contracts[types.LiquidityContract].m[cabi.ProposeAdministratorMethodName] = &implementation.ProposeAdministratorLiquidity{cabi.ProposeAdministratorMethodName}
+	contracts[types.LiquidityContract].m[cabi.NominateGuardiansMethodName] = &implementation.NominateGuardiansLiquidity{cabi.NominateGuardiansMethodName}
+	contracts[types.LiquidityContract].m[cabi.EmergencyMethodName] = &implementation.EmergencyLiquidity{cabi.EmergencyMethodName}
+
 	return contracts
 }
 
@@ -198,8 +200,8 @@ func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Addres
 	}
 
 	var contractsMap map[types.Address]*embeddedImplementation
-	if context.IsBridgeSporkEnforced() {
-		contractsMap = bridgeEmbedded
+	if context.IsBridgeAndLiquiditySporkEnforced() {
+		contractsMap = bridgeAndLiquidityEmbedded
 	} else if context.IsAcceleratorSporkEnforced() {
 		contractsMap = acceleratorEmbedded
 	} else {

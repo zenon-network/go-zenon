@@ -51,31 +51,48 @@ const (
 			{"name":"revokeTime", "type":"int64"},
 			{"name":"expirationTime", "type":"int64"}
 		]},
-		{"type":"function","name":"StartLiquidityStake","inputs":[]},
-		{"type":"function","name":"StopLiquidityStake","inputs":[]},
-		{"type":"function","name":"LiquidityStake","inputs":[{"name":"durationInSec", "type":"int64"}]},
-		{"type":"function","name":"CancelLiquidityStake","inputs":[{"name":"id","type":"hash"}]},
-		{"type":"function","name":"UnlockLiquidityStakeEntries","inputs":[{"name":"tokenStandard", "type":"tokenStandard"}]},
+		{"type":"function","name":"NominateGuardians","inputs":[
+			{"name":"guardians","type":"address[]"}
+		]},
+		{"type":"function","name":"ProposeAdministrator","inputs":[
+			{"name":"address","type":"address"}
+		]},
+		{"type":"function","name":"Emergency","inputs":[]},
+
+		{"type":"variable","name":"securityInfo","inputs":[
+			{"name":"guardians","type":"address[]"},
+			{"name":"guardiansVotes","type":"address[]"},
+			{"name":"administratorDelay","type":"uint64"},
+			{"name":"softDelay","type":"uint64"}
+		]},
+		{"type":"function","name":"SetIsHalted","inputs":[
+			{"name":"isHalted","type":"bool"}
+		]},
+		{"type":"function","name":"LiquidityStake","inputs":[
+			{"name":"durationInSec", "type":"int64"}
+		]},
+		{"type":"function","name":"CancelLiquidityStake","inputs":[
+			{"name":"id","type":"hash"}
+		]},
+		{"type":"function","name":"UnlockLiquidityStakeEntries","inputs":[]},
 		{"type":"function","name":"SetAdditionalReward","inputs":[
 			{"name":"znnReward", "type":"uint256"},
 			{"name":"qsrReward", "type":"uint256"}
 		]},
 		{"type":"function","name":"CollectReward","inputs":[]},
-		{"type":"function","name":"ChangeLiquidityAdministrator","inputs":[
+		{"type":"function","name":"ChangeAdministrator","inputs":[
 			{"name":"administrator","type":"address"}
 		]}
 	]`
 
-	FundMethodName                         = "Fund"
-	BurnZnnMethodName                      = "BurnZnn"
-	SetTokenTupleMethodName                = "SetTokenTuple"
-	LiquidityStakeMethodName               = "LiquidityStake"
-	CancelLiquidityStakeMethodName         = "CancelLiquidityStake"
-	UnlockLiquidityStakeEntriesMethodName  = "UnlockLiquidityStakeEntries"
-	SetAdditionalRewardMethodName          = "SetAdditionalReward"
-	StartLiquidityStakeMethodName          = "StartLiquidityStake"
-	StopLiquidityStakeMethodName           = "StopLiquidityStake"
-	ChangeLiquidityAdministratorMethodName = "ChangeLiquidityAdministrator"
+	FundMethodName                        = "Fund"
+	BurnZnnMethodName                     = "BurnZnn"
+	SetTokenTupleMethodName               = "SetTokenTuple"
+	LiquidityStakeMethodName              = "LiquidityStake"
+	CancelLiquidityStakeMethodName        = "CancelLiquidityStake"
+	UnlockLiquidityStakeEntriesMethodName = "UnlockLiquidityStakeEntries"
+	SetAdditionalRewardMethodName         = "SetAdditionalReward"
+	SetIsHaltedMethodName                 = "SetIsHalted"
 
 	liquidityInfoVariableName       = "liquidityInfo"
 	tokenTupleVariableName          = "tokenTuple"

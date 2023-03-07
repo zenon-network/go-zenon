@@ -67,6 +67,35 @@ func issueTokenSetup(t *testing.T, z mock.MockZenon) {
 	customZts = tokenList.List[0].ZenonTokenStandard
 }
 
+func mint(user types.Address, zts types.ZenonTokenStandard, amount *big.Int, beneficiary types.Address) *nom.AccountBlock {
+	return &nom.AccountBlock{
+		Address:   user,
+		ToAddress: types.TokenContract,
+		Data: definition.ABIToken.PackMethodPanic(definition.MintMethodName,
+			zts, amount, beneficiary),
+	}
+}
+
+func issue(user types.Address, name, symbol, domain string, totalSupply, maxSupply *big.Int, decimals uint8, mintable, burnable, utility bool) *nom.AccountBlock {
+	return &nom.AccountBlock{
+		Address:       user,
+		ToAddress:     types.TokenContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        constants.TokenIssueAmount,
+		Data: definition.ABIToken.PackMethodPanic(definition.IssueMethodName,
+			name,
+			symbol,
+			domain,
+			totalSupply,
+			maxSupply,
+			decimals,
+			mintable,
+			burnable,
+			utility,
+		),
+	}
+}
+
 // Test token amounts
 // - abi packaging works as expected
 // - send & receive of huge values works ok

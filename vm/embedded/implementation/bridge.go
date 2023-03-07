@@ -2,7 +2,6 @@ package implementation
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -17,7 +16,6 @@ import (
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/vm/vm_context"
-	"math"
 	"math/big"
 	"reflect"
 	"sort"
@@ -27,14 +25,6 @@ import (
 var (
 	bridgeLog = common.EmbeddedLogger.New("contract", "bridge")
 )
-
-func GetThreshold(value uint32) (uint32, error) {
-	if value == 0 {
-		return 0, errors.New("invalid input")
-	}
-	threshold := uint32(math.Ceil(float64(value)*2.0/3.0)) - 1
-	return threshold, nil
-}
 
 func CheckECDSASignature(message []byte, pubKeyStr, signatureStr string) (bool, error) {
 	pubKey, err := base64.StdEncoding.DecodeString(pubKeyStr)
@@ -62,29 +52,6 @@ func CheckECDSASignature(message []byte, pubKeyStr, signatureStr string) (bool, 
 	}
 
 	return true, nil
-}
-
-func CheckEDDSASignature(message []byte, pubKeyStr, signatureStr string) (bool, error) {
-	pubKey, err := base64.StdEncoding.DecodeString(pubKeyStr)
-	if err != nil {
-		return false, constants.ErrInvalidB64Decode
-	}
-	if len(pubKey) != constants.EdDSAPubKeyLength {
-		return false, constants.ErrInvalidB64Decode
-	}
-
-	signature, err := base64.StdEncoding.DecodeString(signatureStr)
-	if err != nil {
-		return false, constants.ErrInvalidB64Decode
-	}
-	if len(signature) != 64 {
-		return false, constants.ErrInvalidEDDSASignature
-	}
-
-	if ed25519.Verify(pubKey, message, signature) {
-		return true, nil
-	}
-	return false, constants.ErrInvalidEDDSASignature
 }
 
 func CanPerformAction(context vm_context.AccountVmContext) (*definition.BridgeInfoVariable, *definition.OrchestratorInfo, error) {
@@ -119,18 +86,6 @@ func CheckBridgeInitialized(context vm_context.AccountVmContext) (*definition.Br
 	return bridgeInfo, nil
 }
 
-func CheckSecurityInitialized(context vm_context.AccountVmContext) (*definition.SecurityInfoVariable, error) {
-	securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
-	if err != nil {
-		return nil, err
-	}
-	if len(securityInfo.Guardians) < constants.MinGuardians {
-		return nil, errors.New("security not initialized")
-	}
-
-	return securityInfo, nil
-}
-
 func CheckOrchestratorInfoInitialized(context vm_context.AccountVmContext) (*definition.OrchestratorInfo, error) {
 	orchestratorInfo, err := definition.GetOrchestratorInfoVariable(context.Storage())
 	if err != nil {
@@ -162,26 +117,18 @@ func CheckNetworkAndPairExist(context vm_context.AccountVmContext, networkClass 
 	network, err := definition.GetNetworkInfoVariable(context.Storage(), networkClass, chainId)
 	if err != nil {
 		return nil, err
-	}
-	if network.Name == "" {
+	} else if len(network.Name) == 0 {
 		return nil, constants.ErrUnknownNetwork
 	}
 
 	for i := 0; i < len(network.TokenPairs); i++ {
-		zts := network.TokenPairs[i].TokenStandard
+		zts := network.TokenPairs[i].TokenStandard.String()
 		token := network.TokenPairs[i].TokenAddress
 		if ztsOrToken == zts || ztsOrToken == token {
 			return &network.TokenPairs[i], nil
 		}
 	}
 	return nil, constants.ErrTokenNotFound
-}
-
-func checkWrapMetadataStatic(param *definition.WrapTokenParam) error {
-	if !ecommon.IsHexAddress(param.ToAddress) {
-		return constants.ErrInvalidToAddress
-	}
-	return nil
 }
 
 type WrapTokenMethod struct {
@@ -199,11 +146,11 @@ func (p *WrapTokenMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrUnpackError
 	}
 
-	if err = checkWrapMetadataStatic(param); err != nil {
-		return err
+	if !ecommon.IsHexAddress(param.ToAddress) {
+		return constants.ErrForbiddenParam
 	}
 
-	if block.Amount.Cmp(big.NewInt(0)) == 0 {
+	if block.Amount.Sign() <= 0 {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
@@ -244,7 +191,7 @@ func (p *WrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, send
 	request.Id = sendBlock.Hash
 	request.ToAddress = strings.ToLower(param.ToAddress)
 	request.TokenStandard = sendBlock.TokenStandard
-	request.TokenAddress = strings.ToLower((*tokenPair).TokenAddress)
+	request.TokenAddress = tokenPair.TokenAddress
 	request.Amount = new(big.Int).Set(sendBlock.Amount)
 	amount := new(big.Int).Set(sendBlock.Amount)
 	fee := big.NewInt(int64(tokenPair.FeePercentage))
@@ -253,7 +200,7 @@ func (p *WrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, send
 	request.Signature = ""
 	request.CreationMomentumHeight = frontierMomentum.Height
 
-	ztsFeesInfo, err := definition.GetZtsFeesInfoVariable(context.Storage(), sendBlock.TokenStandard.String())
+	ztsFeesInfo, err := definition.GetZtsFeesInfoVariable(context.Storage(), sendBlock.TokenStandard)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +232,7 @@ func GetMessageToSignEvm(data []byte) ([]byte, error) {
 	return crypto.Keccak256([]byte(msg)), nil
 }
 
-func hashByNetworkClass(data []byte, networkClass uint32) ([]byte, error) {
+func HashByNetworkClass(data []byte, networkClass uint32) ([]byte, error) {
 	switch networkClass {
 	case definition.NoMClass:
 		return crypto.Hash(data), nil
@@ -316,7 +263,7 @@ func GetWrapTokenRequestMessage(request *definition.WrapTokenRequest, contractAd
 	}
 
 	//bridgeLog.Info("CheckECDSASignature", "message", message)
-	return hashByNetworkClass(messageBytes, request.NetworkClass)
+	return HashByNetworkClass(messageBytes, request.NetworkClass)
 }
 
 type UpdateWrapRequestMethod struct {
@@ -332,6 +279,10 @@ func (p *UpdateWrapRequestMethod) ValidateSendBlock(block *nom.AccountBlock) err
 
 	if err := definition.ABIBridge.UnpackMethod(param, p.MethodName, block.Data); err != nil {
 		return constants.ErrUnpackError
+	}
+
+	if block.Amount.Sign() != 0 {
+		return constants.ErrTokenInvalidAmount
 	}
 
 	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.Id, param.Signature)
@@ -361,16 +312,25 @@ func (p *UpdateWrapRequestMethod) ReceiveBlock(context vm_context.AccountVmConte
 	if err != nil {
 		return nil, err
 	} else if len(networkInfo.Name) == 0 {
-		return nil, constants.ErrDataNonExistent
+		return nil, constants.ErrUnknownNetwork
 	}
-	// todo check that the token pair exists
-	contractAddress := ecommon.HexToAddress(networkInfo.ContractAddress)
 
+	found := false
+	for _, pair := range networkInfo.TokenPairs {
+		if reflect.DeepEqual(pair.TokenStandard.Bytes(), request.TokenStandard.Bytes()) && pair.TokenAddress == request.TokenAddress {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, constants.ErrInvalidToken
+	}
+
+	contractAddress := ecommon.HexToAddress(networkInfo.ContractAddress)
 	message, err := GetWrapTokenRequestMessage(request, &contractAddress)
 	if err != nil {
 		return nil, err
 	}
-
 	result, err := CheckECDSASignature(message, bridgeInfo.DecompressedTssECDSAPubKey, param.Signature)
 	if err != nil || !result {
 		return nil, constants.ErrInvalidECDSASignature
@@ -402,7 +362,7 @@ func GetUnwrapTokenRequestMessage(param *definition.UnwrapTokenParam) ([]byte, e
 
 	//bridgeLog.Info("CheckECDSASignature", "message", message)
 
-	return crypto.Hash(messageBytes), nil
+	return HashByNetworkClass(messageBytes, param.NetworkClass)
 }
 
 func checkUnwrapMetadataStatic(param *definition.UnwrapTokenParam) error {
@@ -412,10 +372,6 @@ func checkUnwrapMetadataStatic(param *definition.UnwrapTokenParam) error {
 
 	if param.Amount.Sign() <= 0 {
 		return constants.ErrInvalidTokenOrAmount
-	}
-
-	if param.NetworkClass == 0 || param.ChainId == 0 {
-		return constants.ErrForbiddenParam
 	}
 
 	return nil
@@ -474,8 +430,8 @@ func (p *UnwrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	if err != nil {
 		bridgeLog.Error("Unwrap", "error", err)
 		return nil, err
-	} else if networkInfo.NetworkClass != param.NetworkClass || networkInfo.Id != param.ChainId {
-		return nil, constants.ErrForbiddenParam
+	} else if len(networkInfo.Name) == 0 {
+		return nil, constants.ErrUnknownNetwork
 	}
 
 	tokenPair, err := CheckNetworkAndPairExist(context, param.NetworkClass, param.ChainId, strings.ToLower(param.TokenAddress))
@@ -512,6 +468,7 @@ func (p *UnwrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 		LogIndex:                   param.LogIndex,
 		ToAddress:                  param.ToAddress,
 		TokenAddress:               strings.ToLower(param.TokenAddress),
+		TokenStandard:              tokenPair.TokenStandard,
 		Amount:                     param.Amount,
 		Signature:                  param.Signature,
 		Redeemed:                   0,
@@ -522,14 +479,14 @@ func (p *UnwrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	return nil, nil
 }
 
-type AddNetworkMethod struct {
+type SetNetworkMethod struct {
 	MethodName string
 }
 
-func (p *AddNetworkMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+func (p *SetNetworkMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
-func (p *AddNetworkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
+func (p *SetNetworkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.NetworkInfoParam)
 
@@ -541,8 +498,17 @@ func (p *AddNetworkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	// todo make sure name is not longer than 32
-	// check contract address as eth address
+	if len(param.Name) < 3 || len(param.Name) > 32 {
+		return constants.ErrInvalidNetworkName
+	}
+
+	if param.NetworkClass < 1 || param.ChainId < 1 {
+		return constants.ErrForbiddenParam
+	}
+
+	if !ecommon.IsHexAddress(param.ContractAddress) {
+		return constants.ErrInvalidContractAddress
+	}
 
 	if !IsJSON(param.Metadata) {
 		return constants.ErrInvalidJsonContent
@@ -551,7 +517,7 @@ func (p *AddNetworkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId, param.Name, param.ContractAddress, param.Metadata)
 	return err
 }
-func (p *AddNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+func (p *SetNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
 	}
@@ -562,21 +528,13 @@ func (p *AddNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 		return nil, err
 	}
 
-	bridgeInfo, _, err := CanPerformAction(context)
+	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
 	if err != nil {
 		return nil, err
 	}
 
 	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
-	}
-
-	if param.Name == "" {
-		return nil, constants.ErrInvalidNetworkName
-	}
-
-	if !ecommon.IsHexAddress(param.ContractAddress) {
-		return nil, constants.ErrInvalidContractAddress
 	}
 
 	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkClass, param.ChainId)
@@ -632,7 +590,7 @@ func (p *RemoveNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 		return nil, err
 	}
 
-	bridgeInfo, _, err := CanPerformAction(context)
+	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
 	if err != nil {
 		return nil, err
 	}
@@ -644,16 +602,77 @@ func (p *RemoveNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkClass, param.ChainId)
 	if err != nil {
 		return nil, err
+	} else if len(networkInfo.Name) == 0 {
+		return nil, constants.ErrUnknownNetwork
 	}
-	if networkInfo.Name == "" || networkInfo.NetworkClass != param.NetworkClass || networkInfo.Id != param.ChainId {
-		// todo implement error
-		return nil, constants.ErrPermissionDenied
-	}
+
 	networkInfoVariable, err := definition.EncodeNetworkInfo(networkInfo)
 	if err != nil {
 		return nil, err
 	}
 	common.DealWithErr(networkInfoVariable.Delete(context.Storage()))
+	return nil, nil
+}
+
+type SetNetworkMetadataMethod struct {
+	MethodName string
+}
+
+func (p *SetNetworkMetadataMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+	return plasmaTable.EmbeddedSimple, nil
+}
+func (p *SetNetworkMetadataMethod) ValidateSendBlock(block *nom.AccountBlock) error {
+	var err error
+
+	param := new(definition.SetNetworkMetadataParam)
+	if err := definition.ABIBridge.UnpackMethod(param, p.MethodName, block.Data); err != nil {
+		return constants.ErrUnpackError
+	}
+
+	if block.Amount.Sign() != 0 {
+		return constants.ErrInvalidTokenOrAmount
+	}
+
+	if !IsJSON(param.Metadata) {
+		return constants.ErrInvalidJsonContent
+	}
+
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId, param.Metadata)
+	return err
+}
+func (p *SetNetworkMetadataMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+	if err := p.ValidateSendBlock(sendBlock); err != nil {
+		return nil, err
+	}
+
+	param := new(definition.SetNetworkMetadataParam)
+	err := definition.ABIBridge.UnpackMethod(param, p.MethodName, sendBlock.Data)
+	if err != nil {
+		return nil, err
+	}
+
+	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+		return nil, constants.ErrPermissionDenied
+	}
+
+	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkClass, param.ChainId)
+	if err != nil {
+		return nil, err
+	} else if len(networkInfo.Name) == 0 {
+		return nil, constants.ErrUnknownNetwork
+	}
+
+	networkInfo.Metadata = param.Metadata
+	networkInfoVariable, err := definition.EncodeNetworkInfo(networkInfo)
+	if err != nil {
+		return nil, err
+	}
+	common.DealWithErr(networkInfoVariable.Save(context.Storage()))
 	return nil, nil
 }
 
@@ -681,6 +700,22 @@ func (p *SetTokenPairMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
+	if !ecommon.IsHexAddress(param.TokenAddress) {
+		return constants.ErrForbiddenParam
+	}
+
+	if param.TokenStandard.String() == types.ZeroTokenStandard.String() {
+		return constants.ErrForbiddenParam
+	}
+
+	if param.FeePercentage > constants.MaximumFee {
+		return constants.ErrForbiddenParam
+	}
+
+	if param.RedeemDelay == 0 {
+		return constants.ErrForbiddenParam
+	}
+
 	if !IsJSON(param.Metadata) {
 		return constants.ErrInvalidJsonContent
 	}
@@ -688,47 +723,6 @@ func (p *SetTokenPairMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId, param.TokenStandard, param.TokenAddress, param.Bridgeable, param.Redeemable, param.Owned, param.MinAmount, param.FeePercentage, param.RedeemDelay, param.Metadata)
 	return err
 }
-
-func timeChallenge(context vm_context.AccountVmContext, methodName string, hash []byte) (*definition.TimeChallengeInfo, error) {
-	timeChallengeInfo, err := definition.GetTimeChallengeInfoVariable(context.Storage(), methodName)
-	if err != nil {
-		return nil, err
-	}
-	if timeChallengeInfo == nil {
-		timeChallengeInfo = &definition.TimeChallengeInfo{
-			MethodName:           methodName,
-			ParamsHash:           types.Hash{},
-			ChallengeStartHeight: 0,
-		}
-	}
-	paramsHash, err := types.BytesToHash(hash)
-	if err != nil {
-		return nil, err
-	}
-
-	momentum, err := context.GetFrontierMomentum()
-	common.DealWithErr(err)
-	// if true then we need to check the time challenge, otherwise we start a new challenge
-	if reflect.DeepEqual(timeChallengeInfo.ParamsHash, paramsHash) {
-		securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
-		common.DealWithErr(err)
-
-		if timeChallengeInfo.ChallengeStartHeight+securityInfo.TssDelay >= momentum.Height {
-			return nil, errors.New("challenge not due")
-		} else {
-			// challenge is ok, we can reset it
-			timeChallengeInfo.ParamsHash = types.Hash{}
-		}
-	} else {
-		if errSet := timeChallengeInfo.ParamsHash.SetBytes(paramsHash.Bytes()); errSet != nil {
-			return nil, errSet
-		}
-		timeChallengeInfo.ChallengeStartHeight = momentum.Height
-	}
-	common.DealWithErr(timeChallengeInfo.Save(context.Storage()))
-	return timeChallengeInfo, nil
-}
-
 func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -740,21 +734,9 @@ func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, s
 		return nil, err
 	}
 
-	bridgeInfo, _, err := CanPerformAction(context)
+	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
 	if err != nil {
 		return nil, err
-	}
-
-	if param.MinAmount.Sign() <= 0 {
-		return nil, constants.ErrInvalidMinAmount
-	}
-
-	if param.FeePercentage > constants.MaximumFee {
-		return nil, constants.ErrInvalidFee
-	}
-
-	if param.RedeemDelay == 0 {
-		return nil, constants.ErrInvalidArguments
 	}
 
 	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
@@ -764,13 +746,16 @@ func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, s
 	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkClass, param.ChainId)
 	if err != nil {
 		return nil, err
-	}
-	if networkInfo.Name == "" || networkInfo.NetworkClass != param.NetworkClass || networkInfo.Id != param.ChainId {
-		// todo implement error
-		return nil, constants.ErrInvalidArguments
+	} else if len(networkInfo.Name) == 0 {
+		return nil, constants.ErrUnknownNetwork
 	}
 
-	if timeChallengeInfo, errTimeChallenge := timeChallenge(context, p.MethodName, param.Hash()); errTimeChallenge != nil {
+	securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+
+	if timeChallengeInfo, errTimeChallenge := TimeChallenge(context, p.MethodName, param.Hash(), securityInfo.SoftDelay); errTimeChallenge != nil {
 		return nil, errTimeChallenge
 	} else {
 		// if paramsHash is not zero it means we had a new challenge and we can't go further to save the change into local db
@@ -780,7 +765,7 @@ func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, s
 	}
 
 	tokenPair := definition.TokenPair{
-		TokenStandard: param.TokenStandard.String(),
+		TokenStandard: param.TokenStandard,
 		TokenAddress:  strings.ToLower(param.TokenAddress),
 		Bridgeable:    param.Bridgeable,
 		Redeemable:    param.Redeemable,
@@ -790,15 +775,16 @@ func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, s
 		RedeemDelay:   param.RedeemDelay,
 		Metadata:      param.Metadata,
 	}
-	found := false
 
-	// todo do not allow two token pairs on the same network with the same erc20 address
-	// todo implement time challenge for updating a token pair - only one
+	found := false
 	for i := 0; i < len(networkInfo.TokenPairs); i++ {
-		if networkInfo.TokenPairs[i].TokenStandard == param.TokenStandard.String() {
+		if networkInfo.TokenPairs[i].TokenStandard == tokenPair.TokenStandard || networkInfo.TokenPairs[i].TokenAddress == tokenPair.TokenAddress {
+			// we do not allow duplicate zts or tokenAddress
+			if found {
+				return nil, constants.ErrForbiddenParam
+			}
 			networkInfo.TokenPairs[i] = tokenPair
 			found = true
-			break
 		}
 	}
 	if !found {
@@ -832,6 +818,10 @@ func (p *RemoveTokenPairMethod) ValidateSendBlock(block *nom.AccountBlock) error
 		return constants.ErrInvalidTokenOrAmount
 	}
 
+	if !ecommon.IsHexAddress(param.TokenAddress) {
+		return constants.ErrForbiddenParam
+	}
+
 	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId, param.TokenStandard, param.TokenAddress)
 	return err
 }
@@ -846,78 +836,6 @@ func (p *RemoveTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext
 		return nil, err
 	}
 
-	bridgeInfo, _, err := CanPerformAction(context)
-	if err != nil {
-		return nil, err
-	}
-
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
-		return nil, constants.ErrPermissionDenied
-	}
-
-	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkClass, param.ChainId)
-	if err != nil {
-		return nil, err
-	}
-	if networkInfo.Name == "" || networkInfo.NetworkClass != param.NetworkClass || networkInfo.Id != param.ChainId {
-		// todo implement error
-		return nil, constants.ErrPermissionDenied
-	}
-
-	for i := 0; i < len(networkInfo.TokenPairs); i++ {
-		zts := networkInfo.TokenPairs[i].TokenStandard
-		token := networkInfo.TokenPairs[i].TokenAddress
-		if param.TokenStandard.String() == zts && param.TokenAddress == token {
-			networkInfo.TokenPairs = append(networkInfo.TokenPairs[:i], networkInfo.TokenPairs[i+1:]...)
-			break
-		}
-	}
-
-	networkInfoVariable, err := definition.EncodeNetworkInfo(networkInfo)
-	if err != nil {
-		return nil, err
-	}
-	common.DealWithErr(networkInfoVariable.Save(context.Storage()))
-	return nil, nil
-}
-
-type UpdateNetworkMetadataMethod struct {
-	MethodName string
-}
-
-func (p *UpdateNetworkMetadataMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
-	return plasmaTable.EmbeddedSimple, nil
-}
-func (p *UpdateNetworkMetadataMethod) ValidateSendBlock(block *nom.AccountBlock) error {
-	var err error
-
-	param := new(definition.UpdateNetworkMetadataParam)
-	if err := definition.ABIBridge.UnpackMethod(param, p.MethodName, block.Data); err != nil {
-		return constants.ErrUnpackError
-	}
-
-	if block.Amount.Sign() != 0 {
-		return constants.ErrInvalidTokenOrAmount
-	}
-
-	if !IsJSON(param.Metadata) {
-		return constants.ErrInvalidJsonContent
-	}
-
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.NetworkClass, param.ChainId, param.Metadata)
-	return err
-}
-func (p *UpdateNetworkMetadataMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
-	if err := p.ValidateSendBlock(sendBlock); err != nil {
-		return nil, err
-	}
-
-	param := new(definition.UpdateNetworkMetadataParam)
-	err := definition.ABIBridge.UnpackMethod(param, p.MethodName, sendBlock.Data)
-	if err != nil {
-		return nil, err
-	}
-	// todo decide whether or not we can do it when it is halted
 	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
 	if err != nil {
 		return nil, err
@@ -930,13 +848,24 @@ func (p *UpdateNetworkMetadataMethod) ReceiveBlock(context vm_context.AccountVmC
 	networkInfo, err := definition.GetNetworkInfoVariable(context.Storage(), param.NetworkClass, param.ChainId)
 	if err != nil {
 		return nil, err
-	}
-	if networkInfo.Name == "" || networkInfo.NetworkClass != param.NetworkClass || networkInfo.Id != param.ChainId {
-		// todo implement error
-		return nil, constants.ErrPermissionDenied
+	} else if len(networkInfo.Name) == 0 {
+		return nil, constants.ErrUnknownNetwork
 	}
 
-	networkInfo.Metadata = param.Metadata
+	found := false
+	for i := 0; i < len(networkInfo.TokenPairs); i++ {
+		zts := networkInfo.TokenPairs[i].TokenStandard
+		token := networkInfo.TokenPairs[i].TokenAddress
+		if reflect.DeepEqual(param.TokenStandard.Bytes(), zts.Bytes()) && param.TokenAddress == token {
+			networkInfo.TokenPairs = append(networkInfo.TokenPairs[:i], networkInfo.TokenPairs[i+1:]...)
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, constants.ErrTokenNotFound
+	}
+
 	networkInfoVariable, err := definition.EncodeNetworkInfo(networkInfo)
 	if err != nil {
 		return nil, err
@@ -945,13 +874,13 @@ func (p *UpdateNetworkMetadataMethod) ReceiveBlock(context vm_context.AccountVmC
 	return nil, nil
 }
 
-func GetBasicMethodMessage(methodName string, tssNonce uint64, networkClass, chainId uint32) ([]byte, error) {
+func GetBasicMethodMessage(methodName string, tssNonce uint64, networkClass uint32, chainId uint64) ([]byte, error) {
 	args := eabi.Arguments{{Type: definition.StringTy}, {Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}}
 	values := make([]interface{}, 0)
 	values = append(values,
 		methodName,
 		big.NewInt(0).SetUint64(uint64(networkClass)),
-		big.NewInt(0).SetUint64(uint64(chainId)),
+		big.NewInt(0).SetUint64(chainId),
 		big.NewInt(0).SetUint64(tssNonce), // nonce
 	)
 
@@ -961,7 +890,7 @@ func GetBasicMethodMessage(methodName string, tssNonce uint64, networkClass, cha
 	}
 	//bridgeLog.Info("CheckECDSASignature", "message", message)
 
-	return hashByNetworkClass(messageBytes, networkClass)
+	return HashByNetworkClass(messageBytes, networkClass)
 }
 
 type HaltMethod struct {
@@ -997,14 +926,19 @@ func (p *HaltMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock
 		return nil, err
 	}
 
-	bridgeInfo, _, err := CanPerformAction(context)
-	if err != nil {
-		return nil, err
+	bridgeInfo, errBridge := definition.GetBridgeInfoVariable(context.Storage())
+	if errBridge != nil {
+		return nil, errBridge
+	}
+	if bridgeInfo.Halted == true {
+		return nil, constants.ErrBridgeHalted
 	}
 
 	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
-		// todo get znn chainIdentifier from variable
-		message, err := GetBasicMethodMessage(p.MethodName, bridgeInfo.TssNonce, definition.NoMClass, 1)
+		momentum, err := context.GetFrontierMomentum()
+		common.DealWithErr(err)
+
+		message, err := GetBasicMethodMessage(p.MethodName, bridgeInfo.TssNonce, definition.NoMClass, momentum.ChainIdentifier)
 		if err != nil {
 			return nil, err
 		}
@@ -1050,13 +984,14 @@ func (p *UnhaltMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 	if err != nil {
 		return nil, err
 	}
-	bridgeInfo, err := CheckBridgeInitialized(context)
+	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
 	if err != nil {
 		return nil, err
 	}
+
 	// we do this check, so we cannot unhalt more than one time and actually increase the duration of the halt
 	if bridgeInfo.Halted == false {
-		return nil, errors.New("bridge not halted")
+		return nil, constants.ErrBridgeNotHalted
 	}
 
 	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
@@ -1101,8 +1036,13 @@ func (p *EmergencyMethod) ReceiveBlock(context vm_context.AccountVmContext, send
 	if err != nil {
 		return nil, err
 	}
+
 	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
 	if err != nil {
+		return nil, err
+	}
+
+	if _, err := CheckSecurityInitialized(context); err != nil {
 		return nil, err
 	}
 
@@ -1172,13 +1112,12 @@ func (p *ChangeTssECDSAPubKeyMethod) ValidateSendBlock(block *nom.AccountBlock) 
 	if len(pubKey) != constants.CompressedECDSAPubKeyLength {
 		return constants.ErrInvalidCompressedECDSAPubKeyLength
 	}
-	// todo check sendBlock params for all methods
 
 	if block.Amount.Sign() != 0 {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.PubKey, param.OldPubKeySignature, param.NewPubKeySignature, param.KeySignThreshold)
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.PubKey, param.OldPubKeySignature, param.NewPubKeySignature)
 	return err
 }
 func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -1192,32 +1131,21 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, err
 	}
 
-	orchestratorInfo, err := CheckOrchestratorInfoInitialized(context)
-	if err != nil {
-		return nil, err
-	}
 	if _, err := CheckSecurityInitialized(context); err != nil {
 		return nil, err
 	}
+	if _, err := CheckOrchestratorInfoInitialized(context); err != nil {
+		return nil, err
+	}
+
 	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
 	if err != nil {
 		return nil, err
 	}
 
-	threshold, err := GetThreshold(orchestratorInfo.KeyGenThreshold)
-	if err != nil {
-		return nil, err
-	}
-	if param.KeySignThreshold < threshold {
-		return nil, constants.ErrInvalidKeySignThreshold
-	}
+	// we check it in the send block
+	pubKey, _ := base64.StdEncoding.DecodeString(param.PubKey)
 
-	pubKey, err := base64.StdEncoding.DecodeString(param.PubKey)
-	if err != nil {
-		return nil, constants.ErrInvalidB64Decode
-	} else if len(pubKey) != constants.CompressedECDSAPubKeyLength {
-		return nil, constants.ErrInvalidCompressedECDSAPubKeyLength
-	}
 	X, Y := secp256k1.DecompressPubkey(pubKey)
 	dPubKeyBytes := make([]byte, 1)
 	dPubKeyBytes[0] = 4
@@ -1228,29 +1156,35 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		// this only applies to non administrator calls
 		if !bridgeInfo.AllowKeyGen {
-			return nil, constants.ErrNotAllowedToChangeSignature
+			return nil, constants.ErrNotAllowedToChangeTss
 		}
-		// todo get zenon chainId as variable
-		message, err := GetChangePubKeyMessage(p.MethodName, definition.NoMClass, 1, bridgeInfo.TssNonce, param.PubKey)
+		momentum, err := context.GetFrontierMomentum()
+		common.DealWithErr(err)
+
+		message, err := GetChangePubKeyMessage(p.MethodName, definition.NoMClass, momentum.ChainIdentifier, bridgeInfo.TssNonce, param.PubKey)
 		if err != nil {
 			return nil, err
 		}
 		result, err := CheckECDSASignature(message, bridgeInfo.DecompressedTssECDSAPubKey, param.OldPubKeySignature)
 		if err != nil || !result {
-			bridgeLog.Error("ChangeTssECDSAPubKey-ErrInvalidSignature", "error", err, "result", result)
+			bridgeLog.Error("ChangeTssECDSAPubKey-ErrInvalidOldKeySignature", "error", err, "result", result)
 			return nil, constants.ErrInvalidECDSASignature
 		}
 
 		result, err = CheckECDSASignature(message, newDecompressedPubKey, param.NewPubKeySignature)
 		if err != nil || !result {
-			bridgeLog.Error("ChangeTssECDSAPubKey-ErrInvalidSignature", "error", err, "result", result)
+			bridgeLog.Error("ChangeTssECDSAPubKey-ErrInvalidNewKeySignature", "error", err, "result", result)
 			return nil, constants.ErrInvalidECDSASignature
 		}
 
 		bridgeInfo.TssNonce += 1
 	} else {
+		securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
+		if err != nil {
+			return nil, err
+		}
 		paramsHash := crypto.Hash(dPubKeyBytes)
-		if timeChallengeInfo, errTimeChallenge := timeChallenge(context, p.MethodName, paramsHash); errTimeChallenge != nil {
+		if timeChallengeInfo, errTimeChallenge := TimeChallenge(context, p.MethodName, paramsHash, securityInfo.SoftDelay); errTimeChallenge != nil {
 			return nil, errTimeChallenge
 		} else {
 			// if paramsHash is not zero it means we had a new challenge and we can't go further to save the change into local db
@@ -1264,8 +1198,6 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 	bridgeInfo.DecompressedTssECDSAPubKey = newDecompressedPubKey
 	bridgeInfo.AllowKeyGen = false
 	common.DealWithErr(bridgeInfo.Save(context.Storage()))
-	orchestratorInfo.KeySignThreshold = param.KeySignThreshold
-	common.DealWithErr(orchestratorInfo.Save(context.Storage()))
 	return nil, nil
 }
 
@@ -1286,6 +1218,15 @@ func (p *ChangeAdministratorMethod) ValidateSendBlock(block *nom.AccountBlock) e
 	if block.Amount.Sign() != 0 {
 		return constants.ErrInvalidTokenOrAmount
 	}
+
+	// we also check with this method because in the abi the checksum is not verified
+	parsedAddress, err := types.ParseAddress(address.String())
+	if err != nil {
+		return err
+	} else if parsedAddress.IsZero() {
+		return constants.ErrForbiddenParam
+	}
+
 	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, address)
 	return err
 }
@@ -1309,8 +1250,13 @@ func (p *ChangeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmCon
 		return nil, constants.ErrPermissionDenied
 	}
 
+	securityInfo, err := CheckSecurityInitialized(context)
+	if err != nil {
+		return nil, err
+	}
+
 	paramsHash := crypto.Hash(address.Bytes())
-	if timeChallengeInfo, errTimeChallenge := timeChallenge(context, p.MethodName, paramsHash); errTimeChallenge != nil {
+	if timeChallengeInfo, errTimeChallenge := TimeChallenge(context, p.MethodName, paramsHash, securityInfo.AdministratorDelay); errTimeChallenge != nil {
 		return nil, errTimeChallenge
 	} else {
 		// if paramsHash is not zero it means we had a new challenge and we can't go further to save the change into local db
@@ -1326,81 +1272,19 @@ func (p *ChangeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmCon
 	return nil, nil
 }
 
-type AllowKeygenMethod struct {
+type SetAllowKeygenMethod struct {
 	MethodName string
 }
 
-func (p *AllowKeygenMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+func (p *SetAllowKeygenMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
-func (p *AllowKeygenMethod) ValidateSendBlock(block *nom.AccountBlock) error {
+func (p *SetAllowKeygenMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
-	if err := definition.ABIBridge.UnpackEmptyMethod(p.MethodName, block.Data); err != nil {
+	var param bool
+	if err := definition.ABIBridge.UnpackMethod(&param, p.MethodName, block.Data); err != nil {
 		return constants.ErrUnpackError
-	}
-
-	if block.Amount.Sign() != 0 {
-		return constants.ErrInvalidTokenOrAmount
-	}
-
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName)
-	return err
-}
-func (p *AllowKeygenMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
-	if err := p.ValidateSendBlock(sendBlock); err != nil {
-		return nil, err
-	}
-
-	err := definition.ABIBridge.UnpackEmptyMethod(p.MethodName, sendBlock.Data)
-	if err != nil {
-		return nil, err
-	}
-
-	orchestratorInfo, err := CheckOrchestratorInfoInitialized(context)
-	if err != nil {
-		return nil, err
-	}
-
-	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
-	if err != nil {
-		return nil, err
-	}
-
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
-		return nil, constants.ErrPermissionDenied
-	}
-
-	bridgeInfo.AllowKeyGen = true
-	common.DealWithErr(bridgeInfo.Save(context.Storage()))
-
-	momentum, err := context.GetFrontierMomentum()
-	if err != nil {
-		return nil, err
-	}
-	orchestratorInfo.AllowKeyGenHeight = momentum.Height
-	common.DealWithErr(orchestratorInfo.Save(context.Storage()))
-	return nil, nil
-}
-
-type SetUnhaltDurationMethod struct {
-	MethodName string
-}
-
-func (p *SetUnhaltDurationMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
-	return plasmaTable.EmbeddedSimple, nil
-}
-func (p *SetUnhaltDurationMethod) ValidateSendBlock(block *nom.AccountBlock) error {
-	var err error
-
-	param := new(uint64)
-	if err := definition.ABIBridge.UnpackMethod(param, p.MethodName, block.Data); err != nil {
-		return constants.ErrUnpackError
-	}
-
-	if *param < constants.MinUnhaltDurationInMomentums {
-		// todo change error
-		return errors.New("not allowed")
 	}
 
 	if block.Amount.Sign() != 0 {
@@ -1410,36 +1294,48 @@ func (p *SetUnhaltDurationMethod) ValidateSendBlock(block *nom.AccountBlock) err
 	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param)
 	return err
 }
-func (p *SetUnhaltDurationMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+func (p *SetAllowKeygenMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
 	}
 
-	param := new(uint64)
-	err := definition.ABIBridge.UnpackMethod(param, p.MethodName, sendBlock.Data)
-	if err != nil {
-		return nil, err
-	}
-	if *param < constants.MinUnhaltDurationInMomentums {
-		return nil, constants.ErrForbiddenParam
+	var param bool
+	if err := definition.ABIBridge.UnpackMethod(&param, p.MethodName, sendBlock.Data); err != nil {
+		return nil, constants.ErrUnpackError
 	}
 
-	_, err = CheckOrchestratorInfoInitialized(context)
-	if err != nil {
-		return nil, err
+	bridgeInfo, errBridge := definition.GetBridgeInfoVariable(context.Storage())
+	if errBridge != nil {
+		return nil, errBridge
 	}
-
-	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
-	if err != nil {
-		return nil, err
+	if _, errSec := CheckSecurityInitialized(context); errSec != nil {
+		return nil, errSec
+	} else {
+		if errHalt := CheckBridgeHalted(bridgeInfo, context); errHalt != nil {
+			return nil, errHalt
+		}
+	}
+	orchestratorInfo, errOrc := CheckOrchestratorInfoInitialized(context)
+	if errOrc != nil {
+		return nil, errOrc
 	}
 
 	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
-	bridgeInfo.UnhaltDurationInMomentums = *param
+	bridgeInfo.AllowKeyGen = param
 	common.DealWithErr(bridgeInfo.Save(context.Storage()))
+
+	if param {
+		momentum, err := context.GetFrontierMomentum()
+		if err != nil {
+			return nil, err
+		}
+		orchestratorInfo.AllowKeyGenHeight = momentum.Height
+		common.DealWithErr(orchestratorInfo.Save(context.Storage()))
+	}
+
 	return nil, nil
 }
 
@@ -1459,7 +1355,7 @@ func (p *SetOrchestratorInfoMethod) ValidateSendBlock(block *nom.AccountBlock) e
 	}
 
 	if param.KeyGenThreshold == 0 || param.ConfirmationsToFinality == 0 || param.WindowSize == 0 || param.EstimatedMomentumTime == 0 {
-		return constants.ErrInvalidArguments
+		return constants.ErrForbiddenParam
 	}
 
 	if block.Amount.Sign() != 0 {
@@ -1503,14 +1399,14 @@ func (p *SetOrchestratorInfoMethod) ReceiveBlock(context vm_context.AccountVmCon
 	return nil, nil
 }
 
-type UpdateBridgeMetadataMethod struct {
+type SetBridgeMetadataMethod struct {
 	MethodName string
 }
 
-func (p *UpdateBridgeMetadataMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+func (p *SetBridgeMetadataMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
-func (p *UpdateBridgeMetadataMethod) ValidateSendBlock(block *nom.AccountBlock) error {
+func (p *SetBridgeMetadataMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
 	param := new(string)
@@ -1529,7 +1425,7 @@ func (p *UpdateBridgeMetadataMethod) ValidateSendBlock(block *nom.AccountBlock) 
 	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param)
 	return err
 }
-func (p *UpdateBridgeMetadataMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+func (p *SetBridgeMetadataMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
 	}
@@ -1540,7 +1436,6 @@ func (p *UpdateBridgeMetadataMethod) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, err
 	}
 
-	// todo what checks?
 	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
 	if err != nil {
 		return nil, err
@@ -1553,25 +1448,6 @@ func (p *UpdateBridgeMetadataMethod) ReceiveBlock(context vm_context.AccountVmCo
 	bridgeInfo.Metadata = *param
 	common.DealWithErr(bridgeInfo.Save(context.Storage()))
 	return nil, nil
-}
-
-func GetRevokeUnwrapMessage(param *definition.RevokeUnwrapParam, methodName string, tssNonce uint64) ([]byte, error) {
-	args := eabi.Arguments{{Type: definition.StringTy}, {Type: definition.Uint256Ty}, {Type: definition.Uint256Ty}}
-	values := make([]interface{}, 0)
-	values = append(values,
-		methodName,
-		big.NewInt(0).SetUint64(tssNonce), // nonce
-		big.NewInt(0).SetBytes(param.TransactionHash.Bytes()), // Tx hash
-	)
-
-	messageBytes, err := args.PackValues(values)
-	if err != nil {
-		return nil, err
-	}
-
-	//bridgeLog.Info("CheckECDSASignature", "message", message)
-
-	return crypto.Hash(messageBytes), nil
 }
 
 type RevokeUnwrapRequestMethod struct {
@@ -1593,7 +1469,7 @@ func (p *RevokeUnwrapRequestMethod) ValidateSendBlock(block *nom.AccountBlock) e
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.TransactionHash, param.Signature)
+	block.Data, err = definition.ABIBridge.PackMethod(p.MethodName, param.TransactionHash, param.LogIndex)
 	return err
 }
 func (p *RevokeUnwrapRequestMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
@@ -1606,8 +1482,8 @@ func (p *RevokeUnwrapRequestMethod) ReceiveBlock(context vm_context.AccountVmCon
 	if err != nil {
 		return nil, err
 	}
-	// todo what checks?
-	bridgeInfo, err := CheckBridgeInitialized(context)
+
+	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
 	if err != nil {
 		return nil, err
 	}
@@ -1618,21 +1494,11 @@ func (p *RevokeUnwrapRequestMethod) ReceiveBlock(context vm_context.AccountVmCon
 	}
 
 	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
-		message, err := GetRevokeUnwrapMessage(param, p.MethodName, bridgeInfo.TssNonce)
-		if err != nil {
-			return nil, err
-		}
-		result, err := CheckECDSASignature(message, bridgeInfo.DecompressedTssECDSAPubKey, param.Signature)
-		if err != nil || !result {
-			bridgeLog.Error("RevokeUnwrapRequest-ErrInvalidSignature", "error", err, "result", result)
-			return nil, constants.ErrInvalidECDSASignature
-		}
-
-		bridgeInfo.TssNonce += 1
-		common.DealWithErr(bridgeInfo.Save(context.Storage()))
+		return nil, constants.ErrPermissionDenied
 	}
 	request.Revoked = 1
 
+	common.DealWithErr(request.Save(context.Storage()))
 	return nil, nil
 }
 
@@ -1674,7 +1540,6 @@ func (p *RedeemMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 	}
 
 	request, err := definition.GetUnwrapTokenRequestByTxHashAndLog(context.Storage(), param.TransactionHash, param.LogIndex)
-	// TODO all getters should return err
 	if err != nil {
 		return nil, err
 	}
@@ -1683,38 +1548,49 @@ func (p *RedeemMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 		return nil, constants.ErrInvalidRedeemRequest
 	}
 
-	tokenPair, err := CheckNetworkAndPairExist(context, request.NetworkClass, request.ChainId, request.TokenAddress)
+	network, err := definition.GetNetworkInfoVariable(context.Storage(), request.NetworkClass, request.ChainId)
 	if err != nil {
 		return nil, err
-	} else if tokenPair == nil {
-		return nil, errors.New("token pair not found")
+	} else if len(network.Name) == 0 {
+		return nil, constants.ErrUnknownNetwork
+	}
+
+	foundIndex := -1
+	for i := 0; i < len(network.TokenPairs); i++ {
+		zts := network.TokenPairs[i].TokenStandard
+		token := network.TokenPairs[i].TokenAddress
+		if reflect.DeepEqual(request.TokenStandard.Bytes(), zts.Bytes()) || request.TokenAddress == token {
+			foundIndex = i
+			break
+		}
+	}
+	if foundIndex == -1 {
+		return nil, constants.ErrTokenNotFound
 	}
 
 	momentum, err := context.GetFrontierMomentum()
 	if err != nil {
 		return nil, err
 	}
-	if momentum.Height-request.RegistrationMomentumHeight < uint64(tokenPair.RedeemDelay) {
+	if momentum.Height-request.RegistrationMomentumHeight < uint64(network.TokenPairs[foundIndex].RedeemDelay) {
 		return nil, constants.ErrInvalidRedeemPeriod
 	}
 
 	request.Redeemed = 1
 	common.DealWithErr(request.Save(context.Storage()))
 
-	zts := types.ParseZTSPanic(tokenPair.TokenStandard)
-
 	var block *nom.AccountBlock
-	if tokenPair.Owned {
+	if network.TokenPairs[foundIndex].Owned {
 		block = &nom.AccountBlock{
 			Address:       types.BridgeContract,
 			ToAddress:     types.TokenContract,
 			BlockType:     nom.BlockTypeContractSend,
 			Amount:        big.NewInt(0),
-			TokenStandard: zts,
-			Data:          definition.ABIToken.PackMethodPanic(definition.MintMethodName, zts, request.Amount, request.ToAddress),
+			TokenStandard: network.TokenPairs[foundIndex].TokenStandard,
+			Data:          definition.ABIToken.PackMethodPanic(definition.MintMethodName, network.TokenPairs[foundIndex].TokenStandard, request.Amount, request.ToAddress),
 		}
 	} else {
-		balance, err := context.GetBalance(zts)
+		balance, err := context.GetBalance(network.TokenPairs[foundIndex].TokenStandard)
 		if err != nil {
 			return nil, err
 		}
@@ -1726,7 +1602,7 @@ func (p *RedeemMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 			ToAddress:     request.ToAddress,
 			BlockType:     nom.BlockTypeContractSend,
 			Amount:        request.Amount,
-			TokenStandard: zts,
+			TokenStandard: network.TokenPairs[foundIndex].TokenStandard,
 			Data:          []byte{},
 		}
 	}
@@ -1744,7 +1620,7 @@ func (p *NominateGuardiansMethod) GetPlasma(plasmaTable *constants.PlasmaTable) 
 func (p *NominateGuardiansMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
-	guardians := new([]string)
+	guardians := new([]types.Address)
 	if err := definition.ABIBridge.UnpackMethod(guardians, p.MethodName, block.Data); err != nil {
 		return constants.ErrUnpackError
 	}
@@ -1752,17 +1628,17 @@ func (p *NominateGuardiansMethod) ValidateSendBlock(block *nom.AccountBlock) err
 	if block.Amount.Sign() != 0 {
 		return constants.ErrInvalidTokenOrAmount
 	}
-	// todo change
-	if len(*guardians) < 4 {
-		return errors.New("not enough guardians")
+
+	if len(*guardians) < constants.MinGuardians {
+		return constants.ErrInvalidGuardians
 	}
-	for _, guardian := range *guardians {
-		gPubKey, err := base64.StdEncoding.DecodeString(guardian)
+	for _, address := range *guardians {
+		// we also check with this method because in the abi the checksum is not verified
+		parsedAddress, err := types.ParseAddress(address.String())
 		if err != nil {
 			return err
-		}
-		if len(gPubKey) != constants.EdDSAPubKeyLength {
-			return constants.ErrInvalidEDDSAPubKey
+		} else if parsedAddress.IsZero() {
+			return constants.ErrForbiddenParam
 		}
 	}
 
@@ -1774,7 +1650,7 @@ func (p *NominateGuardiansMethod) ReceiveBlock(context vm_context.AccountVmConte
 		return nil, err
 	}
 
-	guardians := new([]string)
+	guardians := new([]types.Address)
 	err := definition.ABIBridge.UnpackMethod(guardians, p.MethodName, sendBlock.Data)
 	if err != nil {
 		return nil, err
@@ -1790,18 +1666,20 @@ func (p *NominateGuardiansMethod) ReceiveBlock(context vm_context.AccountVmConte
 	}
 
 	securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
-	common.DealWithErr(err)
+	if err != nil {
+		return nil, err
+	}
 
-	sort.Strings(*guardians)
+	sort.Slice(*guardians, func(i, j int) bool {
+		return (*guardians)[i].String() < (*guardians)[j].String()
+	})
 
 	guardiansBytes := make([]byte, 0)
 	for _, g := range *guardians {
-		// we also checked this in the sendBlock so we should have no error
-		gPubKeyBytes, _ := base64.StdEncoding.DecodeString(g)
-		guardiansBytes = append(guardiansBytes, gPubKeyBytes...)
+		guardiansBytes = append(guardiansBytes, g.Bytes()...)
 	}
 	paramsHash := crypto.Hash(guardiansBytes)
-	if timeChallengeInfo, errTimeChallenge := timeChallenge(context, p.MethodName, paramsHash); errTimeChallenge != nil {
+	if timeChallengeInfo, errTimeChallenge := TimeChallenge(context, p.MethodName, paramsHash, securityInfo.AdministratorDelay); errTimeChallenge != nil {
 		return nil, errTimeChallenge
 	} else {
 		// if paramsHash is not zero it means we had a new challenge and we can't go further to save the change into local db
@@ -1810,16 +1688,15 @@ func (p *NominateGuardiansMethod) ReceiveBlock(context vm_context.AccountVmConte
 		}
 	}
 
-	securityInfo.Guardians = make([]string, 0)
-	securityInfo.GuardiansVotes = make([]string, 0)
+	securityInfo.Guardians = make([]types.Address, 0)
+	securityInfo.GuardiansVotes = make([]types.Address, 0)
 	for _, guardian := range *guardians {
 		securityInfo.Guardians = append(securityInfo.Guardians, guardian)
 		// append empty vote
-		securityInfo.GuardiansVotes = append(securityInfo.GuardiansVotes, "")
+		securityInfo.GuardiansVotes = append(securityInfo.GuardiansVotes, types.Address{})
 	}
 
 	common.DealWithErr(securityInfo.Save(context.Storage()))
-	common.DealWithErr(bridgeInfo.Save(context.Storage()))
 	return nil, nil
 }
 
@@ -1842,7 +1719,11 @@ func (p *ProposeAdministratorMethod) ValidateSendBlock(block *nom.AccountBlock) 
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	if address.IsZero() {
+	// we also check with this method because in the abi the checksum is not verified
+	parsedAddress, err := types.ParseAddress(address.String())
+	if err != nil {
+		return err
+	} else if parsedAddress.IsZero() {
 		return constants.ErrForbiddenParam
 	}
 
@@ -1854,8 +1735,8 @@ func (p *ProposeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, err
 	}
 
-	address := new(types.Address)
-	if err := definition.ABIBridge.UnpackMethod(address, p.MethodName, sendBlock.Data); err != nil {
+	proposedAddress := new(types.Address)
+	if err := definition.ABIBridge.UnpackMethod(proposedAddress, p.MethodName, sendBlock.Data); err != nil {
 		return nil, constants.ErrUnpackError
 	}
 
@@ -1869,39 +1750,44 @@ func (p *ProposeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmCo
 	}
 
 	securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
-	common.DealWithErr(err)
+	if err != nil {
+		return nil, err
+	}
 
 	found := false
-	senderPubKey := base64.StdEncoding.EncodeToString(sendBlock.PublicKey)
 	for idx, guardian := range securityInfo.Guardians {
-		if guardian == senderPubKey {
+		if bytes.Equal(guardian.Bytes(), sendBlock.Address.Bytes()) {
 			found = true
-			securityInfo.GuardiansVotes[idx] = address.String()
+			if err := securityInfo.GuardiansVotes[idx].SetBytes(proposedAddress.Bytes()); err != nil {
+				return nil, err
+			}
 			break
 		}
 	}
 	if !found {
-		return nil, errors.New("sender is not a guardian")
+		return nil, constants.ErrNotGuardian
 	}
 
 	votes := make(map[string]uint8)
-	// todo change discuss
+
 	threshold := uint8(len(securityInfo.Guardians) / 2)
 	for _, vote := range securityInfo.GuardiansVotes {
-		if len(vote) > 0 {
-			votes[vote] += 1
+		if !vote.IsZero() {
+			votes[vote.String()] += 1
 			// we got a majority, so we change the administrator pub key
-			if votes[vote] > threshold {
-				votedAddress, errParse := types.ParseAddress(vote)
+			if votes[vote.String()] > threshold {
+				votedAddress, errParse := types.ParseAddress(vote.String())
 				if errParse != nil {
 					return nil, errParse
+				} else if votedAddress.IsZero() {
+					return nil, constants.ErrForbiddenParam
 				}
 				if errSet := bridgeInfo.Administrator.SetBytes(votedAddress.Bytes()); errSet != nil {
 					return nil, errSet
 				}
 				common.DealWithErr(bridgeInfo.Save(context.Storage()))
 				for idx, _ := range securityInfo.GuardiansVotes {
-					securityInfo.GuardiansVotes[idx] = ""
+					securityInfo.GuardiansVotes[idx] = types.Address{}
 				}
 				break
 			}
@@ -1910,5 +1796,3 @@ func (p *ProposeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmCo
 	common.DealWithErr(securityInfo.Save(context.Storage()))
 	return nil, nil
 }
-
-// todo implement method to change security tss delay, it should be bigger than the constants.min

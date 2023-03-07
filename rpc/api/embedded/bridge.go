@@ -6,6 +6,7 @@ import (
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/implementation"
+	"reflect"
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/common"
@@ -70,6 +71,36 @@ func (a *BridgeApi) GetOrchestratorInfo() (*definition.OrchestratorInfo, error) 
 	return orchestratorInfo, nil
 }
 
+type TimeChallengesList struct {
+	Count int                             `json:"count"`
+	List  []*definition.TimeChallengeInfo `json:"list"`
+}
+
+func (a *BridgeApi) GetTimeChallengesInfo() (*TimeChallengesList, error) {
+	_, context, err := api.GetFrontierContext(a.chain, types.BridgeContract)
+	if err != nil {
+		return nil, err
+	}
+
+	ans := make([]*definition.TimeChallengeInfo, 0)
+	methods := []string{"NominateGuardians", "ChangeTssECDSAPubKey", "ChangeAdministrator", "SetTokenPair"}
+
+	for _, m := range methods {
+		timeC, err := definition.GetTimeChallengeInfoVariable(context.Storage(), m)
+		if err != nil {
+			return nil, err
+		}
+		if timeC != nil {
+			ans = append(ans, timeC)
+		}
+	}
+
+	return &TimeChallengesList{
+		Count: len(ans),
+		List:  ans,
+	}, nil
+}
+
 func (a *BridgeApi) GetNetworkInfo(networkClass uint32, chainId uint32) (*definition.NetworkInfo, error) {
 	_, context, err := api.GetFrontierContext(a.chain, types.BridgeContract)
 	if err != nil {
@@ -122,7 +153,7 @@ func (a *BridgeApi) toRequest(context vm_context.AccountVmContext, abiRequest *d
 	}
 	tokenAddress := ""
 	for i := 0; i < len(networkInfoVariable.TokenPairs); i++ {
-		if networkInfoVariable.TokenPairs[i].TokenStandard == abiRequest.TokenStandard.String() {
+		if reflect.DeepEqual(networkInfoVariable.TokenPairs[i].TokenStandard.Bytes(), abiRequest.TokenStandard.Bytes()) {
 			tokenAddress = networkInfoVariable.TokenPairs[i].TokenAddress
 		}
 	}
@@ -428,18 +459,23 @@ func (a *BridgeApi) getTokenStandard(request *definition.UnwrapTokenRequest) (*t
 	if err != nil {
 		return nil, err
 	}
-	tokenStandard := ""
+
+	found := false
+	tokenStandard := &types.ZenonTokenStandard{}
 	for _, pair := range networkInfo.TokenPairs {
 		if pair.TokenAddress == request.TokenAddress {
-			tokenStandard = pair.TokenStandard
+			if err := tokenStandard.SetBytes(pair.TokenStandard.Bytes()); err != nil {
+				return nil, err
+			}
+			found = true
 			break
 		}
 	}
-	if tokenStandard == "" {
+	if !found {
 		return nil, constants.ErrInvalidToken
 	}
-	zts := types.ParseZTSPanic(tokenStandard)
-	return &zts, nil
+
+	return tokenStandard, nil
 }
 
 func (a *BridgeApi) GetUnwrapTokenRequestByHashAndLog(txHash types.Hash, logIndex uint32) (*UnwrapTokenRequest, error) {
@@ -577,5 +613,5 @@ func (a *BridgeApi) GetFeeTokenPair(zts types.ZenonTokenStandard) (*definition.Z
 	if err != nil {
 		return nil, err
 	}
-	return definition.GetZtsFeesInfoVariable(context.Storage(), zts.String())
+	return definition.GetZtsFeesInfoVariable(context.Storage(), zts)
 }
