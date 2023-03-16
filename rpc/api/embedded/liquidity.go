@@ -103,7 +103,7 @@ func (a *LiquidityApi) GetTimeChallengesInfo() (*TimeChallengesList, error) {
 	}
 
 	ans := make([]*definition.TimeChallengeInfo, 0)
-	methods := []string{"SetTokenTuple", "ChangeLiquidityAdministrator", "SetAdditionalReward"}
+	methods := []string{"NominateGuardians", "SetTokenTuple", "ChangeAdministrator", "SetAdditionalReward"}
 
 	for _, m := range methods {
 		timeC, err := definition.GetTimeChallengeInfoVariable(context.Storage(), m)
