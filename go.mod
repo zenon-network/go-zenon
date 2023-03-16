@@ -1,6 +1,6 @@
 module github.com/zenon-network/go-zenon
 
-go 1.17
+go 1.20
 
 require (
 	github.com/btcsuite/btcutil v1.0.3-0.20201208143702-a53e38424cce
