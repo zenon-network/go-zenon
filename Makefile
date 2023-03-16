@@ -37,4 +37,4 @@ znnd:
 clean:
 	rm -r $(BUILDDIR)/
 
-all: znnd
+all: clean znnd libznn
