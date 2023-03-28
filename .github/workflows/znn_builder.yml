@@ -19,7 +19,7 @@ jobs:
         run: |
           for s in $(go list ./...); do if ! go test -failfast -v -p 1 $s; then exit 1; fi; done
       - name: Check for Go vulnerabilities
-        uses: opzkit/govulncheck-action@v1.0.1
+        uses: opzkit/govulncheck-action@v1.0.0
         with:
           govuln-version: 'latest'
           packages: './...'
