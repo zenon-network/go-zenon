@@ -1,5 +1,4 @@
-// +build libznn
-//go:build !detached
+//go:build libznn && !detached
 
 package main
 

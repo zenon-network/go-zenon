@@ -207,7 +207,7 @@ func ListenUDP(priv *ecdsa.PrivateKey, laddr string, natm nat.Interface, nodeDBP
 		return nil, err
 	}
 	tab, _ := newUDP(priv, conn, natm, nodeDBPath)
-	common.P2PLogger.Info(fmt.Sprintf("Listening,", tab.self))
+	common.P2PLogger.Info(fmt.Sprintf("Listening, %v", tab.self))
 	return tab, nil
 }
 
@@ -436,7 +436,7 @@ func (t *udp) send(toaddr *net.UDPAddr, ptype byte, req interface{}) error {
 	}
 	common.P2PLogger.Debug(fmt.Sprintf(">>> %v %T\n", toaddr, req))
 	if _, err = t.conn.WriteToUDP(packet, toaddr); err != nil {
-		common.P2PLogger.Debug(fmt.Sprintf("UDP send failed:", err))
+		common.P2PLogger.Debug(fmt.Sprintf("UDP send failed: %v", err))
 	}
 	return err
 }
