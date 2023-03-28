@@ -2,8 +2,6 @@ name: Build and release znnd and libznn
 
 on:
   push:
-    branches:
-      - cicd
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
@@ -21,14 +19,14 @@ jobs:
         run: |
           for s in $(go list ./...); do if ! go test -failfast -v -p 1 $s; then exit 1; fi; done
       - name: Check for Go vulnerabilities
-        uses: opzkit/govulncheck-action@v1.0.0
+        uses: opzkit/govulncheck-action@v1.1.2
         with:
           govuln-version: 'latest'
           packages: './...'
       - name: Make version
         run: make version
       - name: Build znnd
-        uses: crazy-max/ghaction-xgo@v2.3.0
+        uses: crazy-max/ghaction-xgo@v2.4.0
         with:
           xgo_version: latest
           go_version: latest
@@ -43,7 +41,7 @@ jobs:
           buildmode: default
           trimpath: true
       - name: Build libznn
-        uses: crazy-max/ghaction-xgo@v2.3.0
+        uses: crazy-max/ghaction-xgo@v2.4.0
         with:
           xgo_version: latest
           go_version: latest
@@ -84,7 +82,7 @@ jobs:
           GOZENON=$(cat metadata/version.go | grep Version | awk -F '"' '{print $2}')
           echo "GOZENON_VERSION=$GOZENON" >> $GITHUB_ENV
       - name: Upload files to a GitHub release
-        uses: svenstaro/upload-release-action@2.3.0
+        uses: svenstaro/upload-release-action@2.5.0
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: build/*
