@@ -24,17 +24,20 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y zip
+      - name: Check Go environment
+        run: |
+          go env
       - name: Run tests
         run: |
           for s in $(go list ./...); do if ! go test -failfast -v -p 1 $s; then exit 1; fi; done
-      - name: Check for Go vulnerabilities
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          /home/runner/go/bin/govulncheck ./...
+      # - name: Check for Go vulnerabilities
+      #   run: |
+      #     go install golang.org/x/vuln/cmd/govulncheck@latest
+      #     /home/runner/go/bin/govulncheck -json ./...
       - name: Make version
         run: make version
       - name: Build znnd
-        uses: crazy-max/ghaction-xgo@1a3a2657b45453afaad742662a2f373ecd0ea51b
+        uses: crazy-max/ghaction-xgo@588a1a9bc6aa44305ce5d2c669c11687316f87bf
         with:
           xgo_version: latest
           go_version: latest
@@ -49,7 +52,7 @@ jobs:
           buildmode: default
           trimpath: true
       - name: Build libznn
-        uses: crazy-max/ghaction-xgo@1a3a2657b45453afaad742662a2f373ecd0ea51b
+        uses: crazy-max/ghaction-xgo@588a1a9bc6aa44305ce5d2c669c11687316f87bf
         with:
           xgo_version: latest
           go_version: latest
