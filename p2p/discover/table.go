@@ -95,7 +95,7 @@ func newTable(t transport, ourID NodeID, ourAddr *net.UDPAddr, nodeDBPath string
 	// If no node database was given, use an in-memory one
 	db, err := newNodeDB(nodeDBPath, Version, ourID)
 	if err != nil {
-		common.P2PLogger.Warn(fmt.Sprintf("Failed to open node database:", err))
+		common.P2PLogger.Warn(fmt.Sprintf("Failed to open node database: %v", err))
 		db, _ = newNodeDB("", Version, ourID)
 	}
 	tab := &Table{

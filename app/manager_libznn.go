@@ -1,5 +1,4 @@
 //go:build libznn
-// +build libznn
 
 package app
 

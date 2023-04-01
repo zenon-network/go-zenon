@@ -29,8 +29,16 @@ func TestDumpContractsABIMethods(t *testing.T) {
 
 	common.Expect(t, dump, `
 [
+{"address":"z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22", "name":"AddPhase", "id":"c7e13ddc", "signature":"AddPhase(hash,string,string,string,uint256,uint256)"}
+{"address":"z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22", "name":"CreateProject", "id":"77c044b6", "signature":"CreateProject(string,string,string,uint256,uint256)"}
 {"address":"z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22", "name":"Donate", "id":"cb7f8b2a", "signature":"Donate()"}
+{"address":"z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22", "name":"Update", "id":"20093ea6", "signature":"Update()"}
+{"address":"z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22", "name":"UpdatePhase", "id":"c1d7d323", "signature":"UpdatePhase(hash,string,string,string,uint256,uint256)"}
+{"address":"z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22", "name":"VoteByName", "id":"5c6c1064", "signature":"VoteByName(hash,string,uint8)"}
+{"address":"z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22", "name":"VoteByProdAddress", "id":"90ed001c", "signature":"VoteByProdAddress(hash,uint8)"}
+{"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"BurnZnn", "id":"096b75a4", "signature":"BurnZnn(uint256)"}
 {"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"Donate", "id":"cb7f8b2a", "signature":"Donate()"}
+{"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"Fund", "id":"912f3c3f", "signature":"Fund(uint256,uint256)"}
 {"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"Update", "id":"20093ea6", "signature":"Update()"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"CancelFuse", "id":"f9ca9dc3", "signature":"CancelFuse(hash)"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"Fuse", "id":"5ac942e8", "signature":"Fuse(address)"}
