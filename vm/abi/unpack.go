@@ -195,7 +195,6 @@ func lengthPrefixPointsTo(index int, output []byte) (start int, length int, err 
 	defer intpool.Put(totalSize)
 	totalSize.Add(totalSize, bigOffsetEnd)
 	totalSize.Add(totalSize, lengthBig)
-	totalSize.SetInt64(64)
 	if totalSize.BitLen() > 63 {
 		return 0, 0, errBigLengthOverflow(totalSize)
 	}
