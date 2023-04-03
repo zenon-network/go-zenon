@@ -20,11 +20,8 @@ var (
 	RewardTimeLimit   int64 = 3600
 
 	// UpdateMinNumMomentums is the number momentums between 2 UpdateEmbedded* calls which will execute, used for all applicable contracts
-	// Testnet value
-	UpdateMinNumMomentums = uint64(MomentumsPerHour / 6)
-	//UpdateMinNumMomentums = uint64(MomentumsPerHour * 5 / 6) // main net
-
-	MaxEpochsPerUpdate = 20
+	UpdateMinNumMomentums = uint64(MomentumsPerHour * 5 / 6)
+	MaxEpochsPerUpdate    = 20
 
 	// === Accelerator ===
 
@@ -59,12 +56,10 @@ var (
 	/// === Staking constants ===
 
 	// Testnet value
-	StakeTimeUnitSec int64 = 30
-	//StakeTimeUnitSec int64 = 30 * SecsInDay // main net
-
-	StakeTimeMinSec = StakeTimeUnitSec * 1
-	StakeTimeMaxSec = StakeTimeUnitSec * 12
-	StakeMinAmount  = big.NewInt(1 * Decimals)
+	StakeTimeUnitSec int64 = 30 * SecsInDay
+	StakeTimeMinSec        = StakeTimeUnitSec * 1
+	StakeTimeMaxSec        = StakeTimeUnitSec * 12
+	StakeMinAmount         = big.NewInt(1 * Decimals)
 
 	// === Plasma constants ===
 
@@ -98,22 +93,16 @@ var (
 
 	/// === Bridge constants ===
 
-	// todo change administrator address
-	InitialBridgeAdministrator   = types.ParseAddressPanic("z1qz8q0x3rs36z2kw8eltf8r323hlcn64jnujkuz")
+	InitialBridgeAdministrator   = types.ParseAddressPanic("z1qr9vtwsfr2n0nsxl2nfh6l5esqjh2wfj85cfq9")
 	MaximumFee                   = uint32(10000)
-	MinUnhaltDurationInMomentums = uint64(1)
-	MinAdministratorDelay        = uint64(1)
-	MinSoftDelay                 = uint64(1)
-	MinGuardians                 = 1
-	//MinUnhaltDurationInMomentums  = uint64(6 * MomentumsPerHour) //main net
-	//MinAdministratorDelay         = uint64(2 * MomentumsPerEpoch) // main net
-	//MinSoftDelay                  = uint64(MomentumsPerEpoch)     // main net
-	//MinGuardians                  = 5 // main net
+	MinUnhaltDurationInMomentums = uint64(6 * MomentumsPerHour)  //main net
+	MinAdministratorDelay        = uint64(2 * MomentumsPerEpoch) // main net
+	MinSoftDelay                 = uint64(MomentumsPerEpoch)     // main net
+	MinGuardians                 = 5                             // main net
 
 	DecompressedECDSAPubKeyLength = 65
 	CompressedECDSAPubKeyLength   = 33
 	ECDSASignatureLength          = 65
-	EdDSAPubKeyLength             = 32
 
 	/// === Reward constants ===
 

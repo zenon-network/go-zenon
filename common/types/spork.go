@@ -1,9 +1,8 @@
 package types
 
 var (
-	AcceleratorSpork = NewImplementedSpork("6d2b1e6cb4025f2f45533f0fe22e9b7ce2014d91cc960471045fa64eee5a6ba3")
-	// BridgeAndLiquiditySpork TODO: change hash for bridge spork
-	BridgeAndLiquiditySpork = NewImplementedSpork("7c0a642a7a05e8d32eac1a0b6d5d7ede56a7c51ca99b15d70659e478031fbe86")
+	AcceleratorSpork        = NewImplementedSpork("6d2b1e6cb4025f2f45533f0fe22e9b7ce2014d91cc960471045fa64eee5a6ba3")
+	BridgeAndLiquiditySpork = NewImplementedSpork("ddd43466769461c5b5d109c639da0f50a7eeb96ad6e7274b1928a35c431d7b1b")
 	ImplementedSporksMap    = map[Hash]bool{
 		AcceleratorSpork.SporkId:        true,
 		BridgeAndLiquiditySpork.SporkId: true,
