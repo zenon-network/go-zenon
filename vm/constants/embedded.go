@@ -55,7 +55,6 @@ var (
 
 	/// === Staking constants ===
 
-	// Testnet value
 	StakeTimeUnitSec int64 = 30 * SecsInDay
 	StakeTimeMinSec        = StakeTimeUnitSec * 1
 	StakeTimeMaxSec        = StakeTimeUnitSec * 12
