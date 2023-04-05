@@ -58,4 +58,12 @@ var (
 
 	// Spork
 	ErrAlreadyActivated = errors.New("spork is already activated")
+
+	// Htlc
+	ReclaimNotDue            = errors.New("entry is not expired")
+	ErrInvalidHashType       = errors.New("invalid hash type")
+	ErrInvalidHashDigest     = errors.New("invalid hash digest")
+	ErrInvalidPreimage       = errors.New("invalid preimage")
+	ErrInvalidExpirationTime = errors.New("invalid expiration time")
+	ErrExpired               = errors.New("expired")
 )

@@ -33,4 +33,5 @@ type AccountVmContext interface {
 	// ====== Spork ======
 
 	IsAcceleratorSporkEnforced() bool
+	IsHtlcSporkEnforced() bool
 }
