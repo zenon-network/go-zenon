@@ -8,11 +8,30 @@ import (
 )
 
 var (
-	// Config settings
+
+	// pprof
+
+	PprofFlag = cli.BoolFlag{
+		Name:  "pprof",
+		Usage: "Enable the pprof HTTP server",
+	}
+	PprofPortFlag = cli.Uint64Flag{
+		Name:  "pprof.port",
+		Usage: "pprof HTTP server listening port",
+		Value: 6060,
+	}
+
+	PprofAddrFlag = cli.StringFlag{
+		Name:  "pprof.addr",
+		Usage: "pprof HTTP server listening interface",
+		Value: "127.0.0.1",
+	}
+
+	// config
 
 	ConfigFileFlag = cli.StringFlag{
 		Name:  "config",
-		Usage: "JSON configuration file",
+		Usage: "Node configuration file in JSON format",
 		Value: "DataPath/config.json",
 	}
 
@@ -98,7 +117,14 @@ var (
 	}
 
 	AllFlags = []cli.Flag{
+
+		// config
 		ConfigFileFlag,
+
+		// pprof
+		PprofFlag,
+		PprofPortFlag,
+		PprofAddrFlag,
 
 		// general
 		DataPathFlag,
@@ -122,7 +148,7 @@ var (
 		WSListenAddrFlag,
 		WSPortFlag,
 
-		//Log
+		// log
 		LogLvlFlag,
 	}
 )
