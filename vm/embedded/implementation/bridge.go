@@ -700,6 +700,11 @@ func (p *SetTokenPairMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
+	if (param.TokenStandard.String() == types.ZnnTokenStandard.String() || param.TokenStandard.String() == types.QsrTokenStandard.String()) &&
+		param.Owned == true {
+		return constants.ErrForbiddenParam
+	}
+
 	if !ecommon.IsHexAddress(param.TokenAddress) {
 		return constants.ErrForbiddenParam
 	}

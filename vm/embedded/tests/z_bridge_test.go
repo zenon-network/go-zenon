@@ -2483,6 +2483,70 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	defer z.CallContract(removeTokenPair(g.User5.Address, networkClass, chainId, types.ZnnTokenStandard, "0x5fbdb2315678afecb367f032d93f642f64180aa3")).
 		Error(t, constants.ErrTokenNotFound)
 	insertMomentums(z, 2)
+
+	z.InsertSendBlock(setTokenPairStep(g.User5.Address, networkClass, chainId, types.ZnnTokenStandard, tokenAddress, true, true, true,
+		big.NewInt(100), uint32(15), uint32(20), `{"APR": 15, "LockingPeriod": 100}`),
+		constants.ErrForbiddenParam, mock.SkipVmChanges)
+	insertMomentums(z, 2)
+
+	common.Json(bridgeAPI.GetTimeChallengesInfo()).Equals(t, `
+{
+	"count": 3,
+	"list": [
+		{
+			"MethodName": "NominateGuardians",
+			"ParamsHash": "0000000000000000000000000000000000000000000000000000000000000000",
+			"ChallengeStartHeight": 75
+		},
+		{
+			"MethodName": "ChangeTssECDSAPubKey",
+			"ParamsHash": "0000000000000000000000000000000000000000000000000000000000000000",
+			"ChallengeStartHeight": 131
+		},
+		{
+			"MethodName": "SetTokenPair",
+			"ParamsHash": "0000000000000000000000000000000000000000000000000000000000000000",
+			"ChallengeStartHeight": 224
+		}
+	]
+}`)
+
+	z.InsertSendBlock(setTokenPairStep(g.User5.Address, networkClass, chainId, types.QsrTokenStandard, tokenAddress, true, true, true,
+		big.NewInt(100), uint32(15), uint32(20), `{"APR": 15, "LockingPeriod": 100}`),
+		constants.ErrForbiddenParam, mock.SkipVmChanges)
+	insertMomentums(z, 2)
+
+	common.Json(bridgeAPI.GetTimeChallengesInfo()).Equals(t, `
+{
+	"count": 3,
+	"list": [
+		{
+			"MethodName": "NominateGuardians",
+			"ParamsHash": "0000000000000000000000000000000000000000000000000000000000000000",
+			"ChallengeStartHeight": 75
+		},
+		{
+			"MethodName": "ChangeTssECDSAPubKey",
+			"ParamsHash": "0000000000000000000000000000000000000000000000000000000000000000",
+			"ChallengeStartHeight": 131
+		},
+		{
+			"MethodName": "SetTokenPair",
+			"ParamsHash": "0000000000000000000000000000000000000000000000000000000000000000",
+			"ChallengeStartHeight": 224
+		}
+	]
+}`)
+
+	common.Json(bridgeAPI.GetNetworkInfo(networkClass, chainId)).Equals(t, `
+{
+	"networkClass": 2,
+	"chainId": 123,
+	"name": "Ethereum",
+	"contractAddress": "0x323b5d4c32345ced77393b3530b1eed0f346429d",
+	"metadata": "{}",
+	"tokenPairs": []
+}`)
 }
 
 func TestBridge_Halt(t *testing.T) {

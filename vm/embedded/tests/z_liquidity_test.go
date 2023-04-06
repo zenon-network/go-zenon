@@ -151,8 +151,14 @@ func activateLiquidityStep2(t *testing.T, z mock.MockZenon) {
 	liquidityAPI := embedded.NewLiquidityApi(z)
 	common.Json(liquidityAPI.GetTimeChallengesInfo()).Equals(t, `
 {
-	"count": 0,
-	"list": []
+	"count": 1,
+	"list": [
+		{
+			"MethodName": "NominateGuardians",
+			"ParamsHash": "0000000000000000000000000000000000000000000000000000000000000000",
+			"ChallengeStartHeight": 501
+		}
+	]
 }`)
 
 	percentages := []uint32{5000, 5000}
@@ -160,8 +166,13 @@ func activateLiquidityStep2(t *testing.T, z mock.MockZenon) {
 	setTokensTuple(t, z, g.User5.Address, tokensString, percentages, percentages, minAmounts)
 	common.Json(liquidityAPI.GetTimeChallengesInfo()).Equals(t, `
 {
-	"count": 1,
+	"count": 2,
 	"list": [
+		{
+			"MethodName": "NominateGuardians",
+			"ParamsHash": "0000000000000000000000000000000000000000000000000000000000000000",
+			"ChallengeStartHeight": 501
+		},
 		{
 			"MethodName": "SetTokenTuple",
 			"ParamsHash": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -475,11 +486,6 @@ func activateLiquidityStep8(t *testing.T, z mock.MockZenon) {
 	// balance should stay the same
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 1672*g.Zexp+2)
 	z.ExpectBalance(types.LiquidityContract, types.QsrTokenStandard, 3000*g.Zexp+2)
-}
-
-func activateLiquidityStep9(t *testing.T, z mock.MockZenon) {
-	activateLiquidityStep8(t, z)
-
 }
 
 func TestLiquidity(t *testing.T) {
@@ -2934,8 +2940,13 @@ t=2001-09-09T03:48:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 
 	common.Json(liquidityAPI.GetTimeChallengesInfo()).Equals(t, `
 {
-	"count": 2,
+	"count": 3,
 	"list": [
+		{
+			"MethodName": "NominateGuardians",
+			"ParamsHash": "0000000000000000000000000000000000000000000000000000000000000000",
+			"ChallengeStartHeight": 501
+		},
 		{
 			"MethodName": "SetTokenTuple",
 			"ParamsHash": "0000000000000000000000000000000000000000000000000000000000000000",
