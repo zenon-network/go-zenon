@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -62,17 +64,34 @@ func init() {
 	app.After = afterAction
 }
 func beforeAction(ctx *cli.Context) error {
-	if len(ctx.Args()) == 0 {
-		max := runtime.NumCPU()
-		fmt.Printf("Starting znnd.\n")
-		fmt.Printf("current time is %v\n", time.Now().Format("2006-01-02 15:04:05"))
-		fmt.Printf("version: %v\n", metadata.Version)
-		fmt.Printf("git-commit-hash: %v\n", metadata.GitCommit)
-		fmt.Printf("znnd will use at most %v cpu-cores\n", max)
-		runtime.GOMAXPROCS(max)
+
+	max := runtime.NumCPU()
+	fmt.Printf("Starting znnd.\n")
+	fmt.Printf("current time is %v\n", time.Now().Format("2009-01-03 18:15:05"))
+	fmt.Printf("version: %v\n", metadata.Version)
+	fmt.Printf("git-commit-hash: %v\n", metadata.GitCommit)
+	fmt.Printf("znnd will use at most %v cpu-cores\n", max)
+	runtime.GOMAXPROCS(max)
+
+	// pprof server
+	if ctx.GlobalIsSet(PprofFlag.Name) {
+		listenHost := ctx.String(PprofAddrFlag.Name)
+
+		port := ctx.Int(PprofPortFlag.Name)
+
+		address := fmt.Sprintf("%s:%d", listenHost, port)
+
+		log.Info("Starting pprof server", "addr", fmt.Sprintf("http://%s/debug/pprof", address))
+		go func() {
+			if err := http.ListenAndServe(address, nil); err != nil {
+				log.Error("Failure in running pprof server", "err", err)
+			}
+		}()
 	}
+
 	return nil
 }
+
 func action(ctx *cli.Context) error {
 	//Make sure No subCommands were entered,Only the flags
 	if args := ctx.Args(); len(args) > 0 {
@@ -86,6 +105,7 @@ func action(ctx *cli.Context) error {
 
 	return nodeManager.Start()
 }
+
 func afterAction(*cli.Context) error {
 	return nil
 }
