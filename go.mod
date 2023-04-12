@@ -17,7 +17,7 @@ require (
 	github.com/prometheus/tsdb v0.10.0
 	github.com/rs/cors v1.8.2
 	github.com/shirou/gopsutil v3.21.11+incompatible
-	github.com/stretchr/testify v1.7.0
+	github.com/stretchr/testify v1.7.2
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
 	github.com/tyler-smith/go-bip39 v1.1.0
 	golang.org/x/crypto v0.1.0
@@ -28,8 +28,10 @@ require (
 )
 
 require (
-	github.com/btcsuite/btcd v0.22.3 // indirect
+	github.com/BurntSushi/toml v1.2.1 // indirect
+	github.com/btcsuite/btcd/btcec/v2 v2.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1 // indirect
 	github.com/go-kit/kit v0.9.0 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
@@ -44,5 +46,5 @@ require (
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c // indirect
 	golang.org/x/sys v0.1.0 // indirect
 	google.golang.org/protobuf v1.27.1 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
