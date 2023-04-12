@@ -1,0 +1,106 @@
+name: Build and release znnd and libznn
+
+on:
+  push:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  harden_security:
+    name: Harden Security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8f4b7f84864484a7bf31766abe9204da3cbe65b3
+      - name: Ensure SHA pinned actions
+        uses: zgosalvez/github-actions-ensure-sha-pinned-actions@21991cec25093947ff3f62e4c223df0260c39944
+  xgo:
+    needs: harden_security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8f4b7f84864484a7bf31766abe9204da3cbe65b3
+      - name: Install zip utility
+        run: |
+          sudo apt update
+          sudo apt install -y zip
+      - name: Check Go environment
+        run: |
+          go env
+      - name: Run tests
+        run: |
+          for s in $(go list ./...); do if ! go test -failfast -v -p 1 $s; then exit 1; fi; done
+      # - name: Check for Go vulnerabilities
+      #   run: |
+      #     go install golang.org/x/vuln/cmd/govulncheck@latest
+      #     /home/runner/go/bin/govulncheck -json ./...
+      - name: Make version
+        run: make version
+      - name: Build znnd
+        uses: crazy-max/ghaction-xgo@588a1a9bc6aa44305ce5d2c669c11687316f87bf
+        with:
+          xgo_version: latest
+          go_version: latest
+          dest: build
+          prefix: znnd
+          pkg: cmd/znnd
+          targets: darwin/arm64,darwin/amd64,windows/amd64,linux/amd64,linux/arm64
+          v: true
+          x: true
+          ldflags: -s -w
+          buildvcs: false
+          buildmode: default
+          trimpath: true
+      - name: Build libznn
+        uses: crazy-max/ghaction-xgo@588a1a9bc6aa44305ce5d2c669c11687316f87bf
+        with:
+          xgo_version: latest
+          go_version: latest
+          dest: build
+          prefix: libznn
+          pkg: cmd/libznn
+          targets: darwin/arm64,darwin/amd64,windows/amd64,linux/amd64,linux/arm64
+          v: true
+          x: true
+          tags: libznn
+          ldflags: -s -w
+          buildvcs: false
+          buildmode: c-shared
+          trimpath: true
+      - name: Run makefat for darwin builds
+        run: |
+          cd ..
+          git clone https://github.com/randall77/makefat.git
+          cd makefat/
+          git checkout 7ddd0e42c8442593c87c1705a5545099604008e5
+          go build -o mainfat makefat.go
+          ./mainfat ../go-zenon/build/libznn-darwin-universal.dylib ../go-zenon/build/libznn-darwin-amd64.dylib ../go-zenon/build/libznn-darwin-arm64.dylib
+          ./mainfat ../go-zenon/build/znnd-darwin-universal ../go-zenon/build/znnd-darwin-amd64 ../go-zenon/build/znnd-darwin-arm64
+      - name: Go back to build directory, remove header files and add execute flag
+        run: |
+          cd build/
+          rm ./*.h
+          chmod +x ./*
+      - name: Archive files
+        run: |
+          cd build/
+          for file in *windows*; do zip $(echo $file | rev | cut -d '.' -f2- | rev)".zip" "$file" && rm "$file" ; done && for so in "linux" "darwin"; do for file in *"$so"*; do tar cvzf $(echo $file | rev | cut -d '.' -f2- | rev)".tar.gz" "$file" && rm "$file" ; done; done
+      - name: Generate checksums
+        run: | 
+          cd build/
+          sha256sum *
+          sha256sum * > SHA256CHECKSUMS.txt
+      - name: Set version
+        run: |
+          GOZENON=$(cat metadata/version.go | grep Version | awk -F '"' '{print $2}')
+          echo "GOZENON_VERSION=$GOZENON" >> $GITHUB_ENV
+      - name: Upload files to a GitHub release
+        uses: svenstaro/upload-release-action@7319e4733ec7a184d739a6f412c40ffc339b69c7
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: build/*
+          release_name: ${{ env.GOZENON_VERSION }}
+          tag: ${{ env.GOZENON_VERSION }}-alphanet
+          file_glob: true
+          overwrite: true
+          body: ""

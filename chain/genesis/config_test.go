@@ -42,7 +42,7 @@ var (
 
 func TestGenesisToFromJson(t *testing.T) {
 	genesisFile := path.Join(t.TempDir(), "genesis.json")
-	err := os.WriteFile(genesisFile, emptyGenesisJsonStr, 777)
+	err := os.WriteFile(genesisFile, emptyGenesisJsonStr, 0777)
 	common.FailIfErr(t, err)
 
 	config, err := ReadGenesisConfigFromFile(genesisFile)
@@ -53,7 +53,7 @@ func TestGenesisToFromJson(t *testing.T) {
 func TestPartiallyWrittenFile(t *testing.T) {
 	for i := 0; i < len(emptyGenesisJsonStr)-5; i += 1 {
 		genesisFile := path.Join(t.TempDir(), "genesis.json")
-		if err := os.WriteFile(genesisFile, emptyGenesisJsonStr[0:i], 777); err != nil {
+		if err := os.WriteFile(genesisFile, emptyGenesisJsonStr[0:i], 0777); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := ReadGenesisConfigFromFile(genesisFile); err != ErrIncompleteGenesisJson {
@@ -64,7 +64,7 @@ func TestPartiallyWrittenFile(t *testing.T) {
 
 func TestMalformedGenesis(t *testing.T) {
 	genesisFile := path.Join(t.TempDir(), "genesis.json")
-	if err := os.WriteFile(genesisFile, []byte(`{"a":"aaaa"]}`), 777); err != nil {
+	if err := os.WriteFile(genesisFile, []byte(`{"a":"aaaa"]}`), 0777); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ReadGenesisConfigFromFile(genesisFile); err != ErrInvalidGenesisJson {
@@ -74,7 +74,7 @@ func TestMalformedGenesis(t *testing.T) {
 
 func TestEmptyGenesis(t *testing.T) {
 	genesisFile := path.Join(t.TempDir(), "genesis.json")
-	if err := os.WriteFile(genesisFile, []byte(`{}`), 777); err != nil {
+	if err := os.WriteFile(genesisFile, []byte(`{}`), 0777); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ReadGenesisConfigFromFile(genesisFile); err != ErrInvalidGenesisConfig {
