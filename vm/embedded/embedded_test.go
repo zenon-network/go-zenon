@@ -11,7 +11,7 @@ import (
 
 func TestDumpContractsABIMethods(t *testing.T) {
 	dumps := make([]string, 0)
-	for addr, contract := range htlcEmbedded {
+	for addr, contract := range originEmbedded {
 		for _, method := range contract.abi.Methods {
 			dumps = append(dumps, fmt.Sprintf(`{"address":"%v", "name":"%v", "id":"%v", "signature":"%v"}`, addr, method.Name, hex.EncodeToString(method.Id()), method.Sig()))
 		}
