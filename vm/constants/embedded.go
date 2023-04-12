@@ -1,6 +1,7 @@
 package constants
 
 import (
+	"github.com/zenon-network/go-zenon/common/types"
 	"math/big"
 
 	"github.com/zenon-network/go-zenon/common"
@@ -54,6 +55,7 @@ var (
 
 	/// === Staking constants ===
 
+	// Testnet value
 	StakeTimeUnitSec int64 = 30 * SecsInDay
 	StakeTimeMinSec        = StakeTimeUnitSec * 1
 	StakeTimeMaxSec        = StakeTimeUnitSec * 12
@@ -89,6 +91,19 @@ var (
 	// SwapAssetDecayTickValuePercentage is the percentage that is lost after in each tick, equal to 10% per SwapAssetDecayTickEpochs, after SwapAssetDecayEpochsOffset
 	SwapAssetDecayTickValuePercentage = 10
 
+	/// === Bridge constants ===
+
+	InitialBridgeAdministrator   = types.ParseAddressPanic("z1qr9vtwsfr2n0nsxl2nfh6l5esqjh2wfj85cfq9")
+	MaximumFee                   = uint32(10000)
+	MinUnhaltDurationInMomentums = uint64(6 * MomentumsPerHour)  //main net
+	MinAdministratorDelay        = uint64(2 * MomentumsPerEpoch) // main net
+	MinSoftDelay                 = uint64(MomentumsPerEpoch)     // main net
+	MinGuardians                 = 5                             // main net
+
+	DecompressedECDSAPubKeyLength = 65
+	CompressedECDSAPubKeyLength   = 33
+	ECDSASignatureLength          = 65
+
 	/// === Reward constants ===
 
 	// RewardTickDurationInEpochs represents the duration (in epochs) for each reward tick
@@ -119,14 +134,19 @@ var (
 		5000 * Decimals,
 	}
 
-	DelegationZnnRewardPercentage        int64 = 24
-	MomentumProducingZnnRewardPercentage int64 = 50
-	SentinelZnnRewardPercentage          int64 = 13
-	LiquidityZnnRewardPercentage         int64 = 13
+	DelegationZnnRewardPercentage        int64  = 24
+	MomentumProducingZnnRewardPercentage int64  = 50
+	SentinelZnnRewardPercentage          int64  = 13
+	LiquidityZnnRewardPercentage         int64  = 13
+	LiquidityZnnTotalPercentages         uint32 = 10000
 
-	StakingQsrRewardPercentage   int64 = 50
-	SentinelQsrRewardPercentage  int64 = 25
-	LiquidityQsrRewardPercentage int64 = 25
+	StakingQsrRewardPercentage   int64  = 50
+	SentinelQsrRewardPercentage  int64  = 25
+	LiquidityQsrRewardPercentage int64  = 25
+	LiquidityQsrTotalPercentages uint32 = 10000
+	LiquidityStakeWeights               = []int64{
+		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+	}
 )
 
 func NetworkZnnRewardPerEpoch(epoch uint64) int64 {

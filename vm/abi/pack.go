@@ -31,13 +31,11 @@ func packElement(t Type, reflectValue reflect.Value) ([]byte, error) {
 		if reflectValue.Kind() == reflect.Array {
 			reflectValue = mustArrayToByteSlice(reflectValue)
 		}
-
 		return common.LeftPadBytes(reflectValue.Bytes(), WordSize), nil
 	case TokenStandardTy:
 		if reflectValue.Kind() == reflect.Array {
 			reflectValue = mustArrayToByteSlice(reflectValue)
 		}
-
 		return common.LeftPadBytes(reflectValue.Bytes(), WordSize), nil
 	case BoolTy:
 		if reflectValue.Bool() {

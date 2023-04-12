@@ -27,7 +27,7 @@ GIT_COMMIT_FILE=$(shell pwd)/metadata/git_commit.go
 $(EXECUTABLE):
 	go build -o $(BUILDDIR)/$(EXECUTABLE) -buildmode=c-shared -tags libznn $(LIBMAIN)
 
-libznn: $(EXECUTABLE)
+libznn: $(EXECUTABLE) ## Build binaries
 	@echo "Build libznn done."
 
 znnd:

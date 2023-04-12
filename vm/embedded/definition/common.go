@@ -60,6 +60,17 @@ const (
 		{"type":"function","name":"VoteByProdAddress","inputs":[
 			{"name":"id","type":"hash"},
 			{"name":"vote","type":"uint8"}
+		]},
+		{"type":"variable","name":"timeChallengeInfo","inputs":[
+			{"name":"methodName","type":"string"},
+			{"name":"paramsHash","type":"hash"},
+			{"name":"challengeStartHeight","type":"uint64"}
+		]},
+		{"type":"variable","name":"securityInfo","inputs":[
+			{"name":"guardians","type":"address[]"},
+			{"name":"guardiansVotes","type":"address[]"},
+			{"name":"administratorDelay","type":"uint64"},
+			{"name":"softDelay","type":"uint64"}
 		]}
 	]`
 
@@ -70,14 +81,20 @@ const (
 	LastEpochUpdateVariableName      = "lastEpochUpdate"
 	PillarVoteVariableName           = "pillarVote"
 	VotableHashVariableName          = "votableHash"
+	timeChallengeInfoVariableName    = "timeChallengeInfo"
+	securityInfoVariableName         = "securityInfo"
 
-	UpdateMethodName            = "Update"
-	CollectRewardMethodName     = "CollectReward"
-	DepositQsrMethodName        = "DepositQsr"
-	WithdrawQsrMethodName       = "WithdrawQsr"
-	DonateMethodName            = "Donate"
-	VoteByNameMethodName        = "VoteByName"
-	VoteByProdAddressMethodName = "VoteByProdAddress"
+	UpdateMethodName               = "Update"
+	CollectRewardMethodName        = "CollectReward"
+	DepositQsrMethodName           = "DepositQsr"
+	WithdrawQsrMethodName          = "WithdrawQsr"
+	DonateMethodName               = "Donate"
+	VoteByNameMethodName           = "VoteByName"
+	VoteByProdAddressMethodName    = "VoteByProdAddress"
+	ChangeAdministratorMethodName  = "ChangeAdministrator"
+	EmergencyMethodName            = "Emergency"
+	NominateGuardiansMethodName    = "NominateGuardians"
+	ProposeAdministratorMethodName = "ProposeAdministrator"
 )
 
 var (
@@ -91,6 +108,8 @@ var (
 	rewardDepositHistoryKeyPrefix = []byte{132}
 	pillarVoteKeyPrefix           = []byte{133}
 	votableHashKeyPrefix          = []byte{134}
+	TimeChallengeKeyPrefix        = []byte{135}
+	SecurityInfoKeyPrefix         = []byte{136}
 )
 
 type RewardDeposit struct {
@@ -540,4 +559,112 @@ func GetVoteBreakdown(context db.DB, id types.Hash) *VoteBreakdown {
 		}
 	}
 	return voteBreakdown
+}
+
+type TimeChallengeInfo struct {
+	MethodName           string
+	ParamsHash           types.Hash
+	ChallengeStartHeight uint64
+}
+
+func (t *TimeChallengeInfo) Save(context db.DB) error {
+	data, err := ABICommon.PackVariable(
+		timeChallengeInfoVariableName,
+		t.MethodName,
+		t.ParamsHash,
+		t.ChallengeStartHeight,
+	)
+	if err != nil {
+		return err
+	}
+	return context.Put(
+		t.Key(),
+		data,
+	)
+}
+func parseTimeChallengeInfoVariable(data []byte) (*TimeChallengeInfo, error) {
+	if len(data) > 0 {
+		timeChallengeInfo := new(TimeChallengeInfo)
+		if err := ABICommon.UnpackVariable(timeChallengeInfo, timeChallengeInfoVariableName, data); err != nil {
+			return nil, err
+		}
+		return timeChallengeInfo, nil
+	} else {
+		return nil, constants.ErrDataNonExistent
+	}
+}
+
+func timeChallengeKey(methodName string) []byte {
+	return common.JoinBytes(TimeChallengeKeyPrefix, crypto.Hash([]byte(methodName)))
+}
+
+func GetTimeChallengeInfoVariable(context db.DB, methodName string) (*TimeChallengeInfo, error) {
+	if data, err := context.Get(timeChallengeKey(methodName)); err != nil {
+		return nil, err
+	} else {
+		upd, err := parseTimeChallengeInfoVariable(data)
+		if err == constants.ErrDataNonExistent {
+			return nil, nil
+		}
+		return upd, err
+	}
+}
+func (t *TimeChallengeInfo) Key() []byte {
+	return common.JoinBytes(TimeChallengeKeyPrefix, crypto.Hash([]byte(t.MethodName)))
+}
+func (t *TimeChallengeInfo) Delete(context db.DB) error {
+	return context.Delete(t.Key())
+}
+
+// SecurityInfoVariable This refers to time challenge security
+type SecurityInfoVariable struct {
+	// addresses that can vote for the new administrator once the bridge is in emergency
+	Guardians []types.Address `json:"guardians"`
+	// votes of the active guardians
+	GuardiansVotes []types.Address `json:"guardiansVotes"`
+	// delay upon which the new administrator or guardians will be active
+	AdministratorDelay uint64 `json:"administratorDelay"`
+	// delay upon which all other time challenges will expire
+	SoftDelay uint64 `json:"softDelay"`
+}
+
+func (s *SecurityInfoVariable) Save(context db.DB) error {
+	data, err := ABICommon.PackVariable(
+		securityInfoVariableName,
+		s.Guardians,
+		s.GuardiansVotes,
+		s.AdministratorDelay,
+		s.SoftDelay,
+	)
+	if err != nil {
+		return err
+	}
+	return context.Put(
+		SecurityInfoKeyPrefix,
+		data,
+	)
+}
+func parseSecurityInfoVariable(data []byte) (*SecurityInfoVariable, error) {
+	if len(data) > 0 {
+		SecurityInfo := new(SecurityInfoVariable)
+		if err := ABICommon.UnpackVariable(SecurityInfo, securityInfoVariableName, data); err != nil {
+			return nil, err
+		}
+		return SecurityInfo, nil
+	} else {
+		return &SecurityInfoVariable{
+			Guardians:          make([]types.Address, 0),
+			GuardiansVotes:     make([]types.Address, 0),
+			AdministratorDelay: constants.MinAdministratorDelay,
+			SoftDelay:          constants.MinSoftDelay,
+		}, nil
+	}
+}
+func GetSecurityInfoVariable(context db.DB) (*SecurityInfoVariable, error) {
+	if data, err := context.Get(SecurityInfoKeyPrefix); err != nil {
+		return nil, err
+	} else {
+		upd, err := parseSecurityInfoVariable(data)
+		return upd, err
+	}
 }

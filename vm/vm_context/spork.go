@@ -16,3 +16,9 @@ func (ctx *accountVmContext) IsHtlcSporkEnforced() bool {
 	common.DealWithErr(err)
 	return active
 }
+
+func (ctx *accountVmContext) IsBridgeAndLiquiditySporkEnforced() bool {
+	active, err := ctx.momentumStore.IsSporkActive(types.BridgeAndLiquiditySpork)
+	common.DealWithErr(err)
+	return active
+}

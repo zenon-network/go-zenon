@@ -21,3 +21,12 @@ func HashSHA256(data ...[]byte) []byte {
 	}
 	return d.Sum(nil)
 }
+
+func Keccak256(data ...[]byte) []byte {
+	d := sha3.NewLegacyKeccak256()
+	for _, item := range data {
+		d.Write(item)
+	}
+
+	return d.Sum(nil)
+}

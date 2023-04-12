@@ -34,4 +34,5 @@ type AccountVmContext interface {
 
 	IsAcceleratorSporkEnforced() bool
 	IsHtlcSporkEnforced() bool
+	IsBridgeAndLiquiditySporkEnforced() bool
 }

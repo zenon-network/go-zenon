@@ -15,6 +15,12 @@ func JoinBytes(data ...[]byte) []byte {
 	return newData
 }
 
+func Uint32ToBytes(x uint32) []byte {
+	bytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(bytes, x)
+	return bytes
+}
+
 func Uint64ToBytes(height uint64) []byte {
 	bytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(bytes, height)
@@ -37,4 +43,22 @@ func BytesToBigInt(bytes []byte) *big.Int {
 	} else {
 		return new(big.Int).SetBytes(bytes)
 	}
+}
+
+// IsHexCharacter returns bool of c being a valid hexadecimal.
+func IsHexCharacter(c byte) bool {
+	return ('0' <= c && c <= '9') || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F')
+}
+
+// IsHex validates whether each byte is valid hexadecimal string.
+func IsHex(str string) bool {
+	if len(str)%2 != 0 {
+		return false
+	}
+	for _, c := range []byte(str) {
+		if !IsHexCharacter(c) {
+			return false
+		}
+	}
+	return true
 }

@@ -85,6 +85,18 @@ func getApi(z zenon.Zenon, p2p *p2p.Server, apiModule string) []rpc.API {
 				Service:   embedded.NewHtlcApi(z),
 				Public:    true,
 			},
+			{
+				Namespace: "embedded.bridge",
+				Version:   "1.0",
+				Service:   embedded.NewBridgeApi(z),
+				Public:    true,
+			},
+			{
+				Namespace: "embedded.liquidity",
+				Version:   "1.0",
+				Service:   embedded.NewLiquidityApi(z),
+				Public:    true,
+			},
 		}
 	case "stats":
 		return []rpc.API{

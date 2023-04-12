@@ -2,6 +2,7 @@ package implementation
 
 import (
 	"math/big"
+	"reflect"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
@@ -16,7 +17,7 @@ var (
 )
 
 // CanPerformUpdate checks if embedded contract can be updated
-//  - returns util.ErrUpdateTooRecent if not due
+//   - returns util.ErrUpdateTooRecent if not due
 func CanPerformUpdate(context vm_context.AccountVmContext) error {
 	momentum, err := context.GetFrontierMomentum()
 	if err != nil {
@@ -37,8 +38,8 @@ func CanPerformUpdate(context vm_context.AccountVmContext) error {
 }
 
 // Generic function, used to limits calls to the update method once every UpdateMinNumMomentums blocks
-//  - automatically stores new height
-//  - returns util.ErrUpdateTooRecent if not due
+//   - automatically stores new height
+//   - returns util.ErrUpdateTooRecent if not due
 func checkAndPerformUpdate(context vm_context.AccountVmContext) error {
 	if err := CanPerformUpdate(context); err != nil {
 		return err
@@ -54,7 +55,7 @@ func checkAndPerformUpdate(context vm_context.AccountVmContext) error {
 }
 
 // CanPerformEpochUpdate checks if embedded contract can perform an epoch update, used most commonly to give rewards
-//  - returns util.EpochUpdateNotDue if not due
+//   - returns util.EpochUpdateNotDue if not due
 func CanPerformEpochUpdate(context vm_context.AccountVmContext, epoch *definition.LastEpochUpdate) error {
 	_, currentEpochEndTime := context.EpochTicker().ToTime(uint64(epoch.LastEpoch + 1))
 	frontierMomentum, err := context.GetFrontierMomentum()
@@ -69,8 +70,8 @@ func CanPerformEpochUpdate(context vm_context.AccountVmContext, epoch *definitio
 }
 
 // Generic function to check if epoch can be updated, if true, update it and save
-//  - automatically moves up epoch by one if possible
-//  - returns util.EpochUpdateNotDue if not due
+//   - automatically moves up epoch by one if possible
+//   - returns util.EpochUpdateNotDue if not due
 func checkAndPerformUpdateEpoch(context vm_context.AccountVmContext, epoch *definition.LastEpochUpdate) error {
 	if err := CanPerformEpochUpdate(context, epoch); err != nil {
 		return err
@@ -171,8 +172,8 @@ func (p *CollectRewardMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 }
 
 // Used for registration
-//  - checks if user has deposited enough QSR
-//  - consumes the required amount
+//   - checks if user has deposited enough QSR
+//   - consumes the required amount
 func checkAndConsumeQsr(context vm_context.AccountVmContext, ownerAddress types.Address, requiredAmount *big.Int) error {
 	// check that sender has enough Qsr deposited for this operation
 	qsrDeposit, err := definition.GetQsrDeposit(context.Storage(), &ownerAddress)
@@ -433,4 +434,53 @@ func (p *VoteByProdAddressMethod) ReceiveBlock(context vm_context.AccountVmConte
 
 	commonLog.Debug("voted for hash", "pillar-vote", param)
 	return nil, nil
+}
+
+func TimeChallenge(context vm_context.AccountVmContext, methodName string, hash []byte, delay uint64) (*definition.TimeChallengeInfo, error) {
+	timeChallengeInfo, err := definition.GetTimeChallengeInfoVariable(context.Storage(), methodName)
+	if err != nil {
+		return nil, err
+	}
+	if timeChallengeInfo == nil {
+		timeChallengeInfo = &definition.TimeChallengeInfo{
+			MethodName:           methodName,
+			ParamsHash:           types.Hash{},
+			ChallengeStartHeight: 0,
+		}
+	}
+	paramsHash, err := types.BytesToHash(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	momentum, err := context.GetFrontierMomentum()
+	common.DealWithErr(err)
+	// if true then we need to check the time challenge, otherwise we start a new challenge
+	if reflect.DeepEqual(timeChallengeInfo.ParamsHash, paramsHash) {
+		if timeChallengeInfo.ChallengeStartHeight+delay >= momentum.Height {
+			return nil, constants.ErrTimeChallengeNotDue
+		} else {
+			// challenge is ok, we can reset it
+			timeChallengeInfo.ParamsHash = types.Hash{}
+		}
+	} else {
+		if errSet := timeChallengeInfo.ParamsHash.SetBytes(paramsHash.Bytes()); errSet != nil {
+			return nil, errSet
+		}
+		timeChallengeInfo.ChallengeStartHeight = momentum.Height
+	}
+	common.DealWithErr(timeChallengeInfo.Save(context.Storage()))
+	return timeChallengeInfo, nil
+}
+
+func CheckSecurityInitialized(context vm_context.AccountVmContext) (*definition.SecurityInfoVariable, error) {
+	securityInfo, err := definition.GetSecurityInfoVariable(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+	if len(securityInfo.Guardians) < constants.MinGuardians {
+		return nil, constants.ErrSecurityNotInitialized
+	}
+
+	return securityInfo, nil
 }
