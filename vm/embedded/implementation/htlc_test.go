@@ -4,8 +4,8 @@ import (
 	"encoding/hex"
 	"testing"
 
-	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
@@ -13,7 +13,7 @@ import (
 var (
 	hashlock, _ = hex.DecodeString("b7845adcd41eec4e4fa1cc75a868014811b575942c6e4a72551bc01f63705634")
 	defaultHtlc = definition.CreateHtlcParam{
-		HashLocked:     g.User1.Address,
+		HashLocked:     types.HtlcContract,
 		ExpirationTime: 1000000000,
 		HashType:       0,
 		KeyMaxSize:     32,
