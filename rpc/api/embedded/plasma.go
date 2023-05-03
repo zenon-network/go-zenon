@@ -1,6 +1,7 @@
 package embedded
 
 import (
+	"encoding/json"
 	"math/big"
 	"sort"
 
@@ -39,16 +40,118 @@ type PlasmaInfo struct {
 	MaxPlasma     uint64   `json:"maxPlasma"`
 	QsrAmount     *big.Int `json:"qsrAmount"`
 }
+type PlasmaInfoMarshal struct {
+	CurrentPlasma uint64 `json:"currentPlasma"`
+	MaxPlasma     uint64 `json:"maxPlasma"`
+	QsrAmount     string `json:"qsrAmount"`
+}
+
+func (r *PlasmaInfo) ToPlasmaInfoMarshal() *PlasmaInfoMarshal {
+	aux := &PlasmaInfoMarshal{
+		CurrentPlasma: r.CurrentPlasma,
+		MaxPlasma:     r.MaxPlasma,
+		QsrAmount:     r.QsrAmount.String(),
+	}
+
+	return aux
+}
+
+func (r *PlasmaInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(r.ToPlasmaInfoMarshal())
+}
+
+func (r *PlasmaInfo) UnmarshalJSON(data []byte) error {
+	aux := new(PlasmaInfoMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	r.CurrentPlasma = aux.CurrentPlasma
+	r.MaxPlasma = aux.MaxPlasma
+	r.QsrAmount = common.StringToBigInt(aux.QsrAmount)
+	return nil
+}
+
 type FusionEntry struct {
 	QsrAmount        *big.Int      `json:"qsrAmount"`
 	Beneficiary      types.Address `json:"beneficiary"`
 	ExpirationHeight uint64        `json:"expirationHeight"`
 	Id               types.Hash    `json:"id"`
 }
+type FusionEntryMarshal struct {
+	QsrAmount        string        `json:"qsrAmount"`
+	Beneficiary      types.Address `json:"beneficiary"`
+	ExpirationHeight uint64        `json:"expirationHeight"`
+	Id               types.Hash    `json:"id"`
+}
+
+func (r *FusionEntry) ToFusionEntryMarshal() *FusionEntryMarshal {
+	aux := &FusionEntryMarshal{
+		QsrAmount:        r.QsrAmount.String(),
+		Beneficiary:      r.Beneficiary,
+		ExpirationHeight: r.ExpirationHeight,
+		Id:               r.Id,
+	}
+
+	return aux
+}
+
+func (r *FusionEntry) MarshalJSON() ([]byte, error) {
+	return json.Marshal(r.ToFusionEntryMarshal())
+}
+
+func (r *FusionEntry) UnmarshalJSON(data []byte) error {
+	aux := new(FusionEntryMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	r.QsrAmount = common.StringToBigInt(aux.QsrAmount)
+	r.Beneficiary = aux.Beneficiary
+	r.ExpirationHeight = aux.ExpirationHeight
+	r.Id = aux.Id
+	return nil
+}
+
 type FusionEntryList struct {
 	QsrAmount *big.Int       `json:"qsrAmount"`
 	Count     int            `json:"count"`
 	Fusions   []*FusionEntry `json:"list"`
+}
+type FusionEntryListMarshal struct {
+	QsrAmount string         `json:"qsrAmount"`
+	Count     int            `json:"count"`
+	Fusions   []*FusionEntry `json:"list"`
+}
+
+func (r *FusionEntryList) ToFusionEntryListMarshal() *FusionEntryListMarshal {
+	aux := &FusionEntryListMarshal{
+		QsrAmount: r.QsrAmount.String(),
+		Count:     r.Count,
+	}
+	aux.Fusions = make([]*FusionEntry, len(r.Fusions))
+	for idx, fusion := range r.Fusions {
+		aux.Fusions[idx] = fusion
+	}
+
+	return aux
+}
+
+func (r *FusionEntryList) MarshalJSON() ([]byte, error) {
+	return json.Marshal(r.ToFusionEntryListMarshal())
+}
+
+func (r *FusionEntryList) UnmarshalJSON(data []byte) error {
+	aux := new(FusionEntryListMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	r.QsrAmount = common.StringToBigInt(aux.QsrAmount)
+	r.Count = aux.Count
+	r.Fusions = make([]*FusionEntry, len(r.Fusions))
+	for idx, fusion := range aux.Fusions {
+		r.Fusions[idx] = fusion
+	}
+
+	return nil
 }
 
 type SortFusionEntryByHeight []*definition.FusionInfo
@@ -124,6 +227,37 @@ type GetRequiredResult struct {
 	AvailablePlasma    uint64   `json:"availablePlasma"`
 	BasePlasma         uint64   `json:"basePlasma"`
 	RequiredDifficulty *big.Int `json:"requiredDifficulty"`
+}
+
+type GetRequiredResultMarshal struct {
+	AvailablePlasma    uint64 `json:"availablePlasma"`
+	BasePlasma         uint64 `json:"basePlasma"`
+	RequiredDifficulty string `json:"requiredDifficulty"`
+}
+
+func (r *GetRequiredResult) ToGetRequiredResultMarshal() *GetRequiredResultMarshal {
+	aux := &GetRequiredResultMarshal{
+		AvailablePlasma:    r.AvailablePlasma,
+		BasePlasma:         r.BasePlasma,
+		RequiredDifficulty: r.RequiredDifficulty.String(),
+	}
+
+	return aux
+}
+
+func (r *GetRequiredResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(r.ToGetRequiredResultMarshal())
+}
+
+func (r *GetRequiredResult) UnmarshalJSON(data []byte) error {
+	aux := new(GetRequiredResultMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	r.AvailablePlasma = aux.AvailablePlasma
+	r.BasePlasma = aux.BasePlasma
+	r.RequiredDifficulty = common.StringToBigInt(aux.RequiredDifficulty)
+	return nil
 }
 
 func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetRequiredResult, error) {

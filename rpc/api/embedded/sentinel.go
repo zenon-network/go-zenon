@@ -1,8 +1,6 @@
 package embedded
 
 import (
-	"math/big"
-
 	"github.com/inconshreveable/log15"
 
 	"github.com/zenon-network/go-zenon/chain"
@@ -93,8 +91,9 @@ func (api *SentinelApi) GetAllActive(pageIndex, pageSize uint32) (*SentinelInfoL
 
 // === Shared RPCs ===
 
-func (api *SentinelApi) GetDepositedQsr(address types.Address) (*big.Int, error) {
-	return getDepositedQsr(api.chain, types.SentinelContract, address)
+func (api *SentinelApi) GetDepositedQsr(address types.Address) (string, error) {
+	depositedQsr, err := getDepositedQsr(api.chain, types.SentinelContract, address)
+	return depositedQsr.String(), err
 }
 func (api *SentinelApi) GetUncollectedReward(address types.Address) (*definition.RewardDeposit, error) {
 	return getUncollectedReward(api.chain, types.SentinelContract, address)

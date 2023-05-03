@@ -125,31 +125,31 @@ func TestSimple_ContractCall(t *testing.T) {
 	z.InsertNewMomentum() // cemented send blocks
 	z.InsertNewMomentum() // cemented pillar receive-blocks
 
-	common.Json(pillarApi.GetDepositedQsr(g.User1.Address)).Equals(t, `150000000000`)
+	common.Json(pillarApi.GetDepositedQsr(g.User1.Address)).Equals(t, `"150000000000"`)
 	common.Json(pillarApi.GetDelegatedPillar(g.User1.Address)).Equals(t, `
 {
 	"name": "TEST-pillar-1",
 	"status": 1,
-	"weight": 1200000000000
+	"weight": "1200000000000"
 }`)
 
 	z.InsertMomentumsTo(60)
 	common.Json(pillarApi.GetAll(0, 10)).SubJson(ListOf(func() interface{} {
 		return new(struct {
-			Weight *big.Int `json:"weight"`
+			Weight string `json:"weight"`
 		})
 	})).Equals(t, `
 {
 	"count": 3,
 	"list": [
 		{
-			"weight": 2100000000000
+			"weight": "2100000000000"
 		},
 		{
-			"weight": 200000000000
+			"weight": "200000000000"
 		},
 		{
-			"weight": 200000000000
+			"weight": "200000000000"
 		}
 	]
 }`)

@@ -1,6 +1,7 @@
 package embedded
 
 import (
+	"encoding/json"
 	"math/big"
 	"sort"
 
@@ -37,8 +38,9 @@ var (
 
 // === Shared RPCs ===
 
-func (a *PillarApi) GetDepositedQsr(address types.Address) (*big.Int, error) {
-	return getDepositedQsr(a.chain, types.PillarContract, address)
+func (a *PillarApi) GetDepositedQsr(address types.Address) (string, error) {
+	depositedQsr, err := getDepositedQsr(a.chain, types.PillarContract, address)
+	return depositedQsr.String(), err
 }
 func (a *PillarApi) GetUncollectedReward(address types.Address) (*definition.RewardDeposit, error) {
 	return getUncollectedReward(a.chain, types.PillarContract, address)
@@ -50,18 +52,18 @@ func (a *PillarApi) GetFrontierRewardByPage(address types.Address, pageIndex, pa
 	return getFrontierRewardByPage(a.chain, types.PillarContract, address, pageIndex, pageSize)
 }
 
-func (a *PillarApi) GetQsrRegistrationCost() (*big.Int, error) {
+func (a *PillarApi) GetQsrRegistrationCost() (string, error) {
 	_, context, err := api.GetFrontierContext(a.chain, types.PillarContract)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	currentQsrCost, err := implementation.GetQsrCostForNextPillar(context)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	return currentQsrCost, nil
+	return currentQsrCost.String(), nil
 }
 
 // Pillar details
@@ -84,6 +86,72 @@ type PillarInfo struct {
 	CurrentStats *PillarStats `json:"currentStats"`
 	Weight       *big.Int     `json:"weight"`
 }
+
+type PillarInfoMarshal struct {
+	Name string `json:"name"`
+	Rank int    `json:"rank"`
+	Type uint8  `json:"type"`
+
+	StakeAddress          types.Address `json:"ownerAddress"`
+	BlockProducingAddress types.Address `json:"producerAddress"`
+	RewardWithdrawAddress types.Address `json:"withdrawAddress"`
+
+	CanBeRevoked   bool  `json:"isRevocable"`
+	RevokeCooldown int64 `json:"revokeCooldown"`
+	RevokeTime     int64 `json:"revokeTimestamp"`
+
+	GiveMomentumRewardPercentage uint8 `json:"giveMomentumRewardPercentage"`
+	GiveDelegateRewardPercentage uint8 `json:"giveDelegateRewardPercentage"`
+
+	CurrentStats *PillarStats `json:"currentStats"`
+	Weight       string       `json:"weight"`
+}
+
+func (p *PillarInfo) ToPillarInfoMarshal() *PillarInfoMarshal {
+	aux := &PillarInfoMarshal{
+		Name:                         p.Name,
+		Rank:                         p.Rank,
+		Type:                         p.Type,
+		StakeAddress:                 p.StakeAddress,
+		BlockProducingAddress:        p.BlockProducingAddress,
+		RewardWithdrawAddress:        p.RewardWithdrawAddress,
+		CanBeRevoked:                 p.CanBeRevoked,
+		RevokeCooldown:               p.RevokeCooldown,
+		RevokeTime:                   p.RevokeTime,
+		GiveMomentumRewardPercentage: p.GiveMomentumRewardPercentage,
+		GiveDelegateRewardPercentage: p.GiveDelegateRewardPercentage,
+		CurrentStats:                 p.CurrentStats,
+		Weight:                       p.Weight.String(),
+	}
+
+	return aux
+}
+
+func (p *PillarInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(p.ToPillarInfoMarshal())
+}
+
+func (p *PillarInfo) UnmarshalJSON(data []byte) error {
+	aux := new(PillarInfoMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	p.Name = aux.Name
+	p.Rank = aux.Rank
+	p.Type = aux.Type
+	p.StakeAddress = aux.StakeAddress
+	p.BlockProducingAddress = aux.BlockProducingAddress
+	p.RewardWithdrawAddress = aux.RewardWithdrawAddress
+	p.CanBeRevoked = aux.CanBeRevoked
+	p.RevokeCooldown = aux.RevokeCooldown
+	p.RevokeTime = aux.RevokeTime
+	p.GiveMomentumRewardPercentage = aux.GiveMomentumRewardPercentage
+	p.GiveDelegateRewardPercentage = aux.GiveDelegateRewardPercentage
+	p.CurrentStats = aux.CurrentStats
+	p.Weight = common.StringToBigInt(aux.Weight)
+	return nil
+}
+
 type PillarInfoList struct {
 	Count uint32        `json:"count"`
 	List  []*PillarInfo `json:"list"`
@@ -235,6 +303,36 @@ type GetDelegatedPillarResponse struct {
 	Name       string   `json:"name"`
 	NodeStatus uint8    `json:"status"`
 	Balance    *big.Int `json:"weight"`
+}
+
+type GetDelegatedPillarResponseMarshal struct {
+	Name       string `json:"name"`
+	NodeStatus uint8  `json:"status"`
+	Balance    string `json:"weight"`
+}
+
+func (g *GetDelegatedPillarResponse) ToGetDelegatedPillarResponse() *GetDelegatedPillarResponseMarshal {
+	aux := &GetDelegatedPillarResponseMarshal{
+		Name:       g.Name,
+		NodeStatus: g.NodeStatus,
+		Balance:    g.Balance.String(),
+	}
+	return aux
+}
+
+func (g *GetDelegatedPillarResponse) MarshalJSON() ([]byte, error) {
+	return json.Marshal(g.ToGetDelegatedPillarResponse())
+}
+
+func (g *GetDelegatedPillarResponse) UnmarshalJSON(data []byte) error {
+	aux := new(GetDelegatedPillarResponseMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	g.Name = aux.Name
+	g.NodeStatus = aux.NodeStatus
+	g.Balance = common.StringToBigInt(aux.Balance)
+	return nil
 }
 
 func (a *PillarApi) GetDelegatedPillar(addr types.Address) (*GetDelegatedPillarResponse, error) {

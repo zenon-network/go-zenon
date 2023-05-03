@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"math/big"
 
 	"github.com/zenon-network/go-zenon/chain"
@@ -36,6 +37,22 @@ type AccountBlock struct {
 	ConfirmationDetail *AccountBlockConfirmationDetail `json:"confirmationDetail"`
 	PairedAccountBlock *AccountBlock                   `json:"pairedAccountBlock"`
 }
+
+func (block *AccountBlock) MarshalJSON() ([]byte, error) {
+	aux := struct {
+		nom.AccountBlockMarshall
+		TokenInfo          *Token                          `json:"token"`
+		ConfirmationDetail *AccountBlockConfirmationDetail `json:"confirmationDetail"`
+		PairedAccountBlock *AccountBlock                   `json:"pairedAccountBlock"`
+	}{
+		AccountBlockMarshall: block.AccountBlock.ToMarshalJson(),
+		TokenInfo:            block.TokenInfo,
+		ConfirmationDetail:   block.ConfirmationDetail,
+		PairedAccountBlock:   block.PairedAccountBlock,
+	}
+	return json.Marshal(aux)
+}
+
 type AccountInfo struct {
 	Address        types.Address                             `json:"address"`
 	AccountHeight  uint64                                    `json:"accountHeight"`
@@ -45,6 +62,54 @@ type BalanceInfo struct {
 	TokenInfo *Token   `json:"token"`
 	Balance   *big.Int `json:"balance"`
 }
+
+type BalanceInfoMarshal struct {
+	TokenMarshal `json:"token"`
+	Balance      string `json:"balance"`
+}
+
+func (b *BalanceInfo) ToBalanceInfoMarshal() BalanceInfoMarshal {
+	aux := BalanceInfoMarshal{
+		TokenMarshal: TokenMarshal{
+			TokenName:          b.TokenInfo.TokenName,
+			TokenSymbol:        b.TokenInfo.TokenSymbol,
+			TokenDomain:        b.TokenInfo.TokenDomain,
+			MaxSupply:          b.TokenInfo.MaxSupply.String(),
+			Decimals:           b.TokenInfo.Decimals,
+			Owner:              b.TokenInfo.Owner,
+			ZenonTokenStandard: b.TokenInfo.ZenonTokenStandard,
+			TotalSupply:        b.TokenInfo.TotalSupply.String(),
+			IsBurnable:         b.TokenInfo.IsBurnable,
+			IsMintable:         b.TokenInfo.IsMintable,
+			IsUtility:          b.TokenInfo.IsUtility,
+		},
+		Balance: b.Balance.String(),
+	}
+	return aux
+}
+func (b *BalanceInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(b.ToBalanceInfoMarshal())
+}
+func (b *BalanceInfo) UnmarshalJSON(data []byte) error {
+	aux := new(BalanceInfoMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	b.TokenInfo.TokenName = aux.TokenName
+	b.TokenInfo.TokenSymbol = aux.TokenSymbol
+	b.TokenInfo.TokenDomain = aux.TokenDomain
+	b.TokenInfo.MaxSupply = common.StringToBigInt(aux.MaxSupply)
+	b.TokenInfo.Decimals = aux.Decimals
+	b.TokenInfo.Owner = aux.Owner
+	b.TokenInfo.ZenonTokenStandard = aux.ZenonTokenStandard
+	b.TokenInfo.TotalSupply = common.StringToBigInt(aux.TotalSupply)
+	b.TokenInfo.IsBurnable = aux.IsBurnable
+	b.TokenInfo.IsMintable = aux.IsMintable
+	b.TokenInfo.IsUtility = aux.IsUtility
+	return nil
+}
+
 type Token struct {
 	TokenName          string                   `json:"name"`
 	TokenSymbol        string                   `json:"symbol"`
@@ -57,6 +122,59 @@ type Token struct {
 	IsBurnable         bool                     `json:"isBurnable"`
 	IsMintable         bool                     `json:"isMintable"`
 	IsUtility          bool                     `json:"isUtility"`
+}
+
+type TokenMarshal struct {
+	TokenName          string                   `json:"name"`
+	TokenSymbol        string                   `json:"symbol"`
+	TokenDomain        string                   `json:"domain"`
+	TotalSupply        string                   `json:"totalSupply"`
+	Decimals           uint8                    `json:"decimals"`
+	Owner              types.Address            `json:"owner"`
+	ZenonTokenStandard types.ZenonTokenStandard `json:"tokenStandard"`
+	MaxSupply          string                   `json:"maxSupply"`
+	IsBurnable         bool                     `json:"isBurnable"`
+	IsMintable         bool                     `json:"isMintable"`
+	IsUtility          bool                     `json:"isUtility"`
+}
+
+func (t *Token) ToTokenMarshal() *TokenMarshal {
+	aux := &TokenMarshal{
+		TokenName:          t.TokenName,
+		TokenSymbol:        t.TokenSymbol,
+		TokenDomain:        t.TokenDomain,
+		MaxSupply:          t.MaxSupply.String(),
+		Decimals:           t.Decimals,
+		Owner:              t.Owner,
+		ZenonTokenStandard: t.ZenonTokenStandard,
+		TotalSupply:        t.TotalSupply.String(),
+		IsBurnable:         t.IsBurnable,
+		IsMintable:         t.IsMintable,
+		IsUtility:          t.IsUtility,
+	}
+	return aux
+}
+func (t *Token) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.ToTokenMarshal())
+}
+func (t *Token) UnmarshalJSON(data []byte) error {
+	aux := new(TokenMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	t.TokenName = aux.TokenName
+	t.TokenSymbol = aux.TokenSymbol
+	t.TokenDomain = aux.TokenDomain
+	t.MaxSupply = common.StringToBigInt(aux.MaxSupply)
+	t.Decimals = aux.Decimals
+	t.Owner = aux.Owner
+	t.ZenonTokenStandard = aux.ZenonTokenStandard
+	t.TotalSupply = common.StringToBigInt(aux.TotalSupply)
+	t.IsBurnable = aux.IsBurnable
+	t.IsMintable = aux.IsMintable
+	t.IsUtility = aux.IsUtility
+	return nil
 }
 
 type AccountBlockList struct {

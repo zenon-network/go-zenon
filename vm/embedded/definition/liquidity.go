@@ -1,6 +1,7 @@
 package definition
 
 import (
+	"encoding/json"
 	"github.com/pkg/errors"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
@@ -121,6 +122,49 @@ type LiquidityInfo struct {
 	TokenTuples   []TokenTuple  `json:"tokenTuples"`
 }
 
+type LiquidityInfoMarshal struct {
+	Administrator types.Address `json:"administrator"`
+	IsHalted      bool          `json:"isHalted"`
+	ZnnReward     string        `json:"znnReward"`
+	QsrReward     string        `json:"qsrReward"`
+	TokenTuples   []TokenTuple  `json:"tokenTuples"`
+}
+
+func (l *LiquidityInfo) ToLiquidityInfoMarshal() LiquidityInfoMarshal {
+	aux := LiquidityInfoMarshal{
+		Administrator: l.Administrator,
+		IsHalted:      l.IsHalted,
+		ZnnReward:     l.ZnnReward.String(),
+		QsrReward:     l.QsrReward.String(),
+	}
+
+	aux.TokenTuples = make([]TokenTuple, len(l.TokenTuples))
+	for idx, tuple := range l.TokenTuples {
+		aux.TokenTuples[idx] = tuple
+	}
+
+	return aux
+}
+func (l *LiquidityInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(l.ToLiquidityInfoMarshal())
+}
+
+func (l *LiquidityInfo) UnmarshalJSON(data []byte) error {
+	aux := new(LiquidityInfoMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	l.Administrator = aux.Administrator
+	l.IsHalted = aux.IsHalted
+	l.ZnnReward = common.StringToBigInt(aux.ZnnReward)
+	l.QsrReward = common.StringToBigInt(aux.QsrReward)
+	l.TokenTuples = make([]TokenTuple, len(aux.TokenTuples))
+	for idx, tuple := range aux.TokenTuples {
+		l.TokenTuples[idx] = tuple
+	}
+	return nil
+}
+
 func (liq *LiquidityInfoVariable) Save(context db.DB) error {
 	data, err := ABILiquidity.PackVariable(
 		liquidityInfoVariableName,
@@ -203,6 +247,40 @@ type TokenTuple struct {
 	ZnnPercentage uint32   `json:"znnPercentage"`
 	QsrPercentage uint32   `json:"qsrPercentage"`
 	MinAmount     *big.Int `json:"minAmount"`
+}
+
+type TokenTupleMarshal struct {
+	TokenStandard string `json:"tokenStandard"`
+	ZnnPercentage uint32 `json:"znnPercentage"`
+	QsrPercentage uint32 `json:"qsrPercentage"`
+	MinAmount     string `json:"minAmount"`
+}
+
+func (s *TokenTuple) ToTokenTupleMarshal() *TokenTupleMarshal {
+	aux := &TokenTupleMarshal{
+		TokenStandard: s.TokenStandard,
+		ZnnPercentage: s.ZnnPercentage,
+		QsrPercentage: s.QsrPercentage,
+		MinAmount:     s.MinAmount.String(),
+	}
+	return aux
+}
+
+func (s *TokenTuple) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.ToTokenTupleMarshal())
+}
+
+func (s *TokenTuple) UnmarshalJSON(data []byte) error {
+	aux := new(TokenTupleMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	s.TokenStandard = aux.TokenStandard
+	s.ZnnPercentage = aux.ZnnPercentage
+	s.QsrPercentage = aux.QsrPercentage
+	s.MinAmount = common.StringToBigInt(aux.MinAmount)
+
+	return nil
 }
 
 type FundParam struct {
@@ -327,6 +405,51 @@ func IterateLiquidityStakeEntries(context db.DB, f func(entry *LiquidityStakeEnt
 			return err
 		}
 	}
+	return nil
+}
+
+type LiquidityStakeEntryMarshal struct {
+	Amount         string                   `json:"amount"`
+	TokenStandard  types.ZenonTokenStandard `json:"tokenStandard"`
+	WeightedAmount string                   `json:"weightedAmount"`
+	StartTime      int64                    `json:"startTime"`
+	RevokeTime     int64                    `json:"revokeTime"`
+	ExpirationTime int64                    `json:"expirationTime"`
+	StakeAddress   types.Address            `json:"stakeAddress"`
+	Id             types.Hash               `json:"id"`
+}
+
+func (stake *LiquidityStakeEntry) ToLiquidityStakeEntry() *LiquidityStakeEntryMarshal {
+	aux := &LiquidityStakeEntryMarshal{
+		Amount:         stake.Amount.String(),
+		TokenStandard:  stake.TokenStandard,
+		WeightedAmount: stake.WeightedAmount.String(),
+		StartTime:      stake.StartTime,
+		RevokeTime:     stake.RevokeTime,
+		ExpirationTime: stake.ExpirationTime,
+		StakeAddress:   stake.StakeAddress,
+		Id:             stake.Id,
+	}
+	return aux
+}
+
+func (stake *LiquidityStakeEntry) MarshalJSON() ([]byte, error) {
+	return json.Marshal(stake.ToLiquidityStakeEntry())
+}
+
+func (stake *LiquidityStakeEntry) UnmarshalJSON(data []byte) error {
+	aux := new(LiquidityStakeEntryMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	stake.Amount = common.StringToBigInt(aux.Amount)
+	stake.TokenStandard = aux.TokenStandard
+	stake.WeightedAmount = common.StringToBigInt(aux.WeightedAmount)
+	stake.StartTime = aux.StartTime
+	stake.RevokeTime = aux.RevokeTime
+	stake.ExpirationTime = aux.ExpirationTime
+	stake.StakeAddress = aux.StakeAddress
+	stake.Id = aux.Id
 	return nil
 }
 

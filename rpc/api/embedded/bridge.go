@@ -1,6 +1,7 @@
 package embedded
 
 import (
+	"encoding/json"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 	"github.com/zenon-network/go-zenon/chain/nom"
@@ -176,6 +177,19 @@ type WrapTokenRequest struct {
 	*definition.WrapTokenRequest
 	TokenInfo               *api.Token `json:"token"`
 	ConfirmationsToFinality uint64     `json:"confirmationsToFinality"`
+}
+
+func (w *WrapTokenRequest) MarshalJSON() ([]byte, error) {
+	aux := struct {
+		*definition.WrapTokenRequestMarshal
+		TokenInfo               *api.Token `json:"token"`
+		ConfirmationsToFinality uint64     `json:"confirmationsToFinality"`
+	}{
+		WrapTokenRequestMarshal: w.WrapTokenRequest.ToMarshalJson(),
+		TokenInfo:               w.TokenInfo,
+		ConfirmationsToFinality: w.ConfirmationsToFinality,
+	}
+	return json.Marshal(aux)
 }
 
 func (a *BridgeApi) getToken(zts types.ZenonTokenStandard) (*api.Token, error) {
@@ -447,6 +461,19 @@ type UnwrapTokenRequest struct {
 	*definition.UnwrapTokenRequest
 	TokenInfo    *api.Token `json:"token"`
 	RedeemableIn uint64     `json:"redeemableIn"`
+}
+
+func (u *UnwrapTokenRequest) MarshalJSON() ([]byte, error) {
+	aux := struct {
+		*definition.UnwrapTokenRequestMarshal
+		TokenInfo    *api.Token `json:"token"`
+		RedeemableIn uint64     `json:"redeemableIn"`
+	}{
+		UnwrapTokenRequestMarshal: u.UnwrapTokenRequest.ToMarshalJson(),
+		TokenInfo:                 u.TokenInfo,
+		RedeemableIn:              u.RedeemableIn,
+	}
+	return json.Marshal(aux)
 }
 
 type UnwrapTokenRequestList struct {

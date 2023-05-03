@@ -50,8 +50,6 @@ t=2001-09-09T01:47:20+0000 lvl=info msg="producing block to update embedded-cont
 t=2001-09-09T01:47:20+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62
 t=2001-09-09T01:47:20+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxsentynelxxxxxxxxxxxxxwy0r2r
 t=2001-09-09T01:47:20+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae
-t=2001-09-09T01:47:20+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22
-t=2001-09-09T01:47:20+0000 lvl=eror msg="failed to update contracts" module=pillar submodule=worker reason="method not found in the abi"
 t=2001-09-09T01:47:20+0000 lvl=info msg="producing momentum" module=pillar submodule=worker event="{StartTime:2001-09-09 01:47:30 +0000 UTC EndTime:2001-09-09 01:47:40 +0000 UTC Producer:z1qqq43dyrswfehx9w9td43exflqzcxrt7g6alah Name:}"
 t=2001-09-09T01:47:20+0000 lvl=info msg="broadcasting own momentum" module=pillar submodule=worker identifier="{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:6}"
 t=2001-09-09T01:47:30+0000 lvl=info msg="start creating autoreceive blocks" module=pillar submodule=worker
@@ -64,32 +62,22 @@ t=2001-09-09T01:47:30+0000 lvl=info msg="created autoreceive-block" module=pilla
 t=2001-09-09T01:47:30+0000 lvl=info msg="generated embedded-block" module=pillar submodule=worker send-block-header="{Address:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:5}}" identifier="{Address:z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}" send-block-hash=XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX returned-error=nil
 t=2001-09-09T01:47:30+0000 lvl=info msg="created autoreceive-block" module=pillar submodule=worker identifier="{Address:z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}"
 t=2001-09-09T01:47:30+0000 lvl=info msg="checking if can update contracts" module=pillar submodule=worker
-t=2001-09-09T01:47:30+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22
-t=2001-09-09T01:47:30+0000 lvl=eror msg="failed to update contracts" module=pillar submodule=worker reason="method not found in the abi"
 t=2001-09-09T01:47:30+0000 lvl=info msg="producing momentum" module=pillar submodule=worker event="{StartTime:2001-09-09 01:47:40 +0000 UTC EndTime:2001-09-09 01:47:50 +0000 UTC Producer:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju Name:}"
 t=2001-09-09T01:47:30+0000 lvl=info msg="broadcasting own momentum" module=pillar submodule=worker identifier="{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:7}"
 t=2001-09-09T01:47:40+0000 lvl=info msg="start creating autoreceive blocks" module=pillar submodule=worker
 t=2001-09-09T01:47:40+0000 lvl=info msg="checking if can update contracts" module=pillar submodule=worker
-t=2001-09-09T01:47:40+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22
-t=2001-09-09T01:47:40+0000 lvl=eror msg="failed to update contracts" module=pillar submodule=worker reason="method not found in the abi"
 t=2001-09-09T01:47:40+0000 lvl=info msg="producing momentum" module=pillar submodule=worker event="{StartTime:2001-09-09 01:47:50 +0000 UTC EndTime:2001-09-09 01:48:00 +0000 UTC Producer:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju Name:}"
 t=2001-09-09T01:47:40+0000 lvl=info msg="broadcasting own momentum" module=pillar submodule=worker identifier="{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:8}"
 t=2001-09-09T01:47:50+0000 lvl=info msg="start creating autoreceive blocks" module=pillar submodule=worker
 t=2001-09-09T01:47:50+0000 lvl=info msg="checking if can update contracts" module=pillar submodule=worker
-t=2001-09-09T01:47:50+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22
-t=2001-09-09T01:47:50+0000 lvl=eror msg="failed to update contracts" module=pillar submodule=worker reason="method not found in the abi"
 t=2001-09-09T01:47:50+0000 lvl=info msg="producing momentum" module=pillar submodule=worker event="{StartTime:2001-09-09 01:48:00 +0000 UTC EndTime:2001-09-09 01:48:10 +0000 UTC Producer:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju Name:}"
 t=2001-09-09T01:47:50+0000 lvl=info msg="broadcasting own momentum" module=pillar submodule=worker identifier="{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:9}"
 t=2001-09-09T01:48:00+0000 lvl=info msg="start creating autoreceive blocks" module=pillar submodule=worker
 t=2001-09-09T01:48:00+0000 lvl=info msg="checking if can update contracts" module=pillar submodule=worker
-t=2001-09-09T01:48:00+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22
-t=2001-09-09T01:48:00+0000 lvl=eror msg="failed to update contracts" module=pillar submodule=worker reason="method not found in the abi"
 t=2001-09-09T01:48:00+0000 lvl=info msg="producing momentum" module=pillar submodule=worker event="{StartTime:2001-09-09 01:48:10 +0000 UTC EndTime:2001-09-09 01:48:20 +0000 UTC Producer:z1qqc8hqalt8je538849rf78nhgek30axq8h0g69 Name:}"
 t=2001-09-09T01:48:00+0000 lvl=info msg="broadcasting own momentum" module=pillar submodule=worker identifier="{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:10}"
 t=2001-09-09T01:48:10+0000 lvl=info msg="start creating autoreceive blocks" module=pillar submodule=worker
 t=2001-09-09T01:48:10+0000 lvl=info msg="checking if can update contracts" module=pillar submodule=worker
-t=2001-09-09T01:48:10+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22
-t=2001-09-09T01:48:10+0000 lvl=eror msg="failed to update contracts" module=pillar submodule=worker reason="method not found in the abi"
 `)
 
 	constants.UpdateMinNumMomentums = 5
