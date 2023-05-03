@@ -2,6 +2,7 @@ package definition
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"strings"
@@ -106,7 +107,7 @@ type HtlcInfo struct {
 	HashLock       []byte                   `json:"hashLock"`
 }
 
-func (h HtlcInfo) String() string {
+func (h *HtlcInfo) String() string {
 	return fmt.Sprintf("Id:%s TimeLocked:%s HashLocked:%s TokenStandard:%s Amount:%s ExpirationTime:%d HashType:%d KeyMaxSize:%d HashLock:%s", h.Id, h.TimeLocked, h.HashLocked, h.TokenStandard, h.Amount, h.ExpirationTime, h.HashType, h.KeyMaxSize, base64.StdEncoding.EncodeToString(h.HashLock))
 }
 
@@ -115,25 +116,25 @@ type UnlockHtlcParam struct {
 	Preimage []byte
 }
 
-func (entry *HtlcInfo) Save(context db.DB) error {
+func (h *HtlcInfo) Save(context db.DB) error {
 	data, err := ABIHtlc.PackVariable(
 		variableNameHtlcInfo,
-		entry.TimeLocked,
-		entry.HashLocked,
-		entry.TokenStandard,
-		entry.Amount,
-		entry.ExpirationTime,
-		entry.HashType,
-		entry.KeyMaxSize,
-		entry.HashLock,
+		h.TimeLocked,
+		h.HashLocked,
+		h.TokenStandard,
+		h.Amount,
+		h.ExpirationTime,
+		h.HashType,
+		h.KeyMaxSize,
+		h.HashLock,
 	)
 	if err != nil {
 		return err
 	}
-	return context.Put(getHtlcInfoKey(entry.Id), data)
+	return context.Put(getHtlcInfoKey(h.Id), data)
 }
-func (entry *HtlcInfo) Delete(context db.DB) error {
-	return context.Delete(getHtlcInfoKey(entry.Id))
+func (h *HtlcInfo) Delete(context db.DB) error {
+	return context.Delete(getHtlcInfoKey(h.Id))
 }
 
 func getHtlcInfoKey(hash types.Hash) []byte {
@@ -179,6 +180,57 @@ func GetHtlcInfo(context db.DB, id types.Hash) (*HtlcInfo, error) {
 	} else {
 		return parseHtlcInfo(key, data)
 	}
+}
+
+type HtlcInfoMarshal struct {
+	Id             types.Hash               `json:"id"`
+	TimeLocked     types.Address            `json:"timeLocked"`
+	HashLocked     types.Address            `json:"hashLocked"`
+	TokenStandard  types.ZenonTokenStandard `json:"tokenStandard"`
+	Amount         string                   `json:"amount"`
+	ExpirationTime int64                    `json:"expirationTime"`
+	HashType       uint8                    `json:"hashType"`
+	KeyMaxSize     uint8                    `json:"keyMaxSize"`
+	HashLock       []byte                   `json:"hashLock"`
+}
+
+func (h *HtlcInfo) ToHtlcInfoMarshal() *HtlcInfoMarshal {
+	aux := &HtlcInfoMarshal{
+		Id:             h.Id,
+		TimeLocked:     h.TimeLocked,
+		HashLocked:     h.HashLocked,
+		TokenStandard:  h.TokenStandard,
+		Amount:         h.Amount.String(),
+		ExpirationTime: h.ExpirationTime,
+		HashType:       h.HashType,
+		KeyMaxSize:     h.KeyMaxSize,
+		HashLock:       h.HashLock,
+	}
+
+	return aux
+}
+
+func (h *HtlcInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(h.ToHtlcInfoMarshal())
+}
+
+func (h *HtlcInfo) UnmarshalJSON(data []byte) error {
+	aux := new(HtlcInfoMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	h.Id = aux.Id
+	h.TimeLocked = aux.TimeLocked
+	h.HashLocked = aux.HashLocked
+	h.TimeLocked = aux.TimeLocked
+	h.TokenStandard = aux.TokenStandard
+	h.Amount = common.StringToBigInt(aux.Amount)
+	h.ExpirationTime = aux.ExpirationTime
+	h.HashType = aux.HashType
+	h.KeyMaxSize = aux.KeyMaxSize
+	h.TimeLocked = aux.TimeLocked
+	h.HashLock = aux.HashLock
+	return nil
 }
 
 type HtlcProxyUnlockInfo struct {
