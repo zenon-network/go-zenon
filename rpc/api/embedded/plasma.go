@@ -224,39 +224,9 @@ type GetRequiredParam struct {
 	Data      []byte         `json:"data"`
 }
 type GetRequiredResult struct {
-	AvailablePlasma    uint64   `json:"availablePlasma"`
-	BasePlasma         uint64   `json:"basePlasma"`
-	RequiredDifficulty *big.Int `json:"requiredDifficulty"`
-}
-
-type GetRequiredResultMarshal struct {
 	AvailablePlasma    uint64 `json:"availablePlasma"`
 	BasePlasma         uint64 `json:"basePlasma"`
-	RequiredDifficulty string `json:"requiredDifficulty"`
-}
-
-func (r *GetRequiredResult) ToGetRequiredResultMarshal() *GetRequiredResultMarshal {
-	aux := &GetRequiredResultMarshal{
-		AvailablePlasma:    r.AvailablePlasma,
-		BasePlasma:         r.BasePlasma,
-		RequiredDifficulty: r.RequiredDifficulty.String(),
-	}
-	return aux
-}
-
-func (r *GetRequiredResult) MarshalJSON() ([]byte, error) {
-	return json.Marshal(r.ToGetRequiredResultMarshal())
-}
-
-func (r *GetRequiredResult) UnmarshalJSON(data []byte) error {
-	aux := new(GetRequiredResultMarshal)
-	if err := json.Unmarshal(data, aux); err != nil {
-		return err
-	}
-	r.AvailablePlasma = aux.AvailablePlasma
-	r.BasePlasma = aux.BasePlasma
-	r.RequiredDifficulty = common.StringToBigInt(aux.RequiredDifficulty)
-	return nil
+	RequiredDifficulty uint64 `json:"requiredDifficulty"`
 }
 
 func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetRequiredResult, error) {
@@ -294,7 +264,7 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 		return &GetRequiredResult{
 			AvailablePlasma:    availablePlasma,
 			BasePlasma:         basePlasma,
-			RequiredDifficulty: common.Big0,
+			RequiredDifficulty: 0,
 		}, nil
 	} else {
 		difficulty, err := vm.GetDifficultyForPlasma(basePlasma - availablePlasma)
