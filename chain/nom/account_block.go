@@ -300,7 +300,7 @@ func DeserializeAccountBlock(data []byte) (*AccountBlock, error) {
 	return DeProtoAccountBlock(pb), nil
 }
 
-type AccountBlockMarshall struct {
+type AccountBlockMarshal struct {
 	Version         uint64 `json:"version"`
 	ChainIdentifier uint64 `json:"chainIdentifier"`
 	BlockType       uint64 `json:"blockType"`
@@ -338,8 +338,8 @@ type AccountBlockMarshall struct {
 	Signature []byte            `json:"signature"` // not included in hash
 }
 
-func (ab *AccountBlock) ToMarshalJson() AccountBlockMarshall {
-	aux := AccountBlockMarshall{
+func (ab *AccountBlock) ToNomMarshalJson() *AccountBlockMarshal {
+	aux := &AccountBlockMarshal{
 		Version:              ab.Version,
 		ChainIdentifier:      ab.ChainIdentifier,
 		BlockType:            ab.BlockType,
@@ -352,7 +352,6 @@ func (ab *AccountBlock) ToMarshalJson() AccountBlockMarshall {
 		Amount:               ab.Amount.String(),
 		TokenStandard:        ab.TokenStandard,
 		FromBlockHash:        ab.FromBlockHash,
-		DescendantBlocks:     nil,
 		Data:                 ab.Data,
 		FusedPlasma:          ab.FusedPlasma,
 		Difficulty:           ab.Difficulty,
@@ -370,11 +369,45 @@ func (ab *AccountBlock) ToMarshalJson() AccountBlockMarshall {
 	}
 	return aux
 }
+
+func (ab *AccountBlockMarshal) FromNomMarshalJson() *AccountBlock {
+	aux := &AccountBlock{
+		Version:              ab.Version,
+		ChainIdentifier:      ab.ChainIdentifier,
+		BlockType:            ab.BlockType,
+		Hash:                 ab.Hash,
+		PreviousHash:         ab.PreviousHash,
+		Height:               ab.Height,
+		MomentumAcknowledged: ab.MomentumAcknowledged,
+		Address:              ab.Address,
+		ToAddress:            ab.ToAddress,
+		Amount:               common.StringToBigInt(ab.Amount),
+		TokenStandard:        ab.TokenStandard,
+		FromBlockHash:        ab.FromBlockHash,
+		Data:                 ab.Data,
+		FusedPlasma:          ab.FusedPlasma,
+		Difficulty:           ab.Difficulty,
+		BasePlasma:           ab.BasePlasma,
+		TotalPlasma:          ab.TotalPlasma,
+		ChangesHash:          ab.ChangesHash,
+		PublicKey:            ab.PublicKey,
+		Signature:            ab.Signature,
+	}
+	// ignore the error, it will just not set the nonce
+	aux.Nonce.UnmarshalText([]byte(ab.Nonce))
+
+	aux.DescendantBlocks = make([]*AccountBlock, 0, len(ab.DescendantBlocks))
+	for _, dBlock := range ab.DescendantBlocks {
+		aux.DescendantBlocks = append(aux.DescendantBlocks, dBlock)
+	}
+	return aux
+}
+
 func (ab *AccountBlock) MarshalJSON() ([]byte, error) {
-	return json.Marshal(ab.ToMarshalJson())
+	return json.Marshal(ab.ToNomMarshalJson())
 }
 func (ab *AccountBlock) UnmarshalJSON(data []byte) error {
-	aux := new(AccountBlockMarshall)
+	aux := new(AccountBlockMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}

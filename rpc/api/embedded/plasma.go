@@ -241,7 +241,6 @@ func (r *GetRequiredResult) ToGetRequiredResultMarshal() *GetRequiredResultMarsh
 		BasePlasma:         r.BasePlasma,
 		RequiredDifficulty: r.RequiredDifficulty.String(),
 	}
-
 	return aux
 }
 

@@ -38,19 +38,61 @@ type AccountBlock struct {
 	PairedAccountBlock *AccountBlock                   `json:"pairedAccountBlock"`
 }
 
-func (block *AccountBlock) MarshalJSON() ([]byte, error) {
-	aux := struct {
-		nom.AccountBlockMarshall
-		TokenInfo          *Token                          `json:"token"`
-		ConfirmationDetail *AccountBlockConfirmationDetail `json:"confirmationDetail"`
-		PairedAccountBlock *AccountBlock                   `json:"pairedAccountBlock"`
-	}{
-		AccountBlockMarshall: block.AccountBlock.ToMarshalJson(),
-		TokenInfo:            block.TokenInfo,
-		ConfirmationDetail:   block.ConfirmationDetail,
-		PairedAccountBlock:   block.PairedAccountBlock,
+type AccountBlockMarshal struct {
+	nom.AccountBlockMarshal
+	TokenInfo          *TokenMarshal                   `json:"token"`
+	ConfirmationDetail *AccountBlockConfirmationDetail `json:"confirmationDetail"`
+	PairedAccountBlock *AccountBlockMarshal            `json:"pairedAccountBlock"`
+}
+
+func (block *AccountBlock) ToAccountBlockMarshal() *AccountBlockMarshal {
+	aux := &AccountBlockMarshal{
+		AccountBlockMarshal: *block.AccountBlock.ToNomMarshalJson(),
+		ConfirmationDetail:  block.ConfirmationDetail,
 	}
-	return json.Marshal(aux)
+	if block.TokenInfo != nil {
+		aux.TokenInfo = block.TokenInfo.ToTokenMarshal()
+	}
+	if block.PairedAccountBlock != nil {
+		aux.PairedAccountBlock = block.PairedAccountBlock.ToAccountBlockMarshal()
+	}
+	return aux
+}
+
+func (block *AccountBlock) MarshalJSON() ([]byte, error) {
+	return json.Marshal(block.ToAccountBlockMarshal())
+}
+
+func (block *AccountBlock) UnmarshalJSON(data []byte) error {
+	aux := new(AccountBlockMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	block.AccountBlock = *aux.FromNomMarshalJson()
+	if block.TokenInfo != nil {
+		block.TokenInfo = aux.TokenInfo.FromTokenMarshal()
+	}
+	block.ConfirmationDetail = aux.ConfirmationDetail
+	if block.PairedAccountBlock != nil {
+		block.PairedAccountBlock = aux.PairedAccountBlock.FromApiMarshalJson()
+	}
+	return nil
+}
+
+func (a *AccountBlockMarshal) FromApiMarshalJson() *AccountBlock {
+	aux := &AccountBlock{
+		ConfirmationDetail: a.ConfirmationDetail,
+	}
+	block := a.FromNomMarshalJson()
+	aux.AccountBlock = *block
+	if a.TokenInfo != nil {
+		aux.TokenInfo = a.TokenInfo.FromTokenMarshal()
+	}
+	if a.PairedAccountBlock != nil {
+		aux.PairedAccountBlock = a.PairedAccountBlock.FromApiMarshalJson()
+	}
+	return aux
 }
 
 type AccountInfo struct {
@@ -177,11 +219,73 @@ func (t *Token) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (t *TokenMarshal) FromTokenMarshal() *Token {
+	return &Token{
+		TokenName:          t.TokenName,
+		TokenSymbol:        t.TokenSymbol,
+		TokenDomain:        t.TokenDomain,
+		TotalSupply:        common.StringToBigInt(t.TotalSupply),
+		Decimals:           t.Decimals,
+		Owner:              t.Owner,
+		ZenonTokenStandard: t.ZenonTokenStandard,
+		MaxSupply:          common.StringToBigInt(t.MaxSupply),
+		IsBurnable:         t.IsBurnable,
+		IsMintable:         t.IsMintable,
+		IsUtility:          t.IsUtility,
+	}
+}
+
 type AccountBlockList struct {
 	List  []*AccountBlock `json:"list"`
 	Count int             `json:"count"`
 	More  bool            `json:"more"`
 }
+
+type AccountBlockListMarshal struct {
+	List  []*AccountBlockMarshal `json:"list"`
+	Count int                    `json:"count"`
+	More  bool                   `json:"more"`
+}
+
+func (abl *AccountBlockList) ToAccountBlockListMarshal() *AccountBlockListMarshal {
+	aux := &AccountBlockListMarshal{
+		Count: abl.Count,
+		More:  abl.More,
+	}
+	aux.List = make([]*AccountBlockMarshal, 0)
+	for idx, block := range abl.List {
+		aux.List = append(aux.List, &AccountBlockMarshal{
+			AccountBlockMarshal: *block.ToNomMarshalJson(),
+			ConfirmationDetail:  block.ConfirmationDetail,
+		})
+		if block.TokenInfo != nil {
+			aux.List[idx].TokenInfo = block.TokenInfo.ToTokenMarshal()
+		}
+		if block.PairedAccountBlock != nil {
+			aux.List[idx].PairedAccountBlock = block.PairedAccountBlock.ToAccountBlockMarshal()
+		}
+	}
+	return aux
+}
+func (abl *AccountBlockList) MarshalJSON() ([]byte, error) {
+	return json.Marshal(abl.ToAccountBlockListMarshal())
+}
+func (abl *AccountBlockList) UnmarshalJSON(data []byte) error {
+	aux := new(AccountBlockListMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	abl.List = make([]*AccountBlock, 0)
+	for _, accBl := range aux.List {
+		block := accBl.FromApiMarshalJson()
+		abl.List = append(abl.List, block)
+	}
+	abl.Count = aux.Count
+	abl.More = aux.More
+	return nil
+}
+
 type MomentumList struct {
 	List  []*Momentum `json:"list"`
 	Count int         `json:"count"`
