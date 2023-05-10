@@ -808,6 +808,7 @@ func (wrapRequest *WrapTokenRequest) UnmarshalJSON(data []byte) error {
 
 	wrapRequest.NetworkClass = aux.NetworkClass
 	wrapRequest.ChainId = aux.ChainId
+	wrapRequest.Id = aux.Id
 	wrapRequest.ToAddress = aux.ToAddress
 	wrapRequest.TokenStandard = aux.TokenStandard
 	wrapRequest.TokenAddress = aux.TokenAddress
