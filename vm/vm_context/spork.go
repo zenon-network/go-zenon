@@ -11,14 +11,20 @@ func (ctx *accountVmContext) IsAcceleratorSporkEnforced() bool {
 	return active
 }
 
+func (ctx *accountVmContext) IsBridgeAndLiquiditySporkEnforced() bool {
+	active, err := ctx.momentumStore.IsSporkActive(types.BridgeAndLiquiditySpork)
+	common.DealWithErr(err)
+	return active
+}
+
 func (ctx *accountVmContext) IsHtlcSporkEnforced() bool {
 	active, err := ctx.momentumStore.IsSporkActive(types.HtlcSpork)
 	common.DealWithErr(err)
 	return active
 }
 
-func (ctx *accountVmContext) IsBridgeAndLiquiditySporkEnforced() bool {
-	active, err := ctx.momentumStore.IsSporkActive(types.BridgeAndLiquiditySpork)
+func (ctx *accountVmContext) IsPtlcSporkEnforced() bool {
+	active, err := ctx.momentumStore.IsSporkActive(types.PtlcSpork)
 	common.DealWithErr(err)
 	return active
 }

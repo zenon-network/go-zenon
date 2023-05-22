@@ -21,6 +21,10 @@ var (
 	ErrForbiddenParam         = errors.New("forbidden parameter")
 	ErrNotEnoughSlots         = errors.New("not enough slots left")
 
+	ReclaimNotDue            = errors.New("entry is not expired")
+	ErrInvalidExpirationTime = errors.New("invalid expiration time")
+	ErrExpired               = errors.New("expired")
+
 	// Common - update contract state
 	ErrUpdateTooRecent      = errors.New("last update was too recent")
 	ErrEpochUpdateTooRecent = errors.New("epoch update was too recent")
@@ -61,13 +65,15 @@ var (
 	ErrAlreadyActivated = errors.New("spork is already activated")
 
 	// Htlc
-	ReclaimNotDue            = errors.New("entry is not expired")
-	ErrInvalidHashType       = errors.New("invalid hash type")
-	ErrInvalidHashDigest     = errors.New("invalid hash digest")
-	ErrInvalidPreimage       = errors.New("invalid preimage")
-	ErrInvalidExpirationTime = errors.New("invalid expiration time")
-	ErrExpired               = errors.New("expired")
-	
+	ErrInvalidHashType   = errors.New("invalid hash type")
+	ErrInvalidHashDigest = errors.New("invalid hash digest")
+	ErrInvalidPreimage   = errors.New("invalid preimage")
+
+	// Ptlc
+	ErrInvalidPointType      = errors.New("invalid point type")
+	ErrInvalidPointLock      = errors.New("invalid point lock")
+	ErrInvalidPointSignature = errors.New("invalid signature")
+
 	// Bridge
 	ErrUnknownNetwork                       = errors.New("unknown network")
 	ErrInvalidToAddress                     = errors.New("invalid destination address")

@@ -32,11 +32,26 @@ type embeddedImplementation struct {
 }
 
 var (
-	originEmbedded      = getOrigin()
-	acceleratorEmbedded = getAccelerator()
-	htlcEmbedded        = getHtlc()
+	originEmbedded             = getOrigin()
+	acceleratorEmbedded        = getAccelerator()
 	bridgeAndLiquidityEmbedded = getBridgeAndLiquidity()
+	htlcEmbedded               = getHtlc()
+	ptlcEmbedded               = getPtlc()
 )
+
+func getPtlc() map[types.Address]*embeddedImplementation {
+	contracts := getHtlc()
+	contracts[types.PtlcContract] = &embeddedImplementation{
+		map[string]Method{
+			cabi.CreatePtlcMethodName:      &implementation.CreatePtlcMethod{cabi.CreatePtlcMethodName},
+			cabi.ReclaimPtlcMethodName:     &implementation.ReclaimPtlcMethod{cabi.ReclaimPtlcMethodName},
+			cabi.UnlockPtlcMethodName:      &implementation.UnlockPtlcMethod{cabi.UnlockPtlcMethodName},
+			cabi.ProxyUnlockPtlcMethodName: &implementation.ProxyUnlockPtlcMethod{cabi.ProxyUnlockPtlcMethodName},
+		},
+		cabi.ABIPtlc,
+	}
+	return contracts
+}
 
 func getHtlc() map[types.Address]*embeddedImplementation {
 	contracts := getBridgeAndLiquidity()
@@ -95,6 +110,7 @@ func getBridgeAndLiquidity() map[types.Address]*embeddedImplementation {
 	contracts[types.LiquidityContract].m[cabi.EmergencyMethodName] = &implementation.EmergencyLiquidity{cabi.EmergencyMethodName}
 
 	return contracts
+
 }
 
 func getAccelerator() map[types.Address]*embeddedImplementation {
@@ -216,8 +232,9 @@ func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Addres
 	}
 
 	var contractsMap map[types.Address]*embeddedImplementation
-	
-	if context.IsHtlcSporkEnforced() {
+	if context.IsPtlcSporkEnforced() {
+		contractsMap = ptlcEmbedded
+	} else if context.IsHtlcSporkEnforced() {
 		contractsMap = htlcEmbedded
 	} else if context.IsBridgeAndLiquiditySporkEnforced() {
 		contractsMap = bridgeAndLiquidityEmbedded
