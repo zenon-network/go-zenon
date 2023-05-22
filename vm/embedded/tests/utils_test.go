@@ -14,6 +14,10 @@ import (
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
+const (
+	genesisTimestamp = 1000000000
+)
+
 type Height struct {
 	Height uint64 `json:"height"`
 }

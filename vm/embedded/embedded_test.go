@@ -11,7 +11,7 @@ import (
 
 func TestDumpContractsABIMethods(t *testing.T) {
 	dumps := make([]string, 0)
-	for addr, contract := range originEmbedded {
+	for addr, contract := range ptlcEmbedded {
 		for _, method := range contract.abi.Methods {
 			dumps = append(dumps, fmt.Sprintf(`{"address":"%v", "name":"%v", "id":"%v", "signature":"%v"}`, addr, method.Name, hex.EncodeToString(method.Id()), method.Sig()))
 		}
@@ -36,6 +36,32 @@ func TestDumpContractsABIMethods(t *testing.T) {
 {"address":"z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22", "name":"UpdatePhase", "id":"c1d7d323", "signature":"UpdatePhase(hash,string,string,string,uint256,uint256)"}
 {"address":"z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22", "name":"VoteByName", "id":"5c6c1064", "signature":"VoteByName(hash,string,uint8)"}
 {"address":"z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22", "name":"VoteByProdAddress", "id":"90ed001c", "signature":"VoteByProdAddress(hash,uint8)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"ChangeAdministrator", "id":"4f6bef7c", "signature":"ChangeAdministrator(address)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"ChangeTssECDSAPubKey", "id":"15a0c641", "signature":"ChangeTssECDSAPubKey(string,string,string)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"Emergency", "id":"fa4ba15f", "signature":"Emergency()"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"Halt", "id":"72334d21", "signature":"Halt(string)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"NominateGuardians", "id":"688ac608", "signature":"NominateGuardians(address[])"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"ProposeAdministrator", "id":"1ca313bd", "signature":"ProposeAdministrator(address)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"Redeem", "id":"d4e06c79", "signature":"Redeem(hash,uint32)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"RemoveNetwork", "id":"3d36aac1", "signature":"RemoveNetwork(uint32,uint32)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"RemoveTokenPair", "id":"b497bf39", "signature":"RemoveTokenPair(uint32,uint32,tokenStandard,string)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"RevokeUnwrapRequest", "id":"fa7c7f3d", "signature":"RevokeUnwrapRequest(hash,uint32)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"SetAllowKeyGen", "id":"4b9b3ecb", "signature":"SetAllowKeyGen(bool)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"SetBridgeMetadata", "id":"96be29e3", "signature":"SetBridgeMetadata(string)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"SetNetwork", "id":"e4f0c639", "signature":"SetNetwork(uint32,uint32,string,string,string)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"SetNetworkMetadata", "id":"ebea4402", "signature":"SetNetworkMetadata(uint32,uint32,string)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"SetOrchestratorInfo", "id":"eed69856", "signature":"SetOrchestratorInfo(uint64,uint32,uint32,uint32)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"SetRedeemDelay", "id":"fd2411ec", "signature":"SetRedeemDelay(uint64)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"SetTokenPair", "id":"d5292476", "signature":"SetTokenPair(uint32,uint32,tokenStandard,string,bool,bool,bool,uint256,uint32,uint32,string)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"Unhalt", "id":"3a16f20e", "signature":"Unhalt()"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"UnwrapToken", "id":"b6069401", "signature":"UnwrapToken(uint32,uint32,hash,uint32,address,string,uint256,string)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"UpdateWrapRequest", "id":"d4bb11c0", "signature":"UpdateWrapRequest(hash,string)"}
+{"address":"z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d", "name":"WrapToken", "id":"61d224bc", "signature":"WrapToken(uint32,uint32,string)"}
+{"address":"z1qxemdeddedxhtlcxxxxxxxxxxxxxxxxxygecvw", "name":"AllowProxyUnlock", "id":"57758f10", "signature":"AllowProxyUnlock()"}
+{"address":"z1qxemdeddedxhtlcxxxxxxxxxxxxxxxxxygecvw", "name":"Create", "id":"5c7e7110", "signature":"Create(address,int64,uint8,uint8,bytes)"}
+{"address":"z1qxemdeddedxhtlcxxxxxxxxxxxxxxxxxygecvw", "name":"DenyProxyUnlock", "id":"e17c39ed", "signature":"DenyProxyUnlock()"}
+{"address":"z1qxemdeddedxhtlcxxxxxxxxxxxxxxxxxygecvw", "name":"Reclaim", "id":"7e003c8d", "signature":"Reclaim(hash)"}
+{"address":"z1qxemdeddedxhtlcxxxxxxxxxxxxxxxxxygecvw", "name":"Unlock", "id":"d33791d3", "signature":"Unlock(hash,bytes)"}
 {"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"BurnZnn", "id":"096b75a4", "signature":"BurnZnn(uint256)"}
 {"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"CancelLiquidityStake", "id":"b8efc37c", "signature":"CancelLiquidityStake(hash)"}
 {"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"ChangeAdministrator", "id":"4f6bef7c", "signature":"ChangeAdministrator(address)"}
@@ -53,6 +79,10 @@ func TestDumpContractsABIMethods(t *testing.T) {
 {"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"Update", "id":"20093ea6", "signature":"Update()"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"CancelFuse", "id":"f9ca9dc3", "signature":"CancelFuse(hash)"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"Fuse", "id":"5ac942e8", "signature":"Fuse(address)"}
+{"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"Create", "id":"ae0f7164", "signature":"Create(int64,uint8,bytes)"}
+{"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"ProxyUnlock", "id":"8bffc216", "signature":"ProxyUnlock(hash,address,bytes)"}
+{"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"Reclaim", "id":"7e003c8d", "signature":"Reclaim(hash)"}
+{"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"Unlock", "id":"d33791d3", "signature":"Unlock(hash,bytes)"}
 {"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"CollectReward", "id":"af43d3f0", "signature":"CollectReward()"}
 {"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"Delegate", "id":"7c2d5d6e", "signature":"Delegate(string)"}
 {"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"DepositQsr", "id":"d49577f4", "signature":"DepositQsr()"}
