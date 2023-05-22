@@ -1,13 +1,14 @@
 package definition
 
 import (
+	"math/big"
+	"strings"
+
 	"github.com/pkg/errors"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/constants"
-	"math/big"
-	"strings"
 
 	"github.com/zenon-network/go-zenon/vm/abi"
 )

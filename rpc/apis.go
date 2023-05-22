@@ -86,6 +86,12 @@ func getApi(z zenon.Zenon, p2p *p2p.Server, apiModule string) []rpc.API {
 				Public:    true,
 			},
 			{
+				Namespace: "embedded.ptlc",
+				Version:   "1.0",
+				Service:   embedded.NewPtlcApi(z),
+				Public:    true,
+			},
+			{
 				Namespace: "embedded.bridge",
 				Version:   "1.0",
 				Service:   embedded.NewBridgeApi(z),

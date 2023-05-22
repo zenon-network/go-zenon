@@ -1,6 +1,9 @@
 package embedded
 
 import (
+	"math/big"
+	"sort"
+
 	"github.com/inconshreveable/log15"
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/common"
@@ -8,8 +11,6 @@ import (
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/zenon"
-	"math/big"
-	"sort"
 )
 
 type LiquidityApi struct {
