@@ -3,7 +3,6 @@ package tests
 import (
 	"encoding/base64"
 	"fmt"
-	"github.com/zenon-network/go-zenon/rpc/api/embedded"
 	"math/big"
 	"testing"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/rpc/api/embedded"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/zenon/mock"

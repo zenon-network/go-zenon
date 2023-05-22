@@ -2,19 +2,19 @@ package embedded
 
 import (
 	"encoding/json"
-	"github.com/inconshreveable/log15"
-	"github.com/pkg/errors"
-	"github.com/zenon-network/go-zenon/chain/nom"
-	"github.com/zenon-network/go-zenon/vm/constants"
-	"github.com/zenon-network/go-zenon/vm/embedded/implementation"
 	"reflect"
 	"sort"
 
+	"github.com/inconshreveable/log15"
+	"github.com/pkg/errors"
 	"github.com/zenon-network/go-zenon/chain"
+	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/rpc/api"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
+	"github.com/zenon-network/go-zenon/vm/embedded/implementation"
 	"github.com/zenon-network/go-zenon/vm/vm_context"
 	"github.com/zenon-network/go-zenon/zenon"
 )
