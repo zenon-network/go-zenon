@@ -2,8 +2,6 @@ package definition
 
 import (
 	"encoding/binary"
-	"github.com/syndtr/goleveldb/leveldb"
-	"github.com/zenon-network/go-zenon/common/crypto"
 	"math"
 	"math/big"
 	"reflect"
@@ -11,7 +9,9 @@ import (
 	"strings"
 
 	eabi "github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/crypto"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/abi"

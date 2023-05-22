@@ -1,10 +1,10 @@
 package constants
 
 import (
-	"github.com/zenon-network/go-zenon/common/types"
 	"math/big"
 
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/types"
 )
 
 const (
