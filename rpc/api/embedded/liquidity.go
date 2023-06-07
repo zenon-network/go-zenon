@@ -1,6 +1,7 @@
 package embedded
 
 import (
+	"encoding/json"
 	"github.com/inconshreveable/log15"
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/common"
@@ -57,6 +58,45 @@ type LiquidityStakeList struct {
 	TotalWeightedAmount *big.Int                          `json:"totalWeightedAmount"`
 	Count               int                               `json:"count"`
 	Entries             []*definition.LiquidityStakeEntry `json:"list"`
+}
+
+type LiquidityStakeListMarshal struct {
+	TotalAmount         string                            `json:"totalAmount"`
+	TotalWeightedAmount string                            `json:"totalWeightedAmount"`
+	Count               int                               `json:"count"`
+	Entries             []*definition.LiquidityStakeEntry `json:"list"`
+}
+
+func (stake *LiquidityStakeList) ToLiquidityStakeListMarshal() *LiquidityStakeListMarshal {
+	aux := &LiquidityStakeListMarshal{
+		TotalAmount:         stake.TotalAmount.String(),
+		TotalWeightedAmount: stake.TotalWeightedAmount.String(),
+		Count:               stake.Count,
+	}
+	aux.Entries = make([]*definition.LiquidityStakeEntry, len(stake.Entries))
+	for idx, entry := range stake.Entries {
+		aux.Entries[idx] = entry
+	}
+	return aux
+}
+
+func (stake *LiquidityStakeList) MarshalJSON() ([]byte, error) {
+	return json.Marshal(stake.ToLiquidityStakeListMarshal())
+}
+
+func (stake *LiquidityStakeList) UnmarshalJSON(data []byte) error {
+	aux := new(LiquidityStakeListMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	stake.TotalAmount = common.StringToBigInt(aux.TotalAmount)
+	stake.TotalWeightedAmount = common.StringToBigInt(aux.TotalWeightedAmount)
+	stake.Count = aux.Count
+	stake.Entries = make([]*definition.LiquidityStakeEntry, len(aux.Entries))
+	for idx, entry := range aux.Entries {
+		stake.Entries[idx] = entry
+	}
+	return nil
 }
 
 func (a *LiquidityApi) GetLiquidityStakeEntriesByAddress(address types.Address, pageIndex, pageSize uint32) (*LiquidityStakeList, error) {

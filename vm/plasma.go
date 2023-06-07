@@ -14,13 +14,13 @@ import (
 	"github.com/zenon-network/go-zenon/vm/vm_context"
 )
 
-func GetDifficultyForPlasma(requiredPlasma uint64) (*big.Int, error) {
+func GetDifficultyForPlasma(requiredPlasma uint64) (uint64, error) {
 	if requiredPlasma > constants.MaxPoWPlasmaForAccountBlock {
-		return nil, constants.ErrForbiddenParam
+		return 0, constants.ErrForbiddenParam
 	} else if requiredPlasma == 0 {
-		return big.NewInt(0), nil
+		return 0, nil
 	}
-	return big.NewInt(int64(requiredPlasma * constants.PoWDifficultyPerPlasma)), nil
+	return requiredPlasma * constants.PoWDifficultyPerPlasma, nil
 }
 func DifficultyToPlasma(difficulty uint64) uint64 {
 	// Check for 0

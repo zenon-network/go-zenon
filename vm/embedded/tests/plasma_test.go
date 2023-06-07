@@ -57,26 +57,26 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg="fused new entry" module=embedded contra
 {
 	"currentPlasma": 10447500,
 	"maxPlasma": 10500000,
-	"qsrAmount": 1000000000000
+	"qsrAmount": "1000000000000"
 }`) // User1 consumed plasma by sending blocks
 
 	z.InsertNewMomentum() // include send block
 	common.Json(plasmaApi.Get(g.User1.Address)).Equals(t, `{
 	"currentPlasma": 10500000,
 	"maxPlasma": 10500000,
-	"qsrAmount": 1000000000000
+	"qsrAmount": "1000000000000"
 }`) // User 1 refreshed to full plasma
 	common.Json(plasmaApi.Get(g.User6.Address)).Equals(t, `{
 	"currentPlasma": 0,
 	"maxPlasma": 0,
-	"qsrAmount": 0
+	"qsrAmount": "0"
 }`) // User 6 didn't gain plasma (yet)
 
 	z.InsertNewMomentum() // include contract receive block
 	common.Json(plasmaApi.Get(g.User6.Address)).Equals(t, `{
 	"currentPlasma": 21000,
 	"maxPlasma": 21000,
-	"qsrAmount": 1000000000
+	"qsrAmount": "1000000000"
 }`) // User 6 just gained plasma
 
 	momentums, err := ledgerApi.GetMomentumsByHeight(3, 2)
@@ -161,21 +161,21 @@ func TestPlasma_combined(t *testing.T) {
 {
 	"currentPlasma": 10000,
 	"maxPlasma": 21000,
-	"qsrAmount": 1000000000
+	"qsrAmount": "1000000000"
 }`) // User 6 used all plasma
 	z.InsertNewMomentum() // include send block
 	common.Json(plasmaApi.Get(g.User6.Address)).Equals(t, `
 {
 	"currentPlasma": 21000,
 	"maxPlasma": 21000,
-	"qsrAmount": 1000000000
+	"qsrAmount": "1000000000"
 }`) // User 6 refreshed to full 21K plasma
 	z.InsertNewMomentum() // include contract receive block
 	common.Json(plasmaApi.Get(g.User6.Address)).Equals(t, `
 {
 	"currentPlasma": 42000,
 	"maxPlasma": 42000,
-	"qsrAmount": 2000000000
+	"qsrAmount": "2000000000"
 }`) // User 6 refreshed to full 42K plasma (new plasma kicked in)
 }
 
@@ -235,23 +235,23 @@ func TestPlasma_rpc(t *testing.T) {
 }`)
 	common.Json(plasmaApi.GetEntriesByAddress(g.User1.Address, 0, 10)).HideHashes().Equals(t, `
 {
-	"qsrAmount": 2001000000000,
+	"qsrAmount": "2001000000000",
 	"count": 3,
 	"list": [
 		{
-			"qsrAmount": 1000000000000,
+			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj",
 			"expirationHeight": 0,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 		},
 		{
-			"qsrAmount": 1000000000000,
+			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"expirationHeight": 0,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 		},
 		{
-			"qsrAmount": 1000000000,
+			"qsrAmount": "1000000000",
 			"beneficiary": "z1qqdt06lnwz57x38rwlyutcx5wgrtl0ynkfe3kv",
 			"expirationHeight": 102,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
@@ -260,7 +260,7 @@ func TestPlasma_rpc(t *testing.T) {
 }`)
 	common.Json(plasmaApi.GetEntriesByAddress(g.User6.Address, 0, 10)).Equals(t, `
 {
-	"qsrAmount": 0,
+	"qsrAmount": "0",
 	"count": 0,
 	"list": []
 }`)
@@ -280,17 +280,17 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 
 	common.Json(plasmaApi.GetEntriesByAddress(g.User1.Address, 0, 10)).Equals(t, `
 {
-	"qsrAmount": 2000000000000,
+	"qsrAmount": "2000000000000",
 	"count": 2,
 	"list": [
 		{
-			"qsrAmount": 1000000000000,
+			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj",
 			"expirationHeight": 0,
 			"id": "0000000000000000000000000000000000000000000000000000000000000000"
 		},
 		{
-			"qsrAmount": 1000000000000,
+			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"expirationHeight": 0,
 			"id": "117613e734b6cb0fd7b7583f5b0e863a3f0c856cd32fa36f1b60b464d068c5a6"
@@ -301,7 +301,7 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 {
 	"currentPlasma": 10500000,
 	"maxPlasma": 10500000,
-	"qsrAmount": 1000000000000
+	"qsrAmount": "1000000000000"
 }`)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
@@ -327,7 +327,7 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 			},
 			"address": "z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp",
 			"toAddress": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-			"amount": 1000000000000,
+			"amount": "1000000000000",
 			"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
 			"fromBlockHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"descendantBlocks": [],
@@ -344,11 +344,11 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 				"name": "QuasarCoin",
 				"symbol": "QSR",
 				"domain": "zenon.network",
-				"totalSupply": 180550000000000,
+				"totalSupply": "180550000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 				"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -367,11 +367,11 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 }`)
 	common.Json(plasmaApi.GetEntriesByAddress(g.User1.Address, 0, 10)).Equals(t, `
 {
-	"qsrAmount": 1000000000000,
+	"qsrAmount": "1000000000000",
 	"count": 1,
 	"list": [
 		{
-			"qsrAmount": 1000000000000,
+			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj",
 			"expirationHeight": 0,
 			"id": "0000000000000000000000000000000000000000000000000000000000000000"
@@ -382,7 +382,7 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 {
 	"currentPlasma": 0,
 	"maxPlasma": 0,
-	"qsrAmount": 0
+	"qsrAmount": "0"
 }`)
 }
 
@@ -401,17 +401,17 @@ t=2001-09-09T01:52:10+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 
 	common.Json(plasmaApi.GetEntriesByAddress(g.User1.Address, 0, 10)).Equals(t, `
 {
-	"qsrAmount": 2000000000000,
+	"qsrAmount": "2000000000000",
 	"count": 2,
 	"list": [
 		{
-			"qsrAmount": 1000000000000,
+			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj",
 			"expirationHeight": 0,
 			"id": "0000000000000000000000000000000000000000000000000000000000000000"
 		},
 		{
-			"qsrAmount": 1000000000000,
+			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"expirationHeight": 0,
 			"id": "117613e734b6cb0fd7b7583f5b0e863a3f0c856cd32fa36f1b60b464d068c5a6"
@@ -422,7 +422,7 @@ t=2001-09-09T01:52:10+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 {
 	"currentPlasma": 10500000,
 	"maxPlasma": 10500000,
-	"qsrAmount": 1000000000000
+	"qsrAmount": "1000000000000"
 }`)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -434,23 +434,23 @@ t=2001-09-09T01:52:10+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 	z.InsertMomentumsTo(33)
 	common.Json(plasmaApi.GetEntriesByAddress(g.User1.Address, 0, 10)).HideHashes().Equals(t, `
 {
-	"qsrAmount": 2001000000000,
+	"qsrAmount": "2001000000000",
 	"count": 3,
 	"list": [
 		{
-			"qsrAmount": 1000000000000,
+			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj",
 			"expirationHeight": 0,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 		},
 		{
-			"qsrAmount": 1000000000000,
+			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"expirationHeight": 0,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 		},
 		{
-			"qsrAmount": 1000000000,
+			"qsrAmount": "1000000000",
 			"beneficiary": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"expirationHeight": 32,
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
@@ -488,7 +488,7 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 {
 	"currentPlasma": 0,
 	"maxPlasma": 0,
-	"qsrAmount": 0
+	"qsrAmount": "0"
 }`)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -504,7 +504,7 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 {
 	"currentPlasma": 7350000,
 	"maxPlasma": 7350000,
-	"qsrAmount": 350000000000
+	"qsrAmount": "350000000000"
 }`)
 
 	defer z.CallContract(&nom.AccountBlock{
@@ -521,7 +521,7 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 {
 	"currentPlasma": 10500000,
 	"maxPlasma": 10500000,
-	"qsrAmount": 700000000000
+	"qsrAmount": "700000000000"
 }`)
 
 	defer z.CallContract(&nom.AccountBlock{
@@ -538,7 +538,7 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 {
 	"currentPlasma": 10500000,
 	"maxPlasma": 10500000,
-	"qsrAmount": 800000000000
+	"qsrAmount": "800000000000"
 }`)
 
 	z.InsertMomentumsTo(30)
@@ -556,7 +556,7 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 {
 	"currentPlasma": 9450000,
 	"maxPlasma": 9450000,
-	"qsrAmount": 450000000000
+	"qsrAmount": "450000000000"
 }`)
 }
 

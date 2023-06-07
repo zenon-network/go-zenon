@@ -82,7 +82,7 @@ t=2001-09-09T01:49:50+0000 lvl=dbug msg="invalid create - cannot create zero amo
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
-    }, constants.ErrInvalidTokenOrAmount, mock.NoVmChanges)
+	}, constants.ErrInvalidTokenOrAmount, mock.NoVmChanges)
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
@@ -147,7 +147,7 @@ t=2001-09-09T01:50:40+0000 lvl=dbug msg=unlocked module=embedded contract=htlc h
 	"timeLocked": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"hashLocked": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"amount": 1000000000,
+	"amount": "1000000000",
 	"expirationTime": 1000000300,
 	"hashType": 0,
 	"keyMaxSize": 32,
@@ -259,7 +259,7 @@ t=2001-09-09T01:53:30+0000 lvl=dbug msg=reclaimed module=embedded contract=htlc 
 	"timeLocked": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"hashLocked": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 	"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-	"amount": 1000000000,
+	"amount": "1000000000",
 	"expirationTime": 1000000300,
 	"hashType": 0,
 	"keyMaxSize": 32,
@@ -1193,7 +1193,7 @@ t=2001-09-09T01:50:20+0000 lvl=dbug msg="invalid unlock - preimage size greater 
 	"timeLocked": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"hashLocked": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"amount": 1000000000,
+	"amount": "1000000000",
 	"expirationTime": 1000000300,
 	"hashType": 0,
 	"keyMaxSize": 32,
@@ -1283,7 +1283,7 @@ t=2001-09-09T01:50:30+0000 lvl=dbug msg=unlocked module=embedded contract=htlc h
 	"timeLocked": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"hashLocked": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"amount": 1000000000,
+	"amount": "1000000000",
 	"expirationTime": 1000000300,
 	"hashType": 1,
 	"keyMaxSize": 32,
@@ -1376,7 +1376,7 @@ t=2001-09-09T01:50:50+0000 lvl=dbug msg="invalid unlock - wrong preimage" module
 	"timeLocked": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"hashLocked": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"amount": 1000000000,
+	"amount": "1000000000",
 	"expirationTime": 1000000300,
 	"hashType": 0,
 	"keyMaxSize": 32,
@@ -1408,7 +1408,7 @@ t=2001-09-09T01:50:50+0000 lvl=dbug msg="invalid unlock - wrong preimage" module
 	"timeLocked": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"hashLocked": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"amount": 1000000000,
+	"amount": "1000000000",
 	"expirationTime": 1000000300,
 	"hashType": 1,
 	"keyMaxSize": 32,

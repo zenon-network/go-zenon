@@ -37,6 +37,14 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 t=2001-09-09T01:47:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 TokenName:QuasarCoin TokenSymbol:QSR TokenDomain:zenon.network TotalSupply:+195550000000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll}" minted-amount=15000000000000 to-address=z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz
 `)
 
+	common.Json(swapRpc.GetAssetsByKeyIdHash(types.HexToHashPanic("c955c2b650452d670179068995a51132463e2d13f7519d64ff283af99dd14b43"))).
+		Equals(t, `
+{
+	"keyIdHash": "c955c2b650452d670179068995a51132463e2d13f7519d64ff283af99dd14b43",
+	"znn": "1500000000000",
+	"qsr": "15000000000000"
+}`)
+
 	// RPC call with assets
 	{
 		list, err := swapRpc.GetAssets()
@@ -44,8 +52,8 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 		common.ExpectJson(t, list, `
 {
 	"c955c2b650452d670179068995a51132463e2d13f7519d64ff283af99dd14b43": {
-		"znn": 1500000000000,
-		"qsr": 15000000000000
+		"znn": "1500000000000",
+		"qsr": "15000000000000"
 	}
 }`)
 	}
@@ -78,11 +86,19 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 		common.ExpectJson(t, list, `
 {
 	"c955c2b650452d670179068995a51132463e2d13f7519d64ff283af99dd14b43": {
-		"znn": 0,
-		"qsr": 0
+		"znn": "0",
+		"qsr": "0"
 	}
 }`)
 	}
+
+	common.Json(swapRpc.GetAssetsByKeyIdHash(types.HexToHashPanic("c955c2b650452d670179068995a51132463e2d13f7519d64ff283af99dd14b43"))).
+		Equals(t, `
+{
+	"keyIdHash": "c955c2b650452d670179068995a51132463e2d13f7519d64ff283af99dd14b43",
+	"znn": "0",
+	"qsr": "0"
+}`)
 }
 
 func TestSwap_WithDecay(t *testing.T) {

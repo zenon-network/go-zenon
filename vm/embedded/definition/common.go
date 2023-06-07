@@ -2,6 +2,7 @@ package definition
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"math/big"
 	"strings"
 
@@ -116,6 +117,37 @@ type RewardDeposit struct {
 	Address *types.Address `json:"address"`
 	Znn     *big.Int       `json:"znnAmount"`
 	Qsr     *big.Int       `json:"qsrAmount"`
+}
+
+type RewardDepositMarshal struct {
+	Address *types.Address `json:"address"`
+	Znn     string         `json:"znnAmount"`
+	Qsr     string         `json:"qsrAmount"`
+}
+
+func (deposit *RewardDeposit) ToRewardDepositMarshal() *RewardDepositMarshal {
+	aux := &RewardDepositMarshal{
+		Address: deposit.Address,
+		Znn:     deposit.Znn.String(),
+		Qsr:     deposit.Qsr.String(),
+	}
+
+	return aux
+}
+
+func (deposit *RewardDeposit) MarshalJSON() ([]byte, error) {
+	return json.Marshal(deposit.ToRewardDepositMarshal())
+}
+
+func (deposit *RewardDeposit) UnmarshalJSON(data []byte) error {
+	aux := new(RewardDepositMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	deposit.Address = aux.Address
+	deposit.Znn = common.StringToBigInt(aux.Znn)
+	deposit.Qsr = common.StringToBigInt(aux.Qsr)
+	return nil
 }
 
 func (deposit *RewardDeposit) Save(context db.DB) error {

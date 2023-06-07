@@ -1,6 +1,8 @@
 package embedded
 
 import (
+	"encoding/json"
+	"github.com/zenon-network/go-zenon/common"
 	"math/big"
 
 	"github.com/zenon-network/go-zenon/chain"
@@ -34,6 +36,38 @@ type RewardHistoryEntry struct {
 	Znn   *big.Int `json:"znnAmount"`
 	Qsr   *big.Int `json:"qsrAmount"`
 }
+
+type RewardHistoryEntryMarshal struct {
+	Epoch int64  `json:"epoch"`
+	Znn   string `json:"znnAmount"`
+	Qsr   string `json:"qsrAmount"`
+}
+
+func (r *RewardHistoryEntry) ToRewardDepositMarshal() *RewardHistoryEntryMarshal {
+	aux := &RewardHistoryEntryMarshal{
+		Epoch: r.Epoch,
+		Znn:   r.Znn.String(),
+		Qsr:   r.Qsr.String(),
+	}
+
+	return aux
+}
+
+func (r *RewardHistoryEntry) MarshalJSON() ([]byte, error) {
+	return json.Marshal(r.ToRewardDepositMarshal())
+}
+
+func (r *RewardHistoryEntry) UnmarshalJSON(data []byte) error {
+	aux := new(RewardHistoryEntryMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	r.Epoch = aux.Epoch
+	r.Znn = common.StringToBigInt(aux.Znn)
+	r.Qsr = common.StringToBigInt(aux.Qsr)
+	return nil
+}
+
 type RewardHistoryList struct {
 	Count int64                 `json:"count"`
 	List  []*RewardHistoryEntry `json:"list"`

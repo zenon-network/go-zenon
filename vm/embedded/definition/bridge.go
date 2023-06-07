@@ -2,6 +2,7 @@ package definition
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/zenon-network/go-zenon/common/crypto"
 	"math"
@@ -352,6 +353,55 @@ type TokenPair struct {
 	Metadata      string                   `json:"metadata"`
 }
 
+type TokenPairMarshall struct {
+	TokenStandard types.ZenonTokenStandard `json:"tokenStandard"`
+	TokenAddress  string                   `json:"tokenAddress"`
+	Bridgeable    bool                     `json:"bridgeable"`
+	Redeemable    bool                     `json:"redeemable"`
+	Owned         bool                     `json:"owned"`
+	MinAmount     string                   `json:"minAmount"`
+	FeePercentage uint32                   `json:"feePercentage"`
+	RedeemDelay   uint32                   `json:"redeemDelay"`
+	Metadata      string                   `json:"metadata"`
+}
+
+func (t *TokenPair) ToMarshalJson() *TokenPairMarshall {
+	aux := &TokenPairMarshall{
+		TokenStandard: t.TokenStandard,
+		TokenAddress:  t.TokenAddress,
+		Bridgeable:    t.Bridgeable,
+		Redeemable:    t.Redeemable,
+		Owned:         t.Owned,
+		MinAmount:     t.MinAmount.String(),
+		FeePercentage: t.FeePercentage,
+		RedeemDelay:   t.RedeemDelay,
+		Metadata:      t.Metadata,
+	}
+	return aux
+}
+
+func (t *TokenPair) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.ToMarshalJson())
+}
+
+func (t *TokenPair) UnmarshalJSON(data []byte) error {
+	aux := new(TokenPairMarshall)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	t.TokenStandard = aux.TokenStandard
+	t.TokenAddress = aux.TokenAddress
+	t.Bridgeable = aux.Bridgeable
+	t.Redeemable = aux.Redeemable
+	t.Owned = aux.Owned
+	t.MinAmount = common.StringToBigInt(aux.MinAmount)
+	t.FeePercentage = aux.FeePercentage
+	t.RedeemDelay = aux.RedeemDelay
+	t.Metadata = aux.Metadata
+
+	return nil
+}
+
 type NetworkInfo struct {
 	NetworkClass    uint32      `json:"networkClass"`
 	Id              uint32      `json:"chainId"`
@@ -364,6 +414,33 @@ type NetworkInfo struct {
 type ZtsFeesInfo struct {
 	TokenStandard  types.ZenonTokenStandard `json:"tokenStandard"`
 	AccumulatedFee *big.Int                 `json:"accumulatedFee"`
+}
+
+type ZtsFeesInfoMarshal struct {
+	TokenStandard  types.ZenonTokenStandard `json:"tokenStandard"`
+	AccumulatedFee string                   `json:"accumulatedFee"`
+}
+
+func (zfi *ZtsFeesInfo) ToZtsFeesInfoMarshal() *ZtsFeesInfoMarshal {
+	aux := &ZtsFeesInfoMarshal{
+		TokenStandard:  zfi.TokenStandard,
+		AccumulatedFee: zfi.AccumulatedFee.String(),
+	}
+	return aux
+}
+
+func (zfi *ZtsFeesInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(zfi.ToZtsFeesInfoMarshal())
+}
+
+func (zfi *ZtsFeesInfo) UnmarshalJSON(data []byte) error {
+	aux := new(ZtsFeesInfoMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	zfi.TokenStandard = aux.TokenStandard
+	zfi.AccumulatedFee = common.StringToBigInt(aux.AccumulatedFee)
+	return nil
 }
 
 func (zfi *ZtsFeesInfo) Save(context db.DB) error {
@@ -691,6 +768,57 @@ func GetWrapTokenRequests(context db.DB) ([]*WrapTokenRequest, error) {
 	return list, nil
 }
 
+type WrapTokenRequestMarshal struct {
+	NetworkClass           uint32                   `json:"networkClass"`
+	ChainId                uint32                   `json:"chainId"`
+	Id                     types.Hash               `json:"id"`
+	ToAddress              string                   `json:"toAddress"`
+	TokenStandard          types.ZenonTokenStandard `json:"tokenStandard"`
+	TokenAddress           string                   `json:"tokenAddress"`
+	Amount                 string                   `json:"amount"`
+	Fee                    string                   `json:"fee"`
+	Signature              string                   `json:"signature"`
+	CreationMomentumHeight uint64                   `json:"creationMomentumHeight"`
+}
+
+func (wrapRequest *WrapTokenRequest) ToMarshalJson() *WrapTokenRequestMarshal {
+	aux := &WrapTokenRequestMarshal{
+		NetworkClass:           wrapRequest.NetworkClass,
+		ChainId:                wrapRequest.ChainId,
+		Id:                     wrapRequest.Id,
+		ToAddress:              wrapRequest.ToAddress,
+		TokenStandard:          wrapRequest.TokenStandard,
+		TokenAddress:           wrapRequest.TokenAddress,
+		Amount:                 wrapRequest.Amount.String(),
+		Fee:                    wrapRequest.Fee.String(),
+		Signature:              wrapRequest.Signature,
+		CreationMomentumHeight: wrapRequest.CreationMomentumHeight,
+	}
+	return aux
+}
+func (wrapRequest *WrapTokenRequest) MarshalJSON() ([]byte, error) {
+	return json.Marshal(wrapRequest.ToMarshalJson())
+}
+
+func (wrapRequest *WrapTokenRequest) UnmarshalJSON(data []byte) error {
+	aux := new(WrapTokenRequestMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	wrapRequest.NetworkClass = aux.NetworkClass
+	wrapRequest.ChainId = aux.ChainId
+	wrapRequest.Id = aux.Id
+	wrapRequest.ToAddress = aux.ToAddress
+	wrapRequest.TokenStandard = aux.TokenStandard
+	wrapRequest.TokenAddress = aux.TokenAddress
+	wrapRequest.Amount = common.StringToBigInt(aux.Amount)
+	wrapRequest.Fee = common.StringToBigInt(aux.Fee)
+	wrapRequest.Signature = aux.Signature
+	wrapRequest.CreationMomentumHeight = aux.CreationMomentumHeight
+	return nil
+}
+
 type UnwrapTokenRequest struct {
 	RegistrationMomentumHeight uint64                   `json:"registrationMomentumHeight"`
 	NetworkClass               uint32                   `json:"networkClass"`
@@ -782,6 +910,64 @@ func GetUnwrapTokenRequests(context db.DB) ([]*UnwrapTokenRequest, error) {
 	}
 
 	return list, nil
+}
+
+type UnwrapTokenRequestMarshal struct {
+	RegistrationMomentumHeight uint64                   `json:"registrationMomentumHeight"`
+	NetworkClass               uint32                   `json:"networkClass"`
+	ChainId                    uint32                   `json:"chainId"`
+	TransactionHash            types.Hash               `json:"transactionHash"`
+	LogIndex                   uint32                   `json:"logIndex"`
+	ToAddress                  types.Address            `json:"toAddress"`
+	TokenAddress               string                   `json:"tokenAddress"`
+	TokenStandard              types.ZenonTokenStandard `json:"tokenStandard"`
+	Amount                     string                   `json:"amount"`
+	Signature                  string                   `json:"signature"`
+	Redeemed                   uint8                    `json:"redeemed"`
+	Revoked                    uint8                    `json:"revoked"`
+}
+
+func (unwrapRequest *UnwrapTokenRequest) ToMarshalJson() *UnwrapTokenRequestMarshal {
+	aux := &UnwrapTokenRequestMarshal{
+		RegistrationMomentumHeight: unwrapRequest.RegistrationMomentumHeight,
+		NetworkClass:               unwrapRequest.NetworkClass,
+		ChainId:                    unwrapRequest.ChainId,
+		TransactionHash:            unwrapRequest.TransactionHash,
+		LogIndex:                   unwrapRequest.LogIndex,
+		ToAddress:                  unwrapRequest.ToAddress,
+		TokenAddress:               unwrapRequest.TokenAddress,
+		TokenStandard:              unwrapRequest.TokenStandard,
+		Amount:                     unwrapRequest.Amount.String(),
+		Signature:                  unwrapRequest.Signature,
+		Redeemed:                   unwrapRequest.Redeemed,
+		Revoked:                    unwrapRequest.Revoked,
+	}
+	return aux
+}
+
+func (unwrapRequest *UnwrapTokenRequest) MarshalJSON() ([]byte, error) {
+	return json.Marshal(unwrapRequest.ToMarshalJson())
+}
+
+func (unwrapRequest *UnwrapTokenRequest) UnmarshalJSON(data []byte) error {
+	aux := new(UnwrapTokenRequestMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	unwrapRequest.RegistrationMomentumHeight = aux.RegistrationMomentumHeight
+	unwrapRequest.NetworkClass = aux.NetworkClass
+	unwrapRequest.ChainId = aux.ChainId
+	unwrapRequest.TransactionHash = aux.TransactionHash
+	unwrapRequest.LogIndex = aux.LogIndex
+	unwrapRequest.ToAddress = aux.ToAddress
+	unwrapRequest.TokenAddress = aux.TokenAddress
+	unwrapRequest.TokenStandard = aux.TokenStandard
+	unwrapRequest.Amount = common.StringToBigInt(aux.Amount)
+	unwrapRequest.Signature = aux.Signature
+	unwrapRequest.Redeemed = aux.Redeemed
+	unwrapRequest.Revoked = aux.Revoked
+	return nil
 }
 
 type OrchestratorInfoParam struct {

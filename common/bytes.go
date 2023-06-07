@@ -62,3 +62,13 @@ func IsHex(str string) bool {
 	}
 	return true
 }
+
+// StringToBigInt The default value is 0 when it cannot parse or the string is ""
+func StringToBigInt(str string) *big.Int {
+	x := new(big.Int)
+	_, ok := x.SetString(str, 10)
+	if !ok {
+		x.SetInt64(0)
+	}
+	return x
+}

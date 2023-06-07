@@ -142,14 +142,14 @@ t=2001-09-09T05:17:20+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(stakeApi.GetUncollectedReward(g.User1.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 2166666666666
+	"znnAmount": "0",
+	"qsrAmount": "2166666666666"
 }`)
 	common.Json(stakeApi.GetUncollectedReward(g.User2.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-	"znnAmount": 0,
-	"qsrAmount": 833333333333
+	"znnAmount": "0",
+	"qsrAmount": "833333333333"
 }`)
 	z.ExpectBalance(g.User1.Address, types.QsrTokenStandard, 120000*g.Zexp)
 	defer z.CallContract(&nom.AccountBlock{
@@ -176,7 +176,7 @@ t=2001-09-09T05:17:20+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			},
 			"address": "z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0",
 			"toAddress": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-			"amount": 2166666666666,
+			"amount": "2166666666666",
 			"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
 			"fromBlockHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"descendantBlocks": [],
@@ -193,11 +193,11 @@ t=2001-09-09T05:17:20+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 				"name": "QuasarCoin",
 				"symbol": "QSR",
 				"domain": "zenon.network",
-				"totalSupply": 184216666666666,
+				"totalSupply": "184216666666666",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 				"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -242,7 +242,7 @@ t=2001-09-09T05:17:20+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			},
 			"address": "z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0",
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-			"amount": 833333333333,
+			"amount": "833333333333",
 			"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
 			"fromBlockHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"descendantBlocks": [],
@@ -259,11 +259,11 @@ t=2001-09-09T05:17:20+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 				"name": "QuasarCoin",
 				"symbol": "QSR",
 				"domain": "zenon.network",
-				"totalSupply": 185049999999999,
+				"totalSupply": "185049999999999",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 				"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -386,13 +386,13 @@ t=2001-09-09T06:46:40+0000 lvl=dbug msg="revoked stake entry" module=embedded co
 	z.InsertMomentumsTo(10)
 	common.Json(stakeApi.GetEntriesByAddress(g.User1.Address, 0, 10)).Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1100000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1100000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
-			"weightedAmount": 1100000000,
+			"amount": "1000000000",
+			"weightedAmount": "1100000000",
 			"startTimestamp": 1000000010,
 			"expirationTimestamp": 1000007210,
 			"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
@@ -414,13 +414,13 @@ t=2001-09-09T06:46:40+0000 lvl=dbug msg="revoked stake entry" module=embedded co
 
 	common.Json(stakeApi.GetEntriesByAddress(g.User1.Address, 0, 10)).Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1100000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1100000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
-			"weightedAmount": 1100000000,
+			"amount": "1000000000",
+			"weightedAmount": "1100000000",
 			"startTimestamp": 1000000010,
 			"expirationTimestamp": 1000007210,
 			"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
@@ -437,13 +437,13 @@ t=2001-09-09T06:46:40+0000 lvl=dbug msg="revoked stake entry" module=embedded co
 	z.InsertNewMomentum()
 	common.Json(stakeApi.GetEntriesByAddress(g.User1.Address, 0, 10)).Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1100000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1100000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
-			"weightedAmount": 1100000000,
+			"amount": "1000000000",
+			"weightedAmount": "1100000000",
 			"startTimestamp": 1000000010,
 			"expirationTimestamp": 1000007210,
 			"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
@@ -633,21 +633,21 @@ t=2001-09-09T07:16:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	z.ExpectBalance(types.StakeContract, types.ZnnTokenStandard, 170*g.Zexp)
 	common.Json(stakeApi.GetEntriesByAddress(g.User1.Address, 0, 10)).HideHashes().Equals(t, `
 {
-	"totalAmount": 2000000000,
-	"totalWeightedAmount": 2300000000,
+	"totalAmount": "2000000000",
+	"totalWeightedAmount": "2300000000",
 	"count": 2,
 	"list": [
 		{
-			"amount": 1000000000,
-			"weightedAmount": 1000000000,
+			"amount": "1000000000",
+			"weightedAmount": "1000000000",
 			"startTimestamp": 1000000010,
 			"expirationTimestamp": 1000003610,
 			"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 		},
 		{
-			"amount": 1000000000,
-			"weightedAmount": 1300000000,
+			"amount": "1000000000",
+			"weightedAmount": "1300000000",
 			"startTimestamp": 1000000010,
 			"expirationTimestamp": 1000014410,
 			"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
@@ -657,8 +657,8 @@ t=2001-09-09T07:16:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 }`)
 	common.Json(stakeApi.GetEntriesByAddress(g.User5.Address, 0, 10)).HideHashes().Equals(t, `
 {
-	"totalAmount": 0,
-	"totalWeightedAmount": 0,
+	"totalAmount": "0",
+	"totalWeightedAmount": "0",
 	"count": 0,
 	"list": []
 }`)
@@ -668,8 +668,8 @@ t=2001-09-09T07:16:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(stakeApi.GetUncollectedReward(g.User1.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 84249084249
+	"znnAmount": "0",
+	"qsrAmount": "84249084249"
 }`)
 
 	// Half of Epoch3
@@ -699,7 +699,7 @@ t=2001-09-09T07:16:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			},
 			"address": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 			"toAddress": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
 			"fromBlockHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"descendantBlocks": [],
@@ -716,11 +716,11 @@ t=2001-09-09T07:16:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19874400000000,
+				"totalSupply": "19874400000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -748,8 +748,8 @@ t=2001-09-09T07:16:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(stakeApi.GetUncollectedReward(g.User1.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 285092005395
+	"znnAmount": "0",
+	"qsrAmount": "285092005395"
 }`)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
@@ -762,8 +762,8 @@ t=2001-09-09T07:16:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(stakeApi.GetUncollectedReward(g.User1.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 	common.Json(ledgerApi.GetUnreceivedBlocksByAddress(g.User1.Address, 0, 10)).HideHashes().Equals(t, `
 {
@@ -781,7 +781,7 @@ t=2001-09-09T07:16:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			},
 			"address": "z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0",
 			"toAddress": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-			"amount": 285092005395,
+			"amount": "285092005395",
 			"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
 			"fromBlockHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"descendantBlocks": [],
@@ -798,11 +798,11 @@ t=2001-09-09T07:16:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 				"name": "QuasarCoin",
 				"symbol": "QSR",
 				"domain": "zenon.network",
-				"totalSupply": 182835092005395,
+				"totalSupply": "182835092005395",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 				"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -828,20 +828,20 @@ t=2001-09-09T07:16:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(stakeApi.GetUncollectedReward(g.User1.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 49429657794
+	"znnAmount": "0",
+	"qsrAmount": "49429657794"
 }`)
 	common.Json(stakeApi.GetUncollectedReward(g.User2.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-	"znnAmount": 0,
-	"qsrAmount": 1866191334722
+	"znnAmount": "0",
+	"qsrAmount": "1866191334722"
 }`)
 	common.Json(stakeApi.GetUncollectedReward(g.User3.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qrs2lpccnsneglhnnfwvlsj0qncnxjnwlfmjac",
-	"znnAmount": 0,
-	"qsrAmount": 2799287002083
+	"znnAmount": "0",
+	"qsrAmount": "2799287002083"
 }`)
 	// collect reward
 	defer z.CallContract(&nom.AccountBlock{
@@ -855,8 +855,8 @@ t=2001-09-09T07:16:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(stakeApi.GetUncollectedReward(g.User1.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 	autoreceive(t, z, g.User1.Address)
 	// qsr after collect
@@ -864,14 +864,14 @@ t=2001-09-09T07:16:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(stakeApi.GetUncollectedReward(g.User2.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-	"znnAmount": 0,
-	"qsrAmount": 1866191334722
+	"znnAmount": "0",
+	"qsrAmount": "1866191334722"
 }`)
 	common.Json(stakeApi.GetUncollectedReward(g.User3.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qrs2lpccnsneglhnnfwvlsj0qncnxjnwlfmjac",
-	"znnAmount": 0,
-	"qsrAmount": 2799287002083
+	"znnAmount": "0",
+	"qsrAmount": "2799287002083"
 }`)
 }
 
@@ -962,13 +962,13 @@ t=2001-09-09T05:17:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	z.InsertMomentumsTo((30 + 3*60) * 6)
 	common.Json(stakeApi.GetEntriesByAddress(g.User1.Address, 0, 10)).Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1000000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
-			"weightedAmount": 1000000000,
+			"amount": "1000000000",
+			"weightedAmount": "1000000000",
 			"startTimestamp": 1000000010,
 			"expirationTimestamp": 1000003610,
 			"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
@@ -979,18 +979,18 @@ t=2001-09-09T05:17:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(stakeApi.GetUncollectedReward(g.User1.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 3000000000000
+	"znnAmount": "0",
+	"qsrAmount": "3000000000000"
 }`)
 	common.Json(stakeApi.GetEntriesByAddress(g.User1.Address, 0, 10)).HideHashes().Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1000000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
-			"weightedAmount": 1000000000,
+			"amount": "1000000000",
+			"weightedAmount": "1000000000",
 			"startTimestamp": 1000000010,
 			"expirationTimestamp": 1000003610,
 			"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
@@ -1008,13 +1008,13 @@ t=2001-09-09T05:17:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(stakeApi.GetUncollectedReward(g.User1.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 3000000000000
+	"znnAmount": "0",
+	"qsrAmount": "3000000000000"
 }`)
 	common.Json(stakeApi.GetEntriesByAddress(g.User1.Address, 0, 10)).HideHashes().Equals(t, `
 {
-	"totalAmount": 0,
-	"totalWeightedAmount": 0,
+	"totalAmount": "0",
+	"totalWeightedAmount": "0",
 	"count": 0,
 	"list": []
 }`)
@@ -1044,7 +1044,7 @@ t=2001-09-09T05:17:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			},
 			"address": "z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0",
 			"toAddress": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-			"amount": 3000000000000,
+			"amount": "3000000000000",
 			"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
 			"fromBlockHash": "0000000000000000000000000000000000000000000000000000000000000000",
 			"descendantBlocks": [],
@@ -1061,11 +1061,11 @@ t=2001-09-09T05:17:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 				"name": "QuasarCoin",
 				"symbol": "QSR",
 				"domain": "zenon.network",
-				"totalSupply": 185050000000000,
+				"totalSupply": "185050000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 				"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -1091,7 +1091,7 @@ t=2001-09-09T05:17:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			},
 			"address": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 			"toAddress": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
 			"fromBlockHash": "0000000000000000000000000000000000000000000000000000000000000000",
 			"descendantBlocks": [],
@@ -1108,11 +1108,11 @@ t=2001-09-09T05:17:00+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 20061600000000,
+				"totalSupply": "20061600000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -1147,13 +1147,13 @@ func TestStake_CheckRpc(t *testing.T) {
 	common.Json(stakeApi.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 	common.Json(stakeApi.GetEntriesByAddress(g.User1.Address, 0, 10)).Equals(t, `
 {
-	"totalAmount": 0,
-	"totalWeightedAmount": 0,
+	"totalAmount": "0",
+	"totalWeightedAmount": "0",
 	"count": 0,
 	"list": []
 }`)

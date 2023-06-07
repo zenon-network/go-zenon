@@ -19,9 +19,9 @@ import (
 
 func depositQsr(z mock.MockZenon, t *testing.T, address types.Address, amount *big.Int) {
 	sentinelApi := embedded.NewSentinelApi(z)
-	initialQsr, err := sentinelApi.GetDepositedQsr(address)
+	initialQsrStr, err := sentinelApi.GetDepositedQsr(address)
 	common.DealWithErr(err)
-
+	initialQsr := common.StringToBigInt(initialQsrStr)
 	// Deposit QSR
 	z.InsertSendBlock(&nom.AccountBlock{
 		Address:       address,
@@ -38,7 +38,9 @@ func depositQsr(z mock.MockZenon, t *testing.T, address types.Address, amount *b
 
 func withdrawQsr(z mock.MockZenon, t *testing.T, address types.Address) {
 	sentinelApi := embedded.NewSentinelApi(z)
-	initialQsr, err := sentinelApi.GetDepositedQsr(address)
+	initialQsrStr, err := sentinelApi.GetDepositedQsr(address)
+	initialQsr := common.StringToBigInt(initialQsrStr)
+
 	common.DealWithErr(err)
 	if initialQsr.Cmp(big.NewInt(0)) == 0 {
 		// Try to withdraw QSR
@@ -57,7 +59,7 @@ func withdrawQsr(z mock.MockZenon, t *testing.T, address types.Address) {
 		}).Error(t, nil)
 		z.InsertNewMomentum()
 	}
-	common.Json(sentinelApi.GetDepositedQsr(address)).Equals(t, `0`)
+	common.Json(sentinelApi.GetDepositedQsr(address)).Equals(t, `"0"`)
 }
 
 func registerSentinel(z mock.MockZenon, t *testing.T, address types.Address) {
@@ -73,7 +75,7 @@ func registerSentinel(z mock.MockZenon, t *testing.T, address types.Address) {
 	}).Error(t, nil)
 	z.InsertNewMomentum()
 
-	common.Json(sentinelApi.GetDepositedQsr(address)).Equals(t, `0`)
+	common.Json(sentinelApi.GetDepositedQsr(address)).Equals(t, `"0"`)
 	sentinel, err := sentinelApi.GetByOwner(address)
 	common.DealWithErr(err)
 	common.ExpectTrue(t, sentinel.Active)
@@ -189,7 +191,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg="successfully register" module=embedded 
 	}).Error(t, nil)
 	z.InsertNewMomentum()
 
-	common.Json(sentinelApi.GetDepositedQsr(g.User1.Address)).Equals(t, `1`)
+	common.Json(sentinelApi.GetDepositedQsr(g.User1.Address)).Equals(t, `"1"`)
 	common.Json(sentinelApi.GetByOwner(g.User1.Address)).Equals(t, `
 {
 	"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
@@ -237,7 +239,7 @@ t=2001-09-09T01:47:20+0000 lvl=dbug msg="invalid register - existing address" mo
 	z.ExpectBalance(g.User1.Address, types.QsrTokenStandard, 20000*g.Zexp)
 	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 7000*g.Zexp)
 
-	common.Json(sentinelApi.GetDepositedQsr(g.User1.Address)).Equals(t, `5000000000000`)
+	common.Json(sentinelApi.GetDepositedQsr(g.User1.Address)).Equals(t, `"5000000000000"`)
 	common.Json(sentinelApi.GetByOwner(g.User1.Address)).Equals(t, `
 {
 	"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
@@ -257,9 +259,9 @@ func TestSentinel_GetByOwner(t *testing.T) {
 	common.Json(sentinelApi.GetByOwner(g.User1.Address)).Equals(t, `null`)
 }
 
-// - test embedded.sentinel.getAllActive RPC
-//   -> return 'count' is the number of active sentinels not the number of inactive + active
-// - sentinel is missing from getAllActive after being revoked
+//   - test embedded.sentinel.getAllActive RPC
+//     -> return 'count' is the number of active sentinels not the number of inactive + active
+//   - sentinel is missing from getAllActive after being revoked
 func TestSentinel_GetAllActiveRPC(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
@@ -445,7 +447,7 @@ t=2001-09-09T02:06:40+0000 lvl=dbug msg="successfully revoke" module=embedded co
 
 	registerSentinel(z, t, g.User1.Address)
 
-	common.Json(sentinelApi.GetDepositedQsr(g.User1.Address)).Equals(t, `0`)
+	common.Json(sentinelApi.GetDepositedQsr(g.User1.Address)).Equals(t, `"0"`)
 	common.Json(sentinelApi.GetByOwner(g.User1.Address)).Equals(t, `
 {
 	"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
@@ -518,15 +520,15 @@ t=2001-09-09T02:46:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 	z.InsertMomentumsTo(60*6 + 2)
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 187200000000,
-	"qsrAmount": 500000000000
+	"znnAmount": "187200000000",
+	"qsrAmount": "500000000000"
 }`)
 }
 
@@ -591,8 +593,8 @@ t=2001-09-09T03:46:50+0000 lvl=dbug msg="invalid update - rewards not due yet" m
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 	z.InsertMomentumsTo(60 * 6)
 	registerSentinel(z, t, g.User2.Address)
@@ -600,34 +602,34 @@ t=2001-09-09T03:46:50+0000 lvl=dbug msg="invalid update - rewards not due yet" m
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 187200000000,
-	"qsrAmount": 500000000000
+	"znnAmount": "187200000000",
+	"qsrAmount": "500000000000"
 }`)
 	common.Json(sentinelApi.GetUncollectedReward(g.User2.Address)).Equals(t, `
 {
 	"address": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 	z.InsertMomentumsTo(60 * 6 * 2)
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 187200000000,
-	"qsrAmount": 500000000000
+	"znnAmount": "187200000000",
+	"qsrAmount": "500000000000"
 }`)
 	z.InsertMomentumsTo(60*6*2 + 2)
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 280800000000,
-	"qsrAmount": 750000000000
+	"znnAmount": "280800000000",
+	"qsrAmount": "750000000000"
 }`)
 	common.Json(sentinelApi.GetUncollectedReward(g.User2.Address)).Equals(t, `
 {
 	"address": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-	"znnAmount": 93600000000,
-	"qsrAmount": 250000000000
+	"znnAmount": "93600000000",
+	"qsrAmount": "250000000000"
 }`)
 }
 
@@ -686,8 +688,8 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 187200000000,
-	"qsrAmount": 500000000000
+	"znnAmount": "187200000000",
+	"qsrAmount": "500000000000"
 }`)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
@@ -700,8 +702,8 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 187200000000,
-	"qsrAmount": 500000000000
+	"znnAmount": "187200000000",
+	"qsrAmount": "500000000000"
 }`)
 }
 
@@ -745,8 +747,8 @@ t=2001-09-09T02:47:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 187200000000,
-	"qsrAmount": 500000000000
+	"znnAmount": "187200000000",
+	"qsrAmount": "500000000000"
 }`)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
@@ -772,7 +774,7 @@ t=2001-09-09T02:47:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			},
 			"address": "z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0",
 			"toAddress": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-			"amount": 500000000000,
+			"amount": "500000000000",
 			"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
 			"fromBlockHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"descendantBlocks": [],
@@ -789,11 +791,11 @@ t=2001-09-09T02:47:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 				"name": "QuasarCoin",
 				"symbol": "QSR",
 				"domain": "zenon.network",
-				"totalSupply": 181550000000000,
+				"totalSupply": "181550000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 				"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -819,7 +821,7 @@ t=2001-09-09T02:47:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			},
 			"address": "z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0",
 			"toAddress": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-			"amount": 187200000000,
+			"amount": "187200000000",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
 			"fromBlockHash": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 			"descendantBlocks": [],
@@ -836,11 +838,11 @@ t=2001-09-09T02:47:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19874400000000,
+				"totalSupply": "19874400000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -861,8 +863,8 @@ t=2001-09-09T02:47:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 }
 
@@ -932,8 +934,8 @@ t=2001-09-09T02:54:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 187200000000,
-	"qsrAmount": 500000000000
+	"znnAmount": "187200000000",
+	"qsrAmount": "500000000000"
 }`)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
@@ -946,8 +948,8 @@ t=2001-09-09T02:54:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 187200000000,
-	"qsrAmount": 500000000000
+	"znnAmount": "187200000000",
+	"qsrAmount": "500000000000"
 }`)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
@@ -961,8 +963,8 @@ t=2001-09-09T02:54:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(sentinelApi.GetUncollectedReward(g.User1.Address)).HideHashes().Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 187200000000+12000*g.Zexp)
 	z.ExpectBalance(g.User1.Address, types.QsrTokenStandard, 500000000000+120000*g.Zexp)
@@ -1093,8 +1095,8 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 	"list": [
 		{
 			"epoch": 0,
-			"znnAmount": 187200000000,
-			"qsrAmount": 500000000000
+			"znnAmount": "187200000000",
+			"qsrAmount": "500000000000"
 		}
 	]
 }`)
@@ -1104,8 +1106,8 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 	"list": [
 		{
 			"epoch": 0,
-			"znnAmount": 0,
-			"qsrAmount": 0
+			"znnAmount": "0",
+			"qsrAmount": "0"
 		}
 	]
 }`)
@@ -1116,13 +1118,13 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 	"list": [
 		{
 			"epoch": 1,
-			"znnAmount": 93600000000,
-			"qsrAmount": 250000000000
+			"znnAmount": "93600000000",
+			"qsrAmount": "250000000000"
 		},
 		{
 			"epoch": 0,
-			"znnAmount": 187200000000,
-			"qsrAmount": 500000000000
+			"znnAmount": "187200000000",
+			"qsrAmount": "500000000000"
 		}
 	]
 }`)
@@ -1132,13 +1134,13 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 	"list": [
 		{
 			"epoch": 1,
-			"znnAmount": 93600000000,
-			"qsrAmount": 250000000000
+			"znnAmount": "93600000000",
+			"qsrAmount": "250000000000"
 		},
 		{
 			"epoch": 0,
-			"znnAmount": 0,
-			"qsrAmount": 0
+			"znnAmount": "0",
+			"qsrAmount": "0"
 		}
 	]
 }`)

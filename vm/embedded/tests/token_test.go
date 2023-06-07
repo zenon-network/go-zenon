@@ -53,11 +53,11 @@ func issueTokenSetup(t *testing.T, z mock.MockZenon) {
 			"name": "test.tok3n_na-m3",
 			"symbol": "TEST",
 			"domain": "",
-			"totalSupply": 100,
+			"totalSupply": "100",
 			"decimals": 1,
 			"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"tokenStandard": "zts103tsa5yqngu9cfpj2m0z9u",
-			"maxSupply": 1000,
+			"maxSupply": "1000",
 			"isBurnable": true,
 			"isMintable": true,
 			"isUtility": false
@@ -177,48 +177,48 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="issued ZTS" module=embedded contract=to
 				"name": "test.tok3n_na-m3",
 				"symbol": "TEST",
 				"domain": "",
-				"totalSupply": 57896044618658097711785492504343953926634992332820282019728792003956564819967,
+				"totalSupply": "57896044618658097711785492504343953926634992332820282019728792003956564819967",
 				"decimals": 1,
 				"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 				"tokenStandard": "zts1h5xauyvh7vxgnhj09dfclk",
-				"maxSupply": 57896044618658097711785492504343953926634992332820282019728792003956564819967,
+				"maxSupply": "57896044618658097711785492504343953926634992332820282019728792003956564819967",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": false
 			},
-			"balance": 57896044618658097711785492504343953926634992332820282019728792003956564819967
+			"balance": "57896044618658097711785492504343953926634992332820282019728792003956564819967"
 		},
 		"zts1qsrxxxxxxxxxxxxxmrhjll": {
 			"token": {
 				"name": "QuasarCoin",
 				"symbol": "QSR",
 				"domain": "zenon.network",
-				"totalSupply": 180550000000000,
+				"totalSupply": "180550000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 				"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
 			},
-			"balance": 12000000000000
+			"balance": "12000000000000"
 		},
 		"zts1znnxxxxxxxxxxxxx9z4ulx": {
 			"token": {
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19500000000000,
+				"totalSupply": "19500000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
 			},
-			"balance": 1199900000000
+			"balance": "1199900000000"
 		}
 	}
 }`)
@@ -240,48 +240,48 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="issued ZTS" module=embedded contract=to
 				"name": "test.tok3n_na-m3",
 				"symbol": "TEST",
 				"domain": "",
-				"totalSupply": 57896044618658097711785492504343953926634992332820282019728792003956564819967,
+				"totalSupply": "57896044618658097711785492504343953926634992332820282019728792003956564819967",
 				"decimals": 1,
 				"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 				"tokenStandard": "zts1h5xauyvh7vxgnhj09dfclk",
-				"maxSupply": 57896044618658097711785492504343953926634992332820282019728792003956564819967,
+				"maxSupply": "57896044618658097711785492504343953926634992332820282019728792003956564819967",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": false
 			},
-			"balance": 57896044618658097711785492504343953926634992332820282019728792003956564819967
+			"balance": "57896044618658097711785492504343953926634992332820282019728792003956564819967"
 		},
 		"zts1qsrxxxxxxxxxxxxxmrhjll": {
 			"token": {
 				"name": "QuasarCoin",
 				"symbol": "QSR",
 				"domain": "zenon.network",
-				"totalSupply": 180550000000000,
+				"totalSupply": "180550000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 				"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
 			},
-			"balance": 12000000000000
+			"balance": "12000000000000"
 		},
 		"zts1znnxxxxxxxxxxxxx9z4ulx": {
 			"token": {
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19500000000000,
+				"totalSupply": "19500000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
 			},
-			"balance": 1199900000000
+			"balance": "1199900000000"
 		}
 	}
 }`)
@@ -304,48 +304,48 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="issued ZTS" module=embedded contract=to
 				"name": "test.tok3n_na-m3",
 				"symbol": "TEST",
 				"domain": "",
-				"totalSupply": 57896044618658097711785492504343953926634992332820282019728792003956564819967,
+				"totalSupply": "57896044618658097711785492504343953926634992332820282019728792003956564819967",
 				"decimals": 1,
 				"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 				"tokenStandard": "zts1h5xauyvh7vxgnhj09dfclk",
-				"maxSupply": 57896044618658097711785492504343953926634992332820282019728792003956564819967,
+				"maxSupply": "57896044618658097711785492504343953926634992332820282019728792003956564819967",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": false
 			},
-			"balance": 57896044618658097711785492504343953926634992332820282019728792003956564819967
+			"balance": "57896044618658097711785492504343953926634992332820282019728792003956564819967"
 		},
 		"zts1qsrxxxxxxxxxxxxxmrhjll": {
 			"token": {
 				"name": "QuasarCoin",
 				"symbol": "QSR",
 				"domain": "zenon.network",
-				"totalSupply": 180550000000000,
+				"totalSupply": "180550000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 				"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
 			},
-			"balance": 8000000000000
+			"balance": "8000000000000"
 		},
 		"zts1znnxxxxxxxxxxxxx9z4ulx": {
 			"token": {
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19500000000000,
+				"totalSupply": "19500000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
 			},
-			"balance": 800000000000
+			"balance": "800000000000"
 		}
 	}
 }`)
@@ -490,11 +490,11 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="issued ZTS" module=embedded contract=to
 	"name": "test.tok3n_na-m3",
 	"symbol": "TEST",
 	"domain": "",
-	"totalSupply": 100,
+	"totalSupply": "100",
 	"decimals": 1,
 	"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"tokenStandard": "zts103tsa5yqngu9cfpj2m0z9u",
-	"maxSupply": 1000,
+	"maxSupply": "1000",
 	"isBurnable": true,
 	"isMintable": true,
 	"isUtility": false
@@ -535,11 +535,11 @@ t=2001-09-09T01:47:10+0000 lvl=dbug msg="updated ZTS" module=embedded contract=t
 			"name": "test.tok3n_na-m3",
 			"symbol": "TEST",
 			"domain": "",
-			"totalSupply": 100,
+			"totalSupply": "100",
 			"decimals": 1,
 			"owner": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 			"tokenStandard": "zts103tsa5yqngu9cfpj2m0z9u",
-			"maxSupply": 1000,
+			"maxSupply": "1000",
 			"isBurnable": true,
 			"isMintable": true,
 			"isUtility": false
@@ -589,11 +589,11 @@ t=2001-09-09T01:47:10+0000 lvl=dbug msg="updated ZTS" module=embedded contract=t
 			"name": "test.tok3n_na-m3",
 			"symbol": "TEST",
 			"domain": "",
-			"totalSupply": 100,
+			"totalSupply": "100",
 			"decimals": 1,
 			"owner": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 			"tokenStandard": "zts103tsa5yqngu9cfpj2m0z9u",
-			"maxSupply": 1000,
+			"maxSupply": "1000",
 			"isBurnable": false,
 			"isMintable": true,
 			"isUtility": false
@@ -637,11 +637,11 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="issued ZTS" module=embedded contract=to
 			"name": "QuasarCoin",
 			"symbol": "QSR",
 			"domain": "zenon.network",
-			"totalSupply": 180550000000000,
+			"totalSupply": "180550000000000",
 			"decimals": 8,
 			"owner": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 			"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-			"maxSupply": 4611686018427387903,
+			"maxSupply": "4611686018427387903",
 			"isBurnable": true,
 			"isMintable": true,
 			"isUtility": true
@@ -650,11 +650,11 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="issued ZTS" module=embedded contract=to
 			"name": "Zenon Coin",
 			"symbol": "ZNN",
 			"domain": "zenon.network",
-			"totalSupply": 19500000000000,
+			"totalSupply": "19500000000000",
 			"decimals": 8,
 			"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"maxSupply": 4611686018427387903,
+			"maxSupply": "4611686018427387903",
 			"isBurnable": true,
 			"isMintable": true,
 			"isUtility": true
@@ -673,11 +673,11 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="issued ZTS" module=embedded contract=to
 			"name": "test.tok3n_na-m3",
 			"symbol": "TEST",
 			"domain": "",
-			"totalSupply": 100,
+			"totalSupply": "100",
 			"decimals": 1,
 			"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"tokenStandard": "zts103tsa5yqngu9cfpj2m0z9u",
-			"maxSupply": 1000,
+			"maxSupply": "1000",
 			"isBurnable": true,
 			"isMintable": true,
 			"isUtility": false
@@ -692,11 +692,11 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="issued ZTS" module=embedded contract=to
 			"name": "QuasarCoin",
 			"symbol": "QSR",
 			"domain": "zenon.network",
-			"totalSupply": 180550000000000,
+			"totalSupply": "180550000000000",
 			"decimals": 8,
 			"owner": "z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62",
 			"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-			"maxSupply": 4611686018427387903,
+			"maxSupply": "4611686018427387903",
 			"isBurnable": true,
 			"isMintable": true,
 			"isUtility": true
@@ -705,11 +705,11 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="issued ZTS" module=embedded contract=to
 			"name": "Zenon Coin",
 			"symbol": "ZNN",
 			"domain": "zenon.network",
-			"totalSupply": 19500000000000,
+			"totalSupply": "19500000000000",
 			"decimals": 8,
 			"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"maxSupply": 4611686018427387903,
+			"maxSupply": "4611686018427387903",
 			"isBurnable": true,
 			"isMintable": true,
 			"isUtility": true
@@ -718,11 +718,11 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="issued ZTS" module=embedded contract=to
 			"name": "test.tok3n_na-m3",
 			"symbol": "TEST",
 			"domain": "",
-			"totalSupply": 100,
+			"totalSupply": "100",
 			"decimals": 1,
 			"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"tokenStandard": "zts103tsa5yqngu9cfpj2m0z9u",
-			"maxSupply": 1000,
+			"maxSupply": "1000",
 			"isBurnable": true,
 			"isMintable": true,
 			"isUtility": false
@@ -734,11 +734,11 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="issued ZTS" module=embedded contract=to
 	"name": "test.tok3n_na-m3",
 	"symbol": "TEST",
 	"domain": "",
-	"totalSupply": 100,
+	"totalSupply": "100",
 	"decimals": 1,
 	"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"tokenStandard": "zts103tsa5yqngu9cfpj2m0z9u",
-	"maxSupply": 1000,
+	"maxSupply": "1000",
 	"isBurnable": true,
 	"isMintable": true,
 	"isUtility": false
@@ -787,11 +787,11 @@ t=2001-09-09T01:47:30+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 			"name": "test.tok3n_na-m3",
 			"symbol": "TEST",
 			"domain": "",
-			"totalSupply": 100,
+			"totalSupply": "100",
 			"decimals": 1,
 			"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"tokenStandard": "zts17dc044zt9a2d80ajc2j5my",
-			"maxSupply": 1000,
+			"maxSupply": "1000",
 			"isBurnable": false,
 			"isMintable": true,
 			"isUtility": false
@@ -875,11 +875,11 @@ t=2001-09-09T01:50:30+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"name": "test.tok3n_na-m3",
 			"symbol": "TEST",
 			"domain": "",
-			"totalSupply": 100,
+			"totalSupply": "100",
 			"decimals": 1,
 			"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"tokenStandard": "zts103tsa5yqngu9cfpj2m0z9u",
-			"maxSupply": 1000,
+			"maxSupply": "1000",
 			"isBurnable": true,
 			"isMintable": true,
 			"isUtility": false
@@ -1134,11 +1134,11 @@ t=2001-09-09T01:48:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 	"name": "test.tok3n_na-m3",
 	"symbol": "TEST",
 	"domain": "",
-	"totalSupply": 0,
+	"totalSupply": "0",
 	"decimals": 1,
 	"owner": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"tokenStandard": "zts1k7w8wl0wqjaxhjt6zqa3dd",
-	"maxSupply": 1000,
+	"maxSupply": "1000",
 	"isBurnable": true,
 	"isMintable": true,
 	"isUtility": false
