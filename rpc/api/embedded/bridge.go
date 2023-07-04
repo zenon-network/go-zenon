@@ -639,6 +639,9 @@ func (a *BridgeApi) GetAllUnwrapTokenRequestsByToAddress(toAddress string, pageI
 				specificRequests = append(specificRequests, request)
 			}
 		}
+		sort.Slice(specificRequests[:], func(i, j int) bool {
+			return specificRequests[i].RegistrationMomentumHeight > specificRequests[j].RegistrationMomentumHeight
+		})
 
 	}
 	result.Count = len(specificRequests)
