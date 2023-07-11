@@ -3,5 +3,5 @@
 package metadata
 
 const (
-	Version = "v0.0.5-libznn"
+	Version = "v0.0.6-libznn"
 )
