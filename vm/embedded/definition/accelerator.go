@@ -1,6 +1,7 @@
 package definition
 
 import (
+	"encoding/json"
 	"math/big"
 	"strings"
 
@@ -174,6 +175,57 @@ type Phase struct {
 	CreationTimestamp int64      `json:"creationTimestamp"`
 	AcceptedTimestamp int64      `json:"acceptedTimestamp"`
 	Status            uint8      `json:"status"`
+}
+
+type PhaseMarshal struct {
+	Id                types.Hash `json:"id"`
+	ProjectId         types.Hash `json:"projectID"`
+	Name              string     `json:"name"`
+	Description       string     `json:"description"`
+	Url               string     `json:"url"`
+	ZnnFundsNeeded    string     `json:"znnFundsNeeded"`
+	QsrFundsNeeded    string     `json:"qsrFundsNeeded"`
+	CreationTimestamp int64      `json:"creationTimestamp"`
+	AcceptedTimestamp int64      `json:"acceptedTimestamp"`
+	Status            uint8      `json:"status"`
+}
+
+func (phase *Phase) ToProjectMarshal() *PhaseMarshal {
+	aux := &PhaseMarshal{
+		Id:                phase.Id,
+		ProjectId:         phase.ProjectId,
+		Name:              phase.Name,
+		Description:       phase.Description,
+		Url:               phase.Url,
+		ZnnFundsNeeded:    phase.ZnnFundsNeeded.String(),
+		QsrFundsNeeded:    phase.QsrFundsNeeded.String(),
+		CreationTimestamp: phase.CreationTimestamp,
+		AcceptedTimestamp: phase.AcceptedTimestamp,
+		Status:            phase.Status,
+	}
+	return aux
+}
+
+func (phase *Phase) MarshalJSON() ([]byte, error) {
+	return json.Marshal(phase.ToProjectMarshal())
+}
+
+func (phase *Phase) UnmarshalJSON(data []byte) error {
+	aux := new(PhaseMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	phase.Id = aux.Id
+	phase.ProjectId = aux.ProjectId
+	phase.Name = aux.Name
+	phase.Description = aux.Description
+	phase.Url = aux.Url
+	phase.ZnnFundsNeeded = common.StringToBigInt(aux.ZnnFundsNeeded)
+	phase.QsrFundsNeeded = common.StringToBigInt(aux.QsrFundsNeeded)
+	phase.CreationTimestamp = aux.CreationTimestamp
+	phase.AcceptedTimestamp = aux.AcceptedTimestamp
+	phase.Status = aux.Status
+	return nil
 }
 
 func (phase *Phase) Save(context db.DB) {

@@ -614,16 +614,7 @@ func (srv *Server) setupConn(fd net.Conn, flags connFlag, dialDest *discover.Nod
 		c.close(errServerStopped)
 		return
 	}
-	timeout := time.NewTimer(dialHistoryExpiration * 9)
-	defer timeout.Stop()
-	go func() {
-		select {
-		case <-timeout.C:
-			c.close(DiscReadTimeout)
-		case <-srv.quit:
-			c.close(errServerStopped)
-		}
-	}()
+
 	// Run the encryption handshake.
 	var err error
 	if c.id, err = c.doEncHandshake(srv.PrivateKey, dialDest); err != nil {

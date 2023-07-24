@@ -2,6 +2,7 @@ package embedded
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"math/big"
 
 	"github.com/inconshreveable/log15"
@@ -36,10 +37,71 @@ type SwapAssetEntry struct {
 	Znn       *big.Int `json:"znn"`
 	Qsr       *big.Int `json:"qsr"`
 }
+
+type SwapAssetEntryMarshal struct {
+	KeyIdHash string `json:"keyIdHash"`
+	Znn       string `json:"znn"`
+	Qsr       string `json:"qsr"`
+}
+
+func (s *SwapAssetEntry) ToSwapAssetEntryMarshal() *SwapAssetEntryMarshal {
+	aux := &SwapAssetEntryMarshal{
+		KeyIdHash: s.KeyIdHash,
+		Znn:       s.Znn.String(),
+		Qsr:       s.Qsr.String(),
+	}
+
+	return aux
+}
+
+func (s *SwapAssetEntry) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.ToSwapAssetEntryMarshal())
+}
+
+func (s *SwapAssetEntry) UnmarshalJSON(data []byte) error {
+	aux := new(SwapAssetEntryMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	s.KeyIdHash = aux.KeyIdHash
+	s.Znn = common.StringToBigInt(aux.Znn)
+	s.Qsr = common.StringToBigInt(aux.Qsr)
+	return nil
+}
+
 type SwapAssetEntrySimple struct {
 	Znn *big.Int `json:"znn"`
 	Qsr *big.Int `json:"qsr"`
 }
+
+type SwapAssetEntrySimpleMarshal struct {
+	Znn string `json:"znn"`
+	Qsr string `json:"qsr"`
+}
+
+func (s *SwapAssetEntrySimple) ToSwapAssetEntrySimpleMarshal() *SwapAssetEntrySimpleMarshal {
+	aux := &SwapAssetEntrySimpleMarshal{
+		Znn: s.Znn.String(),
+		Qsr: s.Qsr.String(),
+	}
+
+	return aux
+}
+
+func (s *SwapAssetEntrySimple) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.ToSwapAssetEntrySimpleMarshal())
+}
+
+func (s *SwapAssetEntrySimple) UnmarshalJSON(data []byte) error {
+	aux := new(SwapAssetEntrySimpleMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	s.Znn = common.StringToBigInt(aux.Znn)
+	s.Qsr = common.StringToBigInt(aux.Qsr)
+	return nil
+}
+
 type SwapLegacyPillarEntry struct {
 	KeyIdHash  string `json:"keyIdHash"`
 	NumPillars int    `json:"numPillars"`
@@ -47,16 +109,16 @@ type SwapLegacyPillarEntry struct {
 
 // === Swap Assets ===
 
-func (p *SwapApi) GetAssetsByKeyIdHash(keyIdHas types.Hash) (*SwapAssetEntry, error) {
+func (p *SwapApi) GetAssetsByKeyIdHash(keyIdHash types.Hash) (*SwapAssetEntry, error) {
 	m, context, err := api.GetFrontierContext(p.chain, types.SwapContract)
 	if err != nil {
 		return nil, err
 	}
 
-	entry, err := definition.GetSwapAssetsByKeyIdHash(context.Storage(), keyIdHas)
+	entry, err := definition.GetSwapAssetsByKeyIdHash(context.Storage(), keyIdHash)
 	if err == constants.ErrDataNonExistent {
 		return &SwapAssetEntry{
-			KeyIdHash: keyIdHas.String(),
+			KeyIdHash: keyIdHash.String(),
 			Znn:       common.Big0,
 			Qsr:       common.Big0,
 		}, nil
@@ -70,7 +132,7 @@ func (p *SwapApi) GetAssetsByKeyIdHash(keyIdHas types.Hash) (*SwapAssetEntry, er
 	currentEpoch := int(p.consensus.FixedPillarReader(m.Identifier()).EpochTicker().ToTick(*currentM.Timestamp))
 	implementation.ApplyDecay(entry, currentEpoch)
 	return &SwapAssetEntry{
-		KeyIdHash: keyIdHas.String(),
+		KeyIdHash: keyIdHash.String(),
 		Znn:       entry.Znn,
 		Qsr:       entry.Qsr,
 	}, nil

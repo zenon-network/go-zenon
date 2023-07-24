@@ -1,6 +1,7 @@
 package embedded
 
 import (
+	"encoding/json"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 	"github.com/zenon-network/go-zenon/chain/nom"
@@ -176,6 +177,51 @@ type WrapTokenRequest struct {
 	*definition.WrapTokenRequest
 	TokenInfo               *api.Token `json:"token"`
 	ConfirmationsToFinality uint64     `json:"confirmationsToFinality"`
+}
+
+func (w *WrapTokenRequest) MarshalJSON() ([]byte, error) {
+	aux := struct {
+		*definition.WrapTokenRequestMarshal
+		TokenInfo               *api.TokenMarshal `json:"token"`
+		ConfirmationsToFinality uint64            `json:"confirmationsToFinality"`
+	}{
+		WrapTokenRequestMarshal: w.WrapTokenRequest.ToMarshalJson(),
+		ConfirmationsToFinality: w.ConfirmationsToFinality,
+	}
+	if w.TokenInfo != nil {
+		aux.TokenInfo = w.TokenInfo.ToTokenMarshal()
+	}
+
+	return json.Marshal(aux)
+}
+
+func (w *WrapTokenRequest) UnmarshalJSON(data []byte) error {
+	aux := &struct {
+		*definition.WrapTokenRequestMarshal
+		TokenInfo               *api.TokenMarshal `json:"token"`
+		ConfirmationsToFinality uint64            `json:"confirmationsToFinality"`
+	}{}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	w.WrapTokenRequest = &definition.WrapTokenRequest{
+		NetworkClass:           aux.WrapTokenRequestMarshal.NetworkClass,
+		ChainId:                aux.ChainId,
+		Id:                     aux.Id,
+		ToAddress:              aux.ToAddress,
+		TokenStandard:          aux.TokenStandard,
+		TokenAddress:           aux.TokenAddress,
+		Amount:                 common.StringToBigInt(aux.Amount),
+		Fee:                    common.StringToBigInt(aux.Fee),
+		Signature:              aux.Signature,
+		CreationMomentumHeight: aux.CreationMomentumHeight,
+	}
+	if aux.TokenInfo != nil {
+		w.TokenInfo = aux.TokenInfo.FromTokenMarshal()
+	}
+	w.ConfirmationsToFinality = aux.ConfirmationsToFinality
+	return nil
 }
 
 func (a *BridgeApi) getToken(zts types.ZenonTokenStandard) (*api.Token, error) {
@@ -449,6 +495,53 @@ type UnwrapTokenRequest struct {
 	RedeemableIn uint64     `json:"redeemableIn"`
 }
 
+func (u *UnwrapTokenRequest) MarshalJSON() ([]byte, error) {
+	aux := struct {
+		*definition.UnwrapTokenRequestMarshal
+		TokenInfo    *api.TokenMarshal `json:"token"`
+		RedeemableIn uint64            `json:"redeemableIn"`
+	}{
+		UnwrapTokenRequestMarshal: u.UnwrapTokenRequest.ToMarshalJson(),
+		RedeemableIn:              u.RedeemableIn,
+	}
+	if u.TokenInfo != nil {
+		aux.TokenInfo = u.TokenInfo.ToTokenMarshal()
+	}
+	return json.Marshal(aux)
+}
+
+func (u *UnwrapTokenRequest) UnmarshalJSON(data []byte) error {
+	aux := &struct {
+		*definition.UnwrapTokenRequestMarshal
+		TokenInfo    *api.TokenMarshal `json:"token"`
+		RedeemableIn uint64            `json:"redeemableIn"`
+	}{}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	u.UnwrapTokenRequest = &definition.UnwrapTokenRequest{
+		RegistrationMomentumHeight: aux.RegistrationMomentumHeight,
+		NetworkClass:               aux.NetworkClass,
+		ChainId:                    aux.ChainId,
+		TransactionHash:            aux.TransactionHash,
+		LogIndex:                   aux.LogIndex,
+		ToAddress:                  aux.ToAddress,
+		TokenAddress:               aux.TokenAddress,
+		TokenStandard:              aux.TokenStandard,
+		Amount:                     common.StringToBigInt(aux.Amount),
+		Signature:                  aux.Signature,
+		Redeemed:                   aux.Redeemed,
+		Revoked:                    aux.Revoked,
+	}
+
+	if aux.TokenInfo != nil {
+		u.TokenInfo = aux.TokenInfo.FromTokenMarshal()
+	}
+	u.RedeemableIn = aux.RedeemableIn
+	return nil
+}
+
 type UnwrapTokenRequestList struct {
 	Count int                   `json:"count"`
 	List  []*UnwrapTokenRequest `json:"list"`
@@ -546,6 +639,9 @@ func (a *BridgeApi) GetAllUnwrapTokenRequestsByToAddress(toAddress string, pageI
 				specificRequests = append(specificRequests, request)
 			}
 		}
+		sort.Slice(specificRequests[:], func(i, j int) bool {
+			return specificRequests[i].RegistrationMomentumHeight > specificRequests[j].RegistrationMomentumHeight
+		})
 
 	}
 	result.Count = len(specificRequests)

@@ -3,6 +3,7 @@ package nom
 import (
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
 
@@ -297,4 +298,147 @@ func DeserializeAccountBlock(data []byte) (*AccountBlock, error) {
 		return nil, err
 	}
 	return DeProtoAccountBlock(pb), nil
+}
+
+type AccountBlockMarshal struct {
+	Version         uint64 `json:"version"`
+	ChainIdentifier uint64 `json:"chainIdentifier"`
+	BlockType       uint64 `json:"blockType"`
+
+	Hash                 types.Hash       `json:"hash"`
+	PreviousHash         types.Hash       `json:"previousHash"`
+	Height               uint64           `json:"height"`
+	MomentumAcknowledged types.HashHeight `json:"momentumAcknowledged"`
+
+	Address types.Address `json:"address"`
+
+	// Send information
+	ToAddress     types.Address            `json:"toAddress"`
+	Amount        string                   `json:"amount"`
+	TokenStandard types.ZenonTokenStandard `json:"tokenStandard"`
+
+	// Receive information
+	FromBlockHash types.Hash `json:"fromBlockHash"`
+
+	// Batch information
+	DescendantBlocks []*AccountBlock `json:"descendantBlocks"` // hash of DescendantBlocks is included in hash
+
+	Data []byte `json:"data"` // hash of Data is included in hash
+
+	FusedPlasma uint64 `json:"fusedPlasma"`
+	Difficulty  uint64 `json:"difficulty"`
+	Nonce       string `json:"nonce"`
+	BasePlasma  uint64 `json:"basePlasma"` // not included in hash, the smallest value of TotalPlasma required for block
+	TotalPlasma uint64 `json:"usedPlasma"` // not included in hash, TotalPlasma = FusedPlasma + PowPlasma
+
+	ChangesHash types.Hash `json:"changesHash"` // not included in hash
+
+	producer  *types.Address    // not included in hash, for caching purpose only
+	PublicKey ed25519.PublicKey `json:"publicKey"` // not included in hash
+	Signature []byte            `json:"signature"` // not included in hash
+}
+
+func (ab *AccountBlock) ToNomMarshalJson() *AccountBlockMarshal {
+	aux := &AccountBlockMarshal{
+		Version:              ab.Version,
+		ChainIdentifier:      ab.ChainIdentifier,
+		BlockType:            ab.BlockType,
+		Hash:                 ab.Hash,
+		PreviousHash:         ab.PreviousHash,
+		Height:               ab.Height,
+		MomentumAcknowledged: ab.MomentumAcknowledged,
+		Address:              ab.Address,
+		ToAddress:            ab.ToAddress,
+		Amount:               ab.Amount.String(),
+		TokenStandard:        ab.TokenStandard,
+		FromBlockHash:        ab.FromBlockHash,
+		Data:                 ab.Data,
+		FusedPlasma:          ab.FusedPlasma,
+		Difficulty:           ab.Difficulty,
+		Nonce:                hex.EncodeToString(ab.Nonce.Data[:]),
+		BasePlasma:           ab.BasePlasma,
+		TotalPlasma:          ab.TotalPlasma,
+		ChangesHash:          ab.ChangesHash,
+		PublicKey:            ab.PublicKey,
+		Signature:            ab.Signature,
+	}
+
+	aux.DescendantBlocks = make([]*AccountBlock, 0, len(ab.DescendantBlocks))
+	for _, dBlock := range ab.DescendantBlocks {
+		aux.DescendantBlocks = append(aux.DescendantBlocks, dBlock)
+	}
+	return aux
+}
+
+func (ab *AccountBlockMarshal) FromNomMarshalJson() *AccountBlock {
+	aux := &AccountBlock{
+		Version:              ab.Version,
+		ChainIdentifier:      ab.ChainIdentifier,
+		BlockType:            ab.BlockType,
+		Hash:                 ab.Hash,
+		PreviousHash:         ab.PreviousHash,
+		Height:               ab.Height,
+		MomentumAcknowledged: ab.MomentumAcknowledged,
+		Address:              ab.Address,
+		ToAddress:            ab.ToAddress,
+		Amount:               common.StringToBigInt(ab.Amount),
+		TokenStandard:        ab.TokenStandard,
+		FromBlockHash:        ab.FromBlockHash,
+		Data:                 ab.Data,
+		FusedPlasma:          ab.FusedPlasma,
+		Difficulty:           ab.Difficulty,
+		BasePlasma:           ab.BasePlasma,
+		TotalPlasma:          ab.TotalPlasma,
+		ChangesHash:          ab.ChangesHash,
+		PublicKey:            ab.PublicKey,
+		Signature:            ab.Signature,
+	}
+	// ignore the error, it will just not set the nonce
+	aux.Nonce.UnmarshalText([]byte(ab.Nonce))
+
+	aux.DescendantBlocks = make([]*AccountBlock, 0, len(ab.DescendantBlocks))
+	for _, dBlock := range ab.DescendantBlocks {
+		aux.DescendantBlocks = append(aux.DescendantBlocks, dBlock)
+	}
+	return aux
+}
+
+func (ab *AccountBlock) MarshalJSON() ([]byte, error) {
+	return json.Marshal(ab.ToNomMarshalJson())
+}
+func (ab *AccountBlock) UnmarshalJSON(data []byte) error {
+	aux := new(AccountBlockMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	ab.Version = aux.Version
+	ab.ChainIdentifier = aux.ChainIdentifier
+	ab.BlockType = aux.BlockType
+	ab.Hash = aux.Hash
+	ab.PreviousHash = aux.PreviousHash
+	ab.Height = aux.Height
+	ab.MomentumAcknowledged = aux.MomentumAcknowledged
+	ab.Address = aux.Address
+	ab.ToAddress = aux.ToAddress
+	ab.Amount = common.StringToBigInt(aux.Amount)
+	ab.TokenStandard = aux.TokenStandard
+	ab.FromBlockHash = aux.FromBlockHash
+	ab.DescendantBlocks = make([]*AccountBlock, len(aux.DescendantBlocks))
+	ab.Data = aux.Data
+	ab.FusedPlasma = aux.FusedPlasma
+	ab.Difficulty = aux.Difficulty
+	if err := ab.Nonce.UnmarshalText([]byte(aux.Nonce)); err != nil {
+		return err
+	}
+	ab.BasePlasma = aux.BasePlasma
+	ab.TotalPlasma = aux.TotalPlasma
+	ab.ChangesHash = aux.ChangesHash
+	ab.PublicKey = aux.PublicKey
+	ab.Signature = aux.Signature
+	for index, dBlock := range aux.DescendantBlocks {
+		ab.DescendantBlocks[index] = dBlock
+	}
+
+	return nil
 }

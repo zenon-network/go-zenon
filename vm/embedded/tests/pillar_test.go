@@ -194,14 +194,14 @@ t=2001-09-09T05:47:30+0000 lvl=info msg="received donation" module=embedded cont
 }
 
 // Try to register without QSR deposited before
-//  - gets the 15K ZNN back, since the transaction is rollback
+//   - gets the 15K ZNN back, since the transaction is rollback
 func TestPillar_RegisterWithoutQsr(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	pillarApi := embedded.NewPillarApi(z, true)
 	defer z.StopPanic()
 	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, ``)
 
-	common.Json(pillarApi.GetQsrRegistrationCost()).Equals(t, `15000000000000`)
+	common.Json(pillarApi.GetQsrRegistrationCost()).Equals(t, `"15000000000000"`)
 	z.ExpectBalance(g.Pillar4.Address, types.ZnnTokenStandard, 16000*g.Zexp)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.Pillar4.Address,
@@ -249,7 +249,7 @@ func TestPillar_DepositQsr(t *testing.T) {
 	}).Error(t, nil)
 	// Add send-blocks
 	z.InsertNewMomentum()
-	common.Json(pillarApi.GetDepositedQsr(g.Pillar4.Address)).Equals(t, `15000000000000`)
+	common.Json(pillarApi.GetDepositedQsr(g.Pillar4.Address)).Equals(t, `"15000000000000"`)
 	z.ExpectBalance(g.Pillar4.Address, types.QsrTokenStandard, 200000*g.Zexp-15000000000000)
 
 	defer z.CallContract(&nom.AccountBlock{
@@ -261,7 +261,7 @@ func TestPillar_DepositQsr(t *testing.T) {
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 	autoreceive(t, z, g.Pillar4.Address)
-	common.Json(pillarApi.GetDepositedQsr(g.Pillar4.Address)).Equals(t, `0`)
+	common.Json(pillarApi.GetDepositedQsr(g.Pillar4.Address)).Equals(t, `"0"`)
 	z.ExpectBalance(g.Pillar4.Address, types.QsrTokenStandard, 200000*g.Zexp)
 
 	// withdraw again, should receive error
@@ -283,7 +283,7 @@ func TestPillar_DepositQsr(t *testing.T) {
 	}).Error(t, nil)
 	// Add send-blocks
 	z.InsertNewMomentum()
-	common.Json(pillarApi.GetDepositedQsr(g.Pillar4.Address)).Equals(t, `15000000000000`)
+	common.Json(pillarApi.GetDepositedQsr(g.Pillar4.Address)).Equals(t, `"15000000000000"`)
 
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.Pillar4.Address,
@@ -291,12 +291,12 @@ func TestPillar_DepositQsr(t *testing.T) {
 		Data:      definition.ABIPillars.PackMethodPanic(definition.WithdrawQsrMethodName),
 	}).Error(t, nil)
 	z.InsertMomentumsTo(30)
-	common.Json(pillarApi.GetDepositedQsr(g.Pillar4.Address)).Equals(t, `0`)
+	common.Json(pillarApi.GetDepositedQsr(g.Pillar4.Address)).Equals(t, `"0"`)
 }
 
 // Register a pillar depositing weird amounts of QSR
-//  - support custom deposit values
-//  - be able to withdraw the deposited QSR in case of too much deposited
+//   - support custom deposit values
+//   - be able to withdraw the deposited QSR in case of too much deposited
 func TestPillar_RegisterWithWeirdQsrDeposits(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
@@ -374,7 +374,7 @@ t=2001-09-09T01:47:40+0000 lvl=dbug msg=swap-utils-log module=embedded contract=
 t=2001-09-09T01:47:50+0000 lvl=dbug msg="burned ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 TokenName:QuasarCoin TokenSymbol:QSR TokenDomain:zenon.network TotalSupply:+134550000000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll}" burned-amount=15000000000000
 `)
 
-	common.Json(pillarApi.GetQsrRegistrationCost()).Equals(t, `15000000000000`)
+	common.Json(pillarApi.GetQsrRegistrationCost()).Equals(t, `"15000000000000"`)
 	// deposit QSR for first normal pillar
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.Pillar4.Address,
@@ -394,7 +394,7 @@ t=2001-09-09T01:47:50+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 	}).Error(t, nil)
 	z.InsertNewMomentum()
 
-	common.Json(pillarApi.GetQsrRegistrationCost()).Equals(t, `16000000000000`)
+	common.Json(pillarApi.GetQsrRegistrationCost()).Equals(t, `"16000000000000"`)
 	// deposit QSR for second normal pillar
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.Pillar5.Address,
@@ -460,7 +460,7 @@ t=2001-09-09T01:47:50+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 		}
 	]
 }`)
-	common.Json(pillarApi.GetQsrRegistrationCost()).Equals(t, `17000000000000`)
+	common.Json(pillarApi.GetQsrRegistrationCost()).Equals(t, `"17000000000000"`)
 	common.Json(swapApi.GetLegacyPillars()).Equals(t, `
 [
 	{
@@ -532,6 +532,24 @@ func TestPillar_RegisterRevokeRegisterPillar(t *testing.T) {
 	defer z.StopPanic()
 	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
 t=2001-09-09T01:47:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 TokenName:QuasarCoin TokenSymbol:QSR TokenDomain:zenon.network TotalSupply:+165550000000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll}" burned-amount=15000000000000
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg current-height=361 last-update-height=0
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="computer pillar-reward" module=embedded contract=pillar epoch=0 pillar-name=TEST-pillar-1 reward="&{DelegationReward:+11995200000 BlockReward:+9916666627 TotalReward:+21911866627 ProducedBlockNum:119 ExpectedBlockNum:120 Weight:+2100000000000}" total-weight=2500000000000 self-weight=2100000000000
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="computer pillar-reward" module=embedded contract=pillar epoch=0 pillar-name=TEST-pillar-cool reward="&{DelegationReward:+1152000000 BlockReward:+9999999960 TotalReward:+11151999960 ProducedBlockNum:120 ExpectedBlockNum:120 Weight:+200000000000}" total-weight=2500000000000 self-weight=200000000000
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="computer pillar-reward" module=embedded contract=pillar epoch=0 pillar-name=TEST-pillar-znn reward="&{DelegationReward:+1152000000 BlockReward:+9999999960 TotalReward:+11151999960 ProducedBlockNum:120 ExpectedBlockNum:120 Weight:+200000000000}" total-weight=2500000000000 self-weight=200000000000
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=pillar epoch=1
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxsentynelxxxxxxxxxxxxxwy0r2r current-height=361 last-update-height=0
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating sentinel reward" module=embedded contract=sentinel epoch=0 total-znn-reward=187200000000 total-qsr-reward=500000000000 cumulated-sentinel=0 start-time=1000000000 end-time=1000003600
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=sentinel epoch=1
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 current-height=361 last-update-height=0
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating stake reward" module=embedded contract=stake epoch=0 total-reward=1000000000000 cumulated-stake=0 start-time=1000000000 end-time=1000003600
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=stake epoch=1
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating contract state" module=embedded contract=common contract=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae current-height=361 last-update-height=0
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="updating liquidity reward" module=embedded contract=liquidity epoch=0 znn-amount=187200000000 qsr-amount=500000000000
+t=2001-09-09T02:46:40+0000 lvl=dbug msg="invalid update - rewards not due yet" module=embedded contract=liquidity epoch=1
+t=2001-09-09T02:46:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg TokenName:Zenon Coin TokenSymbol:ZNN TokenDomain:zenon.network TotalSupply:+19687200000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx}" minted-amount=187200000000 to-address=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae
+t=2001-09-09T02:46:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 TokenName:QuasarCoin TokenSymbol:QSR TokenDomain:zenon.network TotalSupply:+166050000000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll}" minted-amount=500000000000 to-address=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae
+t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1znnxxxxxxxxxxxxx9z4ulx amount=187200000000
+t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1qsrxxxxxxxxxxxxxmrhjll amount=500000000000
 `)
 	defer func() {
 		constants.PillarEpochRevokeTime = 28800
@@ -540,7 +558,7 @@ t=2001-09-09T01:47:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 	constants.PillarEpochRevokeTime = 60
 	constants.PillarEpochLockTime = 60
 
-	common.Json(pillarApi.GetQsrRegistrationCost()).Equals(t, `15000000000000`)
+	common.Json(pillarApi.GetQsrRegistrationCost()).Equals(t, `"15000000000000"`)
 	// deposit QSR for Pillar 4
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.Pillar4.Address,
@@ -607,7 +625,7 @@ t=2001-09-09T01:47:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 	]
 }`)
 
-	common.Json(pillarApi.GetQsrRegistrationCost()).Equals(t, `15000000000000`)
+	common.Json(pillarApi.GetQsrRegistrationCost()).Equals(t, `"15000000000000"`)
 	common.Json(pillarApi.CheckNameAvailability(g.Pillar4Name)).Equals(t, `false`)
 	// deposit QSR for Pillar 4
 	defer z.CallContract(&nom.AccountBlock{
@@ -629,4 +647,85 @@ t=2001-09-09T01:47:10+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
+
+	common.Json(pillarApi.GetAll(0, 100)).Equals(t, `
+{
+	"count": 3,
+	"list": [
+		{
+			"name": "TEST-pillar-1",
+			"rank": 0,
+			"type": 1,
+			"ownerAddress": "z1qqq43dyrswfehx9w9td43exflqzcxrt7g6alah",
+			"producerAddress": "z1qqq43dyrswfehx9w9td43exflqzcxrt7g6alah",
+			"withdrawAddress": "z1qqq43dyrswfehx9w9td43exflqzcxrt7g6alah",
+			"isRevocable": false,
+			"revokeCooldown": 20,
+			"revokeTimestamp": 0,
+			"giveMomentumRewardPercentage": 0,
+			"giveDelegateRewardPercentage": 100,
+			"currentStats": {
+				"producedMomentums": 4,
+				"expectedMomentums": 10
+			},
+			"weight": "2100000000000"
+		},
+		{
+			"name": "TEST-pillar-cool",
+			"rank": 1,
+			"type": 1,
+			"ownerAddress": "z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju",
+			"producerAddress": "z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju",
+			"withdrawAddress": "z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju",
+			"isRevocable": false,
+			"revokeCooldown": 20,
+			"revokeTimestamp": 0,
+			"giveMomentumRewardPercentage": 0,
+			"giveDelegateRewardPercentage": 100,
+			"currentStats": {
+				"producedMomentums": 6,
+				"expectedMomentums": 10
+			},
+			"weight": "200000000000"
+		},
+		{
+			"name": "TEST-pillar-znn",
+			"rank": 2,
+			"type": 1,
+			"ownerAddress": "z1qqc8hqalt8je538849rf78nhgek30axq8h0g69",
+			"producerAddress": "z1qqc8hqalt8je538849rf78nhgek30axq8h0g69",
+			"withdrawAddress": "z1qqc8hqalt8je538849rf78nhgek30axq8h0g69",
+			"isRevocable": false,
+			"revokeCooldown": 20,
+			"revokeTimestamp": 0,
+			"giveMomentumRewardPercentage": 0,
+			"giveDelegateRewardPercentage": 100,
+			"currentStats": {
+				"producedMomentums": 6,
+				"expectedMomentums": 10
+			},
+			"weight": "200000000000"
+		}
+	]
+}`)
+
+	z.InsertMomentumsTo(500)
+
+	common.Json(pillarApi.GetUncollectedReward(g.Pillar1.Address)).Equals(t, `
+{
+	"address": "z1qqq43dyrswfehx9w9td43exflqzcxrt7g6alah",
+	"znnAmount": "10487866627",
+	"qsrAmount": "0"
+}`)
+	common.Json(pillarApi.GetFrontierRewardByPage(g.Pillar1.Address, 0, 2)).Equals(t, `
+{
+	"count": 1,
+	"list": [
+		{
+			"epoch": 0,
+			"znnAmount": "10487866627",
+			"qsrAmount": "0"
+		}
+	]
+}`)
 }

@@ -1,6 +1,7 @@
 package embedded
 
 import (
+	"encoding/json"
 	"math/big"
 	"sort"
 
@@ -78,6 +79,81 @@ type Project struct {
 	PhaseIds            []types.Hash              `json:"phaseIds"`
 	Votes               *definition.VoteBreakdown `json:"votes"`
 	Phases              []*Phase                  `json:"phases"`
+}
+
+type ProjectMarshal struct {
+	Id                  types.Hash                `json:"id"`
+	Owner               types.Address             `json:"owner"`
+	Name                string                    `json:"name"`
+	Description         string                    `json:"description"`
+	Url                 string                    `json:"url"`
+	ZnnFundsNeeded      string                    `json:"znnFundsNeeded"`
+	QsrFundsNeeded      string                    `json:"qsrFundsNeeded"`
+	CreationTimestamp   int64                     `json:"creationTimestamp"`
+	LastUpdateTimestamp int64                     `json:"lastUpdateTimestamp"`
+	Status              uint8                     `json:"status"`
+	PhaseIds            []types.Hash              `json:"phaseIds"`
+	Votes               *definition.VoteBreakdown `json:"votes"`
+	Phases              []*Phase                  `json:"phases"`
+}
+
+func (p *Project) ToProjectMarshal() *ProjectMarshal {
+	aux := &ProjectMarshal{
+		Id:                  p.Id,
+		Owner:               p.Owner,
+		Name:                p.Name,
+		Description:         p.Description,
+		Url:                 p.Url,
+		ZnnFundsNeeded:      p.ZnnFundsNeeded.String(),
+		QsrFundsNeeded:      p.QsrFundsNeeded.String(),
+		CreationTimestamp:   p.CreationTimestamp,
+		LastUpdateTimestamp: p.LastUpdateTimestamp,
+		Status:              p.Status,
+		PhaseIds:            nil,
+		Votes:               p.Votes,
+		Phases:              nil,
+	}
+	aux.PhaseIds = make([]types.Hash, len(p.PhaseIds))
+	for idx, phaseId := range p.PhaseIds {
+		aux.PhaseIds[idx] = phaseId
+	}
+
+	aux.Phases = make([]*Phase, len(p.Phases))
+	for idx, phase := range p.Phases {
+		aux.Phases[idx] = phase
+	}
+	return aux
+}
+
+func (p *Project) MarshalJSON() ([]byte, error) {
+	return json.Marshal(p.ToProjectMarshal())
+}
+
+func (p *Project) UnmarshalJSON(data []byte) error {
+	aux := new(ProjectMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	p.Id = aux.Id
+	p.Owner = aux.Owner
+	p.Name = aux.Name
+	p.Description = aux.Description
+	p.Url = aux.Url
+	p.ZnnFundsNeeded = common.StringToBigInt(aux.ZnnFundsNeeded)
+	p.QsrFundsNeeded = common.StringToBigInt(aux.QsrFundsNeeded)
+	p.CreationTimestamp = aux.CreationTimestamp
+	p.LastUpdateTimestamp = aux.LastUpdateTimestamp
+	p.Status = aux.Status
+	p.PhaseIds = make([]types.Hash, len(aux.PhaseIds))
+	for idx, phaseId := range aux.PhaseIds {
+		p.PhaseIds[idx] = phaseId
+	}
+	p.Votes = aux.Votes
+	p.Phases = make([]*Phase, len(p.Phases))
+	for idx, phase := range aux.Phases {
+		p.Phases[idx] = phase
+	}
+	return nil
 }
 
 type ProjectList struct {

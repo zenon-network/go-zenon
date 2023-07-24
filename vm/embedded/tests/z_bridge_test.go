@@ -316,7 +316,7 @@ func activateBridgeStep5(t *testing.T, z mock.MockZenon) {
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": false,
-			"minAmount": 100,
+			"minAmount": "100",
 			"feePercentage": 15,
 			"redeemDelay": 20,
 			"metadata": "{\"APR\": 15, \"LockingPeriod\": 100}"
@@ -327,7 +327,7 @@ func activateBridgeStep5(t *testing.T, z mock.MockZenon) {
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": true,
-			"minAmount": 10,
+			"minAmount": "10",
 			"feePercentage": 100,
 			"redeemDelay": 15,
 			"metadata": "{\"APR\": 20, \"LockingPeriod\": 50}"
@@ -379,19 +379,19 @@ func activateBridgeStep6(t *testing.T, z mock.MockZenon) {
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1qanamzukd2v0pp8j2wzx6m",
 			"tokenAddress": "0x5aaaa2315678afecb367f032d93f642f64180aa3",
-			"amount": 5000,
-			"fee": 50,
+			"amount": "5000",
+			"fee": "50",
 			"signature": "",
 			"creationMomentumHeight": 91,
 			"token": {
 				"name": "test.tok3n_na-m3",
 				"symbol": "TEST",
 				"domain": "",
-				"totalSupply": 95050,
+				"totalSupply": "95050",
 				"decimals": 1,
 				"owner": "z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d",
 				"tokenStandard": "zts1qanamzukd2v0pp8j2wzx6m",
-				"maxSupply": 1000000,
+				"maxSupply": "1000000",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": false
@@ -405,19 +405,19 @@ func activateBridgeStep6(t *testing.T, z mock.MockZenon) {
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
 			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
-			"amount": 15000000000,
-			"fee": 22500000,
+			"amount": "15000000000",
+			"fee": "22500000",
 			"signature": "",
 			"creationMomentumHeight": 89,
 			"token": {
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19500000000000,
+				"totalSupply": "19500000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -431,13 +431,13 @@ func activateBridgeStep6(t *testing.T, z mock.MockZenon) {
 	common.Json(bridgeAPI.GetFeeTokenPair(types.ZnnTokenStandard)).Equals(t, `
 {
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"accumulatedFee": 22500000
+	"accumulatedFee": "22500000"
 }`)
 
 	common.Json(bridgeAPI.GetFeeTokenPair(tokenList.List[0].ZenonTokenStandard)).Equals(t, `
 {
 	"tokenStandard": "zts1qanamzukd2v0pp8j2wzx6m",
-	"accumulatedFee": 50
+	"accumulatedFee": "50"
 }`)
 }
 
@@ -487,7 +487,7 @@ func activateBridgeStep7(t *testing.T, z mock.MockZenon) {
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 			"tokenAddress": "0x5aaaa2315678afecb367f032d93f642f64180aa3",
 			"tokenStandard": "zts1qanamzukd2v0pp8j2wzx6m",
-			"amount": 800,
+			"amount": "800",
 			"signature": "eCKubWhwnuqqX9vjGl9ltqxCNwE2V9Xi4bO1q404JYNCUlJ0c3h5Cq558pLxtimrS73hPStjtz281+GcfNPTyAE=",
 			"redeemed": 0,
 			"revoked": 0,
@@ -495,11 +495,11 @@ func activateBridgeStep7(t *testing.T, z mock.MockZenon) {
 				"name": "test.tok3n_na-m3",
 				"symbol": "TEST",
 				"domain": "",
-				"totalSupply": 95050,
+				"totalSupply": "95050",
 				"decimals": 1,
 				"owner": "z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d",
 				"tokenStandard": "zts1qanamzukd2v0pp8j2wzx6m",
-				"maxSupply": 1000000,
+				"maxSupply": "1000000",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": false
@@ -515,7 +515,7 @@ func activateBridgeStep7(t *testing.T, z mock.MockZenon) {
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"amount": 10000000000,
+			"amount": "10000000000",
 			"signature": "YXFeAH2BIKnbHm7qd1zXt6SSReI9ovhYg5jVPGumNOkj3Bw6OfUwSZSCKSMPCw4NRZGDXT6m7Axe5UIwAno4xQE=",
 			"redeemed": 0,
 			"revoked": 0,
@@ -523,11 +523,11 @@ func activateBridgeStep7(t *testing.T, z mock.MockZenon) {
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19500000000000,
+				"totalSupply": "19500000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -573,19 +573,19 @@ func activateBridgeStep8(t *testing.T, z mock.MockZenon) {
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1qanamzukd2v0pp8j2wzx6m",
 			"tokenAddress": "0x5aaaa2315678afecb367f032d93f642f64180aa3",
-			"amount": 5000,
-			"fee": 50,
+			"amount": "5000",
+			"fee": "50",
 			"signature": "+i2E5GEjpFbGKIune7b6sl29+RNUCou8UniY0xXvZehRPRBCjPFuu7QukqUFEU9qzongnGqi2+6d7YcwlfTXBwE=",
 			"creationMomentumHeight": 91,
 			"token": {
 				"name": "test.tok3n_na-m3",
 				"symbol": "TEST",
 				"domain": "",
-				"totalSupply": 95050,
+				"totalSupply": "95050",
 				"decimals": 1,
 				"owner": "z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d",
 				"tokenStandard": "zts1qanamzukd2v0pp8j2wzx6m",
-				"maxSupply": 1000000,
+				"maxSupply": "1000000",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": false
@@ -599,19 +599,19 @@ func activateBridgeStep8(t *testing.T, z mock.MockZenon) {
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
 			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
-			"amount": 15000000000,
-			"fee": 22500000,
+			"amount": "15000000000",
+			"fee": "22500000",
 			"signature": "TxMtWKUPCOJjdSbshzc4id58m0XSrHCDVQjI20ys6TZmazUDP6KPsNjR4Bdjx0BU7svPOSU+XM6l372X+E1aoAE=",
 			"creationMomentumHeight": 89,
 			"token": {
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19500000000000,
+				"totalSupply": "19500000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -679,7 +679,7 @@ func activateBridgeStep9(t *testing.T, z mock.MockZenon) {
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 			"tokenAddress": "0x5aaaa2315678afecb367f032d93f642f64180aa3",
 			"tokenStandard": "zts1qanamzukd2v0pp8j2wzx6m",
-			"amount": 800,
+			"amount": "800",
 			"signature": "eCKubWhwnuqqX9vjGl9ltqxCNwE2V9Xi4bO1q404JYNCUlJ0c3h5Cq558pLxtimrS73hPStjtz281+GcfNPTyAE=",
 			"redeemed": 1,
 			"revoked": 0,
@@ -687,11 +687,11 @@ func activateBridgeStep9(t *testing.T, z mock.MockZenon) {
 				"name": "test.tok3n_na-m3",
 				"symbol": "TEST",
 				"domain": "",
-				"totalSupply": 95850,
+				"totalSupply": "95850",
 				"decimals": 1,
 				"owner": "z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d",
 				"tokenStandard": "zts1qanamzukd2v0pp8j2wzx6m",
-				"maxSupply": 1000000,
+				"maxSupply": "1000000",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": false
@@ -707,7 +707,7 @@ func activateBridgeStep9(t *testing.T, z mock.MockZenon) {
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"amount": 10000000000,
+			"amount": "10000000000",
 			"signature": "YXFeAH2BIKnbHm7qd1zXt6SSReI9ovhYg5jVPGumNOkj3Bw6OfUwSZSCKSMPCw4NRZGDXT6m7Axe5UIwAno4xQE=",
 			"redeemed": 1,
 			"revoked": 0,
@@ -715,11 +715,11 @@ func activateBridgeStep9(t *testing.T, z mock.MockZenon) {
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19500000000000,
+				"totalSupply": "19500000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -1014,7 +1014,7 @@ t=2001-09-09T02:01:50+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 			"tokenAddress": "0x5aaaa2315678afecb367f032d93f642f64180aa3",
 			"tokenStandard": "zts1qanamzukd2v0pp8j2wzx6m",
-			"amount": 800,
+			"amount": "800",
 			"signature": "eCKubWhwnuqqX9vjGl9ltqxCNwE2V9Xi4bO1q404JYNCUlJ0c3h5Cq558pLxtimrS73hPStjtz281+GcfNPTyAE=",
 			"redeemed": 0,
 			"revoked": 0,
@@ -1022,11 +1022,11 @@ t=2001-09-09T02:01:50+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 				"name": "test.tok3n_na-m3",
 				"symbol": "TEST",
 				"domain": "",
-				"totalSupply": 95050,
+				"totalSupply": "95050",
 				"decimals": 1,
 				"owner": "z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d",
 				"tokenStandard": "zts1qanamzukd2v0pp8j2wzx6m",
-				"maxSupply": 1000000,
+				"maxSupply": "1000000",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": false
@@ -1042,7 +1042,7 @@ t=2001-09-09T02:01:50+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"amount": 10000000000,
+			"amount": "10000000000",
 			"signature": "YXFeAH2BIKnbHm7qd1zXt6SSReI9ovhYg5jVPGumNOkj3Bw6OfUwSZSCKSMPCw4NRZGDXT6m7Axe5UIwAno4xQE=",
 			"redeemed": 0,
 			"revoked": 1,
@@ -1050,11 +1050,11 @@ t=2001-09-09T02:01:50+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19500000000000,
+				"totalSupply": "19500000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -1124,7 +1124,7 @@ t=2001-09-09T02:01:50+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": false,
-			"minAmount": 100,
+			"minAmount": "100",
 			"feePercentage": 20,
 			"redeemDelay": 25,
 			"metadata": "{\"APR\": 25, \"LockingPeriod\": 100}"
@@ -1135,7 +1135,7 @@ t=2001-09-09T02:01:50+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": true,
-			"minAmount": 10,
+			"minAmount": "10",
 			"feePercentage": 100,
 			"redeemDelay": 15,
 			"metadata": "{\"APR\": 20, \"LockingPeriod\": 50}"
@@ -1146,7 +1146,7 @@ t=2001-09-09T02:01:50+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": false,
-			"minAmount": 100,
+			"minAmount": "100",
 			"feePercentage": 15,
 			"redeemDelay": 20,
 			"metadata": "{\"APR\": 15, \"LockingPeriod\": 100}"
@@ -1173,7 +1173,7 @@ t=2001-09-09T02:01:50+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": true,
-			"minAmount": 10,
+			"minAmount": "10",
 			"feePercentage": 100,
 			"redeemDelay": 15,
 			"metadata": "{\"APR\": 20, \"LockingPeriod\": 50}"
@@ -1184,7 +1184,7 @@ t=2001-09-09T02:01:50+0000 lvl=dbug msg="burned ZTS" module=embedded contract=to
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": false,
-			"minAmount": 100,
+			"minAmount": "100",
 			"feePercentage": 15,
 			"redeemDelay": 20,
 			"metadata": "{\"APR\": 15, \"LockingPeriod\": 100}"
@@ -1397,7 +1397,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.Json(feeTokenPair, err).Equals(t, `
 {
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"accumulatedFee": 0
+	"accumulatedFee": "0"
 }`)
 	amount := big.NewInt(15 * g.Zexp)
 	defer z.CallContract(wrapToken(types.ZnnTokenStandard, amount, networkClass, chainId, "0xb794f5ea0ba39494ce839613fffba74279579268")).
@@ -1458,7 +1458,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": false,
-			"minAmount": 100,
+			"minAmount": "100",
 			"feePercentage": 15,
 			"redeemDelay": 20,
 			"metadata": "{\"APR\": 15, \"LockingPeriod\": 100}"
@@ -1489,7 +1489,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.Json(bridgeAPI.GetFeeTokenPair(types.ZnnTokenStandard)).Equals(t, `
 {
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"accumulatedFee": 6750000
+	"accumulatedFee": "6750000"
 }`)
 	defer z.CallContract(wrapToken(types.ZnnTokenStandard, big.NewInt(10*g.Zexp), networkClass, chainId, "0xb794f5ea0ba39494ce839613fffba74279579268")).Error(t,
 		nil)
@@ -1499,7 +1499,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.Json(bridgeAPI.GetFeeTokenPair(types.ZnnTokenStandard)).Equals(t, `
 {
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"accumulatedFee": 6750000
+	"accumulatedFee": "6750000"
 }`)
 
 	// Set token fee 100%
@@ -1508,7 +1508,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.Json(bridgeAPI.GetFeeTokenPair(types.ZnnTokenStandard)).Equals(t, `
 {
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"accumulatedFee": 6750000
+	"accumulatedFee": "6750000"
 }`)
 	defer z.CallContract(wrapToken(types.ZnnTokenStandard, big.NewInt(1*g.Zexp), networkClass, chainId, "0xb794f5ea0ba39494ce839613fffba74279579268")).Error(t,
 		nil)
@@ -1518,7 +1518,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.Json(bridgeAPI.GetFeeTokenPair(types.ZnnTokenStandard)).Equals(t, `
 {
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"accumulatedFee": 106750000
+	"accumulatedFee": "106750000"
 }`)
 
 	// Set token minAmount to 1 so when we wrap the calculated fee value is 0
@@ -1534,7 +1534,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.Json(bridgeAPI.GetFeeTokenPair(types.ZnnTokenStandard)).Equals(t, `
 {
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"accumulatedFee": 106750000
+	"accumulatedFee": "106750000"
 }`)
 
 	// wrapping 10 should increase fees with 1
@@ -1546,7 +1546,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	common.Json(bridgeAPI.GetFeeTokenPair(types.ZnnTokenStandard)).Equals(t, `
 {
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"accumulatedFee": 106750001
+	"accumulatedFee": "106750001"
 }`)
 }
 
@@ -1690,19 +1690,19 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 			"toAddress": "0xb794f5ea0ba39494ce839613fffba74279579268",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
 			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
-			"amount": 1500000000,
-			"fee": 2250000,
+			"amount": "1500000000",
+			"fee": "2250000",
 			"signature": "BeQGkmasEzOP7W9+Z+2+nUspA+LGw5kw/WJKFlL7H346PeehfbCNxxHuToXTMzrieCRze/WKIjejPUp1esQ+NgA=",
 			"creationMomentumHeight": 81,
 			"token": {
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19500000000000,
+				"totalSupply": "19500000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -1792,7 +1792,7 @@ t=2001-09-09T02:05:00+0000 lvl=eror msg=Unwrap-ErrInvalidSignature module=embedd
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"amount": 10000000000,
+			"amount": "10000000000",
 			"signature": "YXFeAH2BIKnbHm7qd1zXt6SSReI9ovhYg5jVPGumNOkj3Bw6OfUwSZSCKSMPCw4NRZGDXT6m7Axe5UIwAno4xQE=",
 			"redeemed": 0,
 			"revoked": 0,
@@ -1800,11 +1800,11 @@ t=2001-09-09T02:05:00+0000 lvl=eror msg=Unwrap-ErrInvalidSignature module=embedd
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19500000000000,
+				"totalSupply": "19500000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -1920,7 +1920,7 @@ t=2001-09-09T02:05:00+0000 lvl=eror msg=Unwrap-ErrInvalidSignature module=embedd
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"amount": 10000000000,
+			"amount": "10000000000",
 			"signature": "YXFeAH2BIKnbHm7qd1zXt6SSReI9ovhYg5jVPGumNOkj3Bw6OfUwSZSCKSMPCw4NRZGDXT6m7Axe5UIwAno4xQE=",
 			"redeemed": 0,
 			"revoked": 0,
@@ -1928,11 +1928,11 @@ t=2001-09-09T02:05:00+0000 lvl=eror msg=Unwrap-ErrInvalidSignature module=embedd
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19500000000000,
+				"totalSupply": "19500000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -1957,7 +1957,7 @@ t=2001-09-09T02:05:00+0000 lvl=eror msg=Unwrap-ErrInvalidSignature module=embedd
 			"toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
 			"tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
 			"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-			"amount": 10000000000,
+			"amount": "10000000000",
 			"signature": "YXFeAH2BIKnbHm7qd1zXt6SSReI9ovhYg5jVPGumNOkj3Bw6OfUwSZSCKSMPCw4NRZGDXT6m7Axe5UIwAno4xQE=",
 			"redeemed": 0,
 			"revoked": 1,
@@ -1965,11 +1965,11 @@ t=2001-09-09T02:05:00+0000 lvl=eror msg=Unwrap-ErrInvalidSignature module=embedd
 				"name": "Zenon Coin",
 				"symbol": "ZNN",
 				"domain": "zenon.network",
-				"totalSupply": 19500000000000,
+				"totalSupply": "19500000000000",
 				"decimals": 8,
 				"owner": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
 				"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-				"maxSupply": 4611686018427387903,
+				"maxSupply": "4611686018427387903",
 				"isBurnable": true,
 				"isMintable": true,
 				"isUtility": true
@@ -2353,7 +2353,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 			"bridgeable": true,
 			"redeemable": true,
 			"owned": false,
-			"minAmount": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+			"minAmount": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
 			"feePercentage": 15,
 			"redeemDelay": 20,
 			"metadata": "{\"APR\": 15, \"LockingPeriod\": 100}"

@@ -67,7 +67,7 @@ func beforeAction(ctx *cli.Context) error {
 
 	max := runtime.NumCPU()
 	fmt.Printf("Starting znnd.\n")
-	fmt.Printf("current time is %v\n", time.Now().Format("2009-01-03 18:15:05"))
+	fmt.Printf("current time is %v\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Printf("version: %v\n", metadata.Version)
 	fmt.Printf("git-commit-hash: %v\n", metadata.GitCommit)
 	fmt.Printf("znnd will use at most %v cpu-cores\n", max)

@@ -184,20 +184,20 @@ func activateLiquidityStep2(t *testing.T, z mock.MockZenon) {
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": [
 		{
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
 			"znnPercentage": 5000,
 			"qsrPercentage": 5000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
 			"znnPercentage": 5000,
 			"qsrPercentage": 5000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		}
 	]
 }`)
@@ -219,14 +219,14 @@ func activateLiquidityStep3(t *testing.T, z mock.MockZenon) {
 	liquidityAPI := embedded.NewLiquidityApi(z)
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 5)).Equals(t, `
 {
-	"totalAmount": 4000000000,
-	"totalWeightedAmount": 10000000000,
+	"totalAmount": "4000000000",
+	"totalWeightedAmount": "10000000000",
 	"count": 2,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005480,
 			"revokeTime": 0,
 			"expirationTime": 1000009080,
@@ -234,9 +234,9 @@ func activateLiquidityStep3(t *testing.T, z mock.MockZenon) {
 			"id": "62690006c58c67dc5b7c41e095a22e40307eba0463cee5585f84b91f6815a5b1"
 		},
 		{
-			"amount": 3000000000,
+			"amount": "3000000000",
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
-			"weightedAmount": 9000000000,
+			"weightedAmount": "9000000000",
 			"startTime": 1000005500,
 			"revokeTime": 0,
 			"expirationTime": 1000016300,
@@ -264,8 +264,8 @@ func activateLiquidityStep4(t *testing.T, z mock.MockZenon) {
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 187200000000,
-	"qsrAmount": 500000000000
+	"znnAmount": "187200000000",
+	"qsrAmount": "500000000000"
 }`)
 
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 1872*g.Zexp)
@@ -297,20 +297,20 @@ func activateLiquidityStep5(t *testing.T, z mock.MockZenon) {
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 10000000000,
-	"qsrReward": 100000000000,
+	"znnReward": "10000000000",
+	"qsrReward": "100000000000",
 	"tokenTuples": [
 		{
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
 			"znnPercentage": 5000,
 			"qsrPercentage": 5000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
 			"znnPercentage": 5000,
 			"qsrPercentage": 5000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		}
 	]
 }`)
@@ -335,8 +335,8 @@ func activateLiquidityStep6(t *testing.T, z mock.MockZenon) {
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 197200000000,
-	"qsrAmount": 600000000000
+	"znnAmount": "197200000000",
+	"qsrAmount": "600000000000"
 }`)
 
 	// the amount of 100 was burned
@@ -374,14 +374,14 @@ func activateLiquidityStep7(t *testing.T, z mock.MockZenon) {
 	common.FailIfErr(t, err)
 	common.Json(stakes, err).Equals(t, `
 {
-	"totalAmount": 4000000000,
-	"totalWeightedAmount": 10000000000,
+	"totalAmount": "4000000000",
+	"totalWeightedAmount": "10000000000",
 	"count": 2,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005480,
 			"revokeTime": 0,
 			"expirationTime": 1000009080,
@@ -389,9 +389,9 @@ func activateLiquidityStep7(t *testing.T, z mock.MockZenon) {
 			"id": "62690006c58c67dc5b7c41e095a22e40307eba0463cee5585f84b91f6815a5b1"
 		},
 		{
-			"amount": 3000000000,
+			"amount": "3000000000",
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
-			"weightedAmount": 9000000000,
+			"weightedAmount": "9000000000",
 			"startTime": 1000005500,
 			"revokeTime": 0,
 			"expirationTime": 1000016300,
@@ -417,8 +417,8 @@ func activateLiquidityStep7(t *testing.T, z mock.MockZenon) {
 	common.FailIfErr(t, err)
 	common.Json(stakes, err).Equals(t, `
 {
-	"totalAmount": 0,
-	"totalWeightedAmount": 0,
+	"totalAmount": "0",
+	"totalWeightedAmount": "0",
 	"count": 0,
 	"list": []
 }`)
@@ -442,20 +442,20 @@ func activateLiquidityStep8(t *testing.T, z mock.MockZenon) {
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": [
 		{
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
 			"znnPercentage": 5000,
 			"qsrPercentage": 5000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
 			"znnPercentage": 5000,
 			"qsrPercentage": 5000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		}
 	]
 }`)
@@ -467,8 +467,8 @@ func activateLiquidityStep8(t *testing.T, z mock.MockZenon) {
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 197200000000,
-	"qsrAmount": 600000000000
+	"znnAmount": "197200000000",
+	"qsrAmount": "600000000000"
 }`)
 
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 1672*g.Zexp)
@@ -479,8 +479,8 @@ func activateLiquidityStep8(t *testing.T, z mock.MockZenon) {
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 571599999998,
-	"qsrAmount": 1599999999998
+	"znnAmount": "571599999998",
+	"qsrAmount": "1599999999998"
 }`)
 
 	// balance should stay the same
@@ -695,20 +695,20 @@ func TestLiquidity_SetTokenTuples(t *testing.T) {
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": [
 		{
 			"tokenStandard": "zts1xflhun39kllr8vw67y8gw9",
 			"znnPercentage": 5000,
 			"qsrPercentage": 5000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1g9zjdnwc28hg3zx954d7hw",
 			"znnPercentage": 5000,
 			"qsrPercentage": 5000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		}
 	]
 }`)
@@ -721,20 +721,20 @@ func TestLiquidity_SetTokenTuples(t *testing.T) {
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": [
 		{
 			"tokenStandard": "zts1xflhun39kllr8vw67y8gw9",
 			"znnPercentage": 0,
 			"qsrPercentage": 10000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1g9zjdnwc28hg3zx954d7hw",
 			"znnPercentage": 10000,
 			"qsrPercentage": 0,
-			"minAmount": 2000
+			"minAmount": "2000"
 		}
 	]
 }`)
@@ -757,8 +757,8 @@ func TestLiquidity_SetTokenTuples(t *testing.T) {
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": []
 }`)
 
@@ -777,20 +777,20 @@ func TestLiquidity_SetTokenTuples(t *testing.T) {
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": [
 		{
 			"tokenStandard": "zts1xflhun39kllr8vw67y8gw9",
 			"znnPercentage": 1,
 			"qsrPercentage": 9999,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1g9zjdnwc28hg3zx954d7hw",
 			"znnPercentage": 9999,
 			"qsrPercentage": 1,
-			"minAmount": 2000
+			"minAmount": "2000"
 		}
 	]
 }`)
@@ -804,14 +804,14 @@ func TestLiquidity_SetTokenTuples(t *testing.T) {
 	common.FailIfErr(t, err)
 	common.Json(entries, err).Equals(t, `
 {
-	"totalAmount": 10000000000,
-	"totalWeightedAmount": 10000000000,
+	"totalAmount": "10000000000",
+	"totalWeightedAmount": "10000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 10000000000,
+			"amount": "10000000000",
 			"tokenStandard": "zts1xflhun39kllr8vw67y8gw9",
-			"weightedAmount": 10000000000,
+			"weightedAmount": "10000000000",
 			"startTime": 1000006260,
 			"revokeTime": 0,
 			"expirationTime": 1000009860,
@@ -823,8 +823,8 @@ func TestLiquidity_SetTokenTuples(t *testing.T) {
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 18720000,
-	"qsrAmount": 499950000000
+	"znnAmount": "18720000",
+	"qsrAmount": "499950000000"
 }`)
 	// delete tokens
 	setTokensTuple(t, z, g.User5.Address, []string{}, []uint32{}, []uint32{}, []*big.Int{})
@@ -841,16 +841,16 @@ func TestLiquidity_SetTokenTuples(t *testing.T) {
 
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 5)).Equals(t, `
 {
-	"totalAmount": 0,
-	"totalWeightedAmount": 0,
+	"totalAmount": "0",
+	"totalWeightedAmount": "0",
 	"count": 0,
 	"list": []
 }`)
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 
 }
@@ -890,14 +890,14 @@ func TestLiquidity_StakeLiquidity(t *testing.T) {
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": [
 		{
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
 			"znnPercentage": 10000,
 			"qsrPercentage": 10000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		}
 	]
 }`)
@@ -954,8 +954,8 @@ func TestLiquidity_SetAdditionalRewards(t *testing.T) {
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 23720000000,
-	"qsrAmount": 60000000000
+	"znnAmount": "23720000000",
+	"qsrAmount": "60000000000"
 }`)
 	// balance of the contract should be 1872*4 - 237.2 znn and 5000 * 4 - 600 qsr as that was my reward and the rest was minted to the contract
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 1872*4*g.Zexp-2372*1e7)
@@ -1147,14 +1147,14 @@ t=2001-09-09T03:52:10+0000 lvl=dbug msg="revoked liquidity stake entry" module=e
 
 	common.Json(entries, err).Equals(t, `
 {
-	"totalAmount": 9000000000,
-	"totalWeightedAmount": 70000000000,
+	"totalAmount": "9000000000",
+	"totalWeightedAmount": "70000000000",
 	"count": 3,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005480,
 			"revokeTime": 0,
 			"expirationTime": 1000009080,
@@ -1162,9 +1162,9 @@ t=2001-09-09T03:52:10+0000 lvl=dbug msg="revoked liquidity stake entry" module=e
 			"id": "62690006c58c67dc5b7c41e095a22e40307eba0463cee5585f84b91f6815a5b1"
 		},
 		{
-			"amount": 3000000000,
+			"amount": "3000000000",
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
-			"weightedAmount": 9000000000,
+			"weightedAmount": "9000000000",
 			"startTime": 1000005500,
 			"revokeTime": 0,
 			"expirationTime": 1000016300,
@@ -1172,9 +1172,9 @@ t=2001-09-09T03:52:10+0000 lvl=dbug msg="revoked liquidity stake entry" module=e
 			"id": "3de102aa795d705f1183c3422f8139983bbbcf398d3b60c848f7de27defdf4ea"
 		},
 		{
-			"amount": 5000000000,
+			"amount": "5000000000",
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
-			"weightedAmount": 60000000000,
+			"weightedAmount": "60000000000",
 			"startTime": 1000007370,
 			"revokeTime": 0,
 			"expirationTime": 1000050570,
@@ -1200,14 +1200,14 @@ t=2001-09-09T03:52:10+0000 lvl=dbug msg="revoked liquidity stake entry" module=e
 
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 5)).Equals(t, `
 {
-	"totalAmount": 9000000000,
-	"totalWeightedAmount": 70000000000,
+	"totalAmount": "9000000000",
+	"totalWeightedAmount": "70000000000",
 	"count": 3,
 	"list": [
 		{
-			"amount": 3000000000,
+			"amount": "3000000000",
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
-			"weightedAmount": 9000000000,
+			"weightedAmount": "9000000000",
 			"startTime": 1000005500,
 			"revokeTime": 0,
 			"expirationTime": 1000007470,
@@ -1215,9 +1215,9 @@ t=2001-09-09T03:52:10+0000 lvl=dbug msg="revoked liquidity stake entry" module=e
 			"id": "3de102aa795d705f1183c3422f8139983bbbcf398d3b60c848f7de27defdf4ea"
 		},
 		{
-			"amount": 5000000000,
+			"amount": "5000000000",
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
-			"weightedAmount": 60000000000,
+			"weightedAmount": "60000000000",
 			"startTime": 1000007370,
 			"revokeTime": 0,
 			"expirationTime": 1000007470,
@@ -1225,9 +1225,9 @@ t=2001-09-09T03:52:10+0000 lvl=dbug msg="revoked liquidity stake entry" module=e
 			"id": "5fd186418784d4b963369941646bfaa63dc7b28127c71be37e64116fa1580927"
 		},
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005480,
 			"revokeTime": 0,
 			"expirationTime": 1000009080,
@@ -1245,14 +1245,14 @@ t=2001-09-09T03:52:10+0000 lvl=dbug msg="revoked liquidity stake entry" module=e
 	entries, err = liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 5)
 	common.Json(entries, err).Equals(t, `
 {
-	"totalAmount": 9000000000,
-	"totalWeightedAmount": 70000000000,
+	"totalAmount": "9000000000",
+	"totalWeightedAmount": "70000000000",
 	"count": 3,
 	"list": [
 		{
-			"amount": 3000000000,
+			"amount": "3000000000",
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
-			"weightedAmount": 9000000000,
+			"weightedAmount": "9000000000",
 			"startTime": 1000005500,
 			"revokeTime": 0,
 			"expirationTime": 1000007470,
@@ -1260,9 +1260,9 @@ t=2001-09-09T03:52:10+0000 lvl=dbug msg="revoked liquidity stake entry" module=e
 			"id": "3de102aa795d705f1183c3422f8139983bbbcf398d3b60c848f7de27defdf4ea"
 		},
 		{
-			"amount": 5000000000,
+			"amount": "5000000000",
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
-			"weightedAmount": 60000000000,
+			"weightedAmount": "60000000000",
 			"startTime": 1000007370,
 			"revokeTime": 0,
 			"expirationTime": 1000007470,
@@ -1270,9 +1270,9 @@ t=2001-09-09T03:52:10+0000 lvl=dbug msg="revoked liquidity stake entry" module=e
 			"id": "5fd186418784d4b963369941646bfaa63dc7b28127c71be37e64116fa1580927"
 		},
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005480,
 			"revokeTime": 0,
 			"expirationTime": 1000009080,
@@ -1295,14 +1295,14 @@ t=2001-09-09T03:52:10+0000 lvl=dbug msg="revoked liquidity stake entry" module=e
 
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 5)).Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1000000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005480,
 			"revokeTime": 0,
 			"expirationTime": 1000009080,
@@ -1369,68 +1369,68 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": [
 		{
 			"tokenStandard": "zts1r8z2feqa3lsz9t78rgy772",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts196fjtffgd8jj3c99slvnt7",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		},
 		{
 			"tokenStandard": "zts1gl30jmp4qd8slt5kwcxtru",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts129hkhzcdys8aacwwl7r7re",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		},
 		{
 			"tokenStandard": "zts13pu3yrev9rqm4qjhwpfez9",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1kc4lg8jey6hfkkcycr9rpv",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		},
 		{
 			"tokenStandard": "zts1c7py5fkcxgf3h7g8y8tct2",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1ejte9v853kw5ydexhc68es",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		},
 		{
 			"tokenStandard": "zts1emn6vr3e20tc8gjq3kh6aw",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1eaas9e0f30wfcdgp433xhd",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		}
 	]
 }`)
@@ -1493,14 +1493,14 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 95901781201,
-	"qsrAmount": 256147919875
+	"znnAmount": "95901781201",
+	"qsrAmount": "256147919875"
 }`)
 	common.Json(liquidityAPI.GetUncollectedReward(g.User2.Address)).Equals(t, `
 {
 	"address": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-	"znnAmount": 91298218797,
-	"qsrAmount": 243852080123
+	"znnAmount": "91298218797",
+	"qsrAmount": "243852080123"
 }`)
 
 	// balance should stay the the same as all rewards will be given to the users
@@ -1544,14 +1544,14 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 	stakes1, err = liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 10)
 	common.Json(stakes1, err).Equals(t, `
 {
-	"totalAmount": 1396234400877484,
-	"totalWeightedAmount": 1396234400877484,
+	"totalAmount": "1396234400877484",
+	"totalWeightedAmount": "1396234400877484",
 	"count": 7,
 	"list": [
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1gl30jmp4qd8slt5kwcxtru",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018100,
 			"revokeTime": 0,
 			"expirationTime": 1000021700,
@@ -1559,9 +1559,9 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 			"id": "7fa485f45e7f0ced2a90f0b6a5b3d82b1eeaea47a6a3289629206e7ca3355643"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts129hkhzcdys8aacwwl7r7re",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018140,
 			"revokeTime": 0,
 			"expirationTime": 1000021740,
@@ -1569,9 +1569,9 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 			"id": "2c546fd7a4566a18a552ddf9c186f219d02214492d8ad0cfb8d8aed80da2f0ad"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts13pu3yrev9rqm4qjhwpfez9",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018160,
 			"revokeTime": 0,
 			"expirationTime": 1000021760,
@@ -1579,9 +1579,9 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 			"id": "2a6875bedb9e74f4f61bc2c37fa3abdf1659a8ec924dfa8c5550e9e5d09612b4"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1kc4lg8jey6hfkkcycr9rpv",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018200,
 			"revokeTime": 0,
 			"expirationTime": 1000021800,
@@ -1589,9 +1589,9 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 			"id": "03d684838b68cd9b05277c58f8e023da4037815b7507b50e26b2e40616fc3bd5"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1c7py5fkcxgf3h7g8y8tct2",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018220,
 			"revokeTime": 0,
 			"expirationTime": 1000021820,
@@ -1599,9 +1599,9 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 			"id": "b3f1f5b0bc0eee6b529507f2754a5fc1fa507d9c006707b00be27953f16d1493"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1ejte9v853kw5ydexhc68es",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018260,
 			"revokeTime": 0,
 			"expirationTime": 1000021860,
@@ -1609,9 +1609,9 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 			"id": "66710f2e36a85f0c3394f09dc7c97f9ecb1cd64a7ae36e78c725cf815381ff8c"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1emn6vr3e20tc8gjq3kh6aw",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018280,
 			"revokeTime": 0,
 			"expirationTime": 1000021880,
@@ -1623,14 +1623,14 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 	stakes2, err = liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User2.Address, 0, 10)
 	common.Json(stakes2, err).Equals(t, `
 {
-	"totalAmount": 797848229072848,
-	"totalWeightedAmount": 797848229072848,
+	"totalAmount": "797848229072848",
+	"totalWeightedAmount": "797848229072848",
 	"count": 4,
 	"list": [
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1gl30jmp4qd8slt5kwcxtru",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018120,
 			"revokeTime": 0,
 			"expirationTime": 1000021720,
@@ -1638,9 +1638,9 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 			"id": "5b95e7bffdae5cae44a6f6774dd4adddfafd064a0357a9d5896b7b8389c8684b"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts13pu3yrev9rqm4qjhwpfez9",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018180,
 			"revokeTime": 0,
 			"expirationTime": 1000021780,
@@ -1648,9 +1648,9 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 			"id": "a4de82d0fc2b79657ae34380eac21a53e6839af25078d4733d1f27e464a9d36f"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1c7py5fkcxgf3h7g8y8tct2",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018240,
 			"revokeTime": 0,
 			"expirationTime": 1000021840,
@@ -1658,9 +1658,9 @@ func TestLiquidity_TestScenariosNoAdditionalRewards(t *testing.T) {
 			"id": "441c85b14820b8085382e28b140d58d4138eef07308be106bf2616045b3fb0a6"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1emn6vr3e20tc8gjq3kh6aw",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018300,
 			"revokeTime": 0,
 			"expirationTime": 1000021900,
@@ -1761,68 +1761,68 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": [
 		{
 			"tokenStandard": "zts1r8z2feqa3lsz9t78rgy772",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts196fjtffgd8jj3c99slvnt7",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		},
 		{
 			"tokenStandard": "zts1gl30jmp4qd8slt5kwcxtru",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts129hkhzcdys8aacwwl7r7re",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		},
 		{
 			"tokenStandard": "zts13pu3yrev9rqm4qjhwpfez9",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1kc4lg8jey6hfkkcycr9rpv",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		},
 		{
 			"tokenStandard": "zts1c7py5fkcxgf3h7g8y8tct2",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1ejte9v853kw5ydexhc68es",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		},
 		{
 			"tokenStandard": "zts1emn6vr3e20tc8gjq3kh6aw",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1eaas9e0f30wfcdgp433xhd",
 			"znnPercentage": 1000,
 			"qsrPercentage": 1000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		}
 	]
 }`)
@@ -1888,14 +1888,14 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 106147697996,
-	"qsrAmount": 358607087826
+	"znnAmount": "106147697996",
+	"qsrAmount": "358607087826"
 }`)
 	common.Json(liquidityAPI.GetUncollectedReward(g.User2.Address)).Equals(t, `
 {
 	"address": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-	"znnAmount": 101052302002,
-	"qsrAmount": 341392912172
+	"znnAmount": "101052302002",
+	"qsrAmount": "341392912172"
 }`)
 
 	// balance should have - 2 additional rewards
@@ -1939,14 +1939,14 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 	stakes1, err = liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 10)
 	common.Json(stakes1, err).Equals(t, `
 {
-	"totalAmount": 1396234400877484,
-	"totalWeightedAmount": 1396234400877484,
+	"totalAmount": "1396234400877484",
+	"totalWeightedAmount": "1396234400877484",
 	"count": 7,
 	"list": [
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1gl30jmp4qd8slt5kwcxtru",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018100,
 			"revokeTime": 0,
 			"expirationTime": 1000021700,
@@ -1954,9 +1954,9 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 			"id": "6bf235ba6df49d27ca269cccddf852a2e71b23ae5a98d91843ea9e5ba3070b67"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts129hkhzcdys8aacwwl7r7re",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018140,
 			"revokeTime": 0,
 			"expirationTime": 1000021740,
@@ -1964,9 +1964,9 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 			"id": "468ffd339aca907988b2cba552344005ab34bfe7e345092770a8899f903f7900"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts13pu3yrev9rqm4qjhwpfez9",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018160,
 			"revokeTime": 0,
 			"expirationTime": 1000021760,
@@ -1974,9 +1974,9 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 			"id": "61b1d6e73f4bccde98742dd013f0884273fdeb6243ab8d76c117a68b45fb9b82"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1kc4lg8jey6hfkkcycr9rpv",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018200,
 			"revokeTime": 0,
 			"expirationTime": 1000021800,
@@ -1984,9 +1984,9 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 			"id": "081158361eed80d008a5bfcb7daba3de139d84d03da9d095eb5408fd82d91ddf"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1c7py5fkcxgf3h7g8y8tct2",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018220,
 			"revokeTime": 0,
 			"expirationTime": 1000021820,
@@ -1994,9 +1994,9 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 			"id": "ac7b1258bac27fb78126d3520429aacc79cb7dd11b1372ce29c3cf49ff33080e"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1ejte9v853kw5ydexhc68es",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018260,
 			"revokeTime": 0,
 			"expirationTime": 1000021860,
@@ -2004,9 +2004,9 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 			"id": "4798779359065c465aed8b76a8ebd3c7cf1987ae6ac67851e80c403dbd1f3469"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1emn6vr3e20tc8gjq3kh6aw",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018280,
 			"revokeTime": 0,
 			"expirationTime": 1000021880,
@@ -2018,14 +2018,14 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 	stakes2, err = liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User2.Address, 0, 10)
 	common.Json(stakes2, err).Equals(t, `
 {
-	"totalAmount": 797848229072848,
-	"totalWeightedAmount": 797848229072848,
+	"totalAmount": "797848229072848",
+	"totalWeightedAmount": "797848229072848",
 	"count": 4,
 	"list": [
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1gl30jmp4qd8slt5kwcxtru",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018120,
 			"revokeTime": 0,
 			"expirationTime": 1000021720,
@@ -2033,9 +2033,9 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 			"id": "e691977e7ff10a6fa140a0c7ff049e2bc07fcdb89fa9802da50157db29501c59"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts13pu3yrev9rqm4qjhwpfez9",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018180,
 			"revokeTime": 0,
 			"expirationTime": 1000021780,
@@ -2043,9 +2043,9 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 			"id": "3ef084e4df6034c1b41ff581fdde62984bd0770929ac7df0d192202d90160166"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1c7py5fkcxgf3h7g8y8tct2",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018240,
 			"revokeTime": 0,
 			"expirationTime": 1000021840,
@@ -2053,9 +2053,9 @@ func TestLiquidity_TestScenariosWithAdditionalRewards(t *testing.T) {
 			"id": "dca0e7a095e9b177aa14785bed435e1db173fd1dc9612c5f8969b5a7403cbb27"
 		},
 		{
-			"amount": 199462057268212,
+			"amount": "199462057268212",
 			"tokenStandard": "zts1emn6vr3e20tc8gjq3kh6aw",
-			"weightedAmount": 199462057268212,
+			"weightedAmount": "199462057268212",
 			"startTime": 1000018300,
 			"revokeTime": 0,
 			"expirationTime": 1000021900,
@@ -2180,14 +2180,14 @@ t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating contract state" module=embedde
 	z.ExpectBalance(g.User1.Address, tokens[0], 190*g.Zexp)
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 5)).HideHashes().Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1000000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005480,
 			"revokeTime": 0,
 			"expirationTime": 1000009080,
@@ -2201,14 +2201,14 @@ t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating contract state" module=embedde
 	insertMomentums(z, 2)
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 5)).HideHashes().Equals(t, `
 {
-	"totalAmount": 2000000000,
-	"totalWeightedAmount": 2000000000,
+	"totalAmount": "2000000000",
+	"totalWeightedAmount": "2000000000",
 	"count": 2,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005480,
 			"revokeTime": 0,
 			"expirationTime": 1000009080,
@@ -2216,9 +2216,9 @@ t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating contract state" module=embedde
 			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 		},
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005500,
 			"revokeTime": 0,
 			"expirationTime": 1000009100,
@@ -2231,8 +2231,8 @@ t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating contract state" module=embedde
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 187200000000,
-	"qsrAmount": 500000000000
+	"znnAmount": "187200000000",
+	"qsrAmount": "500000000000"
 }`)
 }
 
@@ -2318,14 +2318,14 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 	z.ExpectBalance(g.User1.Address, tokens[0], 190*g.Zexp)
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 5)).HideHashes().Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1000000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005480,
 			"revokeTime": 0,
 			"expirationTime": 1000009080,
@@ -2339,8 +2339,8 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 131040000000,
-	"qsrAmount": 150000000000
+	"znnAmount": "131040000000",
+	"qsrAmount": "150000000000"
 }`)
 }
 
@@ -2443,14 +2443,14 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 	insertMomentums(z, 2)
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 5)).HideHashes().Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1000000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005480,
 			"revokeTime": 0,
 			"expirationTime": 1000009080,
@@ -2482,14 +2482,14 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 5)).HideHashes().Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1000000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005480,
 			"revokeTime": 0,
 			"expirationTime": 1000009080,
@@ -2500,14 +2500,14 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 }`)
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User2.Address, 0, 5)).HideHashes().Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1000000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005560,
 			"revokeTime": 0,
 			"expirationTime": 1000009160,
@@ -2518,14 +2518,14 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 }`)
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User3.Address, 0, 5)).HideHashes().Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1000000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005580,
 			"revokeTime": 0,
 			"expirationTime": 1000009180,
@@ -2536,14 +2536,14 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 }`)
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User4.Address, 0, 5)).HideHashes().Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1000000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005600,
 			"revokeTime": 0,
 			"expirationTime": 1000009200,
@@ -2557,26 +2557,26 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 34253617021,
-	"qsrAmount": 39209726443
+	"znnAmount": "34253617021",
+	"qsrAmount": "39209726443"
 }`)
 	common.Json(liquidityAPI.GetUncollectedReward(g.User2.Address)).Equals(t, `
 {
 	"address": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-	"znnAmount": 32660425531,
-	"qsrAmount": 37386018237
+	"znnAmount": "32660425531",
+	"qsrAmount": "37386018237"
 }`)
 	common.Json(liquidityAPI.GetUncollectedReward(g.User3.Address)).Equals(t, `
 {
 	"address": "z1qrs2lpccnsneglhnnfwvlsj0qncnxjnwlfmjac",
-	"znnAmount": 32262127659,
-	"qsrAmount": 36930091185
+	"znnAmount": "32262127659",
+	"qsrAmount": "36930091185"
 }`)
 	common.Json(liquidityAPI.GetUncollectedReward(g.User4.Address)).Equals(t, `
 {
 	"address": "z1qraz4ermhhua89a0h0gxxan4lnzrfutgs6xxe2",
-	"znnAmount": 31863829787,
-	"qsrAmount": 36474164133
+	"znnAmount": "31863829787",
+	"qsrAmount": "36474164133"
 }`)
 
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 243360000002)
@@ -2750,20 +2750,20 @@ t=2001-09-09T04:47:20+0000 lvl=info msg="received donation" module=embedded cont
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 2000000000,
-	"qsrReward": 1200000000,
+	"znnReward": "2000000000",
+	"qsrReward": "1200000000",
 	"tokenTuples": [
 		{
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
 			"znnPercentage": 5000,
 			"qsrPercentage": 5000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
 			"znnPercentage": 5000,
 			"qsrPercentage": 5000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		}
 	]
 }`)
@@ -2782,14 +2782,14 @@ t=2001-09-09T04:47:20+0000 lvl=info msg="received donation" module=embedded cont
 
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 5)).Equals(t, `
 {
-	"totalAmount": 2000000000,
-	"totalWeightedAmount": 2000000000,
+	"totalAmount": "2000000000",
+	"totalWeightedAmount": "2000000000",
 	"count": 2,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005620,
 			"revokeTime": 0,
 			"expirationTime": 1000009220,
@@ -2797,9 +2797,9 @@ t=2001-09-09T04:47:20+0000 lvl=info msg="received donation" module=embedded cont
 			"id": "ea9fb366a9592b7a6a78d0e5881bee440d727ee04eb20fafb29628e7c02054b6"
 		},
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005640,
 			"revokeTime": 0,
 			"expirationTime": 1000009240,
@@ -2812,8 +2812,8 @@ t=2001-09-09T04:47:20+0000 lvl=info msg="received donation" module=embedded cont
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 189200000000,
-	"qsrAmount": 501200000000
+	"znnAmount": "189200000000",
+	"qsrAmount": "501200000000"
 }`)
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 1852*g.Zexp)
 	z.ExpectBalance(types.LiquidityContract, types.QsrTokenStandard, 4988*g.Zexp)
@@ -2828,8 +2828,8 @@ t=2001-09-09T04:47:20+0000 lvl=info msg="received donation" module=embedded cont
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 11998*g.Zexp)
 	z.ExpectBalance(g.User1.Address, types.QsrTokenStandard, 120000*g.Zexp)
@@ -2847,8 +2847,8 @@ t=2001-09-09T04:47:20+0000 lvl=info msg="received donation" module=embedded cont
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 
 	// balance increases
@@ -2967,20 +2967,20 @@ t=2001-09-09T03:48:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 5000000000,
-	"qsrReward": 1200000000,
+	"znnReward": "5000000000",
+	"qsrReward": "1200000000",
 	"tokenTuples": [
 		{
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
 			"znnPercentage": 5000,
 			"qsrPercentage": 5000,
-			"minAmount": 1000
+			"minAmount": "1000"
 		},
 		{
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
 			"znnPercentage": 5000,
 			"qsrPercentage": 5000,
-			"minAmount": 2000
+			"minAmount": "2000"
 		}
 	]
 }`)
@@ -2995,14 +2995,14 @@ t=2001-09-09T03:48:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 11998*g.Zexp)
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User1.Address, 0, 5)).Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1000000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1992nq43xn2urz3wttklc8z",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005640,
 			"revokeTime": 0,
 			"expirationTime": 1000009240,
@@ -3025,14 +3025,14 @@ t=2001-09-09T03:48:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	z.ExpectBalance(g.User2.Address, tokens[1], 190*g.Zexp)
 	common.Json(liquidityAPI.GetLiquidityStakeEntriesByAddress(g.User2.Address, 0, 5)).Equals(t, `
 {
-	"totalAmount": 1000000000,
-	"totalWeightedAmount": 1000000000,
+	"totalAmount": "1000000000",
+	"totalWeightedAmount": "1000000000",
 	"count": 1,
 	"list": [
 		{
-			"amount": 1000000000,
+			"amount": "1000000000",
 			"tokenStandard": "zts1fres5c39axw805xswvt55j",
-			"weightedAmount": 1000000000,
+			"weightedAmount": "1000000000",
 			"startTime": 1000005680,
 			"revokeTime": 0,
 			"expirationTime": 1000009280,
@@ -3045,14 +3045,14 @@ t=2001-09-09T03:48:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 96100000000,
-	"qsrAmount": 250600000000
+	"znnAmount": "96100000000",
+	"qsrAmount": "250600000000"
 }`)
 	common.Json(liquidityAPI.GetUncollectedReward(g.User2.Address)).Equals(t, `
 {
 	"address": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-	"znnAmount": 96100000000,
-	"qsrAmount": 250600000000
+	"znnAmount": "96100000000",
+	"qsrAmount": "250600000000"
 }`)
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 1822*g.Zexp)
 	z.ExpectBalance(types.LiquidityContract, types.QsrTokenStandard, 4988*g.Zexp)
@@ -3068,8 +3068,8 @@ t=2001-09-09T03:48:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(liquidityAPI.GetUncollectedReward(g.User1.Address)).Equals(t, `
 {
 	"address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 
 	defer z.CallContract(collectReward(g.User2.Address)).Error(t, nil)
@@ -3077,8 +3077,8 @@ t=2001-09-09T03:48:40+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 	common.Json(liquidityAPI.GetUncollectedReward(g.User2.Address)).Equals(t, `
 {
 	"address": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
-	"znnAmount": 0,
-	"qsrAmount": 0
+	"znnAmount": "0",
+	"qsrAmount": "0"
 }`)
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 1822*g.Zexp)
 	z.ExpectBalance(types.LiquidityContract, types.QsrTokenStandard, 4988*g.Zexp)
@@ -3160,9 +3160,9 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
-	"tokenTuples": null
+	"znnReward": "0",
+	"qsrReward": "0",
+	"tokenTuples": []
 }`)
 	defer z.CallContract(changeAdministratorLiqStep(g.User5.Address, g.User4.Address)).Error(t, nil)
 	insertMomentums(z, 2)
@@ -3170,8 +3170,8 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 {
 	"administrator": "z1qraz4ermhhua89a0h0gxxan4lnzrfutgs6xxe2",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": []
 }`)
 }
@@ -3388,8 +3388,8 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 {
 	"administrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"isHalted": true,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": []
 }`)
 	defer z.CallContract(proposeAdministratorLiq(g.User4.Address, g.User3.Address)).Error(t, nil)
@@ -3399,8 +3399,8 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 {
 	"administrator": "z1qrs2lpccnsneglhnnfwvlsj0qncnxjnwlfmjac",
 	"isHalted": true,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": []
 }`)
 	common.Json(liquidityAPI.GetSecurityInfo()).Equals(t, `
@@ -3472,9 +3472,9 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
-	"tokenTuples": null
+	"znnReward": "0",
+	"qsrReward": "0",
+	"tokenTuples": []
 }`)
 
 	// halt before
@@ -3488,8 +3488,8 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 {
 	"administrator": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f",
 	"isHalted": true,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": []
 }`)
 
@@ -3540,8 +3540,8 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": true,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": []
 }`)
 	defer z.CallContract(setIsHalted(g.User5.Address, false)).Error(t, nil)
@@ -3550,8 +3550,8 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": false,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": []
 }`)
 
@@ -3566,8 +3566,8 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 {
 	"administrator": "z1qqaswvt0e3cc5sm7lygkyza9ra63cr8e6zre09",
 	"isHalted": true,
-	"znnReward": 0,
-	"qsrReward": 0,
+	"znnReward": "0",
+	"qsrReward": "0",
 	"tokenTuples": []
 }`)
 
