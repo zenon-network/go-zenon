@@ -8,6 +8,7 @@ import (
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/implementation"
 	"reflect"
+	"sort"
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/common"
