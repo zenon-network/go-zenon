@@ -328,7 +328,7 @@ func (p *UpdateEmbeddedAcceleratorMethod) ReceiveBlock(context vm_context.Accoun
 	}
 	qsrBalance := new(big.Int).Set(balanceQsr)
 
-	sort.Slice(projectList, func(i, j int) bool {
+	sort.SliceStable(projectList, func(i, j int) bool {
 		var phaseITimestamp, phaseJTimestamp int64
 		phaseI, err := projectList[i].GetCurrentPhase(context.Storage())
 		if err != nil {
