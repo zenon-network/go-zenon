@@ -2,14 +2,14 @@ package embedded
 
 import (
 	"encoding/json"
+	"reflect"
+	"sort"
+
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/implementation"
-	"reflect"
-	"sort"
-
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
