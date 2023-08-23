@@ -1,4 +1,4 @@
-module github.com/zenon-network/go-zenon
+module github.com/hypercore-one/go-zenon
 
 go 1.20
 
