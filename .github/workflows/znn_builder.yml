@@ -2,6 +2,8 @@ name: Build and release znnd and libznn
 
 on:
   push:
+    branches:
+      - master
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
@@ -59,7 +61,23 @@ jobs:
           dest: build
           prefix: libznn
           pkg: cmd/libznn
-          targets: darwin/arm64,darwin/amd64,windows/amd64,linux/amd64,linux/arm64
+          targets: darwin/arm64,darwin/amd64,linux/amd64,linux/arm64
+          v: true
+          x: true
+          tags: libznn
+          ldflags: -s -w
+          buildvcs: false
+          buildmode: c-shared
+          trimpath: true
+      - name: Build libznn (windows/amd64)
+        uses: crazy-max/ghaction-xgo@588a1a9bc6aa44305ce5d2c669c11687316f87bf
+        with:
+          xgo_version: latest
+          go_version: 1.19.10
+          dest: build
+          prefix: libznn
+          pkg: cmd/libznn
+          targets: windows/amd64
           v: true
           x: true
           tags: libznn
