@@ -245,7 +245,7 @@ func (q *queue) Reserve(p *peer, count int) *fetchRequest {
 	if space == 0 {
 		return nil
 	}
-	
+
 	for _, request := range q.pendPool {
 		space -= len(request.Hashes)
 	}
