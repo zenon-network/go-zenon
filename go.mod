@@ -3,7 +3,7 @@ module github.com/zenon-network/go-zenon
 go 1.20
 
 require (
-	github.com/btcsuite/btcutil v1.0.3-0.20201208143702-a53e38424cce
+	github.com/btcsuite/btcd/btcutil v1.1.3
 	github.com/deckarep/golang-set v1.8.0
 	github.com/ethereum/go-ethereum v1.10.22
 	github.com/golang-collections/collections v0.0.0-20130729185459-604e922904d3
