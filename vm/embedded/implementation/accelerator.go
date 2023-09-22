@@ -39,7 +39,7 @@ func checkMetaDataStatic(param *definition.AcceleratorParam) error {
 		return constants.ErrInvalidDescription
 	}
 
-	if ok, _ := regexp.MatchString("^([Hh][Tt][Tt][Pp][Ss]?://)?[a-zA-Z0-9]{2,60}\\.[a-zA-Z]{1,6}([-a-zA-Z0-9()@:%_+.~#?&/=]{0,100})$", param.Url); ok == false || len(param.Url) == 0 {
+	if ok, _ := regexp.MatchString("^([Hh][Tt][Tt][Pp][Ss]?://)?[a-zA-Z0-9]{2,60}\\.[a-zA-Z]{1,6}([-a-zA-Z0-9()@:%_+.~#?&/=]{0,100})$", param.Url); !ok || len(param.Url) == 0 {
 		return constants.ErrForbiddenParam
 	}
 
