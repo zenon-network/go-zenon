@@ -36,8 +36,6 @@ jobs:
       #   run: |
       #     go install golang.org/x/vuln/cmd/govulncheck@latest
       #     /home/runner/go/bin/govulncheck -json ./...
-      - name: Make version
-        run: make version
       - name: Build znnd
         uses: crazy-max/ghaction-xgo@588a1a9bc6aa44305ce5d2c669c11687316f87bf
         with:
