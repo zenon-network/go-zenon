@@ -5,13 +5,13 @@ import (
 	"os"
 	"runtime"
 
-	"gopkg.in/urfave/cli.v1"
+	"github.com/urfave/cli/v2"
 
 	"github.com/zenon-network/go-zenon/metadata"
 )
 
 var (
-	versionCommand = cli.Command{
+	versionCommand = &cli.Command{
 		Action:    versionAction,
 		Name:      "version",
 		Usage:     "Print version numbers",

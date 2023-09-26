@@ -6,7 +6,7 @@ import (
 	"io/ioutil"
 	"path/filepath"
 
-	"gopkg.in/urfave/cli.v1"
+	"github.com/urfave/cli/v2"
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/node"
@@ -44,73 +44,73 @@ func MakeConfig(ctx *cli.Context) (*node.Config, error) {
 }
 
 func applyFlagsToConfig(ctx *cli.Context, cfg *node.Config) {
-	if dataDir := ctx.GlobalString(DataPathFlag.Name); ctx.GlobalIsSet(DataPathFlag.Name) && len(dataDir) > 0 {
+	if dataDir := ctx.String(DataPathFlag.Name); ctx.IsSet(DataPathFlag.Name) && len(dataDir) > 0 {
 		cfg.DataPath = dataDir
 	}
 
 	// Wallet
-	if walletDir := ctx.GlobalString(WalletDirFlag.Name); ctx.GlobalIsSet(WalletDirFlag.Name) && len(walletDir) > 0 {
+	if walletDir := ctx.String(WalletDirFlag.Name); ctx.IsSet(WalletDirFlag.Name) && len(walletDir) > 0 {
 		cfg.WalletPath = walletDir
 	}
 
-	if genesisFile := ctx.GlobalString(GenesisFileFlag.Name); ctx.GlobalIsSet(GenesisFileFlag.Name) && len(genesisFile) > 0 {
+	if genesisFile := ctx.String(GenesisFileFlag.Name); ctx.IsSet(GenesisFileFlag.Name) && len(genesisFile) > 0 {
 		cfg.GenesisFile = genesisFile
 	}
 
 	// Network Config
-	if identity := ctx.GlobalString(IdentityFlag.Name); ctx.GlobalIsSet(IdentityFlag.Name) && len(identity) > 0 {
+	if identity := ctx.String(IdentityFlag.Name); ctx.IsSet(IdentityFlag.Name) && len(identity) > 0 {
 		cfg.Name = identity
 	}
 
-	if ctx.GlobalIsSet(MaxPeersFlag.Name) {
-		cfg.Net.MaxPeers = ctx.GlobalInt(MaxPeersFlag.Name)
+	if ctx.IsSet(MaxPeersFlag.Name) {
+		cfg.Net.MaxPeers = ctx.Int(MaxPeersFlag.Name)
 	}
 
-	if ctx.GlobalIsSet(MaxPendingPeersFlag.Name) {
-		cfg.Net.MaxPendingPeers = ctx.GlobalInt(MaxPendingPeersFlag.Name)
+	if ctx.IsSet(MaxPendingPeersFlag.Name) {
+		cfg.Net.MaxPendingPeers = ctx.Int(MaxPendingPeersFlag.Name)
 	}
 
-	if listenHost := ctx.GlobalString(ListenHostFlag.Name); ctx.GlobalIsSet(ListenHostFlag.Name) && len(listenHost) > 0 {
+	if listenHost := ctx.String(ListenHostFlag.Name); ctx.IsSet(ListenHostFlag.Name) && len(listenHost) > 0 {
 		cfg.RPC.HTTPHost = listenHost
 	}
 
-	if ctx.GlobalIsSet(ListenPortFlag.Name) {
-		cfg.Net.ListenPort = ctx.GlobalInt(ListenPortFlag.Name)
+	if ctx.IsSet(ListenPortFlag.Name) {
+		cfg.Net.ListenPort = ctx.Int(ListenPortFlag.Name)
 	}
 
 	// Http Config
-	if ctx.GlobalIsSet(RPCEnabledFlag.Name) {
-		cfg.RPC.EnableHTTP = ctx.GlobalBool(RPCEnabledFlag.Name)
+	if ctx.IsSet(RPCEnabledFlag.Name) {
+		cfg.RPC.EnableHTTP = ctx.Bool(RPCEnabledFlag.Name)
 	}
 
-	if httpHost := ctx.GlobalString(RPCListenAddrFlag.Name); ctx.GlobalIsSet(RPCListenAddrFlag.Name) && len(httpHost) > 0 {
+	if httpHost := ctx.String(RPCListenAddrFlag.Name); ctx.IsSet(RPCListenAddrFlag.Name) && len(httpHost) > 0 {
 		cfg.RPC.HTTPHost = httpHost
 	}
 
-	if ctx.GlobalIsSet(RPCPortFlag.Name) {
-		cfg.RPC.HTTPPort = ctx.GlobalInt(RPCPortFlag.Name)
+	if ctx.IsSet(RPCPortFlag.Name) {
+		cfg.RPC.HTTPPort = ctx.Int(RPCPortFlag.Name)
 	}
 
 	// WS Config
-	if ctx.GlobalIsSet(WSEnabledFlag.Name) {
-		cfg.RPC.EnableWS = ctx.GlobalBool(WSEnabledFlag.Name)
+	if ctx.IsSet(WSEnabledFlag.Name) {
+		cfg.RPC.EnableWS = ctx.Bool(WSEnabledFlag.Name)
 	}
 
-	if wsListenAddr := ctx.GlobalString(WSListenAddrFlag.Name); ctx.GlobalIsSet(WSListenAddrFlag.Name) && len(wsListenAddr) > 0 {
+	if wsListenAddr := ctx.String(WSListenAddrFlag.Name); ctx.IsSet(WSListenAddrFlag.Name) && len(wsListenAddr) > 0 {
 		cfg.RPC.WSHost = wsListenAddr
 	}
 
-	if ctx.GlobalIsSet(WSPortFlag.Name) {
-		cfg.RPC.WSPort = ctx.GlobalInt(WSPortFlag.Name)
+	if ctx.IsSet(WSPortFlag.Name) {
+		cfg.RPC.WSPort = ctx.Int(WSPortFlag.Name)
 	}
 
 	// Log Level Config
-	if logLevel := ctx.GlobalString(LogLvlFlag.Name); ctx.GlobalIsSet(LogLvlFlag.Name) && len(logLevel) > 0 {
+	if logLevel := ctx.String(LogLvlFlag.Name); ctx.IsSet(LogLvlFlag.Name) && len(logLevel) > 0 {
 		cfg.LogLevel = logLevel
 	}
 }
 func readConfigFromFile(ctx *cli.Context, cfg *node.Config) error {
-	if file := ctx.GlobalString(ConfigFileFlag.Name); file != "" {
+	if file := ctx.String(ConfigFileFlag.Name); file != "" {
 		if jsonConf, err := ioutil.ReadFile(file); err == nil {
 			err = json.Unmarshal(jsonConf, &cfg)
 			if err == nil {
@@ -124,7 +124,7 @@ func readConfigFromFile(ctx *cli.Context, cfg *node.Config) error {
 
 	// second read default settings
 	dataPath := cfg.DataPath
-	if dataDir := ctx.GlobalString(DataPathFlag.Name); len(dataDir) > 0 {
+	if dataDir := ctx.String(DataPathFlag.Name); len(dataDir) > 0 {
 		dataPath = dataDir
 	}
 
