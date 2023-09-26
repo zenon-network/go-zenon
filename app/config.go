@@ -3,7 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 
 	"gopkg.in/urfave/cli.v1"
@@ -111,7 +111,7 @@ func applyFlagsToConfig(ctx *cli.Context, cfg *node.Config) {
 }
 func readConfigFromFile(ctx *cli.Context, cfg *node.Config) error {
 	if file := ctx.GlobalString(ConfigFileFlag.Name); file != "" {
-		if jsonConf, err := ioutil.ReadFile(file); err == nil {
+		if jsonConf, err := os.ReadFile(file); err == nil {
 			err = json.Unmarshal(jsonConf, &cfg)
 			if err == nil {
 				return nil
@@ -130,7 +130,7 @@ func readConfigFromFile(ctx *cli.Context, cfg *node.Config) error {
 
 	configPath := filepath.Join(dataPath, defaultNodeConfigFileName)
 
-	if jsonConf, err := ioutil.ReadFile(configPath); err == nil {
+	if jsonConf, err := os.ReadFile(configPath); err == nil {
 		err = json.Unmarshal(jsonConf, &cfg)
 		if err == nil {
 			return nil
