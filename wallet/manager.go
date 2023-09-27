@@ -111,7 +111,7 @@ func (m *Manager) ListEntropyFilesInStandardDir() ([]*KeyFile, error) {
 
 	files := make([]*KeyFile, 0)
 	for _, file := range filePaths {
-		if file.IsDir() || file.Type()&os.ModeType != 0 {
+		if file.IsDir() || file.Type() != 0 {
 			continue
 		}
 		fn := file.Name()
