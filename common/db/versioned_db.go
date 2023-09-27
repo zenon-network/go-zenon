@@ -159,7 +159,7 @@ func (m *memdbManager) Pop() error {
 	}
 
 	previous, ok := m.previous[m.frontierIdentifier]
-	if ok == false {
+	if !ok {
 		return errors.Errorf("can't find previous for ")
 	}
 

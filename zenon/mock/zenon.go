@@ -83,7 +83,7 @@ type MockContractCaller struct {
 
 func (mcc *MockContractCaller) LateCallFunction() (string, error) {
 	str, ok := (*mcc.results)[mcc.sendBlockHash]
-	if ok == false {
+	if !ok {
 		return "", errors.Errorf("'can't find sendBlock of contract. Maybe the send-block is not cemented yet or the test doesn't end with a 'InsertNewMomentum()'?\n")
 	} else {
 		return "", errors.Errorf("%v", str)
@@ -198,7 +198,7 @@ func (zenon *mockZenon) InsertMomentumsTo(targetHeight uint64) {
 
 func (zenon *mockZenon) CallContract(template *nom.AccountBlock) *common.Expecter {
 	template.BlockType = nom.BlockTypeUserSend
-	if types.IsEmbeddedAddress(template.ToAddress) == false {
+	if !types.IsEmbeddedAddress(template.ToAddress) {
 		zenon.t.Fatalf("Unable to CallContract for block %v. Reason: ToAddress is not a contract address", template)
 	}
 

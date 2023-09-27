@@ -79,7 +79,7 @@ func (m *Manager) MakePathAbsolut(path string) string {
 
 func (m *Manager) GetKeyFile(path string) (*KeyFile, error) {
 	path = m.MakePathAbsolut(path)
-	if kf, ok := m.encrypted[path]; ok == false {
+	if kf, ok := m.encrypted[path]; !ok {
 		return nil, ErrKeyStoreNotFound
 	} else {
 		return kf, nil
@@ -87,9 +87,9 @@ func (m *Manager) GetKeyFile(path string) (*KeyFile, error) {
 }
 func (m *Manager) GetKeyStore(path string) (*KeyStore, error) {
 	path = m.MakePathAbsolut(path)
-	if _, ok := m.encrypted[path]; ok == false {
+	if _, ok := m.encrypted[path]; !ok {
 		return nil, ErrKeyStoreNotFound
-	} else if ks, ok := m.decrypted[path]; ok == false {
+	} else if ks, ok := m.decrypted[path]; !ok {
 		return nil, ErrKeyStoreLocked
 	} else {
 		return ks, nil
@@ -147,14 +147,14 @@ func (m *Manager) Unlock(path, password string) error {
 }
 func (m *Manager) Lock(path string) {
 	path = m.MakePathAbsolut(path)
-	if ks, ok := m.decrypted[path]; ok == true {
+	if ks, ok := m.decrypted[path]; ok {
 		ks.Zero()
 		m.decrypted[path] = nil
 	}
 }
 func (m *Manager) IsUnlocked(path string) (bool, error) {
 	path = m.MakePathAbsolut(path)
-	if _, ok := m.encrypted[path]; ok == false {
+	if _, ok := m.encrypted[path]; !ok {
 		return false, ErrKeyStoreNotFound
 	}
 	_, ok := m.decrypted[path]

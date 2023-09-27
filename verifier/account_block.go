@@ -333,7 +333,7 @@ func (abv *accountBlockVerifier) fromHash() error {
 
 	// check if abv.block was already received
 	status := abv.accountStore.IsReceived(abv.block.FromBlockHash)
-	if status == true {
+	if status {
 		return ErrABFromBlockAlreadyReceived
 	}
 
@@ -437,7 +437,7 @@ func (abvt *accountBlockTransactionVerifier) producer() error {
 }
 func (abvt *accountBlockTransactionVerifier) descendantBlocks() error {
 	block := abvt.transaction.Block
-	if isContractReceive(block) == false && len(block.DescendantBlocks) > 0 {
+	if !isContractReceive(block) && len(block.DescendantBlocks) > 0 {
 		return ErrABDescendantMustBeZero
 	}
 	for _, dBlock := range block.DescendantBlocks {

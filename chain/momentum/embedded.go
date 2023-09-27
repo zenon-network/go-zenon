@@ -42,12 +42,12 @@ func (ms *momentumStore) computeBackers(infos []*definition.DelegationInfo) (*ma
 
 	for _, delegation := range infos {
 		balance, ok := balanceMap[delegation.Backer]
-		if ok == false {
+		if !ok {
 			balance = big.NewInt(0)
 		}
 
 		delegators, ok := result[delegation.Name]
-		if ok == false {
+		if !ok {
 			delegators = map[types.Address]*big.Int{}
 		}
 

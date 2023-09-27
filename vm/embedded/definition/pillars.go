@@ -193,7 +193,7 @@ func GetPillarsList(context db.DB, onlyActive bool, pillarType uint8) ([]*Pillar
 		}
 
 		if pillar, err := parsePillarInfo(iterator.Value()); err == nil {
-			if (onlyActive == false || pillar.RevokeTime == 0) && (pillarType == AnyPillarType || pillarType == pillar.PillarType) {
+			if (!onlyActive || pillar.RevokeTime == 0) && (pillarType == AnyPillarType || pillarType == pillar.PillarType) {
 				list = append(list, pillar)
 			}
 		} else if err == constants.ErrDataNonExistent {

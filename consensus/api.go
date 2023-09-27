@@ -78,7 +78,7 @@ func (obj *API) GetPillarDelegationsByEpoch(epoch uint64) (map[string]*types.Pil
 		// merge current into result
 		for _, c := range current {
 			existing, ok := result[c.Name]
-			if ok == false {
+			if !ok {
 				result[c.Name] = c
 			} else {
 				existing.Merge(c)

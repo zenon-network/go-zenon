@@ -144,7 +144,7 @@ func (w *worker) work(task common.TaskResolver, e consensus.ProducerEvent) {
 
 			one = true
 		}
-		if one == false {
+		if !one {
 			break
 		}
 	}

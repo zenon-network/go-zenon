@@ -99,7 +99,7 @@ func GetSubscribeApi() *Api {
 	if singleton == nil {
 		panic("must call GetSubscribeServer once before calling GetSubscribeApi")
 	}
-	if singleton.started == false {
+	if !singleton.started {
 		panic("must start SubscribeServer before calling GetSubscribeApi")
 	}
 	return singleton.Api
