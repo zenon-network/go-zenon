@@ -53,8 +53,8 @@ func newMockTransaction(seed int64, db DB) *mockTransaction {
 		height:   frontier.Height + 1,
 	}
 
-	rand.Seed(seed)
-	stressTestConcurrentUse(nil, db, 5, 1)
+	r := rand.New(rand.NewSource(seed))
+	stressTestConcurrentUse(nil, db, 5, 1, r)
 
 	changes, _ := db.Changes()
 	ab.changesHash = PatchHash(changes)

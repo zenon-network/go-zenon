@@ -10,8 +10,9 @@ import (
 
 func TestStressMemDB(t *testing.T) {
 	simpleMemDBOperations(t, NewMemDB())
-	stressTestConcurrentUse(t, NewMemDB(), 1e5, 20)
-	stressTestConcurrentUse(t, NewMemDB().Subset([]byte{10, 11, 12, 13}), 1e5, 10)
+	r := rand.New(rand.NewSource(rand.Int63()))
+	stressTestConcurrentUse(t, NewMemDB(), 1e5, 20, r)
+	stressTestConcurrentUse(t, NewMemDB().Subset([]byte{10, 11, 12, 13}), 1e5, 10, r)
 }
 
 func TestChanges(t *testing.T) {
@@ -99,7 +100,7 @@ func simpleMemDBOperations(t *testing.T, db DB) {
 	common.FailIfErr(t, db.Delete([]byte{1, 2, 3, 4}))
 }
 
-func stressTestConcurrentUse(t *testing.T, db DB, numInserts int, numThreads int) {
+func stressTestConcurrentUse(t *testing.T, db DB, numInserts int, numThreads int, r *rand.Rand) {
 	inputs := make([][][2][]byte, 0, numThreads)
 	dbs := make([]DB, 0, numThreads)
 
@@ -107,8 +108,8 @@ func stressTestConcurrentUse(t *testing.T, db DB, numInserts int, numThreads int
 		dbs = append(dbs, db)
 		currentInputs := make([][2][]byte, numInserts)
 		for i := 0; i < numInserts; i += 1 {
-			currentInputs[i][0] = common.Uint64ToBytes(rand.Uint64())
-			currentInputs[i][1] = common.Uint64ToBytes(rand.Uint64())
+			currentInputs[i][0] = common.Uint64ToBytes(r.Uint64())
+			currentInputs[i][1] = common.Uint64ToBytes(r.Uint64())
 		}
 		inputs = append(inputs, currentInputs)
 	}
