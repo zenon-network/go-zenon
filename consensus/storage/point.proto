@@ -1,5 +1,6 @@
 syntax = "proto3";
 package storage;
+option go_package = "github.com/zenon-network/go-zenon/consensus/storage";
 
 message ProducerDetailProto {
   string name = 1;
