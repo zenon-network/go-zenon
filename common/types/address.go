@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/btcsuite/btcutil/bech32"
+	"github.com/btcsuite/btcd/btcutil/bech32"
 	"golang.org/x/crypto/sha3"
 )
 
