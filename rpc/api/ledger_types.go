@@ -70,11 +70,11 @@ func (block *AccountBlock) UnmarshalJSON(data []byte) error {
 	}
 
 	block.AccountBlock = *aux.FromNomMarshalJson()
-	if block.TokenInfo != nil {
+	if aux.TokenInfo != nil {
 		block.TokenInfo = aux.TokenInfo.FromTokenMarshal()
 	}
 	block.ConfirmationDetail = aux.ConfirmationDetail
-	if block.PairedAccountBlock != nil {
+	if aux.PairedAccountBlock != nil {
 		block.PairedAccountBlock = aux.PairedAccountBlock.FromApiMarshalJson()
 	}
 	return nil
