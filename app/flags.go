@@ -4,24 +4,24 @@ import (
 	"github.com/zenon-network/go-zenon/node"
 	"github.com/zenon-network/go-zenon/p2p"
 
-	"gopkg.in/urfave/cli.v1"
+	"github.com/urfave/cli/v2"
 )
 
 var (
 
 	// pprof
 
-	PprofFlag = cli.BoolFlag{
+	PprofFlag = &cli.BoolFlag{
 		Name:  "pprof",
 		Usage: "Enable the pprof HTTP server",
 	}
-	PprofPortFlag = cli.Uint64Flag{
+	PprofPortFlag = &cli.Uint64Flag{
 		Name:  "pprof.port",
 		Usage: "pprof HTTP server listening port",
 		Value: 6060,
 	}
 
-	PprofAddrFlag = cli.StringFlag{
+	PprofAddrFlag = &cli.StringFlag{
 		Name:  "pprof.addr",
 		Usage: "pprof HTTP server listening interface",
 		Value: "127.0.0.1",
@@ -29,7 +29,7 @@ var (
 
 	// config
 
-	ConfigFileFlag = cli.StringFlag{
+	ConfigFileFlag = &cli.StringFlag{
 		Name:  "config",
 		Usage: "Node configuration file in JSON format",
 		Value: "DataPath/config.json",
@@ -37,44 +37,44 @@ var (
 
 	// general
 
-	DataPathFlag = cli.StringFlag{
+	DataPathFlag = &cli.StringFlag{
 		Name:  "data",
 		Usage: "Path to the main zenon data folder. Used for store all files.",
 		Value: node.DefaultDataDir(),
 	}
-	WalletDirFlag = cli.StringFlag{
+	WalletDirFlag = &cli.StringFlag{
 		Name:  "wallet",
 		Usage: "Directory for the wallet.",
 		Value: "DataPath/wallet",
 	}
-	GenesisFileFlag = cli.StringFlag{
+	GenesisFileFlag = &cli.StringFlag{
 		Name:  "genesis",
 		Usage: "Path to genesis file. Used to override embedded genesis from the binary source-code.",
 		Value: "DataPath/genesis.json",
 	}
-	IdentityFlag = cli.StringFlag{
+	IdentityFlag = &cli.StringFlag{
 		Name:  "name", //mapping:p2p.Name
 		Usage: "Node's name. Visible in the network.",
 	}
 
 	// network
 
-	ListenHostFlag = cli.StringFlag{
+	ListenHostFlag = &cli.StringFlag{
 		Name:  "host",
 		Usage: "Network listening host",
 		Value: p2p.DefaultListenHost,
 	}
-	ListenPortFlag = cli.IntFlag{
+	ListenPortFlag = &cli.IntFlag{
 		Name:  "port",
 		Usage: "Network listening port",
 		Value: p2p.DefaultListenPort,
 	}
-	MaxPeersFlag = cli.UintFlag{
+	MaxPeersFlag = &cli.UintFlag{
 		Name:  "max-peers",
 		Usage: "Maximum number of network peers (network disabled if set to 0)",
 		Value: p2p.DefaultMaxPeers,
 	}
-	MaxPendingPeersFlag = cli.UintFlag{
+	MaxPendingPeersFlag = &cli.UintFlag{
 		Name:  "max-pending-peers",
 		Usage: "Maximum number of db connection attempts (defaults used if set to 0)",
 		Value: p2p.DefaultMaxPeers,
@@ -82,28 +82,28 @@ var (
 
 	// rpc
 
-	RPCEnabledFlag = cli.BoolFlag{
+	RPCEnabledFlag = &cli.BoolFlag{
 		Name:  "http",
 		Usage: "Enable the HTTP-RPC server",
 	}
-	RPCListenAddrFlag = cli.StringFlag{
+	RPCListenAddrFlag = &cli.StringFlag{
 		Name:  "http-addr",
 		Usage: "HTTP-RPC server listening interface",
 	}
-	RPCPortFlag = cli.IntFlag{
+	RPCPortFlag = &cli.IntFlag{
 		Name:  "http-port",
 		Usage: "HTTP-RPC server listening port",
 		Value: p2p.DefaultHTTPPort,
 	}
-	WSEnabledFlag = cli.BoolFlag{
+	WSEnabledFlag = &cli.BoolFlag{
 		Name:  "ws",
 		Usage: "Enable the WS-RPC server",
 	}
-	WSListenAddrFlag = cli.StringFlag{
+	WSListenAddrFlag = &cli.StringFlag{
 		Name:  "ws-addr",
 		Usage: "WS-RPC server listening interface",
 	}
-	WSPortFlag = cli.IntFlag{
+	WSPortFlag = &cli.IntFlag{
 		Name:  "ws-port",
 		Usage: "WS-RPC server listening port",
 		Value: p2p.DefaultWSPort,
@@ -111,7 +111,7 @@ var (
 
 	// log
 
-	LogLvlFlag = cli.StringFlag{
+	LogLvlFlag = &cli.StringFlag{
 		Name:  "loglevel",
 		Usage: "log level (info,error,warn,debug)",
 	}

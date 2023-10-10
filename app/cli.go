@@ -10,7 +10,7 @@ import (
 	"sort"
 	"time"
 
-	"gopkg.in/urfave/cli.v1"
+	"github.com/urfave/cli/v2"
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/metadata"
@@ -41,7 +41,7 @@ func init() {
 	app.HideVersion = false
 	app.Version = metadata.Version
 	app.Compiled = time.Now()
-	app.Authors = []cli.Author{
+	app.Authors = []*cli.Author{
 		{
 			Name:  "The Zenon Developers",
 			Email: "portal@zenon.network",
@@ -51,7 +51,7 @@ func init() {
 	app.Usage = "znnd Node"
 
 	//Import: Please add the New command here
-	app.Commands = []cli.Command{
+	app.Commands = []*cli.Command{
 		versionCommand,
 		licenseCommand,
 	}
@@ -74,7 +74,7 @@ func beforeAction(ctx *cli.Context) error {
 	runtime.GOMAXPROCS(max)
 
 	// pprof server
-	if ctx.GlobalIsSet(PprofFlag.Name) {
+	if ctx.IsSet(PprofFlag.Name) {
 		listenHost := ctx.String(PprofAddrFlag.Name)
 
 		port := ctx.Int(PprofPortFlag.Name)
@@ -94,8 +94,8 @@ func beforeAction(ctx *cli.Context) error {
 
 func action(ctx *cli.Context) error {
 	//Make sure No subCommands were entered,Only the flags
-	if args := ctx.Args(); len(args) > 0 {
-		return fmt.Errorf("invalid command: %q", args[0])
+	if args := ctx.Args(); args.Len() > 0 {
+		return fmt.Errorf("invalid command: %q", args.Get(0))
 	}
 	var err error
 	nodeManager, err = NewNodeManager(ctx)

@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"gopkg.in/urfave/cli.v1"
+	"github.com/urfave/cli/v2"
 
 	"github.com/zenon-network/go-zenon/node"
 )

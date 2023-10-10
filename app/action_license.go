@@ -3,11 +3,11 @@ package app
 import (
 	"fmt"
 
-	"gopkg.in/urfave/cli.v1"
+	"github.com/urfave/cli/v2"
 )
 
 var (
-	licenseCommand = cli.Command{
+	licenseCommand = &cli.Command{
 		Action:    licenseAction,
 		Name:      "license",
 		Usage:     "Display license information",
