@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"encoding/json"
-	"io/ioutil"
 	"os"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -40,7 +39,7 @@ type argon2Params struct {
 }
 
 func ReadKeyFile(path string) (*KeyFile, error) {
-	keyFileJson, err := ioutil.ReadFile(path)
+	keyFileJson, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,6 @@
 package wallet
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,14 +104,14 @@ func (m *Manager) GetKeyFileAndDecrypt(path, password string) (*KeyStore, error)
 
 // ListEntropyFilesInStandardDir reads them from the disk
 func (m *Manager) ListEntropyFilesInStandardDir() ([]*KeyFile, error) {
-	filePaths, err := ioutil.ReadDir(m.config.WalletDir)
+	filePaths, err := os.ReadDir(m.config.WalletDir)
 	if err != nil {
 		return nil, err
 	}
 
 	files := make([]*KeyFile, 0)
 	for _, file := range filePaths {
-		if file.IsDir() || file.Mode()&os.ModeType != 0 {
+		if file.IsDir() || file.Type() != 0 {
 			continue
 		}
 		fn := file.Name()
