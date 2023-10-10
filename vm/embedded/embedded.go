@@ -32,9 +32,9 @@ type embeddedImplementation struct {
 }
 
 var (
-	originEmbedded      = getOrigin()
-	acceleratorEmbedded = getAccelerator()
-	htlcEmbedded        = getHtlc()
+	originEmbedded             = getOrigin()
+	acceleratorEmbedded        = getAccelerator()
+	htlcEmbedded               = getHtlc()
 	bridgeAndLiquidityEmbedded = getBridgeAndLiquidity()
 )
 
@@ -216,7 +216,7 @@ func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Addres
 	}
 
 	var contractsMap map[types.Address]*embeddedImplementation
-	
+
 	if context.IsHtlcSporkEnforced() {
 		contractsMap = htlcEmbedded
 	} else if context.IsBridgeAndLiquiditySporkEnforced() {

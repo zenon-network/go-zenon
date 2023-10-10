@@ -67,7 +67,7 @@ var (
 	ErrInvalidPreimage       = errors.New("invalid preimage")
 	ErrInvalidExpirationTime = errors.New("invalid expiration time")
 	ErrExpired               = errors.New("expired")
-	
+
 	// Bridge
 	ErrUnknownNetwork                       = errors.New("unknown network")
 	ErrInvalidToAddress                     = errors.New("invalid destination address")
