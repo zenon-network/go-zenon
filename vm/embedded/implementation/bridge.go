@@ -5,6 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
+	"reflect"
+	"sort"
+	"strings"
+
 	eabi "github.com/ethereum/go-ethereum/accounts/abi"
 	ecommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto/secp256k1"
@@ -16,10 +21,6 @@ import (
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/vm/vm_context"
-	"math/big"
-	"reflect"
-	"sort"
-	"strings"
 )
 
 var (
@@ -175,7 +176,7 @@ func (p *WrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, send
 	if err != nil {
 		return nil, err
 	}
-	if tokenPair.Bridgeable == false {
+	if !tokenPair.Bridgeable {
 		return nil, constants.ErrTokenNotBridgeable
 	}
 
@@ -441,7 +442,7 @@ func (p *UnwrapTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 		return nil, errors.New("token pair not found")
 	}
 
-	if tokenPair.Redeemable == false {
+	if !tokenPair.Redeemable {
 		return nil, constants.ErrTokenNotRedeemable
 	}
 
@@ -701,7 +702,7 @@ func (p *SetTokenPairMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	}
 
 	if (param.TokenStandard.String() == types.ZnnTokenStandard.String() || param.TokenStandard.String() == types.QsrTokenStandard.String()) &&
-		param.Owned == true {
+		param.Owned {
 		return constants.ErrForbiddenParam
 	}
 
@@ -935,7 +936,7 @@ func (p *HaltMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock
 	if errBridge != nil {
 		return nil, errBridge
 	}
-	if bridgeInfo.Halted == true {
+	if bridgeInfo.Halted {
 		return nil, constants.ErrBridgeHalted
 	}
 
@@ -995,7 +996,7 @@ func (p *UnhaltMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 	}
 
 	// we do this check, so we cannot unhalt more than one time and actually increase the duration of the halt
-	if bridgeInfo.Halted == false {
+	if !bridgeInfo.Halted {
 		return nil, constants.ErrBridgeNotHalted
 	}
 

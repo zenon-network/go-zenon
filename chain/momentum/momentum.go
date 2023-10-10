@@ -47,7 +47,7 @@ func (ms *momentumStore) GetMomentumByHeight(height uint64) (*nom.Momentum, erro
 }
 func (ms *momentumStore) GetMomentumsByHeight(height uint64, higher bool, count uint64) ([]*nom.Momentum, error) {
 	var to, from uint64
-	if higher == true {
+	if higher {
 		from = height
 		to = height + count
 	} else {

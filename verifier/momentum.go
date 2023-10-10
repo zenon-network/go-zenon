@@ -179,7 +179,7 @@ func (rmv *rawMomentumVerifier) content() error {
 	heads := make(map[types.Address]types.HashHeight)
 	for _, header := range rmv.momentum.Content {
 		previous, ok := heads[header.Address]
-		if ok == false {
+		if !ok {
 			pastFrontier, err := rmv.momentumStore.GetFrontierAccountBlock(header.Address)
 			if err != nil {
 				return InternalError(err)
@@ -195,7 +195,7 @@ func (rmv *rawMomentumVerifier) content() error {
 		if isBatched(block) {
 			continue
 		}
-		if ok == false {
+		if !ok {
 			return errors.Errorf("momentum content header is not present in prefetched account-blocks")
 		}
 
@@ -268,7 +268,7 @@ func (mv *momentumTransactionVerifier) producer(transaction *nom.MomentumTransac
 	result, err := mv.consensus.VerifyMomentumProducer(transaction.Momentum)
 	if err != nil {
 		return InternalError(err)
-	} else if result == false {
+	} else if !result {
 		return ErrMProducerInvalid
 	}
 	return nil

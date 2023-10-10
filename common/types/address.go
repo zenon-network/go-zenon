@@ -96,7 +96,7 @@ func parseEmbedded(addrStr string) Address {
 	if err != nil {
 		panic(fmt.Sprintf("Address %v err %v", addrStr, err))
 	}
-	if IsEmbeddedAddress(a) == false {
+	if !IsEmbeddedAddress(a) {
 		panic(fmt.Sprintf("Address %v is not a contract address", addrStr))
 	}
 	return a

@@ -138,7 +138,7 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	if err := ap.canRollback(block); err != nil {
 		return err
 	}
-	if err := higherPriority(block, trueBlock); forceAdd == false && err != nil {
+	if err := higherPriority(block, trueBlock); !forceAdd && err != nil {
 		log.Info("failed to insert account-block-transaction", "reason", err, "frontier-identifier", frontierIdentifier)
 		return err
 	}

@@ -296,7 +296,7 @@ func (s *Supervisor) packMomentum(context vm_context.MomentumVMContext, momentum
 		Momentum: momentum,
 		Changes:  changes,
 	}
-	if isGenesis == false {
+	if !isGenesis {
 		if err := s.verifier.MomentumTransaction(transaction); err != nil {
 			return nil, err
 		}

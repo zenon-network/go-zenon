@@ -61,8 +61,8 @@ func checkPillarPercentages(param *definition.RegisterParam) error {
 }
 
 // Used for registration
-//  - checks the validity of pillar information
-//  - registers pillar and producing address in DB
+// - checks the validity of pillar information
+// - registers pillar and producing address in DB
 func checkAndRegisterPillar(context vm_context.AccountVmContext, param *definition.RegisterParam, ownerAddress types.Address, pillarType uint8) error {
 	// check pillar param
 	if err := checkPillarNameStatic(param.Name); err != nil {
@@ -125,9 +125,9 @@ func GetQsrCostForNextPillar(context vm_context.AccountVmContext) (*big.Int, err
 
 // PillarGetRevokeStatus returns status and cooldown.
 // If Pillar *can* be revoked, returns
-//	true, timeWhileCanRevoke
+// - true, timeWhileCanRevoke
 // If Pillar *can't* be revoked, returns
-//  false, timeUntilCanRevoke
+// - false, timeUntilCanRevoke
 func PillarGetRevokeStatus(old *definition.PillarInfo, m *nom.Momentum) (bool, int64) {
 	epochTime := (m.Timestamp.Unix() - old.RegistrationTime) % (constants.PillarEpochLockTime + constants.PillarEpochRevokeTime)
 	if epochTime < constants.PillarEpochLockTime {
@@ -333,7 +333,7 @@ func (p *RevokeMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 
 	momentum, err := context.GetFrontierMomentum()
 	common.DealWithErr(err)
-	if status, _ := PillarGetRevokeStatus(pillar, momentum); status == false {
+	if status, _ := PillarGetRevokeStatus(pillar, momentum); !status {
 		return nil, constants.RevokeNotDue
 	}
 
@@ -378,7 +378,7 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 	for _, pillar := range pillarInfos {
 		reward, ok := pillarReward[pillar.Name]
 		// pillar registered in later epochs
-		if ok == false {
+		if !ok {
 			continue
 		}
 
@@ -399,7 +399,7 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 	for _, pillar := range pillarInfos {
 		reward, ok := pillarReward[pillar.Name]
 		// pillar registered in later epochs
-		if ok == false {
+		if !ok {
 			continue
 		}
 
@@ -433,7 +433,7 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 	common.DealWithErr(err)
 	for _, pillarDetail := range details {
 		toBackers, ok := toGive[pillarDetail.Name]
-		if ok == false {
+		if !ok {
 			return errors.Errorf("can't find amount to backers for pillar %v", pillarDetail.Name)
 		}
 
