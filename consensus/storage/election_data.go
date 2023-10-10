@@ -3,7 +3,7 @@ package storage
 import (
 	"math/big"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/zenon-network/go-zenon/common/types"
 )

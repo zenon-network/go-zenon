@@ -1,5 +1,6 @@
 syntax = "proto3";
 package nom;
+option go_package = "github.com/zenon-network/go-zenon/chain/nom";
 
 import "common/types/protobuf.proto";
 
