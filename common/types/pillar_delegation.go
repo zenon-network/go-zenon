@@ -25,7 +25,7 @@ func (pdd *PillarDelegationDetail) Merge(oth *PillarDelegationDetail) {
 	pdd.Weight.Add(pdd.Weight, oth.Weight)
 	for addr, amount := range oth.Backers {
 		cAmount, ok := pdd.Backers[addr]
-		if ok == false {
+		if !ok {
 			pdd.Backers[addr] = new(big.Int).Set(amount)
 		} else {
 			cAmount.Add(cAmount, amount)

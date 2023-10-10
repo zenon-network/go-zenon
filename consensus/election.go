@@ -115,7 +115,7 @@ func (em *electionManager) ElectionByTick(tick uint64) (*electionResult, error) 
 	}
 	for _, p := range result.Producers {
 		name, ok := registerMap[p.Producer]
-		if ok == true {
+		if ok {
 			p.Name = name
 		} else {
 			em.log.Error("pillar name-lookup failed", "reason", "can't find name for address", "producing-address", p.Producer)

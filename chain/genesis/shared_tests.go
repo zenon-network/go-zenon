@@ -18,7 +18,7 @@ func checkAccountBalance(g *GenesisConfig, addr types.Address, required map[type
 
 		for zts, amount := range block.BalanceList {
 			requiredAmount, ok := required[zts]
-			if ok == false {
+			if !ok {
 				return errors.Errorf("invalid balance for %v Extra token %v", addr, zts)
 			} else {
 				if requiredAmount.Cmp(amount) != 0 {
@@ -29,7 +29,7 @@ func checkAccountBalance(g *GenesisConfig, addr types.Address, required map[type
 
 		for token := range required {
 			_, ok := block.BalanceList[token]
-			if ok == false && required[token].Cmp(common.Big0) != 0 {
+			if !ok && required[token].Cmp(common.Big0) != 0 {
 				return errors.Errorf("invalid balance for %v Expected token %v to be present", addr, token)
 			}
 		}
@@ -122,7 +122,7 @@ func CheckTokenTotalSupply(g *GenesisConfig) error {
 	for _, block := range g.GenesisBlocks.Blocks {
 		for zts, amount := range block.BalanceList {
 			total, ok := given[zts]
-			if ok == false {
+			if !ok {
 				given[zts] = new(big.Int).Set(amount)
 			} else {
 				total.Add(total, amount)
@@ -132,7 +132,7 @@ func CheckTokenTotalSupply(g *GenesisConfig) error {
 
 	for _, token := range g.TokenConfig.Tokens {
 		total, ok := given[token.TokenStandard]
-		if ok == false {
+		if !ok {
 			return errors.Errorf("token %v declared but not given at all", token)
 		} else if token.TotalSupply.Cmp(total) != 0 {
 			return errors.Errorf("invalid token total balance for %v Expected %v but got %v", token, total, token.TotalSupply)
@@ -148,7 +148,7 @@ func CheckTokenTotalSupply(g *GenesisConfig) error {
 			}
 		}
 
-		if found == false {
+		if !found {
 			return errors.Errorf("invalid token %v given but not declared", zts)
 		}
 	}

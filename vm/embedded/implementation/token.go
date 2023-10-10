@@ -38,7 +38,7 @@ func checkToken(param definition.IssueParam) error {
 	if ok, _ := regexp.MatchString("^[A-Z0-9]+$", param.TokenSymbol); !ok {
 		return constants.ErrTokenInvalidText
 	}
-	if ok, _ := regexp.MatchString("^([A-Za-z0-9][A-Za-z0-9-]{0,61}[A-Za-z0-9]\\.)+[A-Za-z]{2,}$", param.TokenDomain); ok == false && len(param.TokenDomain) != 0 {
+	if ok, _ := regexp.MatchString("^([A-Za-z0-9][A-Za-z0-9-]{0,61}[A-Za-z0-9]\\.)+[A-Za-z]{2,}$", param.TokenDomain); !ok && len(param.TokenDomain) != 0 {
 		return constants.ErrTokenInvalidText
 	}
 
@@ -62,7 +62,7 @@ func checkToken(param definition.IssueParam) error {
 	if param.MaxSupply.Cmp(param.TotalSupply) == -1 {
 		return constants.ErrTokenInvalidAmount
 	}
-	if param.IsMintable == false && param.MaxSupply.Cmp(param.TotalSupply) != 0 {
+	if !param.IsMintable && param.MaxSupply.Cmp(param.TotalSupply) != 0 {
 		return constants.ErrTokenInvalidAmount
 	}
 	return nil
@@ -273,7 +273,7 @@ func (p *BurnMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock
 	}
 
 	// for non-mintable coins, drop MaxSupply as well
-	if tokenInfo.IsMintable == false {
+	if !tokenInfo.IsMintable {
 		tokenInfo.MaxSupply.Sub(tokenInfo.MaxSupply, sendBlock.Amount)
 	}
 	tokenInfo.TotalSupply.Sub(tokenInfo.TotalSupply, sendBlock.Amount)
@@ -327,7 +327,7 @@ func (p *UpdateTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	}
 
 	if tokenInfo.IsMintable != param.IsMintable {
-		if tokenInfo.IsMintable == false {
+		if !tokenInfo.IsMintable {
 			return nil, constants.ErrForbiddenParam
 		}
 		tokenLog.Debug("updating token IsMintable", "old", tokenInfo.IsMintable, "new", param.IsMintable)

@@ -70,11 +70,11 @@ func (block *AccountBlock) UnmarshalJSON(data []byte) error {
 	}
 
 	block.AccountBlock = *aux.FromNomMarshalJson()
-	if block.TokenInfo != nil {
+	if aux.TokenInfo != nil {
 		block.TokenInfo = aux.TokenInfo.FromTokenMarshal()
 	}
 	block.ConfirmationDetail = aux.ConfirmationDetail
-	if block.PairedAccountBlock != nil {
+	if aux.PairedAccountBlock != nil {
 		block.PairedAccountBlock = aux.PairedAccountBlock.FromApiMarshalJson()
 	}
 	return nil
@@ -106,26 +106,14 @@ type BalanceInfo struct {
 }
 
 type BalanceInfoMarshal struct {
-	TokenMarshal `json:"token"`
-	Balance      string `json:"balance"`
+	TokenInfo *TokenMarshal `json:"token"`
+	Balance   string        `json:"balance"`
 }
 
 func (b *BalanceInfo) ToBalanceInfoMarshal() BalanceInfoMarshal {
 	aux := BalanceInfoMarshal{
-		TokenMarshal: TokenMarshal{
-			TokenName:          b.TokenInfo.TokenName,
-			TokenSymbol:        b.TokenInfo.TokenSymbol,
-			TokenDomain:        b.TokenInfo.TokenDomain,
-			MaxSupply:          b.TokenInfo.MaxSupply.String(),
-			Decimals:           b.TokenInfo.Decimals,
-			Owner:              b.TokenInfo.Owner,
-			ZenonTokenStandard: b.TokenInfo.ZenonTokenStandard,
-			TotalSupply:        b.TokenInfo.TotalSupply.String(),
-			IsBurnable:         b.TokenInfo.IsBurnable,
-			IsMintable:         b.TokenInfo.IsMintable,
-			IsUtility:          b.TokenInfo.IsUtility,
-		},
-		Balance: b.Balance.String(),
+		TokenInfo: b.TokenInfo.ToTokenMarshal(),
+		Balance:   b.Balance.String(),
 	}
 	return aux
 }
@@ -138,17 +126,8 @@ func (b *BalanceInfo) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	b.TokenInfo.TokenName = aux.TokenName
-	b.TokenInfo.TokenSymbol = aux.TokenSymbol
-	b.TokenInfo.TokenDomain = aux.TokenDomain
-	b.TokenInfo.MaxSupply = common.StringToBigInt(aux.MaxSupply)
-	b.TokenInfo.Decimals = aux.Decimals
-	b.TokenInfo.Owner = aux.Owner
-	b.TokenInfo.ZenonTokenStandard = aux.ZenonTokenStandard
-	b.TokenInfo.TotalSupply = common.StringToBigInt(aux.TotalSupply)
-	b.TokenInfo.IsBurnable = aux.IsBurnable
-	b.TokenInfo.IsMintable = aux.IsMintable
-	b.TokenInfo.IsUtility = aux.IsUtility
+	b.TokenInfo = aux.TokenInfo.FromTokenMarshal()
+	b.Balance = common.StringToBigInt(aux.Balance)
 	return nil
 }
 

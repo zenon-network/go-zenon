@@ -19,7 +19,7 @@ func (u *mergedDB) Get(key []byte) ([]byte, error) {
 	for _, db := range u.dbs {
 		if ok, err := db.Has(key); err != nil {
 			return nil, err
-		} else if ok == true {
+		} else if ok {
 			return db.Get(key)
 		}
 	}
@@ -29,7 +29,7 @@ func (u *mergedDB) Has(key []byte) (bool, error) {
 	for _, db := range u.dbs {
 		if ok, err := db.Has(key); err != nil {
 			return false, err
-		} else if ok == true {
+		} else if ok {
 			return true, nil
 		}
 	}

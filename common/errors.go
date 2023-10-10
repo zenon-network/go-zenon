@@ -117,7 +117,7 @@ func GetStack() string {
 			}
 		}
 
-		if ok == false {
+		if !ok {
 			continue
 		}
 
@@ -148,7 +148,7 @@ func ExpectBytes(t T, current []byte, expected string) {
 	ExpectString(t, hexutil.Encode(current), expected)
 }
 func ExpectTrue(t T, value bool) {
-	if value == false {
+	if !value {
 		expectError(t, "False", "True", GetStack())
 	}
 }

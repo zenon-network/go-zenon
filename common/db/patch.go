@@ -100,7 +100,7 @@ func (pa *patchApplierWO) Put(key []byte, value []byte) {
 	}
 	if ok, err := pa.db.Has(key); err != nil {
 		pa.err = err
-	} else if ok == false {
+	} else if !ok {
 		pa.err = pa.db.Put(key, common.JoinBytes([]byte{0}, value))
 	}
 }
@@ -110,7 +110,7 @@ func (pa *patchApplierWO) Delete(key []byte) {
 	}
 	if ok, err := pa.db.Has(key); err != nil {
 		pa.err = err
-	} else if ok == false {
+	} else if !ok {
 		pa.err = pa.db.Put(key, []byte{0})
 	}
 }

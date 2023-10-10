@@ -101,7 +101,7 @@ func (cs *consensus) Start() error {
 	defer cs.log.Info("started")
 
 	// enable
-	if cs.testing == false {
+	if !cs.testing {
 		cs.wg.Add(1)
 		go func() {
 			defer common.RecoverStack()

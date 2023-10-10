@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/btcsuite/btcutil/bech32"
+	"github.com/btcsuite/btcd/btcutil/bech32"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -30,7 +30,7 @@ var (
 	LiquidityContract   = parseEmbedded("z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae")
 	AcceleratorContract = parseEmbedded("z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22")
 	HtlcContract        = parseEmbedded("z1qxemdeddedxhtlcxxxxxxxxxxxxxxxxxygecvw")
-	BridgeContract 		= parseEmbedded("z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d")
+	BridgeContract      = parseEmbedded("z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d")
 
 	EmbeddedContracts = []Address{PlasmaContract, PillarContract, TokenContract, SentinelContract, SwapContract, StakeContract, SporkContract, LiquidityContract, AcceleratorContract, HtlcContract, BridgeContract}
 	EmbeddedWUpdate   = []Address{PillarContract, StakeContract, SentinelContract, LiquidityContract, AcceleratorContract}
@@ -96,7 +96,7 @@ func parseEmbedded(addrStr string) Address {
 	if err != nil {
 		panic(fmt.Sprintf("Address %v err %v", addrStr, err))
 	}
-	if IsEmbeddedAddress(a) == false {
+	if !IsEmbeddedAddress(a) {
 		panic(fmt.Sprintf("Address %v is not a contract address", addrStr))
 	}
 	return a

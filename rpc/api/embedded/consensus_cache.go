@@ -49,7 +49,7 @@ func (cache *consensusCache) Get() (weights map[string]*big.Int, currentStats *a
 }
 
 func (cache *consensusCache) shouldUpdate() bool {
-	if cache.updating == true {
+	if cache.updating {
 		return false
 	}
 	return cache.nextTime == nil || common.Clock.Now().After(*cache.nextTime)

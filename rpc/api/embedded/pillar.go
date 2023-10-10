@@ -220,7 +220,7 @@ func (a *PillarApi) GetAll(pageIndex, pageSize uint32) (*PillarInfoList, error) 
 	if weights != nil {
 		for _, pillar := range targetList {
 			weight, ok := weights[pillar.Name]
-			if ok == false {
+			if !ok {
 				pillar.Weight = big.NewInt(0)
 			} else {
 				pillar.Weight = (&big.Int{}).Set(weight)
@@ -231,7 +231,7 @@ func (a *PillarApi) GetAll(pageIndex, pageSize uint32) (*PillarInfoList, error) 
 	if stats != nil {
 		for _, pillar := range targetList {
 			pillarStat, ok := stats.Pillars[pillar.Name]
-			if ok == true {
+			if ok {
 				pillar.CurrentStats.ProducedMomentums = pillarStat.BlockNum
 				pillar.CurrentStats.ExpectedMomentums = pillarStat.ExceptedBlockNum
 			}
