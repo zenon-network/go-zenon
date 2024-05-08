@@ -45,9 +45,13 @@ func (av *accountVerifier) getContext(block *nom.AccountBlock) (store.Account, s
 	if block.MomentumAcknowledged.IsZero() {
 		return nil, nil, ErrABMAMustNotBeZero
 	}
-	momentumStore := av.chain.GetMomentumStore(block.MomentumAcknowledged)
-	if momentumStore == nil {
-		return nil, nil, ErrABMAMissing
+
+	var momentumStore store.Momentum
+	if types.IsEmbeddedAddress(block.Address) {
+		momentumStore = av.chain.GetMomentumStore(block.MomentumAcknowledged)
+		if momentumStore == nil {
+			return nil, nil, ErrABMAMissing
+		}
 	}
 
 	accountStore := av.chain.GetAccountStore(block.Address, block.Previous())
@@ -90,6 +94,7 @@ func (av *accountVerifier) AccountBlock(block *nom.AccountBlock) error {
 		block:         block,
 		accountStore:  accountStore,
 		momentumStore: momentumStore,
+		frontierStore: av.chain.GetFrontierMomentumStore(),
 	}).all()
 }
 func (av *accountVerifier) AccountBlockTransaction(transaction *nom.AccountBlockTransaction) error {
@@ -106,6 +111,7 @@ func (av *accountVerifier) AccountBlockTransaction(transaction *nom.AccountBlock
 		transaction:   transaction,
 		accountStore:  accountStore,
 		momentumStore: momentumStore,
+		frontierStore: av.chain.GetFrontierMomentumStore(),
 	}).all()
 }
 
@@ -120,6 +126,7 @@ type accountBlockVerifier struct {
 	block         *nom.AccountBlock
 	accountStore  store.Account
 	momentumStore store.Momentum
+	frontierStore store.Momentum
 }
 
 func (abv *accountBlockVerifier) all() error {
@@ -165,8 +172,8 @@ func (abv *accountBlockVerifier) chainIdentifier() error {
 	if abv.block.ChainIdentifier == 0 {
 		return ErrMChainIdentifierMissing
 	}
-	if abv.block.ChainIdentifier != abv.momentumStore.ChainIdentifier() {
-		return fmt.Errorf("%w - expected %v but received %v", ErrMChainIdentifierMismatch, abv.momentumStore.ChainIdentifier(), abv.block.ChainIdentifier)
+	if abv.block.ChainIdentifier != abv.frontierStore.ChainIdentifier() {
+		return fmt.Errorf("%w - expected %v but received %v", ErrMChainIdentifierMismatch, abv.frontierStore.ChainIdentifier(), abv.block.ChainIdentifier)
 	}
 	return nil
 }
@@ -274,12 +281,15 @@ func (abv *accountBlockVerifier) previous() error {
 	return nil
 }
 func (abv *accountBlockVerifier) momentumAcknowledged() error {
-	momentum, err := abv.momentumStore.GetFrontierMomentum()
-	if err != nil {
-		return InternalError(err)
-	}
-	if momentum.Identifier() != abv.block.MomentumAcknowledged {
-		return InternalError(errors.Errorf("impossible scenario. verifier momentum-store exists but frontier is different. Expected MomentumAcknowledged %v but got %v from MomentumStore", abv.block.MomentumAcknowledged, momentum.Identifier()))
+	if abv.momentumStore != nil {
+		momentum, err := abv.momentumStore.GetFrontierMomentum()
+		if err != nil {
+			return InternalError(err)
+		}
+		identifier := momentum.Identifier()
+		if identifier != abv.block.MomentumAcknowledged {
+			return InternalError(errors.Errorf("impossible scenario. momentum store exists but frontier is different. Expected MomentumAcknowledged %v but got %v from momentum store", abv.block.MomentumAcknowledged, identifier))
+		}
 	}
 
 	// all checks are done by the parent
@@ -295,7 +305,7 @@ func (abv *accountBlockVerifier) momentumAcknowledged() error {
 			}
 		}
 
-		height, err := abv.momentumStore.GetBlockConfirmationHeight(abv.block.FromBlockHash)
+		height, err := abv.frontierStore.GetBlockConfirmationHeight(abv.block.FromBlockHash)
 		if err != nil {
 			return InternalError(err)
 		}
@@ -324,7 +334,7 @@ func (abv *accountBlockVerifier) fromHash() error {
 	}
 
 	// check that from-hash is a valid hash
-	sendBlock, err := abv.momentumStore.GetAccountBlockByHash(abv.block.FromBlockHash)
+	sendBlock, err := abv.frontierStore.GetAccountBlockByHash(abv.block.FromBlockHash)
 	if err != nil {
 		return InternalError(err)
 	} else if sendBlock == nil {
@@ -365,6 +375,7 @@ type accountBlockTransactionVerifier struct {
 	transaction   *nom.AccountBlockTransaction
 	accountStore  store.Account
 	momentumStore store.Momentum
+	frontierStore store.Momentum
 }
 
 func (abvt *accountBlockTransactionVerifier) all() error {
@@ -445,6 +456,7 @@ func (abvt *accountBlockTransactionVerifier) descendantBlocks() error {
 			block:         dBlock,
 			accountStore:  abvt.accountStore,
 			momentumStore: abvt.momentumStore,
+			frontierStore: abvt.frontierStore,
 		}).all(); err != nil {
 			return DescendantVerifyError(err)
 		}

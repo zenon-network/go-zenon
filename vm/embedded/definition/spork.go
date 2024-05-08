@@ -38,6 +38,8 @@ var (
 const (
 	_ byte = iota
 	sporkInfoPrefix
+
+	SporkInfoPrefix = sporkInfoPrefix
 )
 
 type Spork struct {
@@ -66,7 +68,7 @@ func (spork *Spork) Key() []byte {
 	return common.JoinBytes([]byte{sporkInfoPrefix}, spork.Id.Bytes())
 }
 
-func parseSporkInfo(data []byte) *Spork {
+func ParseSporkInfo(data []byte) *Spork {
 	spork := new(Spork)
 	ABISpork.UnpackVariablePanic(spork, sporkInfoVariableName, data)
 	return spork
@@ -81,7 +83,7 @@ func GetSporkInfoById(context db.DB, id types.Hash) *Spork {
 	if len(data) == 0 {
 		return nil
 	} else {
-		return parseSporkInfo(data)
+		return ParseSporkInfo(data)
 	}
 }
 func GetAllSporks(context db.DB) []*Spork {
@@ -94,7 +96,7 @@ func GetAllSporks(context db.DB) []*Spork {
 			common.DealWithErr(iterator.Error())
 			break
 		}
-		spork := parseSporkInfo(iterator.Value())
+		spork := ParseSporkInfo(iterator.Value())
 		sporks = append(sporks, spork)
 	}
 	return sporks

@@ -28,6 +28,8 @@ type Transaction interface {
 
 type StorageIterator interface {
 	Next() bool
+	Prev() bool
+	Last() bool
 
 	Key() []byte
 	Value() []byte
@@ -53,6 +55,7 @@ type db interface {
 	Get([]byte) ([]byte, error)
 	Has([]byte) (bool, error)
 	Put(key, value []byte) error
+	Delete(key []byte) error
 
 	NewIterator(prefix []byte) StorageIterator
 

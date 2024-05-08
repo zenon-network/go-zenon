@@ -5,7 +5,7 @@ import (
 	"github.com/zenon-network/go-zenon/consensus"
 )
 
-func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTransaction, error) {
+func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTransaction, *nom.DetailedMomentum, error) {
 	insert := w.chain.AcquireInsert("momentum-generator")
 	defer insert.Unlock()
 
@@ -14,7 +14,7 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 
 	previousMomentum, err := store.GetFrontierMomentum()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	m := &nom.Momentum{
@@ -26,8 +26,10 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 		Version:         uint64(1),
 	}
 	m.EnsureCache()
-	return w.supervisor.GenerateMomentum(&nom.DetailedMomentum{
+	detailed := &nom.DetailedMomentum{
 		Momentum:      m,
 		AccountBlocks: blocks,
-	}, w.coinbase.Signer)
+	}
+	transaction, err := w.supervisor.GenerateMomentum(detailed, w.coinbase.Signer)
+	return transaction, detailed, err
 }

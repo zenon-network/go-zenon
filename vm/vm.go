@@ -7,6 +7,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -35,12 +36,14 @@ func errToStatus(err error) uint64 {
 }
 
 type VM struct {
-	context vm_context.AccountVmContext
+	context       vm_context.AccountVmContext
+	frontierStore store.Momentum
 }
 
-func NewVM(context vm_context.AccountVmContext) *VM {
+func NewVM(context vm_context.AccountVmContext, frontierStore store.Momentum) *VM {
 	return &VM{
-		context: context,
+		context:       context,
+		frontierStore: frontierStore,
 	}
 }
 
@@ -50,10 +53,14 @@ func enoughPlasma(context vm_context.AccountVmContext, block *nom.AccountBlock) 
 		return nil
 	}
 
-	available, err := AvailablePlasma(context.MomentumStore(), context)
-	common.DealWithErr(err)
-	if available < block.FusedPlasma {
-		return constants.ErrNotEnoughPlasma
+	// Prevent potentially expensive database read operations by only
+	// checking available plasma for blocks with fused plasma
+	if block.FusedPlasma > 0 {
+		available, err := AvailablePlasma(context.CacheStore(), context)
+		common.DealWithErr(err)
+		if available < block.FusedPlasma {
+			return constants.ErrNotEnoughPlasma
+		}
 	}
 
 	powPlasma := DifficultyToPlasma(block.Difficulty)
@@ -62,8 +69,10 @@ func enoughPlasma(context vm_context.AccountVmContext, block *nom.AccountBlock) 
 		return constants.ErrBlockPlasmaLimitReached
 	}
 
-	block.BasePlasma, err = GetBasePlasmaForAccountBlock(context, block)
+	basePlasma, err := GetBasePlasmaForAccountBlock(context, block)
 	common.DealWithErr(err)
+
+	block.BasePlasma = basePlasma
 
 	if block.TotalPlasma < block.BasePlasma {
 		return constants.ErrNotEnoughTotalPlasma
@@ -139,7 +148,7 @@ func (vm *VM) applySend(block *nom.AccountBlock) error {
 	return nil
 }
 func (vm *VM) applyReceive(block *nom.AccountBlock) error {
-	fromBlock, err := vm.context.MomentumStore().GetAccountBlockByHash(block.FromBlockHash)
+	fromBlock, err := vm.frontierStore.GetAccountBlockByHash(block.FromBlockHash)
 	if err != nil {
 		return err
 	}
