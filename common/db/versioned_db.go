@@ -53,6 +53,8 @@ type Manager interface {
 
 	Stop() error
 	Location() string
+
+	Restabilize(DB) error
 }
 
 type memdbManager struct {
@@ -177,6 +179,27 @@ func (m *memdbManager) Stop() error {
 }
 func (m *memdbManager) Location() string {
 	return "in-memory"
+}
+
+func (m *memdbManager) Restabilize(rawDB DB) error {
+	m.changes.Lock()
+	defer m.changes.Unlock()
+	stableIdentifier := GetFrontierIdentifier(rawDB)
+	if stableIdentifier.Height > m.frontierIdentifier.Height {
+		return errors.Errorf("can't restabilize. stable height can't be greater than frontier height")
+	}
+	for identifier := range m.versions {
+		if identifier.Height <= stableIdentifier.Height {
+			delete(m.patches, identifier)
+			delete(m.previous, identifier)
+		}
+		if identifier.Height < stableIdentifier.Height {
+			delete(m.versions, identifier)
+		}
+	}
+	m.stableDB = rawDB
+	m.stableIdentifier = stableIdentifier
+	return nil
 }
 
 type rollbackCache struct {
@@ -403,4 +426,8 @@ func (m *ldbManager) Stop() error {
 }
 func (m *ldbManager) Location() string {
 	return m.location
+}
+
+func (m *ldbManager) Restabilize(rawDB DB) error {
+	panic("unimplemented")
 }

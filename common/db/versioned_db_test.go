@@ -65,6 +65,16 @@ func newMockTransaction(seed int64, db DB) *mockTransaction {
 	}
 }
 
+func applyMockTransactions(m Manager, amount int) map[int]types.HashHeight {
+	identifiers := make(map[int]types.HashHeight, amount)
+	for i := 1; i <= amount; i++ {
+		t := newMockTransaction(int64(i), m.Frontier())
+		common.DealWithErr(m.Add(t))
+		identifiers[i] = t.commit.Identifier()
+	}
+	return identifiers
+}
+
 func TestVersionedDBConcurrentUse(t *testing.T) {
 	m := NewLevelDBManager(t.TempDir())
 	v0 := m.Frontier()
@@ -259,4 +269,35 @@ cea06b688be116ca - f6bd65cefe8c20dc
 d5104dc76695721d - b80704bb7b4d7c03
 dc2864602be7fb85 - d38967f931a50490
 f25f4b21eef64b43 - 9c0a8a2bfc0914df`)
+}
+
+func TestRestabilize(t *testing.T) {
+	stable := NewLevelDBManager(t.TempDir())
+	defer stable.Stop()
+
+	rawDB := stable.Frontier()
+	frontierIdentifier := GetFrontierIdentifier(rawDB)
+	memdb := &memdbManager{
+		stableDB:           rawDB,
+		stableIdentifier:   frontierIdentifier,
+		frontierIdentifier: frontierIdentifier,
+		previous:           map[types.HashHeight]types.HashHeight{},
+		versions:           map[types.HashHeight]DB{frontierIdentifier: rawDB},
+		patches:            map[types.HashHeight]Patch{},
+	}
+	defer memdb.Stop()
+
+	applyMockTransactions(stable, 5)
+	applyMockTransactions(memdb, 10)
+
+	rawDB = stable.Frontier()
+	currentFrontierIdentifier := memdb.frontierIdentifier
+	memdb.Restabilize(rawDB)
+
+	common.ExpectString(t, DebugDB(memdb.stableDB), DebugDB(rawDB))
+	common.ExpectString(t, memdb.stableIdentifier.Hash.String(), GetFrontierIdentifier(rawDB).Hash.String())
+	common.ExpectString(t, memdb.frontierIdentifier.Hash.String(), currentFrontierIdentifier.Hash.String())
+	common.Expect(t, len(memdb.previous), 5)
+	common.Expect(t, len(memdb.patches), 5)
+	common.Expect(t, len(memdb.versions), 6)
 }
