@@ -20,6 +20,7 @@ var (
 	ErrFailedToAddAccountBlockTransaction = errors.Errorf("failed to insert account-block-transaction")
 	ErrPlasmaRatioIsWorse                 = errors.Errorf("plasma ratio is smaller for current block")
 	ErrHashTieBreak                       = errors.Errorf("hash tie-break is worse for current block")
+	ErrBlockHeightNotFound                = errors.Errorf("block height does not exist in account manager")
 
 	// MaxAccountBlocksInMomentum takes into account batched account-blocks
 	MaxAccountBlocksInMomentum = 100
@@ -29,17 +30,53 @@ type Stable interface {
 	GetStableAccountDB(address types.Address) db.DB
 }
 
+type accountManager struct {
+	db     db.Manager
+	blocks map[uint64]*nom.AccountBlock
+}
+
+func (am *accountManager) Add(transaction *nom.AccountBlockTransaction) error {
+	if err := am.db.Add(transaction); err != nil {
+		return err
+	}
+	am.blocks[transaction.Block.Height] = transaction.Block
+	for _, d := range transaction.Block.DescendantBlocks {
+		am.blocks[d.Height] = d
+	}
+	return nil
+}
+
+func (am *accountManager) Pop() error {
+	frontier := db.GetFrontierIdentifier(am.db.Frontier()).Height
+	if err := am.db.Pop(); err != nil {
+		return err
+	}
+	delete(am.blocks, frontier)
+	return nil
+}
+
+func (am *accountManager) BlockByHeight(height uint64) (*nom.AccountBlock, error) {
+	block, ok := am.blocks[height]
+	if !ok {
+		return nil, ErrBlockHeightNotFound
+	}
+	return block, nil
+}
+
 type accountPool struct {
 	log      log15.Logger
 	stable   Stable
-	managers map[types.Address]db.Manager
+	managers map[types.Address]*accountManager
 	changes  sync.Mutex
 }
 
-func (ap *accountPool) getAccountManager(address types.Address) db.Manager {
+func (ap *accountPool) getAccountManager(address types.Address) *accountManager {
 	manager := ap.managers[address]
 	if manager == nil {
-		manager = db.NewMemDBManager(ap.stable.GetStableAccountDB(address))
+		manager = &accountManager{
+			db:     db.NewMemDBManager(ap.stable.GetStableAccountDB(address)),
+			blocks: make(map[uint64]*nom.AccountBlock),
+		}
 		ap.managers[address] = manager
 	}
 	return manager
@@ -146,7 +183,7 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	// rollback blocks and insert this one
 	manager := ap.getAccountManager(address)
 	for {
-		currentIdentifier := db.GetFrontierIdentifier(manager.Frontier())
+		currentIdentifier := db.GetFrontierIdentifier(manager.db.Frontier())
 		if currentIdentifier == previous {
 			break
 		}
@@ -166,7 +203,7 @@ func (ap *accountPool) GetPatch(address types.Address, identifier types.HashHeig
 	ap.changes.Lock()
 	defer ap.changes.Unlock()
 
-	return ap.getAccountManager(address).GetPatch(identifier)
+	return ap.getAccountManager(address).db.GetPatch(identifier)
 }
 func (ap *accountPool) GetAccountStore(address types.Address, identifier types.HashHeight) store.Account {
 	ap.changes.Lock()
@@ -182,9 +219,9 @@ func (ap *accountPool) GetAccountStore(address types.Address, identifier types.H
 	}
 
 	manager := ap.getAccountManager(address)
-	accountDb := manager.Get(identifier)
+	accountDb := manager.db.Get(identifier)
 	if accountDb == nil {
-		frontier := db.GetFrontierIdentifier(manager.Frontier())
+		frontier := db.GetFrontierIdentifier(manager.db.Frontier())
 		ap.log.Info("unable to get account store", "address", address, "frontier-identifier", frontier, "reason", "missing-db")
 		return nil
 	}
@@ -201,7 +238,7 @@ func (ap *accountPool) getStableAccountStore(address types.Address) store.Accoun
 	return account.NewAccountStore(address, db.NewMemDBManager(ap.stable.GetStableAccountDB(address)).Frontier())
 }
 func (ap *accountPool) getFrontierAccountStore(address types.Address) store.Account {
-	return account.NewAccountStore(address, ap.getAccountManager(address).Frontier())
+	return account.NewAccountStore(address, ap.getAccountManager(address).db.Frontier())
 }
 
 func (ap *accountPool) InsertMomentum(detailed *nom.DetailedMomentum) {
@@ -216,7 +253,7 @@ func (ap *accountPool) DeleteMomentum(*nom.DetailedMomentum) {
 	ap.changes.Lock()
 	defer ap.changes.Unlock()
 
-	ap.managers = make(map[types.Address]db.Manager)
+	ap.managers = make(map[types.Address]*accountManager)
 }
 func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 	addresses := make([]types.Address, 0, len(ap.managers))
@@ -233,9 +270,9 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 		oldManager := ap.managers[address]
 
 		stable := account.NewAccountStore(address, ap.stable.GetStableAccountDB(address))
-		uncommittedStore := account.NewAccountStore(address, oldManager.Frontier())
+		uncommittedStore := account.NewAccountStore(address, oldManager.db.Frontier())
 		for i := stable.Identifier().Height + 1; i <= uncommittedStore.Identifier().Height; i += 1 {
-			block, err := uncommittedStore.ByHeight(i)
+			block, err := oldManager.BlockByHeight(i)
 			common.DealWithErr(err)
 			uncommitted = append(uncommitted, block)
 		}
@@ -248,9 +285,12 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 		}
 
 		log.Debug("staring applying blocks", "num-uncommitted", len(uncommitted))
-		manager := db.NewMemDBManager(ap.stable.GetStableAccountDB(address))
+		manager := &accountManager{
+			db:     db.NewMemDBManager(ap.stable.GetStableAccountDB(address)),
+			blocks: make(map[uint64]*nom.AccountBlock),
+		}
 		for _, block := range uncommitted {
-			patch := oldManager.GetPatch(block.Identifier())
+			patch := oldManager.db.GetPatch(block.Identifier())
 			err := manager.Add(&nom.AccountBlockTransaction{
 				Block:   block,
 				Changes: patch,
@@ -310,7 +350,7 @@ func (ap *accountPool) getUncommittedAccountBlocksByAddress(address types.Addres
 	stable := ap.getStableAccountStore(address)
 	frontier := ap.getFrontierAccountStore(address)
 	for i := stable.Identifier().Height + 1; i <= frontier.Identifier().Height; i += 1 {
-		block, err := frontier.ByHeight(i)
+		block, err := ap.getAccountManager(address).BlockByHeight(i)
 		common.DealWithErr(err)
 		blocks = append(blocks, block)
 	}
@@ -322,7 +362,7 @@ func newAccountPool(stable Stable) *accountPool {
 	return &accountPool{
 		log:      common.ChainLogger.New("module", "account-pool"),
 		stable:   stable,
-		managers: make(map[types.Address]db.Manager),
+		managers: make(map[types.Address]*accountManager),
 	}
 }
 func NewAccountPool(stable Stable) AccountPool {
