@@ -58,7 +58,7 @@ func (e *cacheExtractor) tryToGetCacheKey(key []byte, value []byte) []byte {
 		// Cache chain plasma
 		if bytes.HasPrefix(keyWithoutAddress, account.ChainPlasmaKey) {
 			if value == nil {
-				return nil
+				return e.getHeightKey(getChainPlasmaKeyPrefix(address.Bytes()))
 			}
 			// Verify that the state has changed
 			current, err := e.cache.GetChainPlasma(address)
