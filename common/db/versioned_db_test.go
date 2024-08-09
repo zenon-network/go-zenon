@@ -67,6 +67,7 @@ func newMockTransaction(seed int64, db DB) *mockTransaction {
 
 func TestVersionedDBConcurrentUse(t *testing.T) {
 	m := NewLevelDBManager(t.TempDir())
+	defer m.Stop()
 	v0 := m.Frontier()
 	v01 := m.Frontier()
 
@@ -235,6 +236,7 @@ f25f4b21eef64b43 - 9c0a8a2bfc0914df`)
 
 	common.FailIfErr(t, m.Stop())
 	m2 := NewLevelDBManager(dir)
+	defer m2.Stop()
 	db = m2.Frontier()
 	common.ExpectString(t, DebugDB(db), `
 00 - 0a220a20d8ba48392cd7843812028c9fc3d7c92e232b8a725db741d69c930772e8551a851003
