@@ -13,15 +13,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@8f4b7f84864484a7bf31766abe9204da3cbe65b3
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
       - name: Ensure SHA pinned actions
-        uses: zgosalvez/github-actions-ensure-sha-pinned-actions@21991cec25093947ff3f62e4c223df0260c39944
+        uses: zgosalvez/github-actions-ensure-sha-pinned-actions@40ba2d51b6b6d8695f2b6bd74e785172d4f8d00f
   xgo:
     needs: harden_security
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@8f4b7f84864484a7bf31766abe9204da3cbe65b3
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
       - name: Install zip utility
         run: |
           sudo apt update
@@ -37,7 +37,7 @@ jobs:
       #     go install golang.org/x/vuln/cmd/govulncheck@latest
       #     /home/runner/go/bin/govulncheck -json ./...
       - name: Build znnd
-        uses: crazy-max/ghaction-xgo@588a1a9bc6aa44305ce5d2c669c11687316f87bf
+        uses: crazy-max/ghaction-xgo@682253ce1d3dd7a78c5120c703c9f3811dbf8cb2
         with:
           xgo_version: latest
           go_version: latest
@@ -52,7 +52,7 @@ jobs:
           buildmode: default
           trimpath: true
       - name: Build libznn
-        uses: crazy-max/ghaction-xgo@588a1a9bc6aa44305ce5d2c669c11687316f87bf
+        uses: crazy-max/ghaction-xgo@682253ce1d3dd7a78c5120c703c9f3811dbf8cb2
         with:
           xgo_version: latest
           go_version: latest
@@ -68,10 +68,10 @@ jobs:
           buildmode: c-shared
           trimpath: true
       - name: Build libznn (windows/amd64)
-        uses: crazy-max/ghaction-xgo@588a1a9bc6aa44305ce5d2c669c11687316f87bf
+        uses: crazy-max/ghaction-xgo@682253ce1d3dd7a78c5120c703c9f3811dbf8cb2
         with:
           xgo_version: latest
-          go_version: 1.19.10
+          go_version: latest
           dest: build
           prefix: libznn
           pkg: cmd/libznn
@@ -111,7 +111,7 @@ jobs:
           GOZENON=$(cat metadata/version.go | grep Version | awk -F '"' '{print $2}')
           echo "GOZENON_VERSION=$GOZENON" >> $GITHUB_ENV
       - name: Upload files to a GitHub release
-        uses: svenstaro/upload-release-action@7319e4733ec7a184d739a6f412c40ffc339b69c7
+        uses: svenstaro/upload-release-action@04733e069f2d7f7f0b4aebc4fbdbce8613b03ccd
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: build/*
