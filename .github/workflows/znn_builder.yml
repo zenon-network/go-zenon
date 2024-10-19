@@ -37,10 +37,10 @@ jobs:
       #     go install golang.org/x/vuln/cmd/govulncheck@latest
       #     /home/runner/go/bin/govulncheck -json ./...
       - name: Build znnd
-        uses: crazy-max/ghaction-xgo@682253ce1d3dd7a78c5120c703c9f3811dbf8cb2
+        uses: crazy-max/ghaction-xgo@be2dfe6e532254a351b2cd6f8f245847d0cbcdf0
         with:
           xgo_version: latest
-          go_version: latest
+          go_version: 1.23.0
           dest: build
           prefix: znnd
           pkg: cmd/znnd
@@ -52,10 +52,10 @@ jobs:
           buildmode: default
           trimpath: true
       - name: Build libznn
-        uses: crazy-max/ghaction-xgo@682253ce1d3dd7a78c5120c703c9f3811dbf8cb2
+        uses: crazy-max/ghaction-xgo@be2dfe6e532254a351b2cd6f8f245847d0cbcdf0
         with:
           xgo_version: latest
-          go_version: latest
+          go_version: 1.23.0
           dest: build
           prefix: libznn
           pkg: cmd/libznn
@@ -68,10 +68,10 @@ jobs:
           buildmode: c-shared
           trimpath: true
       - name: Build libznn (windows/amd64)
-        uses: crazy-max/ghaction-xgo@682253ce1d3dd7a78c5120c703c9f3811dbf8cb2
+        uses: crazy-max/ghaction-xgo@be2dfe6e532254a351b2cd6f8f245847d0cbcdf0
         with:
           xgo_version: latest
-          go_version: latest
+          go_version: 1.23.0
           dest: build
           prefix: libznn
           pkg: cmd/libznn
