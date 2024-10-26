@@ -39,7 +39,7 @@ jobs:
       - name: Build znnd
         uses: crazy-max/ghaction-xgo@be2dfe6e532254a351b2cd6f8f245847d0cbcdf0
         with:
-          xgo_version: latest
+          xgo_version: "v0.33.0"
           go_version: 1.23.0
           dest: build
           prefix: znnd
@@ -54,7 +54,7 @@ jobs:
       - name: Build libznn
         uses: crazy-max/ghaction-xgo@be2dfe6e532254a351b2cd6f8f245847d0cbcdf0
         with:
-          xgo_version: latest
+          xgo_version: "v0.33.0"
           go_version: 1.23.0
           dest: build
           prefix: libznn
@@ -70,7 +70,7 @@ jobs:
       - name: Build libznn (windows/amd64)
         uses: crazy-max/ghaction-xgo@be2dfe6e532254a351b2cd6f8f245847d0cbcdf0
         with:
-          xgo_version: latest
+          xgo_version: "v0.33.0"
           go_version: 1.23.0
           dest: build
           prefix: libznn
