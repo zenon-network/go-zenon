@@ -119,7 +119,7 @@ func (p *FundMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, erro
 	return plasmaTable.EmbeddedSimple, nil
 }
 func (p *FundMethod) ValidateSendBlock(block *nom.AccountBlock) error {
-	if block.Address != *types.SporkAddress {
+	if block.Address != *types.SporkAddress && block.Address.String() != types.GovernanceContract.String() {
 		return constants.ErrPermissionDenied
 	}
 
@@ -190,7 +190,7 @@ func (p *BurnZnnMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, e
 	return plasmaTable.EmbeddedSimple, nil
 }
 func (p *BurnZnnMethod) ValidateSendBlock(block *nom.AccountBlock) error {
-	if block.Address != *types.SporkAddress {
+	if block.Address != *types.SporkAddress && block.Address.String() != types.GovernanceContract.String() {
 		return constants.ErrPermissionDenied
 	}
 
@@ -312,7 +312,7 @@ func (p *SetTokenTupleMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != liquidityInfo.Administrator.String() {
+	if sendBlock.Address.String() != liquidityInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -777,7 +777,7 @@ func (p *SetIsHalted) ReceiveBlock(context vm_context.AccountVmContext, sendBloc
 	if err != nil {
 		return nil, err
 	}
-	if sendBlock.Address.String() != liquidityInfo.Administrator.String() {
+	if sendBlock.Address.String() != liquidityInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -821,7 +821,7 @@ func (p *UnlockLiquidityStakeEntries) ReceiveBlock(context vm_context.AccountVmC
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != liquidityInfo.Administrator.String() {
+	if sendBlock.Address.String() != liquidityInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -875,7 +875,7 @@ func (p *SetAdditionalReward) ReceiveBlock(context vm_context.AccountVmContext, 
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != liquidityInfo.Administrator.String() {
+	if sendBlock.Address.String() != liquidityInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -964,7 +964,7 @@ func (p *ChangeAdministratorLiquidity) ReceiveBlock(context vm_context.AccountVm
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != liquidityInfo.Administrator.String() {
+	if sendBlock.Address.String() != liquidityInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1046,7 +1046,7 @@ func (p *NominateGuardiansLiquidity) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != liquidityInfo.Administrator.String() {
+	if sendBlock.Address.String() != liquidityInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1225,7 +1225,7 @@ func (p *EmergencyLiquidity) ReceiveBlock(context vm_context.AccountVmContext, s
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != liquidityInfo.Administrator.String() {
+	if sendBlock.Address.String() != liquidityInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 

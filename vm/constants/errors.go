@@ -101,4 +101,8 @@ var (
 	// Liquidity
 	ErrInvalidPercentages = errors.New("invalid percentages")
 	ErrInvalidRewards     = errors.New("invalid liquidity stake rewards")
+
+	// Governance
+
+	ErrUnkownActionType = errors.New("unknown action type")
 )

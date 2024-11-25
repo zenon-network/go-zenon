@@ -36,7 +36,23 @@ var (
 	acceleratorEmbedded        = getAccelerator()
 	htlcEmbedded               = getHtlc()
 	bridgeAndLiquidityEmbedded = getBridgeAndLiquidity()
+	governanceEmbedded         = getGovernance()
 )
+
+func getGovernance() map[types.Address]*embeddedImplementation {
+	contracts := getHtlc()
+	contracts[types.GovernanceContract] = &embeddedImplementation{
+		map[string]Method{
+			cabi.ProposeActionMethodName: &implementation.ProposeActionMethod{cabi.ProposeActionMethodName},
+			cabi.ExecuteActionMethodName: &implementation.ExecuteActionMethod{cabi.ExecuteActionMethodName},
+			// common
+			cabi.VoteByNameMethodName:        &implementation.VoteByNameMethod{cabi.VoteByNameMethodName},
+			cabi.VoteByProdAddressMethodName: &implementation.VoteByProdAddressMethod{cabi.VoteByProdAddressMethodName},
+		},
+		cabi.ABIGovernance,
+	}
+	return contracts
+}
 
 func getHtlc() map[types.Address]*embeddedImplementation {
 	contracts := getBridgeAndLiquidity()
@@ -217,7 +233,9 @@ func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Addres
 
 	var contractsMap map[types.Address]*embeddedImplementation
 
-	if context.IsHtlcSporkEnforced() {
+	if context.IsGovernanceSporkEnforced() {
+		contractsMap = governanceEmbedded
+	} else if context.IsHtlcSporkEnforced() {
 		contractsMap = htlcEmbedded
 	} else if context.IsBridgeAndLiquiditySporkEnforced() {
 		contractsMap = bridgeAndLiquidityEmbedded

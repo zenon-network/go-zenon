@@ -534,7 +534,7 @@ func (p *SetNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -596,7 +596,7 @@ func (p *RemoveNetworkMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -657,7 +657,7 @@ func (p *SetNetworkMetadataMethod) ReceiveBlock(context vm_context.AccountVmCont
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -745,7 +745,7 @@ func (p *SetTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext, s
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -847,7 +847,7 @@ func (p *RemoveTokenPairMethod) ReceiveBlock(context vm_context.AccountVmContext
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -940,7 +940,7 @@ func (p *HaltMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock
 		return nil, constants.ErrBridgeHalted
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		momentum, err := context.GetFrontierMomentum()
 		common.DealWithErr(err)
 
@@ -1000,7 +1000,7 @@ func (p *UnhaltMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 		return nil, constants.ErrBridgeNotHalted
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1052,7 +1052,7 @@ func (p *EmergencyMethod) ReceiveBlock(context vm_context.AccountVmContext, send
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1158,8 +1158,7 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 	dPubKeyBytes = append(dPubKeyBytes, X.Bytes()...)
 	dPubKeyBytes = append(dPubKeyBytes, Y.Bytes()...)
 	newDecompressedPubKey := base64.StdEncoding.EncodeToString(dPubKeyBytes)
-
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		// this only applies to non administrator calls
 		if !bridgeInfo.AllowKeyGen {
 			return nil, constants.ErrNotAllowedToChangeTss
@@ -1252,7 +1251,7 @@ func (p *ChangeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmCon
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1326,7 +1325,7 @@ func (p *SetAllowKeygenMethod) ReceiveBlock(context vm_context.AccountVmContext,
 		return nil, errOrc
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1388,7 +1387,7 @@ func (p *SetOrchestratorInfoMethod) ReceiveBlock(context vm_context.AccountVmCon
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1447,7 +1446,7 @@ func (p *SetBridgeMetadataMethod) ReceiveBlock(context vm_context.AccountVmConte
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
@@ -1499,7 +1498,7 @@ func (p *RevokeUnwrapRequestMethod) ReceiveBlock(context vm_context.AccountVmCon
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 	request.Revoked = 1
@@ -1667,7 +1666,7 @@ func (p *NominateGuardiansMethod) ReceiveBlock(context vm_context.AccountVmConte
 		return nil, err
 	}
 
-	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
+	if sendBlock.Address.String() != bridgeInfo.Administrator.String() && sendBlock.Address.String() != types.GovernanceContract.String() {
 		return nil, constants.ErrPermissionDenied
 	}
 
