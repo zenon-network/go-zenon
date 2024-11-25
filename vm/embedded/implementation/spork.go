@@ -31,7 +31,7 @@ func (p *CreateSporkMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint6
 	return plasmaTable.EmbeddedSimple, nil
 }
 func (p *CreateSporkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
-	if block.Address != *types.SporkAddress {
+	if block.Address != *types.SporkAddress && block.Address.String() != types.GovernanceContract.String() {
 		return constants.ErrPermissionDenied
 	}
 	if block.Amount.Sign() != 0 {
@@ -94,7 +94,7 @@ func (p *ActivateSporkMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uin
 func (p *ActivateSporkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
-	if block.Address != *types.SporkAddress {
+	if block.Address != *types.SporkAddress && block.Address.String() != types.GovernanceContract.String() {
 		return constants.ErrPermissionDenied
 	}
 	id := new(types.Hash)
