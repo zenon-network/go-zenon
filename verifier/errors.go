@@ -60,6 +60,7 @@ var (
 	ErrABFromBlockHashMustBeZero   = errors.New("account-block from-block-hash must be zero")
 	ErrABFromBlockMissing          = errors.New("account-block from-block doesn't exist")
 	ErrABFromBlockAlreadyReceived  = errors.New("account-block from-block already received")
+	ErrABFromBlockReceiverMismatch = errors.New("account-block from-block receiver mismatch")
 	ErrABSequencerNothing          = errors.New("account-block failed to pass sequencer checks. Nothing to receive")
 	ErrABSequencerNotNext          = errors.New("account-block failed to pass sequencer checks. Not next in line to receive")
 
