@@ -51,6 +51,6 @@ type ChainBridge interface {
 
 type Broadcaster interface {
 	SyncInfo() *SyncInfo
-	CreateMomentum(*nom.MomentumTransaction)
+	CreateMomentum(*nom.MomentumTransaction, *nom.DetailedMomentum)
 	CreateAccountBlock(*nom.AccountBlockTransaction)
 }

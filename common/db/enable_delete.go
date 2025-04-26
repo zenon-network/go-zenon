@@ -26,7 +26,8 @@ func (p *enableDeletePatch) Delete(key []byte) {
 }
 
 type enableDeleteDB struct {
-	db db
+	db         db
+	fullDelete bool
 }
 
 func (d *enableDeleteDB) Has(key []byte) (bool, error) {
@@ -55,7 +56,11 @@ func (d *enableDeleteDB) Put(key, value []byte) error {
 	return d.db.Put(key, common.JoinBytes(existsByte, value))
 }
 func (d *enableDeleteDB) Delete(key []byte) error {
-	return d.db.Put(key, []byte{})
+	if d.fullDelete {
+		return d.db.Delete(key)
+	} else {
+		return d.db.Put(key, []byte{})
+	}
 }
 func (d *enableDeleteDB) NewIterator(prefix []byte) StorageIterator {
 	return newEnableDeleteIterator(d.db.NewIterator(prefix))
@@ -76,7 +81,7 @@ func (d *enableDeleteDB) Changes() (Patch, error) {
 	return edp.p, nil
 }
 func (d *enableDeleteDB) Snapshot() DB {
-	return enableDelete(newMergedDb([]db{newMemDBInternal(), d.db}))
+	return enableDelete(newMergedDb([]db{newMemDBInternal(), d.db}), d.fullDelete)
 }
 func (d *enableDeleteDB) Apply(patch Patch) error {
 	pa := &patchApplier{
@@ -89,7 +94,7 @@ func (d *enableDeleteDB) Apply(patch Patch) error {
 	return pa.err
 }
 func (d *enableDeleteDB) Subset(prefix []byte) DB {
-	return enableDelete(newSubDB(prefix, d.db))
+	return enableDelete(newSubDB(prefix, d.db), d.fullDelete)
 }
 
 type enableDeleteIterator struct {
@@ -109,8 +114,9 @@ func newEnableDeleteIterator(iterator StorageIterator) StorageIterator {
 		StorageIterator: iterator,
 	}
 }
-func enableDelete(db db) DB {
+func enableDelete(db db, fullDelete bool) DB {
 	return &enableDeleteDB{
-		db: db,
+		db:         db,
+		fullDelete: fullDelete,
 	}
 }

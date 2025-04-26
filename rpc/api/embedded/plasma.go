@@ -176,7 +176,7 @@ func (a *PlasmaApi) Get(address types.Address) (*PlasmaInfo, error) {
 		return nil, err
 	}
 
-	available, err := vm.AvailablePlasma(context.MomentumStore(), context)
+	available, err := vm.AvailablePlasma(context.CacheStore(), context)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +250,7 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 		return nil, errors.New("toAddress is nil")
 	}
 
-	availablePlasma, err := vm.AvailablePlasma(context.MomentumStore(), context)
+	availablePlasma, err := vm.AvailablePlasma(context.CacheStore(), context)
 	if err != nil {
 		return nil, err
 	}

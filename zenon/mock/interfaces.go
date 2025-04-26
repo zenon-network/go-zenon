@@ -20,4 +20,5 @@ type MockZenon interface {
 
 	SaveLogs(logger common.Logger) *common.Expecter
 	ExpectBalance(address types.Address, standard types.ZenonTokenStandard, expected int64)
+	ExpectCacheFusedAmount(address types.Address, expected int64)
 }

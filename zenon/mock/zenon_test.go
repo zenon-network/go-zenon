@@ -17,11 +17,15 @@ func TestStateGenesis(t *testing.T) {
 	store := z.Chain().GetFrontierMomentumStore()
 	common.ExpectBytes(t, store.Identifier().Hash.Bytes(), "0x0385d849ee33b94c8783288c148e3ae741c2ecec98b08b3f59d6bcc219168fe5")
 
+	cacheStore := z.Chain().GetFrontierCacheStore()
+	common.ExpectBytes(t, cacheStore.Identifier().Hash.Bytes(), "0x0385d849ee33b94c8783288c148e3ae741c2ecec98b08b3f59d6bcc219168fe5")
+
 	genesis, err := store.GetMomentumByHeight(1)
 	common.FailIfErr(t, err)
 	common.ExpectString(t, string(genesis.Data[0:43]), "This is the genesis config used for testing")
 
 	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 12000*g.Zexp)
+	z.ExpectCacheFusedAmount(g.User1.Address, 10000*g.Zexp)
 }
 
 func TestStateProducer(t *testing.T) {
