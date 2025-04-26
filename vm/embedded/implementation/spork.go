@@ -27,11 +27,23 @@ func checkSporkMetaDataStatic(sporkInfo *definition.Spork) error {
 	return nil
 }
 
+func checkCommunitySporkAddressValidity(context vm_context.AccountVmContext) error {
+	frontierMomentum, err := context.GetFrontierMomentum()
+	common.DealWithErr(err)
+	if frontierMomentum.Identifier().Height < definition.CommunitySporkAddressStartHeight {
+		return constants.ErrPermissionDenied
+	}
+	if frontierMomentum.Identifier().Height >= definition.CommunitySporkAddressEndHeight {
+		return constants.ErrPermissionDenied
+	}
+	return nil
+}
+
 func (p *CreateSporkMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
 func (p *CreateSporkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
-	if block.Address != *types.SporkAddress {
+	if block.Address != *types.SporkAddress && block.Address != types.CommunitySporkAddress {
 		return constants.ErrPermissionDenied
 	}
 	if block.Amount.Sign() != 0 {
@@ -61,6 +73,13 @@ func (p *CreateSporkMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		sporkLog.Debug("invalid create - syntactic validation failed", "address", sendBlock.Address, "reason", err)
 		return nil, err
+	}
+
+	if sendBlock.Address == types.CommunitySporkAddress {
+		err := checkCommunitySporkAddressValidity(context)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	spork := new(definition.Spork)
@@ -94,7 +113,7 @@ func (p *ActivateSporkMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uin
 func (p *ActivateSporkMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
-	if block.Address != *types.SporkAddress {
+	if block.Address != *types.SporkAddress && block.Address != types.CommunitySporkAddress {
 		return constants.ErrPermissionDenied
 	}
 	id := new(types.Hash)
@@ -113,6 +132,13 @@ func (p *ActivateSporkMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		sporkLog.Debug("invalid spork activation - syntactic validation failed", "address", sendBlock.Address, "reason", err)
 		return nil, err
+	}
+
+	if sendBlock.Address == types.CommunitySporkAddress {
+		err := checkCommunitySporkAddressValidity(context)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	id := new(types.Hash)

@@ -33,6 +33,9 @@ const (
 var (
 	// ABISpork is abi definition of token contract
 	ABISpork = abi.JSONToABIContract(strings.NewReader(jsonSpork))
+
+	CommunitySporkAddressStartHeight uint64 = 10109240 // Targeting 2025-04-16 12:00:00 UTC
+	CommunitySporkAddressEndHeight   uint64 = 13243712 // Targeting 2026-04-16 12:00:00 UTC
 )
 
 const (
