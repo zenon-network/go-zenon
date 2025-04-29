@@ -146,7 +146,7 @@ func (r *FusionEntryList) UnmarshalJSON(data []byte) error {
 	}
 	r.QsrAmount = common.StringToBigInt(aux.QsrAmount)
 	r.Count = aux.Count
-	r.Fusions = make([]*FusionEntry, len(r.Fusions))
+	r.Fusions = make([]*FusionEntry, len(aux.Fusions))
 	for idx, fusion := range aux.Fusions {
 		r.Fusions[idx] = fusion
 	}
