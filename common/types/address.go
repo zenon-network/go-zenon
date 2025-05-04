@@ -36,6 +36,11 @@ var (
 	EmbeddedWUpdate   = []Address{PillarContract, StakeContract, SentinelContract, LiquidityContract, AcceleratorContract}
 
 	SporkAddress *Address
+
+	// The community spork address is used as a temporary spork address
+	// until an embedded governance contract is taken into use.
+	// The address belongs to Mariposa01 pillar.
+	CommunitySporkAddress = ParseAddressPanic("z1qqvwzz2xq7q5gwk6uhcddgrpxlfcyzc8rsu82s")
 )
 
 func IsEmbeddedAddress(addr Address) bool {

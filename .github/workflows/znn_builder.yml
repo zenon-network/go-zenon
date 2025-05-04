@@ -83,15 +83,15 @@ jobs:
           buildvcs: false
           buildmode: c-shared
           trimpath: true
-      - name: Run makefat for darwin builds
-        run: |
-          cd ..
-          git clone https://github.com/randall77/makefat.git
-          cd makefat/
-          git checkout 7ddd0e42c8442593c87c1705a5545099604008e5
-          go build -o mainfat makefat.go
-          ./mainfat ../go-zenon/build/libznn-darwin-universal.dylib ../go-zenon/build/libznn-darwin-amd64.dylib ../go-zenon/build/libznn-darwin-arm64.dylib
-          ./mainfat ../go-zenon/build/znnd-darwin-universal ../go-zenon/build/znnd-darwin-amd64 ../go-zenon/build/znnd-darwin-arm64
+#      - name: Run makefat for darwin builds
+#        run: |
+#          cd ..
+#          git clone https://github.com/randall77/makefat.git
+#          cd makefat/
+#          git checkout 7ddd0e42c8442593c87c1705a5545099604008e5
+#          go build -o mainfat makefat.go
+#          ./mainfat ../go-zenon/build/libznn-darwin-universal.dylib ../go-zenon/build/libznn-darwin-amd64.dylib ../go-zenon/build/libznn-darwin-arm64.dylib
+#          ./mainfat ../go-zenon/build/znnd-darwin-universal ../go-zenon/build/znnd-darwin-amd64 ../go-zenon/build/znnd-darwin-arm64
       - name: Go back to build directory, remove header files and add execute flag
         run: |
           cd build/
