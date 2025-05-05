@@ -13,15 +13,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@8f4b7f84864484a7bf31766abe9204da3cbe65b3
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Ensure SHA pinned actions
-        uses: zgosalvez/github-actions-ensure-sha-pinned-actions@21991cec25093947ff3f62e4c223df0260c39944
+        uses: zgosalvez/github-actions-ensure-sha-pinned-actions@2d6823da4039243036c86d76f503c84e2ded2517
   xgo:
     needs: harden_security
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@8f4b7f84864484a7bf31766abe9204da3cbe65b3
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install zip utility
         run: |
           sudo apt update
@@ -37,10 +37,10 @@ jobs:
       #     go install golang.org/x/vuln/cmd/govulncheck@latest
       #     /home/runner/go/bin/govulncheck -json ./...
       - name: Build znnd
-        uses: crazy-max/ghaction-xgo@588a1a9bc6aa44305ce5d2c669c11687316f87bf
+        uses: crazy-max/ghaction-xgo@acf46aa99b919eb9ef6bba89dfd13bafa680667f
         with:
-          xgo_version: latest
-          go_version: latest
+          xgo_version: "v0.36.0"
+          go_version: 1.24.1
           dest: build
           prefix: znnd
           pkg: cmd/znnd
@@ -52,10 +52,10 @@ jobs:
           buildmode: default
           trimpath: true
       - name: Build libznn
-        uses: crazy-max/ghaction-xgo@588a1a9bc6aa44305ce5d2c669c11687316f87bf
+        uses: crazy-max/ghaction-xgo@acf46aa99b919eb9ef6bba89dfd13bafa680667f
         with:
-          xgo_version: latest
-          go_version: latest
+          xgo_version: "v0.36.0"
+          go_version: 1.24.1
           dest: build
           prefix: libznn
           pkg: cmd/libznn
@@ -67,11 +67,11 @@ jobs:
           buildvcs: false
           buildmode: c-shared
           trimpath: true
-      - name: Build libznn (windows/amd64)
-        uses: crazy-max/ghaction-xgo@588a1a9bc6aa44305ce5d2c669c11687316f87bf
+      - name: Build libznn
+        uses: crazy-max/ghaction-xgo@acf46aa99b919eb9ef6bba89dfd13bafa680667f
         with:
-          xgo_version: latest
-          go_version: 1.19.10
+          xgo_version: "v0.36.0"
+          go_version: 1.24.1
           dest: build
           prefix: libznn
           pkg: cmd/libznn
@@ -83,15 +83,15 @@ jobs:
           buildvcs: false
           buildmode: c-shared
           trimpath: true
-#      - name: Run makefat for darwin builds
-#        run: |
-#          cd ..
-#          git clone https://github.com/randall77/makefat.git
-#          cd makefat/
-#          git checkout 7ddd0e42c8442593c87c1705a5545099604008e5
-#          go build -o mainfat makefat.go
-#          ./mainfat ../go-zenon/build/libznn-darwin-universal.dylib ../go-zenon/build/libznn-darwin-amd64.dylib ../go-zenon/build/libznn-darwin-arm64.dylib
-#          ./mainfat ../go-zenon/build/znnd-darwin-universal ../go-zenon/build/znnd-darwin-amd64 ../go-zenon/build/znnd-darwin-arm64
+      - name: Upload Darwin builds for makefat
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: darwin-bins
+          path: |
+            build/znnd-darwin-amd64
+            build/znnd-darwin-arm64
+            build/libznn-darwin-amd64.dylib
+            build/libznn-darwin-arm64.dylib
       - name: Go back to build directory, remove header files and add execute flag
         run: |
           cd build/
@@ -102,16 +102,21 @@ jobs:
           cd build/
           for file in *windows*; do zip $(echo $file | rev | cut -d '.' -f2- | rev)".zip" "$file" && rm "$file" ; done && for so in "linux" "darwin"; do for file in *"$so"*; do tar cvzf $(echo $file | rev | cut -d '.' -f2- | rev)".tar.gz" "$file" && rm "$file" ; done; done
       - name: Generate checksums
-        run: | 
+        run: |
           cd build/
           sha256sum *
           sha256sum * > SHA256CHECKSUMS.txt
+      - name: Upload slice checksums
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: slice-checksums
+          path: build/SHA256CHECKSUMS.txt
       - name: Set version
         run: |
           GOZENON=$(cat metadata/version.go | grep Version | awk -F '"' '{print $2}')
           echo "GOZENON_VERSION=$GOZENON" >> $GITHUB_ENV
       - name: Upload files to a GitHub release
-        uses: svenstaro/upload-release-action@7319e4733ec7a184d739a6f412c40ffc339b69c7
+        uses: svenstaro/upload-release-action@04733e069f2d7f7f0b4aebc4fbdbce8613b03ccd
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: build/*
@@ -119,4 +124,67 @@ jobs:
           tag: ${{ env.GOZENON_VERSION }}-alphanet
           file_glob: true
           overwrite: true
+          body: ""
+  makefat:
+    name: Create universal Darwin binaries
+    needs: xgo
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Download Darwin slices
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: darwin-bins
+          path: darwin-bins
+      - name: Download slice checksums
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: slice-checksums
+          path: slice-checksums
+      - name: Prepare output dir
+        run: |
+          mkdir -p universal
+      - name: Create universal znnd
+        run: |
+          lipo -create \
+            darwin-bins/znnd-darwin-amd64 \
+            darwin-bins/znnd-darwin-arm64 \
+            -output universal/znnd-darwin-universal
+      - name: Create universal libznn
+        run: |
+          lipo -create \
+            darwin-bins/libznn-darwin-amd64.dylib \
+            darwin-bins/libznn-darwin-arm64.dylib \
+            -output universal/libznn-darwin-universal.dylib
+      - name: Archive files
+        run: |
+          cd universal/
+          tar -czvf libznn-darwin-universal.tar.gz libznn-darwin-universal.dylib
+          tar -czvf znnd-darwin-universal.tar.gz znnd-darwin-universal
+          rm libznn-darwin-universal.dylib
+          rm znnd-darwin-universal
+      - name: Generate universal checksums
+        run: |
+          cd universal
+          shasum -a 256 * > UNIVERSAL_CHECKSUMS.txt
+          cd ..
+      - name: Merge all checksums
+        run: |
+          cat slice-checksums/SHA256CHECKSUMS.txt universal/UNIVERSAL_CHECKSUMS.txt > SHA256CHECKSUMS.txt
+          rm universal/UNIVERSAL_CHECKSUMS.txt
+      - name: Set version
+        run: |
+          GOZENON=$(grep Version metadata/version.go \
+                     | awk -F '"' '{print $2}')
+          echo "GOZENON_VERSION=$GOZENON" >> $GITHUB_ENV
+      - name: Upload universal Darwin binaries
+        uses: svenstaro/upload-release-action@04733e069f2d7f7f0b4aebc4fbdbce8613b03ccd
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: universal/*
+          release_name: ${{ env.GOZENON_VERSION }}
+          tag: ${{ env.GOZENON_VERSION }}-alphanet
+          overwrite: true
+          file_glob: true
           body: ""
