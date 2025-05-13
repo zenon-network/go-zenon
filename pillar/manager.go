@@ -139,3 +139,7 @@ func (m *manager) GetCoinBase() *types.Address {
 	}
 	return &m.coinbase.Address
 }
+
+func (m *manager) SetPriorityAddresses(addresses map[types.Address]bool) {
+	m.worker.priorityAddresses = addresses
+}

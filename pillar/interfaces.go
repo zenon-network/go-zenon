@@ -22,4 +22,6 @@ type Manager interface {
 
 	SetCoinBase(coinbase *wallet.KeyPair)
 	GetCoinBase() *types.Address
+
+	SetPriorityAddresses(addresses map[types.Address]bool)
 }

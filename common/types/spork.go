@@ -30,12 +30,14 @@ var (
 	// the locally-generated hash (see vm/embedded/tests/spork_test.go
 	// for the existing pattern).
 	Libp2pSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000001")
+	DynamicPlasmaSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000002")
 
 	ImplementedSporksMap = map[Hash]bool{
 		AcceleratorSpork.SporkId:        true,
 		HtlcSpork.SporkId:               true,
 		BridgeAndLiquiditySpork.SporkId: true,
 		Libp2pSpork.SporkId:             true,
+		DynamicPlasmaSpork.SporkId:      true,
 	}
 )
 

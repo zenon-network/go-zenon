@@ -63,6 +63,8 @@ type AccountPool interface {
 	GetNewMomentumContent() []*nom.AccountBlock
 	GetAllUncommittedAccountBlocks() []*nom.AccountBlock
 	GetUncommittedAccountBlocksByAddress(address types.Address) []*nom.AccountBlock
+
+	CheckUncommittedPlasmaAmount(address types.Address) error
 }
 
 type ChainCache interface {

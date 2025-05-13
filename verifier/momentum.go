@@ -14,6 +14,7 @@ import (
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
+	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/wallet"
 )
 
@@ -76,10 +77,14 @@ type rawMomentumVerifier struct {
 }
 
 func (rmv *rawMomentumVerifier) all() error {
+	isDynamicPlasmaActive, err := rmv.momentumStore.IsSporkActive(types.DynamicPlasmaSpork)
+	if err != nil {
+		return err
+	}
 	if err := rmv.chainIdentifier(); err != nil {
 		return err
 	}
-	if err := rmv.version(); err != nil {
+	if err := rmv.version(isDynamicPlasmaActive); err != nil {
 		return err
 	}
 	if err := rmv.timestamp(); err != nil {
@@ -91,7 +96,13 @@ func (rmv *rawMomentumVerifier) all() error {
 	if err := rmv.data(); err != nil {
 		return err
 	}
-	if err := rmv.content(); err != nil {
+	if err := rmv.nextFusionPrice(); err != nil {
+		return err
+	}
+	if err := rmv.nextWorkPrice(); err != nil {
+		return err
+	}
+	if err := rmv.content(isDynamicPlasmaActive); err != nil {
 		return err
 	}
 	return nil
@@ -105,12 +116,18 @@ func (rmv *rawMomentumVerifier) chainIdentifier() error {
 	}
 	return nil
 }
-func (rmv *rawMomentumVerifier) version() error {
+func (rmv *rawMomentumVerifier) version(isDynamicPlasmaActive bool) error {
 	if rmv.momentum.Version == 0 {
 		return ErrMVersionMissing
 	}
-	if rmv.momentum.Version != 1 {
-		return ErrMVersionInvalid
+	if isDynamicPlasmaActive {
+		if rmv.momentum.Version != 2 {
+			return ErrMVersionInvalid
+		}
+	} else {
+		if rmv.momentum.Version != 1 {
+			return ErrMVersionInvalid
+		}
 	}
 	return nil
 }
@@ -155,10 +172,69 @@ func (rmv *rawMomentumVerifier) data() error {
 	}
 	return nil
 }
-func (rmv *rawMomentumVerifier) content() error {
-	if len(rmv.momentum.Content) > chain.MaxAccountBlocksInMomentum {
-		return ErrMContentTooBig
+func (rmv *rawMomentumVerifier) nextFusionPrice() error {
+	if rmv.momentum.Version == 1 && rmv.momentum.NextFusionPrice != 0 {
+		return ErrMDataMustBeZero
+	} else if rmv.momentum.Version >= 2 && rmv.momentum.NextFusionPrice < dp.MinResourcePrice {
+		return ErrMMinimumValueInvalid
 	}
+	return nil
+}
+func (rmv *rawMomentumVerifier) nextWorkPrice() error {
+	if rmv.momentum.Version == 1 && rmv.momentum.NextWorkPrice != 0 {
+		return ErrMDataMustBeZero
+	} else if rmv.momentum.Version >= 2 && rmv.momentum.NextWorkPrice < dp.MinResourcePrice {
+		return ErrMMinimumValueInvalid
+	}
+	return nil
+}
+func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
+	if isDynamicPlasmaActive {
+		previousMomentum, err := rmv.momentumStore.GetMomentumByHash(rmv.momentum.PreviousHash)
+		if err != nil {
+			return err
+		}
+
+		config, err := rmv.momentumStore.GetPlasmaVariables()
+		if err != nil {
+			return err
+		}
+
+		plasma := dp.NewDynamicPlasma(previousMomentum, config)
+		contractBlockCount := uint64(0)
+		basePlasma := types.BasePlasma{Fusion: 0, Pow: 0}
+		for _, block := range rmv.accountBlocks {
+			if types.IsEmbeddedAddress(block.Address) {
+				contractBlockCount++
+				if contractBlockCount > plasma.MaxContractBlocksInMomentum() {
+					return errors.Errorf("exceeded maximum allowed contract account blocks in momentum")
+				}
+			} else {
+				if !plasma.ValidPrice(block) {
+					return errors.Errorf("block price is too small")
+				}
+				basePlasma.Add(plasma.ComputeBasePlasma(block))
+				if basePlasma.Total() > config.MaxBasePlasmaInMomentum {
+					return ErrMContentTooBig
+				}
+			}
+		}
+
+		nextFusionPrice := plasma.NextFusionPrice(basePlasma.Fusion)
+		if nextFusionPrice != rmv.momentum.NextFusionPrice {
+			return errors.Errorf("mismatch in momentum fusion price: have %d, want %d", nextFusionPrice, rmv.momentum.NextFusionPrice)
+		}
+
+		nextWorkPrice := plasma.NextWorkPrice(basePlasma.Pow)
+		if nextWorkPrice != rmv.momentum.NextWorkPrice {
+			return errors.Errorf("mismatch in momentum work price: have %d, want %d", nextWorkPrice, rmv.momentum.NextWorkPrice)
+		}
+	} else {
+		if len(rmv.momentum.Content) > chain.MaxAccountBlocksInMomentum {
+			return ErrMContentTooBig
+		}
+	}
+
 	blocksLookup := make(map[types.HashHeight]*nom.AccountBlock)
 
 	// insert all account-blocks in lookup map

@@ -26,6 +26,8 @@ type worker struct {
 	contracts []types.Address
 	coinbase  *wallet.KeyPair
 
+	priorityAddresses map[types.Address]bool
+
 	// modules
 	chain       chain.Chain
 	supervisor  *vm.Supervisor

@@ -11,6 +11,7 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded"
 	"github.com/zenon-network/go-zenon/vm/vm_context"
@@ -56,16 +57,25 @@ func enoughPlasma(context vm_context.AccountVmContext, block *nom.AccountBlock) 
 	// Prevent potentially expensive database read operations by only
 	// checking available plasma for blocks with fused plasma
 	if block.FusedPlasma > 0 {
-		available, err := AvailablePlasma(context.CacheStore(), context)
-		if err != nil {
-			return err
+		var available uint64
+		var err error
+		if context.IsDynamicPlasmaSporkEnforced() {
+			available, err = AvailablePlasmaV2(context.CacheStore(), context)
+		} else {
+			available, err = AvailablePlasma(context.CacheStore(), context)
 		}
+		common.DealWithErr(err)
 		if available < block.FusedPlasma {
 			return constants.ErrNotEnoughPlasma
 		}
 	}
 
-	powPlasma := DifficultyToPlasma(block.Difficulty)
+	var powPlasma uint64
+	if context.IsDynamicPlasmaSporkEnforced() {
+		powPlasma = dp.DifficultyToPlasma(block.Difficulty)
+	} else {
+		powPlasma = DifficultyToPlasma(block.Difficulty)
+	}
 	block.TotalPlasma = powPlasma + block.FusedPlasma
 	if block.TotalPlasma > constants.MaxPlasmaForAccountBlock {
 		return constants.ErrBlockPlasmaLimitReached

@@ -96,6 +96,7 @@ const (
 	EmergencyMethodName            = "Emergency"
 	NominateGuardiansMethodName    = "NominateGuardians"
 	ProposeAdministratorMethodName = "ProposeAdministrator"
+	SetVariablesMethodName         = "SetVariables"
 )
 
 var (

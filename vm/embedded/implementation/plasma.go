@@ -142,3 +142,94 @@ func (p *CancelFuseMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 		},
 	}, nil
 }
+
+type SetVariablesMethod struct {
+	MethodName string
+}
+
+func (p *SetVariablesMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+	return plasmaTable.EmbeddedSimple, nil
+}
+func (p *SetVariablesMethod) ValidateSendBlock(block *nom.AccountBlock) error {
+	if block.Address != types.GovernanceAddress {
+		return constants.ErrPermissionDenied
+	}
+
+	var err error
+	param := new(definition.PlasmaVariables)
+
+	if err := definition.ABIPlasma.UnpackMethod(param, p.MethodName, block.Data); err != nil {
+		return constants.ErrUnpackError
+	}
+
+	if block.Amount.Sign() != 0 {
+		return constants.ErrInvalidTokenOrAmount
+	}
+
+	if param.MaxBasePlasmaInMomentum > definition.MaxBasePlasmaInMomentumUpperLimit {
+		return constants.ErrForbiddenParam
+	}
+
+	if param.MaxBasePlasmaInMomentum < definition.MaxBasePlasmaInMomentumLowerLimit {
+		return constants.ErrForbiddenParam
+	}
+
+	totalPlasmaTarget := param.FusedPlasmaTarget + param.PowPlasmaTarget
+	if totalPlasmaTarget > param.MaxBasePlasmaInMomentum {
+		return constants.ErrForbiddenParam
+	}
+
+	if param.FusedPlasmaTarget < definition.FusedPlasmaTargetLowerLimit {
+		return constants.ErrForbiddenParam
+	}
+
+	if param.PowPlasmaTarget < definition.PowPlasmaTargetLowerLimit {
+		return constants.ErrForbiddenParam
+	}
+
+	if param.MaxPriceChangePercent > definition.MaxPriceChangePercentUpperLimit {
+		return constants.ErrForbiddenParam
+	}
+
+	if param.MaxPriceChangePercent < definition.MaxPriceChangePercentLowerLimit {
+		return constants.ErrForbiddenParam
+	}
+
+	if param.PriceChangeDenominator > definition.PriceChangeDenominatorUpperLimit {
+		return constants.ErrForbiddenParam
+	}
+
+	if param.PriceChangeDenominator < definition.PriceChangeDenominatorLowerLimit {
+		return constants.ErrForbiddenParam
+	}
+
+	block.Data, err = definition.ABIPlasma.PackMethod(p.MethodName, param.MaxBasePlasmaInMomentum,
+		param.FusedPlasmaTarget, param.PowPlasmaTarget, param.MaxPriceChangePercent, param.PriceChangeDenominator)
+	return err
+}
+func (p *SetVariablesMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+	if err := p.ValidateSendBlock(sendBlock); err != nil {
+		return nil, err
+	}
+
+	param := new(definition.PlasmaVariables)
+	err := definition.ABIPlasma.UnpackMethod(param, p.MethodName, sendBlock.Data)
+	if err != nil {
+		return nil, err
+	}
+
+	variables, err := definition.GetPlasmaVariables(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+
+	variables.MaxBasePlasmaInMomentum = param.MaxBasePlasmaInMomentum
+	variables.FusedPlasmaTarget = param.FusedPlasmaTarget
+	variables.PowPlasmaTarget = param.PowPlasmaTarget
+	variables.MaxPriceChangePercent = param.MaxPriceChangePercent
+	variables.PriceChangeDenominator = param.PriceChangeDenominator
+	common.DealWithErr(variables.Save(context.Storage()))
+
+	plasmaLog.Debug("plasma variables updated", "variables", variables)
+	return nil, nil
+}

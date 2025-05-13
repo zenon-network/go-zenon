@@ -8,12 +8,14 @@ import (
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded"
 	"github.com/zenon-network/go-zenon/vm/vm_context"
 )
 
+// Legacy function from before the Dynamic Plasma spork
 func GetDifficultyForPlasma(requiredPlasma uint64) (uint64, error) {
 	if requiredPlasma > constants.MaxPoWPlasmaForAccountBlock {
 		return 0, constants.ErrForbiddenParam
@@ -22,6 +24,8 @@ func GetDifficultyForPlasma(requiredPlasma uint64) (uint64, error) {
 	}
 	return requiredPlasma * constants.PoWDifficultyPerPlasma, nil
 }
+
+// Legacy function from before the Dynamic Plasma spork
 func DifficultyToPlasma(difficulty uint64) uint64 {
 	// Check for 0
 	if difficulty == 0 {
@@ -36,6 +40,7 @@ func DifficultyToPlasma(difficulty uint64) uint64 {
 	return difficulty / constants.PoWDifficultyPerPlasma
 }
 
+// Legacy function from before the Dynamic Plasma spork
 func FussedAmountToPlasma(amount *big.Int) uint64 {
 	// Check for 0
 	if amount == nil || amount.Sign() <= 0 {
@@ -77,6 +82,35 @@ func AvailablePlasma(cache store.Cache, account store.Account) (uint64, error) {
 	}
 	if answer.Cmp(constants.MaxFussedAmountForAccountBig) == +1 {
 		return constants.MaxFussedAmountForAccount, nil
+	} else {
+		return answer.Uint64(), nil
+	}
+}
+
+// V2 was introduced with the Dynamic Plasma spork
+func AvailablePlasmaV2(cache store.Cache, account store.Account) (uint64, error) {
+	address := *account.Address()
+	committed, err := cache.GetChainPlasma(address)
+	if err != nil {
+		return 0, err
+	}
+	fused, err := cache.GetStakeBeneficialAmount(address)
+	if err != nil {
+		return 0, err
+	}
+	uncommitted, err := account.GetChainPlasma()
+	if err != nil {
+		return 0, err
+	}
+	fusedPlasma := new(big.Int).SetUint64(dp.FusedAmountToPlasma(fused))
+
+	answer := new(big.Int).Add(fusedPlasma, committed)
+	answer = answer.Sub(answer, uncommitted)
+	if answer.Sign() == -1 {
+		return 0, errors.Errorf("got negative available plasma")
+	}
+	if answer.Cmp(dp.MaxFusedAmountForAccountBig) == +1 {
+		return dp.MaxFusedAmountForAccount, nil
 	} else {
 		return answer.Uint64(), nil
 	}

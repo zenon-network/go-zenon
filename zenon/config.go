@@ -7,6 +7,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common/db"
+	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/wallet"
 )
 
@@ -16,6 +17,7 @@ type Config struct {
 	DataDir           string
 	ProducingKeyPair  *wallet.KeyPair
 	GenesisConfig     store.Genesis
+	PriorityAddresses map[types.Address]bool
 }
 
 func (c *Config) NewDBManager(inside string) db.Manager {

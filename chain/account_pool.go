@@ -3,8 +3,10 @@ package chain
 import (
 	"bytes"
 	"fmt"
+	"math/big"
 	"sync"
 
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/vm/constants"
 )
 
 var (
@@ -23,7 +26,12 @@ var (
 	ErrBlockHeightNotFound                = errors.Errorf("block height does not exist in account manager")
 
 	// MaxAccountBlocksInMomentum takes into account batched account-blocks
+	// Not used after Dynamic Plasma spork
 	MaxAccountBlocksInMomentum = 100
+
+	// MaxUncommittedChainPlasma limits the length of the uncommitted
+	// state a user account chain can have to limit node resource consumption.
+	MaxUncommittedChainPlasma = big.NewInt(int64(constants.AccountBlockBasePlasma * 500))
 )
 
 type Stable interface {
@@ -159,6 +167,13 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 
 	frontier := ap.getFrontierAccountStore(address)
 	frontierIdentifier := frontier.Identifier()
+
+	// check uncommitted plasma amount
+	if !forceAdd && !types.IsEmbeddedAddress(address) {
+		if err := ap.checkUncommittedPlasmaAmount(address); err != nil {
+			return err
+		}
+	}
 
 	// fast-forward insert on top of chain
 	if previous == frontierIdentifier {
@@ -362,6 +377,31 @@ func (ap *accountPool) getUncommittedAccountBlocksByAddress(address types.Addres
 	}
 
 	return blocks
+}
+
+func (ap *accountPool) CheckUncommittedPlasmaAmount(address types.Address) error {
+	ap.changes.Lock()
+	defer ap.changes.Unlock()
+
+	return ap.checkUncommittedPlasmaAmount(address)
+}
+func (ap *accountPool) checkUncommittedPlasmaAmount(address types.Address) error {
+	total, err := ap.getFrontierAccountStore(address).GetChainPlasma()
+	if err != nil {
+		log.Info("failed to get total chain plasma", "reason", err)
+		return fmt.Errorf(`%w reason:%v; address:%v`, ErrFailedToAddAccountBlockTransaction, err, address)
+	}
+	committed, err := ap.getStableAccountStore(address).GetChainPlasma()
+	if err != nil {
+		log.Info("failed to get committed chain plasma", "reason", err)
+		return fmt.Errorf(`%w reason:%v; address:%v`, ErrFailedToAddAccountBlockTransaction, err, address)
+	}
+	if total.Sub(total, committed).Cmp(MaxUncommittedChainPlasma) >= 0 {
+		log.Info("max uncommitted chain plasma reached")
+		return fmt.Errorf(`%w reason: max uncommitted chain plasma reached; address:%v`,
+			ErrFailedToAddAccountBlockTransaction, address)
+	}
+	return nil
 }
 
 func newAccountPool(stable Stable) *accountPool {

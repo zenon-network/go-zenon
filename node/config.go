@@ -17,10 +17,11 @@ import (
 )
 
 type ProducerConfig struct {
-	Address     string
-	Index       uint32
-	KeyFilePath string
-	Password    string
+	Address           string
+	Index             uint32
+	KeyFilePath       string
+	Password          string
+	PriorityAddresses []string
 }
 type RPCConfig struct {
 	EnableHTTP bool
@@ -134,6 +135,7 @@ func (c *Config) makeZenonConfig(walletManager *wallet.Manager) (*zenon.Config, 
 		ProducingKeyPair:  pillarCoinbase,
 		GenesisConfig:     c.makeGenesisConfig(),
 		DataDir:           c.DataPath,
+		PriorityAddresses: c.makePriorityAddressesMap(),
 	}, nil
 }
 func (c *Config) makeGenesisConfig() (genesisConfig store.Genesis) {
@@ -207,6 +209,16 @@ func (c *Config) parseProducer(walletManager *wallet.Manager) (*wallet.KeyPair, 
 	}
 
 	return keyPair, nil
+}
+
+func (c *Config) makePriorityAddressesMap() map[types.Address]bool {
+	mapped := make(map[types.Address]bool)
+	if c.Producer != nil {
+		for _, address := range c.Producer.PriorityAddresses {
+			mapped[types.ParseAddressPanic(address)] = true
+		}
+	}
+	return mapped
 }
 
 func (c *Config) makeWalletConfig() *wallet.Config {
