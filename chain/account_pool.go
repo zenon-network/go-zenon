@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 
@@ -386,12 +385,12 @@ func (ap *accountPool) CheckUncommittedBlocksCount(address types.Address) error 
 func (ap *accountPool) checkUncommittedBlocksCount(address types.Address) error {
 	frontier, err := ap.getFrontierAccountStore(address).Frontier()
 	if err != nil {
-		log.Info("failed to get frontier block", "reason", err)
+		ap.log.Info("failed to get frontier block", "reason", err)
 		return fmt.Errorf(`%w reason:%v; address:%v`, ErrFailedToAddAccountBlockTransaction, err, address)
 	}
 	stableFrontier, err := ap.getStableAccountStore(address).Frontier()
 	if err != nil {
-		log.Info("failed to get stable frontier block", "reason", err)
+		ap.log.Info("failed to get stable frontier block", "reason", err)
 		return fmt.Errorf(`%w reason:%v; address:%v`, ErrFailedToAddAccountBlockTransaction, err, address)
 	}
 	if frontier == nil || stableFrontier == nil {
@@ -399,7 +398,7 @@ func (ap *accountPool) checkUncommittedBlocksCount(address types.Address) error 
 	}
 	uncommittedBlockCount := frontier.Height - stableFrontier.Height
 	if uncommittedBlockCount+1 >= MaxUncommittedBlocksPerAccount {
-		log.Info("max uncommitted blocks per account reached")
+		ap.log.Info("max uncommitted blocks per account reached")
 		return fmt.Errorf(`%w reason: max uncommitted blocks per account reached; address:%v`,
 			ErrFailedToAddAccountBlockTransaction, address)
 	}
