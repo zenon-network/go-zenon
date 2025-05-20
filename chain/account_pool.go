@@ -3,7 +3,6 @@ package chain
 import (
 	"bytes"
 	"fmt"
-	"math/big"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/log"
@@ -16,7 +15,6 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
-	"github.com/zenon-network/go-zenon/vm/constants"
 )
 
 var (
@@ -29,9 +27,9 @@ var (
 	// Not used after Dynamic Plasma spork
 	MaxAccountBlocksInMomentum = 100
 
-	// MaxUncommittedChainPlasma limits the length of the uncommitted
+	// MaxUncommittedBlocksPerAccount limits the length of the uncommitted
 	// state a user account chain can have to limit node resource consumption.
-	MaxUncommittedChainPlasma = big.NewInt(int64(constants.AccountBlockBasePlasma * 500))
+	MaxUncommittedBlocksPerAccount uint64 = 500
 )
 
 type Stable interface {
@@ -170,7 +168,7 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 
 	// check uncommitted plasma amount
 	if !forceAdd && !types.IsEmbeddedAddress(address) {
-		if err := ap.checkUncommittedPlasmaAmount(address); err != nil {
+		if err := ap.checkUncommittedBlocksCount(address); err != nil {
 			return err
 		}
 	}
@@ -379,26 +377,30 @@ func (ap *accountPool) getUncommittedAccountBlocksByAddress(address types.Addres
 	return blocks
 }
 
-func (ap *accountPool) CheckUncommittedPlasmaAmount(address types.Address) error {
+func (ap *accountPool) CheckUncommittedBlocksCount(address types.Address) error {
 	ap.changes.Lock()
 	defer ap.changes.Unlock()
 
-	return ap.checkUncommittedPlasmaAmount(address)
+	return ap.checkUncommittedBlocksCount(address)
 }
-func (ap *accountPool) checkUncommittedPlasmaAmount(address types.Address) error {
-	total, err := ap.getFrontierAccountStore(address).GetChainPlasma()
+func (ap *accountPool) checkUncommittedBlocksCount(address types.Address) error {
+	frontier, err := ap.getFrontierAccountStore(address).Frontier()
 	if err != nil {
-		log.Info("failed to get total chain plasma", "reason", err)
+		log.Info("failed to get frontier block", "reason", err)
 		return fmt.Errorf(`%w reason:%v; address:%v`, ErrFailedToAddAccountBlockTransaction, err, address)
 	}
-	committed, err := ap.getStableAccountStore(address).GetChainPlasma()
+	stableFrontier, err := ap.getStableAccountStore(address).Frontier()
 	if err != nil {
-		log.Info("failed to get committed chain plasma", "reason", err)
+		log.Info("failed to get stable frontier block", "reason", err)
 		return fmt.Errorf(`%w reason:%v; address:%v`, ErrFailedToAddAccountBlockTransaction, err, address)
 	}
-	if total.Sub(total, committed).Cmp(MaxUncommittedChainPlasma) >= 0 {
-		log.Info("max uncommitted chain plasma reached")
-		return fmt.Errorf(`%w reason: max uncommitted chain plasma reached; address:%v`,
+	if frontier == nil || stableFrontier == nil {
+		return nil
+	}
+	uncommittedBlockCount := frontier.Height - stableFrontier.Height
+	if uncommittedBlockCount+1 >= MaxUncommittedBlocksPerAccount {
+		log.Info("max uncommitted blocks per account reached")
+		return fmt.Errorf(`%w reason: max uncommitted blocks per account reached; address:%v`,
 			ErrFailedToAddAccountBlockTransaction, address)
 	}
 	return nil

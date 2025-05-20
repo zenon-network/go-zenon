@@ -69,7 +69,7 @@ func (l *LedgerApi) PublishRawTransaction(block *AccountBlock) error {
 		return err
 	}
 
-	if err = l.chain.CheckUncommittedPlasmaAmount(block.Address); err != nil {
+	if err = l.chain.CheckUncommittedBlocksCount(block.Address); err != nil {
 		return err
 	}
 
