@@ -286,7 +286,7 @@ func (m *ldbManager) Get(identifier types.HashHeight) DB {
 				newSubDB(frontierByte, newLevelDBSnapshotWrapper(snapshot)),
 			})),
 	})
-	return enableDelete(u)
+	return enableDelete(u, false)
 }
 func (m *ldbManager) GetPatch(identifier types.HashHeight) Patch {
 	m.changes.Lock()

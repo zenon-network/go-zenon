@@ -38,6 +38,16 @@ func (u *mergedDB) Has(key []byte) (bool, error) {
 func (u *mergedDB) Put(key, value []byte) error {
 	return u.dbs[0].Put(key, value)
 }
+func (u *mergedDB) Delete(key []byte) error {
+	for _, db := range u.dbs {
+		if ok, err := db.Has(key); err != nil {
+			return err
+		} else if ok {
+			return db.Delete(key)
+		}
+	}
+	return nil
+}
 func (u *mergedDB) NewIterator(prefix []byte) StorageIterator {
 	iterators := make([]StorageIterator, len(u.dbs))
 	for i := range u.dbs {
@@ -86,6 +96,12 @@ func newMergedIterator(iterators []StorageIterator) StorageIterator {
 
 func (mi *mergedIterator) Next() bool {
 	return mi.step()
+}
+func (mi *mergedIterator) Prev() bool {
+	panic("unimplemented")
+}
+func (mi *mergedIterator) Last() bool {
+	panic("unimplemented")
 }
 func (mi *mergedIterator) Key() []byte {
 	if mi.current == noCurrent || mi.err != nil {

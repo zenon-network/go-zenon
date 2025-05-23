@@ -23,6 +23,7 @@ type Chain interface {
 	AccountPool
 	MomentumPool
 	MomentumEventManager
+	ChainCache
 }
 
 type MomentumEventListener interface {
@@ -62,4 +63,11 @@ type AccountPool interface {
 	GetNewMomentumContent() []*nom.AccountBlock
 	GetAllUncommittedAccountBlocks() []*nom.AccountBlock
 	GetUncommittedAccountBlocksByAddress(address types.Address) []*nom.AccountBlock
+}
+
+type ChainCache interface {
+	UpdateCache(insertLocker sync.Locker, detailed *nom.DetailedMomentum, changes db.Patch) error
+	RollbackCacheTo(insertLocker sync.Locker, identifier types.HashHeight) error
+	GetCacheStore(identifier types.HashHeight) store.Cache
+	GetFrontierCacheStore() store.Cache
 }
