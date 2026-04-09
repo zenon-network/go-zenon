@@ -101,4 +101,7 @@ var (
 	// Liquidity
 	ErrInvalidPercentages = errors.New("invalid percentages")
 	ErrInvalidRewards     = errors.New("invalid liquidity stake rewards")
+
+	// BitcoinSPV
+	ErrHeaderNotFound = errors.New("block header not found")
 )

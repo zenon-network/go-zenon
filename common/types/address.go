@@ -31,8 +31,12 @@ var (
 	AcceleratorContract = parseEmbedded("z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22")
 	HtlcContract        = parseEmbedded("z1qxemdeddedxhtlcxxxxxxxxxxxxxxxxxygecvw")
 	BridgeContract      = parseEmbedded("z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d")
+	PtlcContract        = parseEmbedded("z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady")
+	BitcoinSpvContract  = parseEmbedded("z1qxemdeddedxtr3dlxxxxxxxxxxxxxxxxqsmv59")
+	GovernanceContract  = parseEmbedded("z1qxemdeddedxg0vernancexxxxxxxxxxxklyh23")
+	AtomicSwapContract  = parseEmbedded("z1qxemdeddedx2wrz6nvvvvvvvvvvvvvgv4am6a")
 
-	EmbeddedContracts = []Address{PlasmaContract, PillarContract, TokenContract, SentinelContract, SwapContract, StakeContract, SporkContract, LiquidityContract, AcceleratorContract, HtlcContract, BridgeContract}
+	EmbeddedContracts = []Address{PlasmaContract, PillarContract, TokenContract, SentinelContract, SwapContract, StakeContract, SporkContract, LiquidityContract, AcceleratorContract, HtlcContract, BridgeContract, PtlcContract, BitcoinSpvContract, GovernanceContract, AtomicSwapContract}
 	EmbeddedWUpdate   = []Address{PillarContract, StakeContract, SentinelContract, LiquidityContract, AcceleratorContract}
 
 	SporkAddress *Address
