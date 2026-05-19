@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/libp2p/go-libp2p/core/network"
+	ma "github.com/multiformats/go-multiaddr"
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/p2p/discover"
@@ -58,9 +60,54 @@ type protoHandshake struct {
 	ID         discover.NodeID
 }
 
+// peerConn holds the connection state for a peer.
+type peerConn struct {
+	rw     *StreamRW
+	stream network.Stream
+	id     discover.NodeID
+	caps   []Cap
+	name   string
+}
+
+func (c *peerConn) close(err error) {
+	if c.stream != nil {
+		c.stream.Close()
+	}
+}
+
+// RemoteAddr returns the remote address of the network connection.
+func (c *peerConn) RemoteAddr() net.Addr {
+	if c.stream != nil {
+		conn := c.stream.Conn()
+		if conn != nil {
+			return &multiaddrNetAddr{conn.RemoteMultiaddr()}
+		}
+	}
+	return &net.TCPAddr{}
+}
+
+// LocalAddr returns the local address of the network connection.
+func (c *peerConn) LocalAddr() net.Addr {
+	if c.stream != nil {
+		conn := c.stream.Conn()
+		if conn != nil {
+			return &multiaddrNetAddr{conn.LocalMultiaddr()}
+		}
+	}
+	return &net.TCPAddr{}
+}
+
+// multiaddrNetAddr wraps a multiaddr as a net.Addr for compatibility.
+type multiaddrNetAddr struct {
+	addr ma.Multiaddr
+}
+
+func (a *multiaddrNetAddr) Network() string { return "libp2p" }
+func (a *multiaddrNetAddr) String() string  { return a.addr.String() }
+
 // Peer represents a connected remote node.
 type Peer struct {
-	rw      *conn
+	rw      *peerConn
 	running map[string]*protoRW
 
 	wg       sync.WaitGroup
@@ -71,16 +118,49 @@ type Peer struct {
 
 // NewPeer returns a peer for testing purposes.
 func NewPeer(id discover.NodeID, name string, caps []Cap) *Peer {
-	pipe, _ := net.Pipe()
-	conn := &conn{fd: pipe, transport: nil, id: id, caps: caps, name: name}
-	peer := newPeer(conn, nil)
-	close(peer.closed) // ensures Disconnect doesn't block
-	return peer
+	conn := &peerConn{id: id, caps: caps, name: name}
+	p := &Peer{
+		rw:       conn,
+		running:  make(map[string]*protoRW),
+		disc:     make(chan DiscReason),
+		protoErr: make(chan error, 1),
+		closed:   make(chan struct{}),
+	}
+	close(p.closed)
+	return p
+}
+
+// newPeerFromStream creates a peer from a libp2p stream.
+func newPeerFromStream(rw *StreamRW, s network.Stream, id discover.NodeID, caps []Cap, name string, protocols []Protocol) *Peer {
+	conn := &peerConn{
+		rw:     rw,
+		stream: s,
+		id:     id,
+		caps:   caps,
+		name:   name,
+	}
+	protomap := matchProtocols(protocols, caps, rw)
+	p := &Peer{
+		rw:       conn,
+		running:  protomap,
+		disc:     make(chan DiscReason),
+		protoErr: make(chan error, len(protomap)+1),
+		closed:   make(chan struct{}),
+	}
+	return p
 }
 
 // ID returns the node's public key.
 func (p *Peer) ID() discover.NodeID {
 	return p.rw.id
+}
+
+// RemotePeerID returns the libp2p peer ID as a string.
+func (p *Peer) RemotePeerID() string {
+	if p.rw.stream != nil {
+		return p.rw.stream.Conn().RemotePeer().String()
+	}
+	return ""
 }
 
 // Name returns the node name that the remote node advertised.
@@ -90,22 +170,20 @@ func (p *Peer) Name() string {
 
 // Caps returns the capabilities (supported subprotocols) of the remote peer.
 func (p *Peer) Caps() []Cap {
-	// TODO: maybe return copy
 	return p.rw.caps
 }
 
 // RemoteAddr returns the remote address of the network connection.
 func (p *Peer) RemoteAddr() net.Addr {
-	return p.rw.fd.RemoteAddr()
+	return p.rw.RemoteAddr()
 }
 
 // LocalAddr returns the local address of the network connection.
 func (p *Peer) LocalAddr() net.Addr {
-	return p.rw.fd.LocalAddr()
+	return p.rw.LocalAddr()
 }
 
 // Disconnect terminates the peer connection with the given reason.
-// It returns immediately and does not wait until the connection is closed.
 func (p *Peer) Disconnect(reason DiscReason) {
 	select {
 	case p.disc <- reason:
@@ -117,18 +195,6 @@ func (p *Peer) Disconnect(reason DiscReason) {
 // String implements fmt.Stringer.
 func (p *Peer) String() string {
 	return fmt.Sprintf("Peer %x %v", p.rw.id[:8], p.RemoteAddr())
-}
-
-func newPeer(conn *conn, protocols []Protocol) *Peer {
-	protomap := matchProtocols(protocols, conn.caps, conn)
-	p := &Peer{
-		rw:       conn,
-		running:  protomap,
-		disc:     make(chan DiscReason),
-		protoErr: make(chan error, len(protomap)+1), // protocols + pingLoop
-		closed:   make(chan struct{}),
-	}
-	return p
 }
 
 func (p *Peer) run() DiscReason {
@@ -152,17 +218,13 @@ func (p *Peer) run() DiscReason {
 		p.wg.Done()
 	}()
 
-	// Start all protocol handlers.
 	writeStart <- struct{}{}
 	p.startProtocols(writeStart, writeErr)
 
-	// Wait for an error or disconnect.
 loop:
 	for {
 		select {
 		case err := <-writeErr:
-			// A write finished. Allow the next write to start if
-			// there was no error.
 			if err != nil {
 				common.P2PLogger.Debug(fmt.Sprintf("%v: write error: %v\n", p, err))
 				reason = DiscNetworkError
@@ -191,9 +253,7 @@ loop:
 
 	p.rw.close(reason)
 	close(p.closed)
-	common.P2PLogger.Debug("wg.Wait() peer.run()")
-	// p.wg.Wait()
-	common.P2PLogger.Debug("wg.Wait() peer.run() finished")
+	common.P2PLogger.Debug("peer.run() finished")
 	if requested {
 		reason = DiscRequested
 	}
@@ -206,7 +266,7 @@ func (p *Peer) pingLoop() {
 	for {
 		select {
 		case <-ping.C:
-			if err := SendItems(p.rw, pingMsg); err != nil {
+			if err := SendItems(p.rw.rw, pingMsg); err != nil {
 				p.protoErr <- err
 				return
 			}
@@ -218,7 +278,7 @@ func (p *Peer) pingLoop() {
 
 func (p *Peer) readLoop(errc chan<- error) {
 	for {
-		msg, err := p.rw.ReadMsg()
+		msg, err := p.rw.rw.ReadMsg()
 		if err != nil {
 			errc <- err
 			return
@@ -237,20 +297,16 @@ func (p *Peer) handle(msg Msg) error {
 		msg.Discard()
 		p.wg.Add(1)
 		go func() {
-			SendItems(p.rw, pongMsg)
+			SendItems(p.rw.rw, pongMsg)
 			p.wg.Done()
 		}()
 	case msg.Code == discMsg:
 		var reason [1]DiscReason
-		// This is the last message. We don't need to discard or
-		// check errors because, the connection will be closed after it.
 		rlp.Decode(msg.Payload, &reason)
 		return reason[0]
 	case msg.Code < baseProtocolLength:
-		// ignore other base protocol messages
 		return msg.Discard()
 	default:
-		// it's a subprotocol message
 		proto, err := p.getProto(msg.Code)
 		if err != nil {
 			return fmt.Errorf("msg code out of range: %v", msg.Code)
@@ -277,7 +333,6 @@ func countMatchingProtocols(protocols []Protocol, caps []Cap) int {
 	return n
 }
 
-// matchProtocols creates structures for matching named subprotocols.
 func matchProtocols(protocols []Protocol, caps []Cap, rw MsgReadWriter) map[string]*protoRW {
 	sort.Sort(capsByNameAndVersion(caps))
 	offset := baseProtocolLength
@@ -287,14 +342,11 @@ outer:
 	for _, cap := range caps {
 		for _, proto := range protocols {
 			if proto.Name == cap.Name && proto.Version == cap.Version {
-				// If an old protocol version matched, revert it
 				if old := result[cap.Name]; old != nil {
 					offset -= old.Length
 				}
-				// Assign the new match
 				result[cap.Name] = &protoRW{Protocol: proto, offset: offset, in: make(chan Msg), w: rw}
 				offset += proto.Length
-
 				continue outer
 			}
 		}
@@ -324,8 +376,6 @@ func (p *Peer) startProtocols(writeStart <-chan struct{}, writeErr chan<- error)
 	}
 }
 
-// getProto finds the protocol responsible for handling
-// the given message code.
 func (p *Peer) getProto(code uint64) (*protoRW, error) {
 	for _, proto := range p.running {
 		if code >= proto.offset && code < proto.offset+proto.Length {
@@ -337,10 +387,10 @@ func (p *Peer) getProto(code uint64) (*protoRW, error) {
 
 type protoRW struct {
 	Protocol
-	in     chan Msg        // receices read messages
-	closed <-chan struct{} // receives when peer is shutting down
-	wstart <-chan struct{} // receives when write may start
-	werr   chan<- error    // for write results
+	in     chan Msg
+	closed <-chan struct{}
+	wstart <-chan struct{}
+	werr   chan<- error
 	offset uint64
 	w      MsgWriter
 }
@@ -353,10 +403,6 @@ func (rw *protoRW) WriteMsg(msg Msg) (err error) {
 	select {
 	case <-rw.wstart:
 		err = rw.w.WriteMsg(msg)
-		// Report write status back to Peer.run. It will initiate
-		// shutdown if the error is non-nil and unblock the next write
-		// otherwise. The calling protocol code should exit for errors
-		// as well but we don't want to rely on that.
 		rw.werr <- err
 	case <-rw.closed:
 		err = fmt.Errorf("shutting down")

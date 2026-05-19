@@ -27,6 +27,13 @@ const (
 )
 
 var (
+	// DefaultSeeders contains the mainnet bootstrap peers.
+	// NOTE: These are currently in legacy enode:// format from the pre-libp2p
+	// networking stack. They will not work with the libp2p implementation —
+	// ParseBootstrapPeers expects multiaddr format (/ip4/.../tcp/.../p2p/...).
+	// The community must supply new bootstrap nodes running the libp2p stack
+	// before mainnet rollout. Once available, replace these entries with
+	// multiaddr strings. See docs/libp2p-rollout.md for the migration plan.
 	DefaultSeeders = []string{
 		"enode://f0e3e1f507c7cc5a2d2cf0eb173c204c820786c7cecbc0118d1cf76e5eaba90348ce57e5c9dee35c27a40f5a44dafc61b8996f00bb33647c66f66c997ce6592b@206.188.197.194:35995",
 		"enode://b65fcbc62293e21ed026f922b986bec16c70dc44de79a11eaaba5650579bd9e5e43630aa0a12eb689dc644b4ccc593fa6e64f189fd892c11eb22917fe46120b6@139.177.178.226:35995",

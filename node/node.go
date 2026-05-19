@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/pkg/errors"
 	"github.com/prometheus/tsdb/fileutil"
 
 	"github.com/zenon-network/go-zenon/common"
@@ -75,9 +74,11 @@ func NewNode(conf *Config) (*Node, error) {
 	}
 
 	netConfig := conf.makeNetConfig()
-	nodes, err := netConfig.Nodes()
+
+	// Parse seeders as multiaddr bootstrap peers
+	bootstrapPeers, err := p2p.ParseBootstrapPeers(netConfig.Seeders)
 	if err != nil {
-		return nil, errors.Errorf("Unable to parse seeders. Reason: %v", err)
+		return nil, fmt.Errorf("parse seeders: %w", err)
 	}
 
 	node.server = &p2p.Server{
@@ -88,10 +89,7 @@ func NewNode(conf *Config) (*Node, error) {
 		MaxPendingPeers:   netConfig.MaxPendingPeers,
 		Discovery:         true,
 		NoDial:            false,
-		StaticNodes:       nil,
-		BootstrapNodes:    nodes,
-		TrustedNodes:      nil,
-		NodeDatabase:      netConfig.NodeDatabase,
+		BootstrapPeers:    bootstrapPeers,
 		ListenAddr:        fmt.Sprintf("%v:%v", netConfig.ListenAddr, netConfig.ListenPort),
 		Protocols:         node.z.Protocol().SubProtocols,
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/zenon-network/go-zenon/chain/genesis"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/p2p/discover"
+	"github.com/zenon-network/go-zenon/p2p/libp2p"
 	"github.com/zenon-network/go-zenon/wallet"
 
 	"github.com/ethereum/go-ethereum/crypto"
@@ -186,20 +187,28 @@ func run(force bool) error {
 		}
 	}
 
-	// Pass 2: load each p2p key, build static enodes for every devnet node.
+	// Pass 2: load each p2p key; build static enodes for every devnet node and
+	// libp2p multiaddrs for every pillar (both formats needed for the switcher).
 	enodes := make(map[string]string, len(pillars)+len(relays))
+	maddrs := make(map[string]string, len(pillars))
 	var bootstrapEnode string
+	var bootstrapMaddr string
 	for _, p := range pillars {
 		k, err := crypto.LoadECDSA(filepath.Join(p.Dir, "network-private-key"))
 		if err != nil {
 			return fmt.Errorf("load p2p key for %s: %w", p.Role, err)
 		}
-		// Seeder parsing in p2p/discover requires a numeric IP, not a hostname,
-		// so we point at the static IPs reserved in docker-compose.yml.
+		pid, err := libp2p.PeerIDFromECDSA(k)
+		if err != nil {
+			return fmt.Errorf("derive peer ID for %s: %w", p.Role, err)
+		}
+		maddr := fmt.Sprintf("/ip4/%s/tcp/35995/p2p/%s", p.IP, pid)
+		maddrs[p.Role] = maddr
 		enode := fmt.Sprintf("enode://%s@%s:35995", discover.PubkeyID(&k.PublicKey).String(), p.IP)
 		enodes[p.Role] = enode
 		if p.IsBootstrap {
 			bootstrapEnode = enode
+			bootstrapMaddr = maddr
 		}
 	}
 	for _, r := range relays {
@@ -213,14 +222,13 @@ func run(force bool) error {
 		return fmt.Errorf("no bootstrap pillar configured")
 	}
 
-	// Pass 3: write per-node configs. Relays seed from all pillars plus each other
-	// so transaction ingress is not dependent on a single bootstrap connection.
+	// Pass 3: write per-node configs.
 	for _, p := range pillars {
 		producer := addrs[p.ProducerIndex]
 		seeders := []string{}
 		minPeers := 0
 		if !p.IsBootstrap {
-			seeders = pillarSeedersExcept(enodes, p.Role)
+			seeders = []string{bootstrapMaddr}
 			minPeers = 1
 		}
 		cfgPath := filepath.Join(p.Dir, "config.json")
@@ -259,7 +267,7 @@ func run(force bool) error {
 	}
 	fmt.Println()
 	for _, p := range pillars {
-		fmt.Printf("%s enode: %s\n", p.Role, enodes[p.Role])
+		fmt.Printf("%s multiaddr: %s\n", p.Role, maddrs[p.Role])
 	}
 	for _, r := range relays {
 		fmt.Printf("%s enode: %s\n", r.Role, enodes[r.Role])
