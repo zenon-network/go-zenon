@@ -97,9 +97,8 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 		manager.chainman.InsertChain,
 		manager.removePeer)
 
-	validator := func(block *nom.Momentum, parent *nom.Momentum) error {
-		//return core.ValidateHeader(pow, block.Headerr(), parent, true)
-		return nil
+	verifier := func(detailed *nom.DetailedMomentum) error {
+		return manager.chainman.VerifyMomentum(detailed)
 	}
 	heighter := func() uint64 {
 		momentum := manager.chainman.CurrentBlock()
@@ -107,7 +106,7 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 	}
 	manager.fetcher = fetcher.New(
 		manager.chainman.GetBlock,
-		validator,
+		verifier,
 		manager.BroadcastMomentum,
 		heighter,
 		manager.chainman.InsertChain,

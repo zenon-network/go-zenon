@@ -52,8 +52,8 @@ type blockRetrievalFn func(types.Hash) *nom.DetailedMomentum
 // blockRequesterFn is a callback type for sending a block retrieval request.
 type blockRequesterFn func([]types.Hash) error
 
-// blockValidatorFn is a callback type to verify a block's header for fast propagation.
-type blockValidatorFn func(block *nom.Momentum, parent *nom.Momentum) error
+// blockVerifierFn is a callback type to fully verify a detailed momentum before propagation.
+type blockVerifierFn func(detailed *nom.DetailedMomentum) error
 
 // blockBroadcasterFn is a callback type for broadcasting a block to connected peers.
 type blockBroadcasterFn func(block *nom.DetailedMomentum, propagate bool)
@@ -105,7 +105,7 @@ type Fetcher struct {
 
 	// Callbacks
 	getBlock       blockRetrievalFn   // Retrieves a block from the local chain
-	validateBlock  blockValidatorFn   // Checks if a block's headers have a valid proof of work
+	verifyBlock    blockVerifierFn    // Fully verifies a momentum before propagation
 	broadcastBlock blockBroadcasterFn // Broadcasts a block to connected peers
 	chainHeight    chainHeightFn      // Retrieves the current chain's height
 	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
@@ -119,7 +119,7 @@ type Fetcher struct {
 }
 
 // New creates a block fetcher to retrieve blocks based on hash announcements.
-func New(getBlock blockRetrievalFn, validateBlock blockValidatorFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertChain chainInsertFn, dropPeer peerDropFn) *Fetcher {
+func New(getBlock blockRetrievalFn, verifyBlock blockVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertChain chainInsertFn, dropPeer peerDropFn) *Fetcher {
 	return &Fetcher{
 		notify:         make(chan *announce),
 		inject:         make(chan *inject),
@@ -133,7 +133,7 @@ func New(getBlock blockRetrievalFn, validateBlock blockValidatorFn, broadcastBlo
 		queues:         make(map[string]int),
 		queued:         make(map[types.Hash]*inject),
 		getBlock:       getBlock,
-		validateBlock:  validateBlock,
+		verifyBlock:    verifyBlock,
 		broadcastBlock: broadcastBlock,
 		chainHeight:    chainHeight,
 		insertChain:    insertChain,
@@ -423,16 +423,8 @@ func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 		if parent == nil {
 			return
 		}
-		// Quickly validate the header and propagate the momentum if it passes
-		switch err := f.validateBlock(momentum, parent.Momentum); err {
-		case nil:
-			// All ok, quickly propagate to our peers
-			go func() {
-				f.broadcastBlock(detailed, true)
-			}()
-
-		default:
-			// Something went very wrong, drop the peer
+		// Fully verify the momentum before propagation
+		if err := f.verifyBlock(detailed); err != nil {
 			log.Info("momentum verification failed", "peer", peer, "momentum", momentum.Height, "hash", hash[:4], "reason", err)
 			f.dropPeer(peer)
 			return
@@ -448,7 +440,7 @@ func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 		}
 		// If import succeeded, broadcast the momentum
 		go func() {
-			f.broadcastBlock(detailed, false)
+			f.broadcastBlock(detailed, true)
 		}()
 
 		// Invoke the testing hook if needed

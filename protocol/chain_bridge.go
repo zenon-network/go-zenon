@@ -110,6 +110,10 @@ func (c chainBridge) Status() (td uint64, currentBlock types.Hash, genesisBlock 
 	return frontier.Height, frontier.Hash, c.chain.GetGenesisMomentum().Hash
 }
 
+func (c chainBridge) VerifyMomentum(detailed *nom.DetailedMomentum) error {
+	return c.verifier.Momentum(detailed)
+}
+
 func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error) {
 	a := momentums[0]
 	b := momentums[len(momentums)-1]
