@@ -108,7 +108,7 @@ make devnet-up             # build & start
 
 ### Prerequisites
 
-1. **New bootstrap nodes must be deployed first.** The 147 hardcoded `enode://` bootstrap nodes in `p2p/config.go` (`DefaultSeeders`) are in legacy format and will not work with the libp2p implementation. `ParseBootstrapPeers` expects multiaddr format (`/ip4/.../tcp/.../p2p/...`). The community must supply new bootstrap nodes running the libp2p stack before mainnet rollout. Once the new nodes are online, `DefaultSeeders` must be replaced with their multiaddr strings. See **Legacy Config** below.
+1. **New bootstrap nodes must be deployed first.** The 147 hardcoded `enode://` bootstrap nodes in `p2p/config.go` (`DefaultSeeders`) are in legacy format and will not work with the libp2p implementation. `ParseBootstrapPeers` expects multiaddr format (`/ip4/.../tcp/.../p2p/...`). The community must supply new bootstrap nodes running the libp2p stack before mainnet rollout. Once the new nodes are online, `DefaultSeeders` must be replaced with their multiaddr strings.
 
 2. **Coordinate a network-wide upgrade.** This is a hard breaking change — nodes running the old RLPX stack cannot communicate with nodes running libp2p. All nodes must switch at the same time.
 

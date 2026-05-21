@@ -91,12 +91,26 @@ func (rw *StreamRW) WriteMsg(msg Msg) error {
 	binary.BigEndian.PutUint32(header[0:4], uint32(msg.Code))
 	binary.BigEndian.PutUint32(header[4:8], uint32(len(payload)))
 
-	// Write header + payload
-	if _, err := rw.stream.Write(header[:]); err != nil {
+	// Write header + payload, looping to handle short writes
+	if err := writeFull(rw.stream, header[:]); err != nil {
 		return err
 	}
-	if _, err := rw.stream.Write(payload); err != nil {
-		return err
+	if len(payload) > 0 {
+		if err := writeFull(rw.stream, payload); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeFull writes all bytes from buf to w, looping on short writes.
+func writeFull(w io.Writer, buf []byte) error {
+	for len(buf) > 0 {
+		n, err := w.Write(buf)
+		if err != nil {
+			return err
+		}
+		buf = buf[n:]
 	}
 	return nil
 }

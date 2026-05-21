@@ -38,7 +38,8 @@ const (
 	baseProtocolLength     = uint64(16)
 	baseProtocolMaxMsgSize = 2 * 1024
 
-	pingInterval = 15 * time.Second
+	pingInterval      = 15 * time.Second
+	discWriteTimeout  = 1 * time.Second
 )
 
 const (
@@ -71,6 +72,13 @@ type peerConn struct {
 
 func (c *peerConn) close(err error) {
 	if c.stream != nil {
+		// Send disconnect reason to the remote peer before closing,
+		// matching the base protocol semantics. Skip for network errors
+		// where the stream may already be broken.
+		if r, ok := err.(DiscReason); ok && r != DiscNetworkError {
+			c.stream.SetWriteDeadline(time.Now().Add(discWriteTimeout))
+			Send(c.rw, discMsg, []DiscReason{r})
+		}
 		c.stream.Close()
 	}
 }

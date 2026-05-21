@@ -139,8 +139,8 @@ func (srv *Server) AddPeer(node *discover.Node) {
 		return
 	}
 	go func() {
-		if err := srv.host.Connect(srv.ctx, *info); err != nil {
-			common.P2PLogger.Debug(fmt.Sprintf("AddPeer connect failed: %v", err))
+		if err := srv.dialPeer(*info); err != nil {
+			common.P2PLogger.Debug(fmt.Sprintf("AddPeer dial failed: %v", err))
 		}
 	}()
 }
@@ -219,7 +219,6 @@ func (srv *Server) Start() (err error) {
 	if srv.running {
 		return errors.New("server already running")
 	}
-	srv.running = true
 	common.P2PLogger.Info("Starting Server (libp2p)")
 
 	if srv.PrivateKey == nil {
@@ -297,6 +296,10 @@ func (srv *Server) Start() (err error) {
 			}
 		}
 	}
+
+	// Mark running only after all initialization succeeded.
+	// Any error above returns before reaching here, so Stop() is safe.
+	srv.running = true
 
 	// Start peer maintenance loop
 	srv.loopWG.Add(1)
@@ -421,6 +424,16 @@ func (srv *Server) doProtoHandshake(rw *StreamRW) (*protoHandshake, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read handshake: %w", err)
 	}
+	if msg.Size > baseProtocolMaxMsgSize {
+		return nil, fmt.Errorf("handshake message too big: %d bytes (max %d)", msg.Size, baseProtocolMaxMsgSize)
+	}
+	if msg.Code == discMsg {
+		var reason [1]DiscReason
+		if err := msg.Decode(&reason); err != nil {
+			return nil, fmt.Errorf("decode disconnect: %w", err)
+		}
+		return nil, reason[0]
+	}
 	if msg.Code != handshakeMsg {
 		return nil, fmt.Errorf("expected handshake msg, got code %d", msg.Code)
 	}
@@ -428,6 +441,12 @@ func (srv *Server) doProtoHandshake(rw *StreamRW) (*protoHandshake, error) {
 	var phs protoHandshake
 	if err := msg.Decode(&phs); err != nil {
 		return nil, fmt.Errorf("decode handshake: %w", err)
+	}
+	if phs.Version != srv.ourHandshake.Version {
+		return nil, DiscIncompatibleVersion
+	}
+	if (phs.ID == discover.NodeID{}) {
+		return nil, DiscInvalidIdentity
 	}
 
 	// Wait for our send to complete
