@@ -125,6 +125,13 @@
                 "description": "bridge-liq",
                 "activated": false,
                 "enforcementHeight": 0
+            },
+            {
+                "id": "0000000000000000000000000000000000000000000000000000000000000001",
+                "name": "libp2p",
+                "description": "Activates the libp2p networking stack",
+                "activated": true,
+                "enforcementHeight": 20
             }
         ]
     },

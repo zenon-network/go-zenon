@@ -187,26 +187,33 @@ func run(force bool) error {
 		}
 	}
 
-	// Pass 2: load each p2p key; build static enodes for every devnet node and
-	// libp2p multiaddrs for every pillar (both formats needed for the switcher).
-	enodes := make(map[string]string, len(pillars)+len(relays))
+	// Pass 2: load each p2p key, build bootstrap addresses in both formats.
+	// The switcher uses the legacy (enode://) list pre-activation and the
+	// libp2p (multiaddr) list post-activation. The two formats are derived
+	// from the same secp256k1 network-private-key.
 	maddrs := make(map[string]string, len(pillars))
-	var bootstrapEnode string
-	var bootstrapMaddr string
+	enodes := make(map[string]string, len(pillars)+len(relays))
+	var bootstrapMaddr, bootstrapEnode string
 	for _, p := range pillars {
 		k, err := crypto.LoadECDSA(filepath.Join(p.Dir, "network-private-key"))
 		if err != nil {
 			return fmt.Errorf("load p2p key for %s: %w", p.Role, err)
 		}
-		// Derive libp2p peer ID from the ECDSA key
+		// libp2p multiaddr (post-activation bootstrap)
 		pid, err := libp2p.PeerIDFromECDSA(k)
 		if err != nil {
-			return fmt.Errorf("derive peer ID for %s: %w", p.Role, err)
+			return fmt.Errorf("derive libp2p peer ID for %s: %w", p.Role, err)
 		}
 		maddr := fmt.Sprintf("/ip4/%s/tcp/35995/p2p/%s", p.IP, pid)
 		maddrs[p.Role] = maddr
-		enode := fmt.Sprintf("enode://%s@%s:35995", discover.PubkeyID(&k.PublicKey).String(), p.IP)
+
+		// Legacy enode URL (pre-activation bootstrap). discover.PubkeyID
+		// gives us the 64-byte uncompressed-pubkey representation that
+		// devp2p uses to identify peers.
+		nodeID := discover.PubkeyID(&k.PublicKey)
+		enode := fmt.Sprintf("enode://%x@%s:35995", nodeID[:], p.IP)
 		enodes[p.Role] = enode
+
 		if p.IsBootstrap {
 			bootstrapEnode = enode
 			bootstrapMaddr = maddr
@@ -227,13 +234,15 @@ func run(force bool) error {
 	for _, p := range pillars {
 		producer := addrs[p.ProducerIndex]
 		bootstrapPeers := []string{}
+		seeders := []string{}
 		minPeers := 0
 		if !p.IsBootstrap {
 			bootstrapPeers = []string{bootstrapMaddr}
+			seeders = []string{bootstrapEnode}
 			minPeers = 1
 		}
 		cfgPath := filepath.Join(p.Dir, "config.json")
-		if err := writePillarConfig(cfgPath, p.Role, producer, p.ProducerIndex, bootstrapPeers, minPeers); err != nil {
+		if err := writePillarConfig(cfgPath, p.Role, producer, p.ProducerIndex, seeders, bootstrapPeers, minPeers); err != nil {
 			return err
 		}
 	}
@@ -320,7 +329,7 @@ func keystoreFromEntropy(entropy []byte) (*wallet.KeyStore, error) {
 	return ks, nil
 }
 
-func writePillarConfig(path, name string, producer types.Address, producerIdx uint32, bootstrapPeers []string, minPeers int) error {
+func writePillarConfig(path, name string, producer types.Address, producerIdx uint32, seeders, bootstrapPeers []string, minPeers int) error {
 	cfg := map[string]any{
 		"DataPath":    "/root/.znn",
 		"WalletPath":  "/root/.znn/wallet",
@@ -350,6 +359,7 @@ func writePillarConfig(path, name string, producer types.Address, producerIdx ui
 			"ListenPort":        35995,
 			"MinPeers":          minPeers,
 			"MinConnectedPeers": minPeers,
+			"Seeders":           seeders,
 			"BootstrapPeers":    bootstrapPeers,
 		},
 	}

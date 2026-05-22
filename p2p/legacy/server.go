@@ -219,9 +219,11 @@ func (c *conn) is(f connFlag) bool {
 	return c.flags&f != 0
 }
 
-// Peers returns all connected peers.
-func (srv *Server) Peers() []*Peer {
-	var ps []*Peer
+// Peers returns all connected peers as the application-level Peer
+// interface so the result is assignable to p2p.Server.Peers()'s return
+// type. The legacy *Peer concrete type satisfies p2p.Peer.
+func (srv *Server) Peers() []p2p.Peer {
+	var ps []p2p.Peer
 	select {
 	// Note: We'd love to put this function into a variable but
 	// that seems to cause a weird compiler error in some

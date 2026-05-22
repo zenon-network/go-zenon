@@ -8,7 +8,8 @@
         "ListenHost": "0.0.0.0",
         "ListenPort": 35995,
         "MinConnectedPeers": 0,
-        "MinPeers": 0
+        "MinPeers": 0,
+        "Seeders": []
     },
     "Producer": {
         "Address": "z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq",

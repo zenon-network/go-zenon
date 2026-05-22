@@ -10,7 +10,10 @@
         "ListenHost": "0.0.0.0",
         "ListenPort": 35995,
         "MinConnectedPeers": 2,
-        "MinPeers": 2
+        "MinPeers": 2,
+        "Seeders": [
+            "enode://c0e8b1c4cffe16c4aa8d394655fd11a0548cab01281d2838c868cd3a12284717d1e66b410bde0d8aa76cb149fdb4dc252e932f4f92394d651e425628e8761971@172.30.0.10:35995"
+        ]
     },
     "RPC": {
         "EnableHTTP": true,
