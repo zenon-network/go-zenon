@@ -114,8 +114,12 @@ func (srv *Server) Start() error {
 	if err := srv.startLegacyLocked(); err != nil {
 		return err
 	}
-	srv.wg.Add(1)
-	go srv.watchActivation()
+	if srv.Oracle != nil {
+		srv.wg.Add(1)
+		go srv.watchActivation()
+	} else {
+		common.P2PLogger.Warn("no spork oracle configured; activation watcher not started")
+	}
 	return nil
 }
 
@@ -251,12 +255,22 @@ func (srv *Server) startLibp2pLocked() error {
 // switcher decoupled from the chain package.
 func (srv *Server) watchActivation() {
 	defer srv.wg.Done()
+
+	// Capture stopCh once so we never read a nil channel (which blocks
+	// forever) if Stop() closes and nils srv.stopCh while we're waiting.
+	srv.mu.RLock()
+	stopCh := srv.stopCh
+	srv.mu.RUnlock()
+	if stopCh == nil {
+		return
+	}
+
 	ticker := time.NewTicker(sporkPollInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-srv.stopCh:
+		case <-stopCh:
 			return
 		case <-ticker.C:
 			if srv.Oracle.IsLibp2pActive() {
@@ -299,6 +313,10 @@ func (srv *Server) swap() {
 		// reads stop seeing it. Stop the actual backend outside the
 		// lock since it can take a noticeable amount of time.
 		srv.mu.Lock()
+		if srv.stopCh == nil {
+			srv.mu.Unlock()
+			return // Stop() was called; abort the swap
+		}
 		legacySrv := srv.legacy
 		srv.legacy = nil
 		srv.active = nil
@@ -308,8 +326,13 @@ func (srv *Server) swap() {
 			legacySrv.Stop()
 		}
 
-		// Bring libp2p up on the now-released port.
+		// Bring libp2p up on the now-released port. Check again
+		// that Stop() hasn't arrived while we tore down legacy.
 		srv.mu.Lock()
+		if srv.stopCh == nil {
+			srv.mu.Unlock()
+			return // Stop() arrived during teardown; abort
+		}
 		err := srv.startLibp2pLocked()
 		srv.mu.Unlock()
 		if err != nil {

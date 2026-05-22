@@ -23,12 +23,9 @@ import "github.com/zenon-network/go-zenon/p2p/discover"
 // the codebase (node, rpc) holds a Server interface and does not care
 // which transport is active.
 //
-// Phase 2 keeps things simple: node.go constructs *libp2p.Server directly
-// and stores it as a p2p.Server. Phase 4 will introduce a wrapper struct
-// in a non-cyclic location that owns both backends and switches between
-// them based on the libp2p activation spork; that wrapper will also
-// implement this interface so node.go changes only at the construction
-// site.
+// In production, node.go constructs a switcher.Server (p2p/switcher/)
+// which owns both backends and swaps between them when the libp2p
+// activation spork's EnforcementHeight is reached on the local chain.
 type Server interface {
 	// Start launches the server. Returns when the listener is ready or
 	// with an error describing why startup failed.
