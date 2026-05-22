@@ -18,11 +18,11 @@ import (
 
 type StatsApi struct {
 	z   zenon.Zenon
-	p2p *p2p.Server
+	p2p p2p.Server
 	log log15.Logger
 }
 
-func NewStatsApi(z zenon.Zenon, p2p *p2p.Server) *StatsApi {
+func NewStatsApi(z zenon.Zenon, p2p p2p.Server) *StatsApi {
 	return &StatsApi{
 		z:   z,
 		p2p: p2p,
@@ -87,7 +87,7 @@ type NetworkInfoResponse struct {
 	Self     *Peer   `json:"self"`
 }
 
-func p2pPeerToPeer(peer *p2p.Peer) (*Peer, error) {
+func p2pPeerToPeer(peer p2p.Peer) (*Peer, error) {
 	ip := peer.RemoteAddr().String()
 	splits := strings.Split(ip, ":")
 	return &Peer{

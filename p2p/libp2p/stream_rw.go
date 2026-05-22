@@ -1,4 +1,4 @@
-package p2p
+package libp2p
 
 import (
 	"encoding/binary"
@@ -9,13 +9,15 @@ import (
 
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/libp2p/go-libp2p/core/network"
+
+	"github.com/zenon-network/go-zenon/p2p"
 )
 
 // maxMessageSize is the maximum payload size allowed in a single message.
 // This prevents a malicious peer from causing an OOM by declaring a huge payload.
 const maxMessageSize = 10 * 1024 * 1024 // 10MB, matching ProtocolMaxMsgSize
 
-// StreamRW wraps a libp2p bidirectional stream to implement MsgReadWriter.
+// StreamRW wraps a libp2p bidirectional stream to implement p2p.MsgReadWriter.
 //
 // Wire format (replaces RLPX framing):
 //
@@ -36,7 +38,7 @@ func NewStreamRW(s network.Stream) *StreamRW {
 }
 
 // ReadMsg reads a message from the stream.
-func (rw *StreamRW) ReadMsg() (Msg, error) {
+func (rw *StreamRW) ReadMsg() (p2p.Msg, error) {
 	rw.rmu.Lock()
 	defer rw.rmu.Unlock()
 
@@ -46,7 +48,7 @@ func (rw *StreamRW) ReadMsg() (Msg, error) {
 	// Read 8-byte header
 	var header [8]byte
 	if _, err := io.ReadFull(rw.stream, header[:]); err != nil {
-		return Msg{}, err
+		return p2p.Msg{}, err
 	}
 
 	code := uint64(binary.BigEndian.Uint32(header[0:4]))
@@ -54,18 +56,18 @@ func (rw *StreamRW) ReadMsg() (Msg, error) {
 
 	// Reject messages exceeding the maximum size before allocating memory
 	if size > maxMessageSize {
-		return Msg{}, fmt.Errorf("message too large: %d bytes (max %d)", size, maxMessageSize)
+		return p2p.Msg{}, fmt.Errorf("message too large: %d bytes (max %d)", size, maxMessageSize)
 	}
 
 	// Read payload
 	payload := make([]byte, size)
 	if size > 0 {
 		if _, err := io.ReadFull(rw.stream, payload); err != nil {
-			return Msg{}, err
+			return p2p.Msg{}, err
 		}
 	}
 
-	return Msg{
+	return p2p.Msg{
 		Code:    code,
 		Size:    size,
 		Payload: &payloadReader{data: payload},
@@ -73,7 +75,7 @@ func (rw *StreamRW) ReadMsg() (Msg, error) {
 }
 
 // WriteMsg writes a message to the stream.
-func (rw *StreamRW) WriteMsg(msg Msg) error {
+func (rw *StreamRW) WriteMsg(msg p2p.Msg) error {
 	rw.wmu.Lock()
 	defer rw.wmu.Unlock()
 

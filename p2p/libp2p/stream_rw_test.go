@@ -1,4 +1,4 @@
-package p2p
+package libp2p
 
 import (
 	"bytes"
@@ -11,6 +11,8 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/protocol"
+
+	"github.com/zenon-network/go-zenon/p2p"
 )
 
 // mockStream implements network.Stream for testing.
@@ -97,7 +99,7 @@ func TestStreamRW_WriteMsg(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg := Msg{
+	msg := p2p.Msg{
 		Code:    10,
 		Size:    uint32(size),
 		Payload: bytes.NewReader(payload),
@@ -151,7 +153,7 @@ func TestStreamRW_RoundTrip(t *testing.T) {
 			return
 		}
 		payload, _ := io.ReadAll(reader)
-		msg := Msg{
+		msg := p2p.Msg{
 			Code:    7,
 			Size:    uint32(size),
 			Payload: bytes.NewReader(payload),

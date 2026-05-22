@@ -10,6 +10,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/p2p"
+	"github.com/zenon-network/go-zenon/p2p/libp2p"
 	api "github.com/zenon-network/go-zenon/rpc"
 	rpc "github.com/zenon-network/go-zenon/rpc/server"
 	"github.com/zenon-network/go-zenon/wallet"
@@ -25,7 +26,7 @@ type Node struct {
 	config *Config
 
 	walletManager *wallet.Manager
-	server        *p2p.Server
+	server        p2p.Server
 
 	z zenon.Zenon
 
@@ -75,13 +76,17 @@ func NewNode(conf *Config) (*Node, error) {
 
 	netConfig := conf.makeNetConfig()
 
-	// Parse seeders as multiaddr bootstrap peers
-	bootstrapPeers, err := p2p.ParseBootstrapPeers(netConfig.Seeders)
+	// Parse the libp2p bootstrap list (multiaddr format). ParseBootstrapPeers
+	// lives in the libp2p subpackage; node.go is the only outside caller of
+	// the libp2p-specific config wiring. Phase 4 will hide this behind the
+	// wrapper Server's construction path, at which point the legacy backend
+	// will read netConfig.Seeders for its own (enode://) bootstrap list.
+	bootstrapPeers, err := libp2p.ParseBootstrapPeers(netConfig.BootstrapPeers)
 	if err != nil {
-		return nil, fmt.Errorf("parse seeders: %w", err)
+		return nil, fmt.Errorf("parse bootstrap peers: %w", err)
 	}
 
-	node.server = &p2p.Server{
+	node.server = &libp2p.Server{
 		PrivateKey:        netConfig.PrivateKey(),
 		Name:              netConfig.Name,
 		MaxPeers:          netConfig.MaxPeers,

@@ -46,7 +46,16 @@ type NetConfig struct {
 	MaxPeers          int
 	MaxPendingPeers   int
 
+	// Seeders is the legacy bootstrap list (enode:// format), used by
+	// the devp2p/RLPX backend pre-activation. Existing operator configs
+	// populate this field.
 	Seeders []string
+
+	// BootstrapPeers is the libp2p bootstrap list (multiaddr format),
+	// used by the libp2p backend post-activation. New field; operators
+	// add it to config.json when the spork-gated rollout begins. Omitted
+	// configs fall back to p2p.DefaultBootstrapPeers.
+	BootstrapPeers []string
 }
 
 type Config struct {
@@ -198,6 +207,7 @@ func (c *Config) makeNetConfig() *p2p.Net {
 		MinConnectedPeers: c.Net.MinConnectedPeers,
 		Name:              fmt.Sprintf("%v %v", metadata.Version, c.Name),
 		Seeders:           c.Net.Seeders,
+		BootstrapPeers:    c.Net.BootstrapPeers,
 		NodeDatabase:      networkDataDir,
 		ListenAddr:        c.Net.ListenHost,
 		ListenPort:        c.Net.ListenPort,

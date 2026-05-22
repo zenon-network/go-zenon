@@ -4,11 +4,11 @@
     "LogLevel": "info",
     "Name": "devnet-pillar",
     "Net": {
+        "BootstrapPeers": [],
         "ListenHost": "0.0.0.0",
         "ListenPort": 35995,
         "MinConnectedPeers": 0,
-        "MinPeers": 0,
-        "Seeders": []
+        "MinPeers": 0
     },
     "Producer": {
         "Address": "z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq",

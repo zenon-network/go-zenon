@@ -1,4 +1,4 @@
-package p2p
+package libp2p
 
 import (
 	"testing"
@@ -95,6 +95,57 @@ func TestParseBootstrapPeers_Invalid(t *testing.T) {
 	_, err := ParseBootstrapPeers(maddrs)
 	if err == nil {
 		t.Fatal("expected error for invalid multiaddr in list")
+	}
+}
+
+// ParseBootstrapPeers tolerates accidental legacy enode:// entries (an
+// operator pasting their old Seeders into the new BootstrapPeers field
+// shouldn't take their node offline). The entry is skipped, a warning
+// is logged, and the remaining valid entries are returned.
+func TestParseBootstrapPeers_SkipsLegacyEnode(t *testing.T) {
+	maddrs := []string{
+		"enode://f0e3e1f507c7cc5a2d2cf0eb173c204c820786c7cecbc0118d1cf76e5eaba90348ce57e5c9dee35c27a40f5a44dafc61b8996f00bb33647c66f66c997ce6592b@206.188.197.194:35995",
+		"/ip4/172.30.0.10/tcp/35995/p2p/16Uiu2HAmRe2RazMPxYEV1A8Vs7LbVfNVMqBdiw7zgSkBLB3E2vQv",
+	}
+	peers, err := ParseBootstrapPeers(maddrs)
+	if err != nil {
+		t.Fatalf("enode:// entry should be skipped, not error: %v", err)
+	}
+	if len(peers) != 1 {
+		t.Fatalf("expected 1 peer (legacy entry skipped), got %d", len(peers))
+	}
+	if peers[0].ID.String() != "16Uiu2HAmRe2RazMPxYEV1A8Vs7LbVfNVMqBdiw7zgSkBLB3E2vQv" {
+		t.Fatalf("unexpected surviving peer: %s", peers[0].ID)
+	}
+}
+
+// All-enode input is fully skipped — caller gets an empty slice with no
+// error. The dial loop is responsible for handling "no bootstrap peers".
+func TestParseBootstrapPeers_AllLegacyEnode(t *testing.T) {
+	maddrs := []string{
+		"enode://abc@1.2.3.4:35995",
+		"enode://def@5.6.7.8:35995",
+	}
+	peers, err := ParseBootstrapPeers(maddrs)
+	if err != nil {
+		t.Fatalf("all-enode input should be skipped silently, got: %v", err)
+	}
+	if len(peers) != 0 {
+		t.Fatalf("expected 0 peers, got %d", len(peers))
+	}
+}
+
+// Whitespace around an otherwise-valid multiaddr should be trimmed.
+func TestParseBootstrapPeers_TrimsWhitespace(t *testing.T) {
+	maddrs := []string{
+		"   /ip4/172.30.0.10/tcp/35995/p2p/16Uiu2HAmRe2RazMPxYEV1A8Vs7LbVfNVMqBdiw7zgSkBLB3E2vQv\n",
+	}
+	peers, err := ParseBootstrapPeers(maddrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(peers) != 1 {
+		t.Fatalf("expected 1 peer, got %d", len(peers))
 	}
 }
 

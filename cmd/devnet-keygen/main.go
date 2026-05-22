@@ -198,6 +198,7 @@ func run(force bool) error {
 		if err != nil {
 			return fmt.Errorf("load p2p key for %s: %w", p.Role, err)
 		}
+		// Derive libp2p peer ID from the ECDSA key
 		pid, err := libp2p.PeerIDFromECDSA(k)
 		if err != nil {
 			return fmt.Errorf("derive peer ID for %s: %w", p.Role, err)
@@ -225,14 +226,14 @@ func run(force bool) error {
 	// Pass 3: write per-node configs.
 	for _, p := range pillars {
 		producer := addrs[p.ProducerIndex]
-		seeders := []string{}
+		bootstrapPeers := []string{}
 		minPeers := 0
 		if !p.IsBootstrap {
-			seeders = []string{bootstrapMaddr}
+			bootstrapPeers = []string{bootstrapMaddr}
 			minPeers = 1
 		}
 		cfgPath := filepath.Join(p.Dir, "config.json")
-		if err := writePillarConfig(cfgPath, p.Role, producer, p.ProducerIndex, seeders, minPeers); err != nil {
+		if err := writePillarConfig(cfgPath, p.Role, producer, p.ProducerIndex, bootstrapPeers, minPeers); err != nil {
 			return err
 		}
 	}
@@ -319,7 +320,7 @@ func keystoreFromEntropy(entropy []byte) (*wallet.KeyStore, error) {
 	return ks, nil
 }
 
-func writePillarConfig(path, name string, producer types.Address, producerIdx uint32, seeders []string, minPeers int) error {
+func writePillarConfig(path, name string, producer types.Address, producerIdx uint32, bootstrapPeers []string, minPeers int) error {
 	cfg := map[string]any{
 		"DataPath":    "/root/.znn",
 		"WalletPath":  "/root/.znn/wallet",
@@ -349,7 +350,7 @@ func writePillarConfig(path, name string, producer types.Address, producerIdx ui
 			"ListenPort":        35995,
 			"MinPeers":          minPeers,
 			"MinConnectedPeers": minPeers,
-			"Seeders":           seeders,
+			"BootstrapPeers":    bootstrapPeers,
 		},
 	}
 	return writeJSON(path, cfg)

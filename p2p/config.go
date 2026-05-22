@@ -27,13 +27,26 @@ const (
 )
 
 var (
-	// DefaultSeeders contains the mainnet bootstrap peers.
-	// NOTE: These are currently in legacy enode:// format from the pre-libp2p
-	// networking stack. They will not work with the libp2p implementation —
-	// ParseBootstrapPeers expects multiaddr format (/ip4/.../tcp/.../p2p/...).
-	// The community must supply new bootstrap nodes running the libp2p stack
-	// before mainnet rollout. Once available, replace these entries with
-	// multiaddr strings. See docs/libp2p-rollout.md for the migration plan.
+	// DefaultBootstrapPeers contains the libp2p bootstrap peers used after
+	// the libp2p activation spork enforces. Entries are multiaddr strings,
+	// e.g. /ip4/<ip>/tcp/35995/p2p/<peer-id>.
+	//
+	// Ships empty by default: the community operators who run the libp2p
+	// bootstrap infrastructure populate this list as part of the binary
+	// release that ships ahead of the activation block. Operators may
+	// override the list via the Net.BootstrapPeers field in config.json.
+	DefaultBootstrapPeers = []string{
+		// populated as community operators stand up libp2p infrastructure
+	}
+
+	// DefaultSeeders contains the legacy (devp2p/RLPX) mainnet bootstrap
+	// peers in enode:// format. These remain in service until the libp2p
+	// activation spork enforces; after that the legacy backend is torn
+	// down and these entries become unused.
+	//
+	// They are kept here (rather than moved to a "legacy" package) so an
+	// operator's existing config.json (which references the Net.Seeders
+	// field) continues to work without modification across the upgrade.
 	DefaultSeeders = []string{
 		"enode://f0e3e1f507c7cc5a2d2cf0eb173c204c820786c7cecbc0118d1cf76e5eaba90348ce57e5c9dee35c27a40f5a44dafc61b8996f00bb33647c66f66c997ce6592b@206.188.197.194:35995",
 		"enode://b65fcbc62293e21ed026f922b986bec16c70dc44de79a11eaaba5650579bd9e5e43630aa0a12eb689dc644b4ccc593fa6e64f189fd892c11eb22917fe46120b6@139.177.178.226:35995",
@@ -178,7 +191,17 @@ type Net struct {
 	// Name sets the node name of this server.
 	Name string
 
+	// Seeders are the legacy (devp2p/RLPX) bootstrap peers in enode://
+	// format. Used by the legacy backend until the libp2p activation
+	// spork enforces. Existing operator configs populate this field.
 	Seeders []string
+
+	// BootstrapPeers are the libp2p bootstrap peers in multiaddr format,
+	// e.g. /ip4/<ip>/tcp/35995/p2p/<peer-id>. Used by the libp2p backend
+	// once the activation spork enforces. New field added in the
+	// spork-gated rollout; existing configs that omit it fall back to
+	// DefaultBootstrapPeers.
+	BootstrapPeers []string
 
 	// NodeDatabase is the path to the database containing the previously seen
 	// live nodes in the network.

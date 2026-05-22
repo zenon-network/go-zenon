@@ -9,7 +9,7 @@ import (
 	"github.com/zenon-network/go-zenon/zenon"
 )
 
-func getApi(z zenon.Zenon, p2p *p2p.Server, apiModule string) []rpc.API {
+func getApi(z zenon.Zenon, p2p p2p.Server, apiModule string) []rpc.API {
 	switch apiModule {
 	case "ledger":
 		return []rpc.API{
@@ -111,13 +111,13 @@ func getApi(z zenon.Zenon, p2p *p2p.Server, apiModule string) []rpc.API {
 		return []rpc.API{}
 	}
 }
-func GetApis(z zenon.Zenon, p2p *p2p.Server, apiModule ...string) []rpc.API {
+func GetApis(z zenon.Zenon, p2p p2p.Server, apiModule ...string) []rpc.API {
 	var apis []rpc.API
 	for _, m := range apiModule {
 		apis = append(apis, getApi(z, p2p, m)...)
 	}
 	return apis
 }
-func GetPublicApis(z zenon.Zenon, p2p *p2p.Server) []rpc.API {
+func GetPublicApis(z zenon.Zenon, p2p p2p.Server) []rpc.API {
 	return GetApis(z, p2p, "ledger", "ledgerSubscribe", "embedded", "stats")
 }
