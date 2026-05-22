@@ -72,16 +72,27 @@ type peerConn struct {
 }
 
 func (c *peerConn) close(err error) {
-	if c.stream != nil {
-		// p2p.Send disconnect reason to the remote peer before closing,
-		// matching the base protocol semantics. Skip for network errors
-		// where the stream may already be broken.
-		if r, ok := err.(p2p.DiscReason); ok && r != p2p.DiscNetworkError {
-			c.stream.SetWriteDeadline(time.Now().Add(discWriteTimeout))
-			p2p.Send(c.rw, discMsg, []p2p.DiscReason{r})
-		}
-		c.stream.Close()
+	if c.stream == nil {
+		return
 	}
+	// Clean disconnect path: we know the reason and the stream is still
+	// healthy enough to send a disc frame. Send the reason, then Close()
+	// the stream gracefully (half-close — the remote can still drain
+	// anything we already sent).
+	if r, ok := err.(p2p.DiscReason); ok && r != p2p.DiscNetworkError {
+		c.stream.SetWriteDeadline(time.Now().Add(discWriteTimeout))
+		p2p.Send(c.rw, discMsg, []p2p.DiscReason{r})
+		c.stream.Close()
+		return
+	}
+	// Unclean disconnect path (network error, read timeout, protocol
+	// error, etc): Reset() rather than Close(). Yamux buffers Close()
+	// writes for up to frameWriteTimeout (20s) on a half-dead stream,
+	// during which the peer entry would stay in peerMap and count toward
+	// MaxPeers — effectively leaking the peer slot until the timeout
+	// fires. Reset() flushes those buffers immediately and signals the
+	// remote with a RST so both sides see the disconnect promptly.
+	c.stream.Reset()
 }
 
 // RemoteAddr returns the remote address of the network connection.

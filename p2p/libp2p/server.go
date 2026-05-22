@@ -22,6 +22,7 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -51,6 +52,16 @@ const (
 	protoID              = "/znn/eth/1"
 	frameReadTimeout     = 30 * time.Second
 	frameWriteTimeout    = 20 * time.Second
+
+	// Exponential-backoff parameters for the peerMaintenanceLoop's
+	// bootstrap-redial path. The schedule (in seconds, before jitter) is
+	// 5, 10, 20, 40, 80, 160, 300, 300, …  — doubling each failure until
+	// the cap, with ±30% jitter applied to each step so 100 nodes
+	// restarting simultaneously don't all hit the bootstrap at the same
+	// instant. Reset to zero on a successful connect.
+	dialBackoffBase  = 5 * time.Second
+	dialBackoffCap   = 5 * time.Minute
+	dialBackoffJitter = 0.3
 )
 
 var errServerStopped = errors.New("server stopped")
@@ -96,12 +107,31 @@ type Server struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	peerMap map[string]*Peer
+	// dialing tracks outbound dials currently in flight, keyed by the
+	// remote libp2p peer.ID string. Used to collapse concurrent dial
+	// attempts for the same peer down to one and avoid wasting an
+	// FD + Noise handshake on the losing goroutine. Protected by peerMu.
+	dialing map[string]struct{}
 	peerMu  sync.RWMutex
 
-	ourHandshake  *protoHandshake
-	delpeer       chan *Peer
-	loopWG        sync.WaitGroup
-	pendingCount  int32 // atomic; tracks peers in handshake phase
+	// backoff state for the peerMaintenanceLoop redial path. Protected
+	// by backoffMu (separate from peerMu so dial/disconnect hot paths
+	// don't contend with backoff bookkeeping).
+	backoffs  map[string]*dialBackoff
+	backoffMu sync.Mutex
+
+	ourHandshake *protoHandshake
+	delpeer      chan *Peer
+	loopWG       sync.WaitGroup
+	pendingCount int32 // atomic; tracks peers in handshake phase
+}
+
+// dialBackoff carries per-peer state for exponential-backoff redialing.
+// Entry is removed entirely on a successful connect so peer-churn doesn't
+// leak memory.
+type dialBackoff struct {
+	attempts int
+	nextDial time.Time
 }
 
 // Peers returns all connected peers as the application-level Peer
@@ -126,24 +156,31 @@ func (srv *Server) PeerCount() int {
 }
 
 // AddPeer connects to the given node and maintains the connection.
+//
+// Failure paths are logged at Warn rather than Debug. The signature is
+// void (no return value) because callers — primarily the RPC handler
+// for the `admin.addPeer` method — don't currently propagate errors,
+// so silently swallowing a misconfigured input would leave an operator
+// wondering why their request "did nothing". Warn-level surfaces the
+// reason in the normal log file without changing the API.
 func (srv *Server) AddPeer(node *discover.Node) {
 	if srv.host == nil {
+		common.P2PLogger.Warn("AddPeer called before Server.Start; ignoring", "node", node)
 		return
 	}
-	// Convert discover.Node to multiaddr
 	maddr, err := nodeToMultiaddr(node)
 	if err != nil {
-		common.P2PLogger.Debug(fmt.Sprintf("AddPeer: invalid node: %v", err))
+		common.P2PLogger.Warn("AddPeer: cannot convert node to multiaddr; ignoring", "node", node, "err", err)
 		return
 	}
 	info, err := peer.AddrInfoFromP2pAddr(maddr)
 	if err != nil {
-		common.P2PLogger.Debug(fmt.Sprintf("AddPeer: %v", err))
+		common.P2PLogger.Warn("AddPeer: cannot extract peer info from multiaddr; ignoring", "maddr", maddr, "err", err)
 		return
 	}
 	go func() {
 		if err := srv.dialPeer(*info); err != nil {
-			common.P2PLogger.Debug(fmt.Sprintf("AddPeer dial failed: %v", err))
+			common.P2PLogger.Warn("AddPeer: dial failed", "peer", info.ID, "err", err)
 		}
 	}()
 }
@@ -230,6 +267,8 @@ func (srv *Server) Start() (err error) {
 
 	srv.ctx, srv.cancel = context.WithCancel(context.Background())
 	srv.peerMap = make(map[string]*Peer)
+	srv.dialing = make(map[string]struct{})
+	srv.backoffs = make(map[string]*dialBackoff)
 	srv.delpeer = make(chan *Peer, 16)
 
 	// Convert ECDSA key to libp2p key
@@ -273,16 +312,44 @@ func (srv *Server) Start() (err error) {
 	// Register stream handler
 	srv.host.SetStreamHandler(protocol.ID(protoID), srv.handleStream)
 
-	// Start discovery DHT if configured
-	if srv.Discovery && len(srv.BootstrapPeers) > 0 {
-		srv.dht, err = dht.New(srv.ctx, srv.host, dht.Mode(dht.ModeAutoServer))
+	// Start discovery DHT.
+	//
+	// Configured for Zenon's network size (≪1000 nodes) rather than the
+	// IPFS defaults (calibrated for millions):
+	//
+	//   - ModeServer (not ModeAutoServer): every node serves DHT queries.
+	//     For a small network we'd rather have all nodes participate than
+	//     have the autodetect heuristic decide for us.
+	//   - ProtocolPrefix("/znn") isolates the routing table from the
+	//     public IPFS DHT. Without this, well-meaning IPFS peers that
+	//     dial port 35995 would fill our buckets with useless entries.
+	//   - DisableProviders + DisableValues turn off the content/value
+	//     routing layers — we only need peer routing.
+	//   - BucketSize and RoutingTableRefreshPeriod tuned smaller/faster
+	//     than IPFS defaults so the table converges quickly on a small
+	//     network without hammering peers with refresh queries.
+	//   - Started unconditionally rather than gated on
+	//     len(BootstrapPeers) > 0, so bootstrap nodes (which have no
+	//     seeders) also participate in discovery.
+	if srv.Discovery {
+		srv.dht, err = dht.New(srv.ctx, srv.host,
+			dht.Mode(dht.ModeServer),
+			dht.ProtocolPrefix("/znn"),
+			dht.DisableProviders(),
+			dht.DisableValues(),
+			dht.BucketSize(16),
+			dht.RoutingTableRefreshPeriod(1*time.Minute),
+		)
 		if err != nil {
 			return fmt.Errorf("create DHT: %w", err)
+		}
+		if err := srv.dht.Bootstrap(srv.ctx); err != nil {
+			common.P2PLogger.Debug(fmt.Sprintf("DHT bootstrap failed: %v", err))
 		}
 	}
 
 	// Dial bootstrap peers immediately so the node has peers within seconds of
-	// startup rather than waiting for the first peerMaintenanceLoop tick (30s).
+	// startup rather than waiting for the first peerMaintenanceLoop tick.
 	if len(srv.BootstrapPeers) > 0 {
 		for _, pi := range srv.BootstrapPeers {
 			pi := pi
@@ -291,12 +358,6 @@ func (srv *Server) Start() (err error) {
 					common.P2PLogger.Debug(fmt.Sprintf("bootstrap dial to %s failed: %v", pi.ID, err))
 				}
 			}()
-		}
-		// Bootstrap the DHT
-		if srv.dht != nil {
-			if err := srv.dht.Bootstrap(srv.ctx); err != nil {
-				common.P2PLogger.Debug(fmt.Sprintf("DHT bootstrap failed: %v", err))
-			}
 		}
 	}
 
@@ -341,9 +402,12 @@ func (srv *Server) handleStream(s network.Stream) {
 		}
 	}()
 
-	// Apply read deadline to prevent slowloris
-	s.SetReadDeadline(time.Now().Add(frameReadTimeout))
-	defer s.SetReadDeadline(time.Time{}) // clear deadline after handshake
+	// Slowloris protection lives entirely in StreamRW: every ReadMsg /
+	// WriteMsg call sets its own per-message deadline. There used to be
+	// a SetReadDeadline + deferred clear here too, but it was redundant
+	// (the first ReadMsg in the handshake immediately overwrites it) and
+	// the deferred clear was a no-op anyway since subsequent ReadMsg
+	// calls re-arm the deadline.
 
 	rw := NewStreamRW(s)
 	remotePeer := s.Conn().RemotePeer()
@@ -359,16 +423,28 @@ func (srv *Server) handleStream(s network.Stream) {
 	// Verify the claimed NodeID matches the libp2p peer identity.
 	// The Noise handshake cryptographically authenticates the remote key,
 	// so we can derive the expected NodeID from RemotePeer() and compare.
+	//
+	// Reject paths Reset() the stream AND close the underlying libp2p
+	// connection. Stream.Reset() alone leaves the host-level connection
+	// alive, which lets an unrelated libp2p peer (e.g. a stray IPFS node
+	// that resolved one of our bootstrap entries) sit on a connection
+	// slot without ever speaking Zenon protocol. ClosePeer() forces the
+	// host to tear that down so the FD / yamux session is reclaimed.
 	remoteID := phs.ID
 	expectedID, err := nodeIDFromPeerID(remotePeer)
 	if err != nil {
-		common.P2PLogger.Debug(fmt.Sprintf("cannot derive NodeID from peer %s: %v", remotePeer, err))
+		common.P2PLogger.Warn("rejecting non-secp256k1 peer", "peer", remotePeer, "err", err)
 		s.Reset()
+		_ = srv.host.Network().ClosePeer(remotePeer)
 		return
 	}
 	if remoteID != expectedID {
-		common.P2PLogger.Debug(fmt.Sprintf("NodeID mismatch: claimed %x, expected %x", remoteID[:8], expectedID[:8]))
+		common.P2PLogger.Warn("NodeID mismatch; disconnecting peer",
+			"peer", remotePeer,
+			"claimed", fmt.Sprintf("%x", remoteID[:8]),
+			"expected", fmt.Sprintf("%x", expectedID[:8]))
 		s.Reset()
+		_ = srv.host.Network().ClosePeer(remotePeer)
 		return
 	}
 
@@ -377,6 +453,7 @@ func (srv *Server) handleStream(s network.Stream) {
 	if remoteID == selfID {
 		common.P2PLogger.Debug("rejecting connection from self")
 		s.Reset()
+		_ = srv.host.Network().ClosePeer(remotePeer)
 		return
 	}
 
@@ -461,18 +538,43 @@ func (srv *Server) doProtoHandshake(rw *StreamRW) (*protoHandshake, error) {
 }
 
 // dialPeer connects to a remote peer and performs the handshake.
+//
+// Concurrency: at most one dial per remote peer.ID is in flight at a time.
+// The first caller takes a slot in srv.dialing (under peerMu) and runs the
+// dial; subsequent callers see the slot taken and bail. Without this, two
+// peerMaintenanceLoop ticks 30s apart (or Start's bootstrap dial racing the
+// first tick) could each spawn a goroutine that gets all the way through
+// host.Connect + Noise handshake before the loser bails at the final
+// peerMap dedup, wasting an FD and CPU.
 func (srv *Server) dialPeer(info peer.AddrInfo) error {
-	// Pre-check before dialing to avoid unnecessary connections.
-	srv.peerMu.RLock()
-	numPeers := len(srv.peerMap)
-	_, alreadyConnected := srv.peerMap[info.ID.String()]
-	srv.peerMu.RUnlock()
-	if numPeers >= srv.MaxPeers {
+	peerKey := info.ID.String()
+
+	// Reserve the dialing slot under the write lock, plus run the
+	// peerMap/MaxPeers pre-check atomically with it so the slot reservation
+	// observes a consistent peer-set snapshot.
+	srv.peerMu.Lock()
+	if len(srv.peerMap) >= srv.MaxPeers {
+		srv.peerMu.Unlock()
 		return fmt.Errorf("max peers reached")
 	}
-	if alreadyConnected {
+	if _, exists := srv.peerMap[peerKey]; exists {
+		srv.peerMu.Unlock()
 		return fmt.Errorf("already connected to %s", info.ID)
 	}
+	if _, exists := srv.dialing[peerKey]; exists {
+		srv.peerMu.Unlock()
+		return fmt.Errorf("dial already in progress for %s", info.ID)
+	}
+	srv.dialing[peerKey] = struct{}{}
+	srv.peerMu.Unlock()
+
+	// Release the dialing slot on every return path so a failed dial
+	// doesn't permanently block re-dial attempts.
+	defer func() {
+		srv.peerMu.Lock()
+		delete(srv.dialing, peerKey)
+		srv.peerMu.Unlock()
+	}()
 
 	if err := srv.host.Connect(srv.ctx, info); err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -484,9 +586,9 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 		return fmt.Errorf("open stream: %w", err)
 	}
 
-	// Apply read deadline to prevent a stalled remote from blocking indefinitely.
-	s.SetReadDeadline(time.Now().Add(frameReadTimeout))
-	defer s.SetReadDeadline(time.Time{})
+	// Slowloris protection is in StreamRW (per-message deadlines); no
+	// stream-level SetReadDeadline needed here. See handleStream for
+	// the same note.
 
 	rw := NewStreamRW(s)
 
@@ -550,6 +652,59 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 	return nil
 }
 
+// shouldDial reports whether the per-peer backoff schedule currently
+// permits a redial of the given peer. Callers should consult this before
+// invoking dialPeer from a periodic loop so a peer that just failed
+// gets respected breathing room.
+func (srv *Server) shouldDial(peerID string) bool {
+	srv.backoffMu.Lock()
+	defer srv.backoffMu.Unlock()
+	b := srv.backoffs[peerID]
+	return b == nil || !time.Now().Before(b.nextDial)
+}
+
+// recordDialFailure bumps the per-peer attempt counter and computes the
+// next earliest redial time using exponential growth (capped at
+// dialBackoffCap) plus ±dialBackoffJitter jitter.
+func (srv *Server) recordDialFailure(peerID string) {
+	srv.backoffMu.Lock()
+	defer srv.backoffMu.Unlock()
+	b := srv.backoffs[peerID]
+	if b == nil {
+		b = &dialBackoff{}
+		srv.backoffs[peerID] = b
+	}
+	b.attempts++
+
+	// Exponential growth: dialBackoffBase * 2^(attempts-1), capped.
+	// shift cap prevents overflow on absurdly large attempt counts.
+	shift := uint(b.attempts - 1)
+	if shift > 16 {
+		shift = 16
+	}
+	base := time.Duration(int64(dialBackoffBase) << shift)
+	if base > dialBackoffCap {
+		base = dialBackoffCap
+	}
+
+	// Symmetric jitter in [-jitter*base, +jitter*base].
+	jitterRange := int64(float64(base) * dialBackoffJitter * 2)
+	if jitterRange < 1 {
+		jitterRange = 1
+	}
+	jitter := time.Duration(rand.Int63n(jitterRange)) - time.Duration(jitterRange/2)
+	b.nextDial = time.Now().Add(base + jitter)
+}
+
+// recordDialSuccess clears the per-peer backoff so subsequent
+// disconnects start the schedule fresh rather than picking up where
+// the last failure streak left off.
+func (srv *Server) recordDialSuccess(peerID string) {
+	srv.backoffMu.Lock()
+	delete(srv.backoffs, peerID)
+	srv.backoffMu.Unlock()
+}
+
 // peerMaintenanceLoop periodically checks peer count and dials bootstrap peers if needed.
 func (srv *Server) peerMaintenanceLoop() {
 	ticker := time.NewTicker(refreshPeersInterval)
@@ -570,16 +725,27 @@ func (srv *Server) peerMaintenanceLoop() {
 			if numPeers < srv.MinConnectedPeers && len(srv.BootstrapPeers) > 0 {
 				for _, pi := range srv.BootstrapPeers {
 					pi := pi
+					peerKey := pi.ID.String()
 					srv.peerMu.RLock()
-					_, connected := srv.peerMap[pi.ID.String()]
+					_, connected := srv.peerMap[peerKey]
 					srv.peerMu.RUnlock()
-					if !connected {
-						go func() {
-							if err := srv.dialPeer(pi); err != nil {
-								common.P2PLogger.Debug(fmt.Sprintf("dial %s failed: %v", pi.ID, err))
-							}
-						}()
+					if connected {
+						continue
 					}
+					// Respect the exponential-backoff schedule so 100
+					// nodes restarting after an outage don't all hit
+					// the bootstrap at the same 30s cadence.
+					if !srv.shouldDial(peerKey) {
+						continue
+					}
+					go func() {
+						if err := srv.dialPeer(pi); err != nil {
+							srv.recordDialFailure(peerKey)
+							common.P2PLogger.Debug(fmt.Sprintf("dial %s failed: %v", pi.ID, err))
+						} else {
+							srv.recordDialSuccess(peerKey)
+						}
+					}()
 				}
 			}
 		}
