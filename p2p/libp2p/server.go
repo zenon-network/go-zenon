@@ -62,6 +62,14 @@ const (
 	dialBackoffBase  = 5 * time.Second
 	dialBackoffCap   = 5 * time.Minute
 	dialBackoffJitter = 0.3
+
+	// dhtDiscoveryInterval controls how often dhtDiscoveryLoop reads
+	// the DHT routing table and attempts to dial new peers from it.
+	// Faster than refreshPeersInterval (which is bootstrap-only) so the
+	// node converges to MinConnectedPeers quickly post-startup, but
+	// slow enough that the dial loop isn't constantly active on a
+	// healthy node already at peer capacity.
+	dhtDiscoveryInterval = 15 * time.Second
 )
 
 var errServerStopped = errors.New("server stopped")
@@ -94,6 +102,14 @@ type Server struct {
 
 	// ListenAddr is the address to listen on (e.g., "0.0.0.0:35995").
 	ListenAddr string
+
+	// NATPortMap controls whether libp2p attempts UPnP / NAT-PMP port
+	// mapping on the listening port. Default false (matches the
+	// pre-libp2p network: legacy's NAT field was nil in the standard
+	// wiring path, so UPnP/PMP probes never fired). Home operators
+	// behind a NATting router can flip this on; data-center operators
+	// should leave it off to avoid spurious probes leaving their host.
+	NATPortMap bool
 
 	// If NoDial is true, the server will not dial any peers.
 	NoDial bool
@@ -283,14 +299,23 @@ func (srv *Server) Start() (err error) {
 		return fmt.Errorf("parse listen addr %q: %w", srv.ListenAddr, err)
 	}
 
-	// Build libp2p options
+	// Build libp2p options.
+	//
+	// NATPortMap is gated by srv.NATPortMap (default false) so we don't
+	// silently change behaviour for operators whose pre-libp2p nodes
+	// had no NAT mapping configured. UPnP / NAT-PMP probes can be
+	// undesirable on data-center hosts and on networks with strict
+	// outbound-traffic monitoring; opt-in keeps the principle of least
+	// surprise.
 	opts := []libp2p.Option{
 		libp2p.Identity(privKey),
 		libp2p.ListenAddrs(listenMaddr),
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.Muxer("/yamux/1.0.0", yamux.DefaultTransport),
 		libp2p.Transport(libp2ptcp.NewTCPTransport),
-		libp2p.NATPortMap(),
+	}
+	if srv.NATPortMap {
+		opts = append(opts, libp2p.NATPortMap())
 	}
 
 	// Create libp2p host
@@ -379,6 +404,22 @@ func (srv *Server) Start() (err error) {
 		srv.loopWG.Done()
 	}()
 
+	// Start the DHT discovery loop. The DHT's routing table is
+	// populated as a side effect of the libp2p Identify exchange on
+	// each connection and the bootstrap walks above; this loop is what
+	// surfaces those entries into the Zenon dial loop. Without it the
+	// DHT would fill its table but nothing would translate that into
+	// new application-protocol streams — the network would be
+	// effectively bootstrap-only after activation, which is what the
+	// PR review (point 1) flagged.
+	if srv.Discovery && srv.dht != nil && !srv.NoDial {
+		srv.loopWG.Add(1)
+		go func() {
+			srv.dhtDiscoveryLoop()
+			srv.loopWG.Done()
+		}()
+	}
+
 	common.P2PLogger.Info(fmt.Sprintf("Listening on %s", srv.host.Addrs()))
 	return nil
 }
@@ -459,9 +500,16 @@ func (srv *Server) handleStream(s network.Stream) {
 
 	// Check protocol match before taking the lock — this is not a concurrent
 	// state issue and avoids holding the lock during the check.
+	//
+	// On reject, tear down the underlying libp2p connection as well as
+	// the stream: without that, an untracked peer would hold a yamux
+	// session + file descriptor without counting toward MaxPeers and
+	// without ever speaking Zenon protocol. Safe here because we never
+	// adopted a stream from this peer.
 	if len(srv.Protocols) > 0 && countMatchingProtocols(srv.Protocols, phs.Caps) == 0 {
 		common.P2PLogger.Debug(fmt.Sprintf("no matching protocols with %s", remotePeer))
 		s.Reset()
+		_ = srv.host.Network().ClosePeer(remotePeer)
 		return
 	}
 
@@ -473,11 +521,19 @@ func (srv *Server) handleStream(s network.Stream) {
 		srv.peerMu.Unlock()
 		common.P2PLogger.Debug("max peers reached, rejecting connection")
 		s.Reset()
+		// Same as above: drop the host-level connection so MaxPeers is
+		// actually a bound on libp2p resources, not just on adopted
+		// Zenon streams.
+		_ = srv.host.Network().ClosePeer(remotePeer)
 		return
 	}
 	if _, exists := srv.peerMap[remotePeer.String()]; exists {
 		srv.peerMu.Unlock()
 		common.P2PLogger.Debug(fmt.Sprintf("duplicate peer %s, rejecting", remotePeer))
+		// Reset only the duplicate stream. Do NOT ClosePeer here —
+		// the host-level connection is being used by the legitimate
+		// already-adopted stream from the first concurrent handler,
+		// and closing it would terminate that healthy peer.
 		s.Reset()
 		return
 	}
@@ -619,9 +675,13 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 		return fmt.Errorf("NodeID mismatch: claimed %x, expected %x", remoteID[:8], expectedID[:8])
 	}
 
-	// Check protocol match
+	// Check protocol match. We never adopted a stream to this peer, so
+	// tearing the host connection down too is safe — without it, the
+	// libp2p host would keep the yamux session alive for a peer we've
+	// just declared incompatible.
 	if len(srv.Protocols) > 0 && countMatchingProtocols(srv.Protocols, phs.Caps) == 0 {
 		s.Reset()
+		_ = srv.host.Network().ClosePeer(info.ID)
 		return fmt.Errorf("no matching protocols")
 	}
 
@@ -633,11 +693,18 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 	if len(srv.peerMap) >= srv.MaxPeers {
 		srv.peerMu.Unlock()
 		s.Reset()
+		// We never adopted a stream to this peer, so closing the host
+		// connection is safe and keeps MaxPeers bounding actual libp2p
+		// resources rather than just adopted streams.
+		_ = srv.host.Network().ClosePeer(info.ID)
 		return fmt.Errorf("max peers reached")
 	}
 	if _, exists := srv.peerMap[info.ID.String()]; exists {
 		srv.peerMu.Unlock()
 		s.Reset()
+		// Do NOT ClosePeer here — the host-level connection is shared
+		// with the already-adopted stream for this peer, and closing
+		// it would terminate that legitimate connection.
 		return fmt.Errorf("duplicate peer %s", info.ID)
 	}
 	srv.peerMap[info.ID.String()] = p
@@ -747,6 +814,96 @@ func (srv *Server) peerMaintenanceLoop() {
 						}
 					}()
 				}
+			}
+		}
+	}
+}
+
+// dhtDiscoveryLoop translates the DHT's routing table into Zenon
+// application-protocol dials.
+//
+// The DHT (created in Start) populates its routing table as a side
+// effect of bootstrap walks and the libp2p Identify exchange on each
+// connection — those peers are reachable libp2p hosts, but without
+// this loop they would never become Zenon peers because the rest of
+// the server only ever dials srv.BootstrapPeers. That would leave the
+// network effectively bootstrap-only after activation; if a node's
+// configured bootstrap entries went down, it would never discover
+// replacements.
+//
+// The loop is bounded:
+//   - Only runs when len(peerMap) < MinConnectedPeers, so a healthy
+//     node at capacity doesn't dial unnecessarily.
+//   - Defers to dialPeer's own dedup (peerMap + dialing set) and
+//     respects the per-peer backoff machinery via shouldDial, so a
+//     peer that just failed isn't immediately retried.
+//   - Caps work per tick at (MinConnectedPeers - peerCount) so we
+//     don't fan out to the entire routing table on a fresh node.
+func (srv *Server) dhtDiscoveryLoop() {
+	ticker := time.NewTicker(dhtDiscoveryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-srv.ctx.Done():
+			return
+		case <-ticker.C:
+			if srv.NoDial {
+				continue
+			}
+
+			srv.peerMu.RLock()
+			numPeers := len(srv.peerMap)
+			srv.peerMu.RUnlock()
+			if numPeers >= srv.MinConnectedPeers {
+				continue
+			}
+			needed := srv.MinConnectedPeers - numPeers
+
+			// Snapshot the routing table. ListPeers returns peer.IDs
+			// the DHT has been able to talk to; we still need a full
+			// libp2p Connect for each (handled inside dialPeer).
+			candidates := srv.dht.RoutingTable().ListPeers()
+			selfID := srv.host.ID()
+			dialed := 0
+			for _, pid := range candidates {
+				if dialed >= needed {
+					break
+				}
+				if pid == selfID {
+					continue
+				}
+				peerKey := pid.String()
+
+				srv.peerMu.RLock()
+				_, connected := srv.peerMap[peerKey]
+				_, dialing := srv.dialing[peerKey]
+				srv.peerMu.RUnlock()
+				if connected || dialing {
+					continue
+				}
+				if !srv.shouldDial(peerKey) {
+					continue
+				}
+
+				// Pull the multiaddrs the libp2p peerstore knows for
+				// this peer — populated by Identify on first contact.
+				addrs := srv.host.Peerstore().Addrs(pid)
+				if len(addrs) == 0 {
+					// No addresses known yet; the DHT will fill these
+					// in soon via its own routing-table refresh.
+					continue
+				}
+				info := peer.AddrInfo{ID: pid, Addrs: addrs}
+				dialed++
+				go func(info peer.AddrInfo) {
+					if err := srv.dialPeer(info); err != nil {
+						srv.recordDialFailure(info.ID.String())
+						common.P2PLogger.Debug(fmt.Sprintf("dht-discovered dial to %s failed: %v", info.ID, err))
+					} else {
+						srv.recordDialSuccess(info.ID.String())
+					}
+				}(info)
 			}
 		}
 	}

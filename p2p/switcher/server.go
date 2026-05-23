@@ -49,6 +49,12 @@ type Server struct {
 
 	// ---- libp2p backend config ----
 	Libp2pBootstrapPeers []peer.AddrInfo
+	// NATPortMap, when true, enables UPnP / NAT-PMP port mapping in
+	// the libp2p backend. Default false to match the pre-libp2p
+	// network's behaviour (legacy had NAT mapping unset). Operators
+	// behind home routers can opt-in via the Net.NATPortMap field in
+	// config.json.
+	NATPortMap bool
 
 	// ---- activation gate ----
 	Oracle SporkOracle
@@ -223,9 +229,27 @@ func (srv *Server) startLegacyLocked() error {
 }
 
 // startLibp2pLocked constructs and starts the libp2p backend. Caller
-// must hold srv.mu.
+// must hold srv.mu. Only used at Start() time when there is no RPC
+// caller to block — the swap() path uses buildLibp2p + Start outside
+// the lock to avoid blocking concurrent Peers/PeerCount/AddPeer
+// readers during libp2p initialization.
 func (srv *Server) startLibp2pLocked() error {
-	srv.libp2p = &libp2p.Server{
+	srv.libp2p = srv.buildLibp2p()
+	if err := srv.libp2p.Start(); err != nil {
+		srv.libp2p = nil
+		return fmt.Errorf("switcher: start libp2p backend: %w", err)
+	}
+	srv.active = srv.libp2p
+	return nil
+}
+
+// buildLibp2p constructs a *libp2p.Server from the switcher's
+// configuration without starting it. Pure — no locks, no I/O, no field
+// reads on srv beyond the immutable-after-Start config fields. Used by
+// the swap() path so libp2p.New() / DHT init / NAT probe time happens
+// outside the switcher mutex.
+func (srv *Server) buildLibp2p() *libp2p.Server {
+	return &libp2p.Server{
 		PrivateKey:        srv.PrivateKey,
 		Name:              srv.Name,
 		MaxPeers:          srv.MaxPeers,
@@ -234,15 +258,22 @@ func (srv *Server) startLibp2pLocked() error {
 		Discovery:         true,
 		NoDial:            false,
 		BootstrapPeers:    srv.Libp2pBootstrapPeers,
+		NATPortMap:        srv.NATPortMap,
 		ListenAddr:        srv.ListenAddr,
 		Protocols:         srv.Protocols,
 	}
-	if err := srv.libp2p.Start(); err != nil {
-		srv.libp2p = nil
-		return fmt.Errorf("switcher: start libp2p backend: %w", err)
-	}
-	srv.active = srv.libp2p
-	return nil
+}
+
+// swapFailed emits the failure banner + structured log when the libp2p
+// backend fails to start during the swap. Extracted so the swap()
+// happy-path code stays linear; called only on the error branch.
+func (srv *Server) swapFailed(err error) {
+	common.P2PLogger.Crit("failed to start libp2p backend during swap; node has no active network listener", "err", err)
+	// stderr so it stays separable from happy-path stdout in docker
+	// logs / log aggregators.
+	fmt.Fprintf(os.Stderr, "\n===== libp2p swap FAILED =====\n")
+	fmt.Fprintf(os.Stderr, "Failed to start libp2p backend: %v\n", err)
+	fmt.Fprintf(os.Stderr, "Node has no active network listener. Restart znnd to retry.\n\n")
 }
 
 // watchActivation polls the spork oracle until either the spork
@@ -286,17 +317,19 @@ func (srv *Server) watchActivation() {
 // Stop and the activation tick race) cannot double-swap.
 //
 // Ordering: legacy is stopped (releasing the TCP listener port), then
-// libp2p is started on the same port. There is a brief window — the
-// duration of legacy.Stop() plus libp2p.Start() — during which the
-// switcher has no active backend; reads in that window observe an empty
-// peer set, which the protocol/handler layer tolerates (it sees mass
-// disconnect followed by mass reconnect, both of which are normal
-// transitions).
+// libp2p is constructed and started on the same port. There is a brief
+// window — the duration of legacy.Stop() plus libp2p.Start() — during
+// which the switcher has no active backend; reads in that window
+// observe an empty peer set, which the protocol/handler layer tolerates
+// (it sees mass disconnect followed by mass reconnect, both of which
+// are normal transitions).
 //
 // The teardown and startup happen outside the mutex; only the brief
-// state transitions (swapping the active backend reference) are
+// state transitions (publishing the new backend reference) are
 // performed under the lock. This keeps RPC readers responsive across
-// the swap.
+// the swap — libp2p.New() can take several seconds on a slow NAT path
+// and we must not block Peers/PeerCount/Self/AddPeer callers for that
+// duration.
 //
 // If libp2p startup fails the node is left without a network listener.
 // We log Crit so the operator notices but do not crash: the RPC stays
@@ -309,9 +342,10 @@ func (srv *Server) swap() {
 		fmt.Printf("\n===== libp2p swap starting =====\n")
 		fmt.Printf("Spork EnforcementHeight reached. Tearing down legacy backend and bringing up libp2p.\n\n")
 
-		// Detach legacy from active state under the lock so concurrent
-		// reads stop seeing it. Stop the actual backend outside the
-		// lock since it can take a noticeable amount of time.
+		// Stage 1: detach legacy from active state under the lock so
+		// concurrent reads stop seeing it. Stop the actual backend
+		// outside the lock since it can take a noticeable amount of
+		// time.
 		srv.mu.Lock()
 		if srv.stopCh == nil {
 			srv.mu.Unlock()
@@ -326,24 +360,32 @@ func (srv *Server) swap() {
 			legacySrv.Stop()
 		}
 
-		// Bring libp2p up on the now-released port. Check again
-		// that Stop() hasn't arrived while we tore down legacy.
+		// Stage 2: construct and start the libp2p backend WITHOUT the
+		// switcher mutex held. libp2p.New() runs through transport
+		// setup, Noise key derivation, and (when enabled) UPnP/NAT-PMP
+		// probes — each of which can take observable wall time. If we
+		// did this under srv.mu, every Peers()/PeerCount()/Self()/
+		// AddPeer() RPC call would block for that duration.
+		newLibp2p := srv.buildLibp2p()
+		if err := newLibp2p.Start(); err != nil {
+			srv.swapFailed(err)
+			return
+		}
+
+		// Stage 3: publish the new backend under the lock. If Stop()
+		// arrived while libp2p was starting, tear the freshly-built
+		// backend down — Stop() can't have seen it (we hadn't written
+		// srv.libp2p yet), so it's our responsibility to clean up.
 		srv.mu.Lock()
 		if srv.stopCh == nil {
 			srv.mu.Unlock()
-			return // Stop() arrived during teardown; abort
-		}
-		err := srv.startLibp2pLocked()
-		srv.mu.Unlock()
-		if err != nil {
-			common.P2PLogger.Crit("failed to start libp2p backend during swap; node has no active network listener", "err", err)
-			// stderr so it stays separable from happy-path stdout in
-			// docker logs / log aggregators.
-			fmt.Fprintf(os.Stderr, "\n===== libp2p swap FAILED =====\n")
-			fmt.Fprintf(os.Stderr, "Failed to start libp2p backend: %v\n", err)
-			fmt.Fprintf(os.Stderr, "Node has no active network listener. Restart znnd to retry.\n\n")
+			newLibp2p.Stop()
 			return
 		}
+		srv.libp2p = newLibp2p
+		srv.active = newLibp2p
+		srv.mu.Unlock()
+
 		common.P2PLogger.Info("libp2p swap complete")
 		fmt.Printf("===== libp2p swap complete =====\n")
 		fmt.Printf("Now running on libp2p transport.\n\n")

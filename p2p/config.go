@@ -203,6 +203,15 @@ type Net struct {
 	// DefaultBootstrapPeers.
 	BootstrapPeers []string
 
+	// NATPortMap enables UPnP / NAT-PMP port mapping in the libp2p
+	// backend. Defaults to false to match the pre-libp2p network's
+	// behaviour: the legacy backend's NAT field was unset in the wiring
+	// path, so port mapping was effectively off. Home operators behind
+	// a NATting router can set this to true; data-center operators
+	// should leave it false to avoid pointless UPnP probes leaving
+	// their host.
+	NATPortMap bool
+
 	// NodeDatabase is the path to the database containing the previously seen
 	// live nodes in the network.
 	NodeDatabase string

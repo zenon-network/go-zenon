@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/zenon-network/go-zenon/common"
@@ -129,8 +130,12 @@ type Server struct {
 	newTransport func(net.Conn) transport
 	newPeerHook  func(*Peer)
 
-	lock    sync.Mutex // protects running
-	running bool
+	// lock historically protected `running`; it is also held during
+	// Start/Stop to serialize lifecycle transitions. `running` itself
+	// is now an atomic.Bool because Server.run()'s scheduleTasks loop
+	// reads it without holding lock, racing with Stop()'s write.
+	lock    sync.Mutex
+	running atomic.Bool
 
 	ntab         discoverTable
 	listener     net.Listener
@@ -266,7 +271,7 @@ func (srv *Server) Self() *discover.Node {
 	defer srv.lock.Unlock()
 
 	// If the server's not running, return an empty node
-	if !srv.running {
+	if !srv.running.Load() {
 		return &discover.Node{IP: net.ParseIP("0.0.0.0")}
 	}
 	// If the node is running but discovery is off, manually assemble the node infos
@@ -293,11 +298,11 @@ func (srv *Server) Stop() {
 	srv.lock.Lock()
 	defer srv.lock.Unlock()
 
-	if !srv.running {
+	if !srv.running.Load() {
 		return
 	}
 
-	srv.running = false
+	srv.running.Store(false)
 	if srv.listener != nil {
 		// this unblocks listener Accept
 		srv.listener.Close()
@@ -310,10 +315,10 @@ func (srv *Server) Stop() {
 func (srv *Server) Start() (err error) {
 	srv.lock.Lock()
 	defer srv.lock.Unlock()
-	if srv.running {
+	if srv.running.Load() {
 		return errors.New("server already running")
 	}
-	srv.running = true
+	srv.running.Store(true)
 	common.P2PLogger.Info(fmt.Sprintf("Starting Server"))
 
 	// static fields
@@ -369,7 +374,8 @@ func (srv *Server) Start() (err error) {
 		srv.run(dialer)
 		srv.loopWG.Done()
 	}()
-	srv.running = true
+	// (running was already set true at the top of Start; the second
+	// assignment that used to live here was a no-op.)
 	return nil
 }
 
@@ -447,7 +453,7 @@ func (srv *Server) run(dialstate dialer) {
 	}
 
 	scheduleTasks := func() {
-		if !srv.running {
+		if !srv.running.Load() {
 			return
 		}
 
@@ -611,9 +617,7 @@ func (srv *Server) listenLoop() {
 // or the handshakes have failed.
 func (srv *Server) setupConn(fd net.Conn, flags connFlag, dialDest *discover.Node) {
 	// Prevent leftover pending conns from entering the handshake.
-	srv.lock.Lock()
-	running := srv.running
-	srv.lock.Unlock()
+	running := srv.running.Load()
 	c := &conn{fd: fd, transport: srv.newTransport(fd), flags: flags, cont: make(chan error)}
 	if !running {
 		c.close(errServerStopped)

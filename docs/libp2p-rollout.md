@@ -267,7 +267,22 @@ The spork holder broadcasts `ActivateSpork(<libp2p-spork-id>)`. The activation's
 
 ### Phase F — Network swap
 
-At `EnforcementHeight`, every node's switcher polls its oracle, sees activation, and fires `swap()` within ~1s. Legacy backends are torn down; libp2p hosts come up on the same TCP port. Momentum production should not stall — the few momentums produced during the swap window may briefly fail to propagate but reconcile via normal reorg once peers reconnect.
+At `EnforcementHeight`, every node's switcher polls its oracle, sees activation, and fires `swap()` within ~1s. Legacy backends are torn down; libp2p hosts come up on the same TCP port.
+
+**Expected behaviour during the swap window.** Consensus does not pause for the transport transition — momentum production is chain-deterministic and fires on its tick schedule regardless of the local peer set. As a consequence:
+
+- The swap window is roughly the duration of `legacy.Stop()` + `libp2p.Start()`. On a healthy node with NAT mapping disabled this is well under a second; with UPnP/NAT-PMP enabled it can be several seconds.
+- During that window the switcher has no active backend, so a momentum produced by the local pillar in this window broadcasts to an empty peer set (`protocol/handler.go:BroadcastMomentum`). The momentum exists in the local chain — it is not lost — but does not propagate via gossip.
+- Up to ~1–2 momentums per node can be affected this way, depending on which slot the pillar is elected for during the window.
+- The chain's normal block-sync path recovers these: once libp2p peers connect post-swap (within ~10s typically), `getBlocks` requests fetch missing momentums from peers that did receive them, and the head reconciles.
+
+This is a known limitation; pausing momentum production to make the swap perfectly atomic would require coordinating consensus state across all pillars, which the spork model does not provide. The mitigation is to keep the swap window short (default-off NAT mapping helps) and rely on the block-sync recovery path that the chain already implements for normal network partitions.
+
+**Production validation.** The devnet activation test (Phase F triggered at momentum 20) exercises the swap mechanism but not its scale behaviour — 3 pillars on a Docker bridge network is not representative of mainnet partition characteristics. The intended validation path before mainnet activation is:
+
+1. Devnet smoke test (this branch — verified)
+2. Testnet activation with a subset of mainnet pillars, soak for ≥30 days, observe swap behaviour under realistic NAT/network conditions
+3. Mainnet activation only after the testnet soak passes
 
 ### Phase G — Post-swap monitoring
 

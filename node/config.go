@@ -56,6 +56,13 @@ type NetConfig struct {
 	// add it to config.json when the spork-gated rollout begins. Omitted
 	// configs fall back to p2p.DefaultBootstrapPeers.
 	BootstrapPeers []string
+
+	// NATPortMap enables UPnP / NAT-PMP port mapping for the libp2p
+	// backend. Default false (matches the pre-libp2p network: legacy
+	// had NAT mapping unconfigured in the standard wiring path, so it
+	// was effectively off). Home operators behind a NATting router can
+	// opt-in by setting this to true in config.json.
+	NATPortMap bool
 }
 
 type Config struct {
@@ -208,6 +215,7 @@ func (c *Config) makeNetConfig() *p2p.Net {
 		Name:              fmt.Sprintf("%v %v", metadata.Version, c.Name),
 		Seeders:           c.Net.Seeders,
 		BootstrapPeers:    c.Net.BootstrapPeers,
+		NATPortMap:        c.Net.NATPortMap,
 		NodeDatabase:      networkDataDir,
 		ListenAddr:        c.Net.ListenHost,
 		ListenPort:        c.Net.ListenPort,

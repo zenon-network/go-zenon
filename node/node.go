@@ -112,6 +112,7 @@ func NewNode(conf *Config) (*Node, error) {
 		LegacyBootstrapNodes: legacyBootstrap,
 		NodeDatabase:         netConfig.NodeDatabase,
 		Libp2pBootstrapPeers: libp2pBootstrap,
+		NATPortMap:           netConfig.NATPortMap,
 
 		// Activation gate. The switcher polls this on a 1s ticker; when
 		// it returns true (the libp2p spork's EnforcementHeight has
