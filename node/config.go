@@ -63,6 +63,14 @@ type NetConfig struct {
 	// was effectively off). Home operators behind a NATting router can
 	// opt-in by setting this to true in config.json.
 	NATPortMap bool
+
+	// PeerstoreDir is an optional override for the libp2p peerstore
+	// directory. When empty (the default), node/config.go places it at
+	// <DataPath>/network/libp2p-peerstore/. Operators normally don't
+	// need to set this; expose only because the legacy nodeDb honors
+	// the analogous DataPath/network convention and we want symmetric
+	// override behaviour.
+	PeerstoreDir string
 }
 
 type Config struct {
@@ -207,6 +215,13 @@ func (c *Config) makeNetConfig() *p2p.Net {
 	networkDataDir := filepath.Join(c.DataPath, p2p.DefaultNetDirName)
 	privateKeyFile := filepath.Join(c.DataPath, p2p.DefaultNetPrivateKeyFile)
 
+	// Default the libp2p peerstore to a sibling of the legacy nodeDb,
+	// honoring an explicit operator override if set in config.json.
+	peerstoreDir := c.Net.PeerstoreDir
+	if peerstoreDir == "" {
+		peerstoreDir = filepath.Join(networkDataDir, p2p.DefaultPeerstoreDirName)
+	}
+
 	return &p2p.Net{
 		PrivateKeyFile:    privateKeyFile,
 		MaxPeers:          c.Net.MaxPeers,
@@ -216,6 +231,7 @@ func (c *Config) makeNetConfig() *p2p.Net {
 		Seeders:           c.Net.Seeders,
 		BootstrapPeers:    c.Net.BootstrapPeers,
 		NATPortMap:        c.Net.NATPortMap,
+		PeerstoreDir:      peerstoreDir,
 		NodeDatabase:      networkDataDir,
 		ListenAddr:        c.Net.ListenHost,
 		ListenPort:        c.Net.ListenPort,

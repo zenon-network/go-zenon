@@ -215,6 +215,16 @@ Each operator's `config.json` carries both bootstrap formats. The legacy backend
 
 Existing operator configs that only have `Seeders` continue to boot — the libp2p backend falls back to `DefaultBootstrapPeers` when the field is omitted. `libp2p.ParseBootstrapPeers` tolerates accidentally-pasted `enode://` entries by skipping them with a warning.
 
+### Persistent peerstore
+
+The libp2p backend remembers peers across restarts via a LevelDB-backed peerstore at `<DataPath>/network/libp2p-peerstore/`. On every successful connection, libp2p records the peer's multiaddrs, public key, and protocol-negotiation results to disk. On the next startup, a "warm bootstrap" path dials up to `MinConnectedPeers` of those known peers in parallel with the configured `BootstrapPeers` — so a node that has been online before can rejoin the network even if every bootstrap entry has since rotated. This is the primary safeguard against the failure mode that left the legacy network with 147 stale seeders: bootstrap nodes are now a first-time-setup dependency, not a continuous-availability dependency.
+
+Disk usage is on the order of ~1MB for a fully populated peerstore (~1000 peers). The directory is created automatically on first start.
+
+Operators normally don't need to configure this. The default path can be overridden via an optional `Net.PeerstoreDir` field in `config.json`; setting it to an empty string falls back to libp2p's in-memory peerstore (every restart becomes a cold start — not recommended in production).
+
+The peerstore is independent from the legacy `nodeDb` (at `<DataPath>/network/nodes/`); migration between formats is not attempted because the peer-ID encoding and dial endpoints differ between backends.
+
 ### `genesis.json` (devnet only)
 
 The devnet genesis pre-seeds the activation spork:
@@ -302,7 +312,7 @@ For the first 24 hours, monitor:
 | Operator misses Phase D binary upgrade | **High** | ≥2 weeks public notice; pillar-coordination check-ins. A node on the placeholder binary stays on legacy forever — safe default but will partition off. |
 | libp2p bootstrap unavailability post-swap | **High** | Bootstrap operators upgrade first (they're a subset of pillar operators). Legacy bootstrap list is not a fallback — different transport. |
 | libp2p host fails to start during swap | **Medium** | Switcher logs `Crit`, prints stderr banner, leaves RPC up. Operator restarts znnd; on restart the spork is active so libp2p starts directly. |
-| Persistent peerstore not yet implemented | **Medium** | After restart, node has empty peerstore and must re-bootstrap. Functional but brief connectivity gap. Planned as follow-up (`go-ds-leveldb`). |
+| Bootstrap-list staleness over time | **Medium** | Persistent peerstore (LevelDB at `<DataPath>/network/libp2p-peerstore/`) means once a node has been online it remembers ~`MinConnectedPeers` peers across restarts. Bootstrap entries become a first-time-setup dependency rather than a runtime dependency. Mitigates the "147 stale seeders" failure mode from the legacy network. |
 | Placeholder spork hash on mainnet | **Low** | Placeholder (`0x...01`) can't match any real `CreateSpork` hash. Node stays on legacy forever — safe default. Risk is operator confusion, not partition. |
 
 ---
@@ -316,7 +326,7 @@ For the first 24 hours, monitor:
 | Exponential backoff on bootstrap redial | **Done** | 5s base, 5m cap, ±30% jitter, reset on success. `p2p/libp2p/server.go:56-64` |
 | Switcher concurrency bugs | **Done** | Fixed: captured `stopCh` in watcher, nil-check before swap mutations, nil-oracle guard |
 | Switcher tests | **Done** | 5 lifecycle tests in `p2p/switcher/server_test.go` |
-| Persistent peerstore (go-ds-leveldb) | **Pending** | Planned as follow-up. Not blocking correctness. |
+| Persistent peerstore (go-ds-leveldb) | **Done** | LevelDB-backed peerstore at `<DataPath>/network/libp2p-peerstore/`. Warm-bootstrap on startup dials up to `MinConnectedPeers` known peers in parallel with `BootstrapPeers`. |
 
 ---
 

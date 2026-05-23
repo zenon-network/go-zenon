@@ -55,6 +55,11 @@ type Server struct {
 	// behind home routers can opt-in via the Net.NATPortMap field in
 	// config.json.
 	NATPortMap bool
+	// PeerstoreDir is the on-disk path for the libp2p persistent
+	// peerstore. Forwarded as-is to the libp2p backend. Empty string
+	// disables persistence (libp2p falls back to its default in-memory
+	// peerstore).
+	PeerstoreDir string
 
 	// ---- activation gate ----
 	Oracle SporkOracle
@@ -259,6 +264,7 @@ func (srv *Server) buildLibp2p() *libp2p.Server {
 		NoDial:            false,
 		BootstrapPeers:    srv.Libp2pBootstrapPeers,
 		NATPortMap:        srv.NATPortMap,
+		PeerstoreDir:      srv.PeerstoreDir,
 		ListenAddr:        srv.ListenAddr,
 		Protocols:         srv.Protocols,
 	}

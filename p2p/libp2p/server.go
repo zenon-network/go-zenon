@@ -22,6 +22,7 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+	leveldb "github.com/ipfs/go-ds-leveldb"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
@@ -36,6 +38,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/libp2p/go-libp2p/p2p/host/peerstore/pstoreds"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"github.com/zenon-network/go-zenon/common"
@@ -111,6 +114,15 @@ type Server struct {
 	// should leave it off to avoid spurious probes leaving their host.
 	NATPortMap bool
 
+	// PeerstoreDir is the on-disk directory for the LevelDB-backed
+	// peerstore. When non-empty, libp2p remembers peers across
+	// restarts and the server's warm-bootstrap path dials known peers
+	// in parallel with BootstrapPeers, removing the runtime dependency
+	// on the bootstrap-node list staying current. When empty, falls
+	// back to libp2p's default in-memory peerstore (every restart is a
+	// cold start).
+	PeerstoreDir string
+
 	// If NoDial is true, the server will not dial any peers.
 	NoDial bool
 
@@ -120,9 +132,14 @@ type Server struct {
 
 	host    host.Host
 	dht     *dht.IpfsDHT
-	ctx     context.Context
-	cancel  context.CancelFunc
-	peerMap map[string]*Peer
+	// peerstoreDS holds the LevelDB datastore backing libp2p's
+	// persistent peerstore when PeerstoreDir is set. nil for the
+	// in-memory peerstore path. Stop() must Close() this after
+	// host.Close() so libp2p's final peerstore writes flush to disk.
+	peerstoreDS io.Closer
+	ctx         context.Context
+	cancel      context.CancelFunc
+	peerMap     map[string]*Peer
 	// dialing tracks outbound dials currently in flight, keyed by the
 	// remote libp2p peer.ID string. Used to collapse concurrent dial
 	// attempts for the same peer down to one and avoid wasting an
@@ -261,10 +278,21 @@ func (srv *Server) Stop() {
 	if srv.host != nil {
 		srv.host.Close()
 	}
+	// Capture the peerstore datastore reference under the lock then
+	// close it outside, ordered AFTER host.Close() so libp2p's final
+	// peerstore writes flush before the underlying LevelDB shuts down.
+	peerstoreDS := srv.peerstoreDS
+	srv.peerstoreDS = nil
 	srv.lock.Unlock()
 
 	// Wait outside the lock so goroutines that need to acquire locks can finish.
 	srv.loopWG.Wait()
+
+	if peerstoreDS != nil {
+		if err := peerstoreDS.Close(); err != nil {
+			common.P2PLogger.Warn("error closing peerstore datastore", "err", err)
+		}
+	}
 }
 
 // Start starts running the server.
@@ -318,9 +346,42 @@ func (srv *Server) Start() (err error) {
 		opts = append(opts, libp2p.NATPortMap())
 	}
 
+	// Persistent peerstore (optional).
+	//
+	// When PeerstoreDir is set, libp2p remembers peer addresses,
+	// public keys, and protocol-negotiation results across restarts.
+	// On the next startup the warm-bootstrap path (below) dials those
+	// peers in parallel with the configured BootstrapPeers — so a
+	// node that's been online before doesn't depend on the bootstrap
+	// list staying current to rejoin the network.
+	//
+	// Empty PeerstoreDir falls back to libp2p's default in-memory
+	// peerstore; useful for tests and for nodes that explicitly opt
+	// out of persistent state.
+	if srv.PeerstoreDir != "" {
+		ds, err := leveldb.NewDatastore(srv.PeerstoreDir, nil)
+		if err != nil {
+			return fmt.Errorf("open peerstore datastore at %q: %w", srv.PeerstoreDir, err)
+		}
+		ps, err := pstoreds.NewPeerstore(srv.ctx, ds, pstoreds.DefaultOpts())
+		if err != nil {
+			ds.Close()
+			return fmt.Errorf("create datastore peerstore: %w", err)
+		}
+		srv.peerstoreDS = ds
+		opts = append(opts, libp2p.Peerstore(ps))
+		common.P2PLogger.Info("libp2p peerstore opened", "path", srv.PeerstoreDir)
+	}
+
 	// Create libp2p host
 	srv.host, err = libp2p.New(opts...)
 	if err != nil {
+		// If we opened a peerstore datastore above but failed to bring
+		// the host up, close it now so we don't leak the file handle.
+		if srv.peerstoreDS != nil {
+			srv.peerstoreDS.Close()
+			srv.peerstoreDS = nil
+		}
 		return fmt.Errorf("create libp2p host: %w", err)
 	}
 
@@ -384,6 +445,24 @@ func (srv *Server) Start() (err error) {
 				}
 			}()
 		}
+	}
+
+	// Warm bootstrap from the persistent peerstore.
+	//
+	// On a fresh install or with an in-memory peerstore this is a
+	// no-op (no known peers). On any subsequent restart it dials
+	// peers we successfully connected to before — in parallel with
+	// the configured BootstrapPeers — which lets the node rejoin the
+	// network even if the entire bootstrap list has rotated since the
+	// previous run. This is the primary resilience mechanism against
+	// stale-bootstrap-list scenarios; the bootstrap entries become a
+	// first-time-setup dependency rather than a runtime dependency.
+	//
+	// Fan-out is capped at MinConnectedPeers so a long-running node
+	// with hundreds of cached peers doesn't burst all its FDs on
+	// startup. The DHT discovery loop covers the rest as we get going.
+	if !srv.NoDial && srv.host.Peerstore() != nil {
+		srv.warmBootstrap()
 	}
 
 	// Mark running only after all initialization succeeded.
@@ -717,6 +796,58 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 	}()
 
 	return nil
+}
+
+// warmBootstrap dials known peers from the persistent peerstore on
+// startup. See the call site in Start() for the why.
+//
+// Returns immediately if the peerstore has no known peers (fresh
+// install, in-memory peerstore, or just-cleared on-disk peerstore).
+// Caps fan-out at MinConnectedPeers so a node with hundreds of cached
+// peers doesn't burst its FD limit at startup.
+func (srv *Server) warmBootstrap() {
+	known := srv.host.Peerstore().PeersWithAddrs()
+	if len(known) == 0 {
+		return
+	}
+	selfID := srv.host.ID()
+	target := srv.MinConnectedPeers
+	if target <= 0 {
+		target = 8 // sane floor when MinConnectedPeers is unset
+	}
+
+	dialed := 0
+	for _, pid := range known {
+		if dialed >= target {
+			break
+		}
+		if pid == selfID {
+			continue
+		}
+		// Skip peers we've recently failed to dial; the backoff
+		// machinery will let them through later via the DHT discovery
+		// loop once the backoff window elapses.
+		if !srv.shouldDial(pid.String()) {
+			continue
+		}
+		addrs := srv.host.Peerstore().Addrs(pid)
+		if len(addrs) == 0 {
+			continue
+		}
+		info := peer.AddrInfo{ID: pid, Addrs: addrs}
+		dialed++
+		go func(info peer.AddrInfo) {
+			if err := srv.dialPeer(info); err != nil {
+				srv.recordDialFailure(info.ID.String())
+				common.P2PLogger.Debug(fmt.Sprintf("warm-bootstrap dial to %s failed: %v", info.ID, err))
+			} else {
+				srv.recordDialSuccess(info.ID.String())
+			}
+		}(info)
+	}
+	if dialed > 0 {
+		common.P2PLogger.Info("warm-bootstrap from persistent peerstore", "dialing", dialed, "known", len(known))
+	}
 }
 
 // shouldDial reports whether the per-peer backoff schedule currently
