@@ -38,7 +38,6 @@ func newTestHarness(getBlock blockRetrievalFn, verifyBlock blockVerifierFn, inse
 
 	h.f = New(
 		getBlock,
-		func(block *nom.Momentum, parent *nom.Momentum) error { return nil },
 		verifyBlock,
 		func(block *nom.DetailedMomentum, propagate bool) {
 			if propagate {
