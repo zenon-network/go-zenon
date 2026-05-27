@@ -96,6 +96,7 @@ func TestPtlc_VerifySignatureStableErrors(t *testing.T) {
 	}
 	message := definition.GetPtlcUnlockMessage(chainIdentifier, info.PointType, id, destination)
 
+	// All-0xff is outside the secp256k1 field/order ranges, so ParseSignature fails before verification.
 	common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, id, destination, bytes.Repeat([]byte{0xff}, 64)), constants.ErrInvalidPointSignature)
 
 	signature, err := schnorr.Sign(privateKey, message)

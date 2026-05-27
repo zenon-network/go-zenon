@@ -110,7 +110,6 @@ func getBridgeAndLiquidity() map[types.Address]*embeddedImplementation {
 	contracts[types.LiquidityContract].m[cabi.EmergencyMethodName] = &implementation.EmergencyLiquidity{cabi.EmergencyMethodName}
 
 	return contracts
-
 }
 
 func getAccelerator() map[types.Address]*embeddedImplementation {

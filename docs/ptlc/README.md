@@ -50,6 +50,8 @@ HTLC unlocks prove knowledge of a preimage for a stored hash digest. PTLC unlock
 
 The PTLC contract is available only after `types.PtlcSpork` is enforced. The PTLC contract map includes the prior HTLC contract map, so existing embedded contracts remain available after PTLC activation.
 
+Operational rollout must activate sporks in chronological order. `PtlcSpork` assumes the prior HTLC and bridge/liquidity sporks have already been activated.
+
 ## Related docs
 
 - [Signing](SIGNING.md)
