@@ -4,9 +4,9 @@ This contract moves funds based on stored consensus state and signature verifica
 
 ## Domain separation
 
-Unlock signatures are domain-separated with a purpose/version string, contract address, point type, PTLC id, and destination.
+Unlock signatures are domain-separated with a purpose/version string, chain identifier, contract address, point type, PTLC id, and destination.
 
-This prevents a signature intended for one PTLC context from accidentally verifying in another contract or for another point type. The destination is signed so `ProxyUnlock` cannot redirect funds.
+This prevents a signature intended for one PTLC context from accidentally verifying on another Zenon chain, in another contract, or for another point type. The destination is signed so `ProxyUnlock` cannot redirect funds.
 
 ## Stored state validation
 

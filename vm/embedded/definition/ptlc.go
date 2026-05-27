@@ -147,9 +147,10 @@ func unmarshalPtlcInfoKey(key []byte) (*types.Hash, error) {
 	return h, nil
 }
 
-func GetPtlcUnlockMessage(pointType uint8, id types.Hash, destination types.Address) []byte {
+func GetPtlcUnlockMessage(chainIdentifier uint64, pointType uint8, id types.Hash, destination types.Address) []byte {
 	return crypto.Hash(common.JoinBytes(
 		[]byte(PtlcUnlockMessageDomain),
+		common.Uint64ToBytes(chainIdentifier),
 		types.PtlcContract.Bytes(),
 		[]byte{pointType},
 		id.Bytes(),

@@ -55,7 +55,7 @@ func checkStoredPtlcInfo(ptlcInfo *definition.PtlcInfo) error {
 	return nil
 }
 
-func verifyPtlcSignature(ptlcInfo *definition.PtlcInfo, id types.Hash, destination types.Address, signature []byte) error {
+func verifyPtlcSignature(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, id types.Hash, destination types.Address, signature []byte) error {
 	signatureSize, ok := definition.PointTypeSignatureSizes[ptlcInfo.PointType]
 	if !ok {
 		return constants.ErrInvalidPointType
@@ -66,7 +66,7 @@ func verifyPtlcSignature(ptlcInfo *definition.PtlcInfo, id types.Hash, destinati
 		return constants.ErrInvalidPointSignature
 	}
 
-	unlockMessage := definition.GetPtlcUnlockMessage(ptlcInfo.PointType, id, destination)
+	unlockMessage := definition.GetPtlcUnlockMessage(chainIdentifier, ptlcInfo.PointType, id, destination)
 	if ptlcInfo.PointType == definition.PointTypeED25519 {
 		valid, err := wallet.VerifySignature(ed25519.PublicKey(ptlcInfo.PointLock), unlockMessage, signature)
 		if err != nil {
@@ -260,7 +260,7 @@ func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock
 		return nil, constants.ErrExpired
 	}
 
-	if err := verifyPtlcSignature(ptlcInfo, id, destination, signature); err != nil {
+	if err := verifyPtlcSignature(ptlcInfo, momentum.ChainIdentifier, id, destination, signature); err != nil {
 		ptlcLog.Debug("invalid unlock - invalid signature", "id", ptlcInfo.Id, "address", sendBlock.Address, "destination", destination, "signature", base64.StdEncoding.EncodeToString(signature), "reason", err)
 		return nil, err
 	}

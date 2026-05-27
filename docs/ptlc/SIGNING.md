@@ -9,6 +9,7 @@ The message is:
 ```go
 crypto.Hash(common.JoinBytes(
     []byte("zenon-ptlc-unlock:v1"),
+    common.Uint64ToBytes(chainIdentifier),
     types.PtlcContract.Bytes(),
     []byte{pointType},
     id.Bytes(),
@@ -19,12 +20,13 @@ crypto.Hash(common.JoinBytes(
 Fields:
 
 - `zenon-ptlc-unlock:v1`: purpose and version string.
+- `chainIdentifier`: Zenon chain identifier from the frontier momentum.
 - `types.PtlcContract`: embedded contract address.
 - `pointType`: stored signature scheme.
 - `id`: hash of the PTLC create block.
 - `destination`: address that receives funds if the signature verifies.
 
-If a consensus-visible network or chain id is added later, introduce a new signing version and bind that id in the message.
+The chain identifier is consensus state, not a wallet preference. A signature produced for another Zenon chain id is invalid on this chain.
 
 ## ED25519 mode
 
@@ -43,7 +45,7 @@ Malformed BIP340 signatures are rejected with `ErrInvalidPointSignature`. Malfor
 For `ProxyUnlock`, the caller and destination can differ. The signature must still be valid for the destination argument:
 
 ```txt
-signature = Sign(pointLockPrivateKey, PTLCUnlockMessage(pointType, id, destination))
+signature = Sign(pointLockPrivateKey, PTLCUnlockMessage(chainIdentifier, pointType, id, destination))
 ```
 
 A valid signature for destination A cannot unlock funds to destination B.
