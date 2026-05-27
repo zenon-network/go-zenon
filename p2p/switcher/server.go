@@ -64,11 +64,21 @@ type Server struct {
 	// ---- activation gate ----
 	Oracle SporkOracle
 
+	// ---- test hooks (nil = use real backends) ----
+	// NewLegacy, if non-nil, is called instead of constructing a
+	// legacy.Server. The returned backend is used for the pre-activation
+	// phase. Tests inject a stub here to avoid real network I/O.
+	NewLegacy func() backend
+	// NewLibp2p, if non-nil, is called instead of buildLibp2p(). The
+	// returned backend is used when the spork activates. Tests inject a
+	// stub here to control swap timing and error injection.
+	NewLibp2p func() backend
+
 	// ---- internal state (do not set from outside) ----
 	mu       sync.RWMutex
 	active   backend // currently-serving backend (nil when stopped or mid-swap)
-	legacy   *legacy.Server
-	libp2p   *libp2p.Server
+	legacy   backend // pre-activation backend (nil when stopped or not yet started)
+	libp2p   backend // post-activation backend (nil when stopped or not yet swapped)
 	swapOnce sync.Once
 	stopCh   chan struct{}
 	wg       sync.WaitGroup // tracks the activation watcher goroutine
@@ -213,17 +223,21 @@ func (srv *Server) Self() *discover.Node {
 // startLegacyLocked constructs and starts the legacy backend. Caller
 // must hold srv.mu.
 func (srv *Server) startLegacyLocked() error {
-	srv.legacy = &legacy.Server{
-		PrivateKey:        srv.PrivateKey,
-		MaxPeers:          srv.MaxPeers,
-		MinConnectedPeers: srv.MinConnectedPeers,
-		MaxPendingPeers:   srv.MaxPendingPeers,
-		Discovery:         true,
-		Name:              srv.Name,
-		BootstrapNodes:    srv.LegacyBootstrapNodes,
-		NodeDatabase:      srv.NodeDatabase,
-		Protocols:         srv.Protocols,
-		ListenAddr:        srv.ListenAddr,
+	if srv.NewLegacy != nil {
+		srv.legacy = srv.NewLegacy()
+	} else {
+		srv.legacy = &legacy.Server{
+			PrivateKey:        srv.PrivateKey,
+			MaxPeers:          srv.MaxPeers,
+			MinConnectedPeers: srv.MinConnectedPeers,
+			MaxPendingPeers:   srv.MaxPendingPeers,
+			Discovery:         true,
+			Name:              srv.Name,
+			BootstrapNodes:    srv.LegacyBootstrapNodes,
+			NodeDatabase:      srv.NodeDatabase,
+			Protocols:         srv.Protocols,
+			ListenAddr:        srv.ListenAddr,
+		}
 	}
 	if err := srv.legacy.Start(); err != nil {
 		srv.legacy = nil
@@ -239,7 +253,11 @@ func (srv *Server) startLegacyLocked() error {
 // the lock to avoid blocking concurrent Peers/PeerCount/AddPeer
 // readers during libp2p initialization.
 func (srv *Server) startLibp2pLocked() error {
-	srv.libp2p = srv.buildLibp2p()
+	if srv.NewLibp2p != nil {
+		srv.libp2p = srv.NewLibp2p()
+	} else {
+		srv.libp2p = srv.buildLibp2p()
+	}
 	if err := srv.libp2p.Start(); err != nil {
 		srv.libp2p = nil
 		return fmt.Errorf("switcher: start libp2p backend: %w", err)
@@ -372,8 +390,13 @@ func (srv *Server) swap() {
 		// probes — each of which can take observable wall time. If we
 		// did this under srv.mu, every Peers()/PeerCount()/Self()/
 		// AddPeer() RPC call would block for that duration.
-		newLibp2p := srv.buildLibp2p()
-		if err := newLibp2p.Start(); err != nil {
+		var newBackend backend
+		if srv.NewLibp2p != nil {
+			newBackend = srv.NewLibp2p()
+		} else {
+			newBackend = srv.buildLibp2p()
+		}
+		if err := newBackend.Start(); err != nil {
 			srv.swapFailed(err)
 			return
 		}
@@ -385,11 +408,11 @@ func (srv *Server) swap() {
 		srv.mu.Lock()
 		if srv.stopCh == nil {
 			srv.mu.Unlock()
-			newLibp2p.Stop()
+			newBackend.Stop()
 			return
 		}
-		srv.libp2p = newLibp2p
-		srv.active = newLibp2p
+		srv.libp2p = newBackend
+		srv.active = newBackend
 		srv.mu.Unlock()
 
 		common.P2PLogger.Info("libp2p swap complete")
