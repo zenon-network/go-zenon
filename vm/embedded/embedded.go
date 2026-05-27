@@ -202,6 +202,17 @@ func getOrigin() map[types.Address]*embeddedImplementation {
 	}
 }
 
+// getAllEmbedded returns the fully merged contract map with all spork diffs applied.
+// Used by tests to introspect the complete set of contract methods.
+func getAllEmbedded() map[types.Address]*embeddedImplementation {
+	contractsMap := getOrigin()
+	applyAcceleratorDiffs(contractsMap)
+	applyBridgeAndLiquidityDiffs(contractsMap)
+	applyHtlcDiffs(contractsMap)
+	applyDynamicPlasmaDiffs(contractsMap)
+	return contractsMap
+}
+
 // GetEmbeddedMethod finds method instance of embedded contract by address and abiSelector
 // - returns constants.ErrNotContractAddress in case address is not an embedded address (bad prefix)
 // - returns constants.ErrContractDoesntExist in case the address doesn't link to a valid embedded contract

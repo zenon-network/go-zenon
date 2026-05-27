@@ -17,7 +17,8 @@ import (
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
-func activateAccelerator(z mock.MockZenon) {
+func activateAccelerator(t *testing.T, z mock.MockZenon) {
+	saveSporkState(t)
 	sporkAPI := embedded.NewSporkApi(z)
 	z.InsertSendBlock(&nom.AccountBlock{
 		Address:   g.Spork.Address,
@@ -72,7 +73,7 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork s
 t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:34d8229bd07586c243c6e74122a18d6d2002694c72964a7186111026a9cec6ab Name:spork-accelerator Description:activate spork for accelerator Activated:true EnforcementHeight:9}"
 t=2001-09-09T01:50:00+0000 lvl=dbug msg="successfully create project" module=embedded contract=accelerator project="&{Id:c24a5a6166c8948aba23d68aa39e206fc1410138ad218500749b75e2ae92d730 Owner:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz Name:Test Project 1 Description:TEST DESCRIPTION Url:test.com ZnnFundsNeeded:+100 QsrFundsNeeded:+1000 CreationTimestamp:1000000200 LastUpdateTimestamp:1000000200 Status:0 PhaseIds:[]}"
 `)
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -131,7 +132,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 t=2001-09-09T01:50:00+0000 lvl=dbug msg="successfully create project" module=embedded contract=accelerator project="&{Id:c24a5a6166c8948aba23d68aa39e206fc1410138ad218500749b75e2ae92d730 Owner:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz Name:Test Project 1 Description:TEST DESCRIPTION Url:test.com ZnnFundsNeeded:+100 QsrFundsNeeded:+1000 CreationTimestamp:1000000200 LastUpdateTimestamp:1000000200 Status:0 PhaseIds:[]}"
 t=2001-09-09T01:50:20+0000 lvl=dbug msg="successfully create project" module=embedded contract=accelerator project="&{Id:fb056c9bdf8c08b30e8abbd17dc9406be7149878663719ceabb004440e24cdda Owner:z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx Name:Test Project 2 Description:TEST DESCRIPTION Url:test.com ZnnFundsNeeded:+100 QsrFundsNeeded:+1000 CreationTimestamp:1000000220 LastUpdateTimestamp:1000000220 Status:0 PhaseIds:[]}"
 `)
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -223,7 +224,7 @@ t=2001-09-09T01:50:00+0000 lvl=dbug msg="successfully create project" module=emb
 t=2001-09-09T01:50:20+0000 lvl=dbug msg="voted for hash" module=embedded contract=common pillar-vote="&{Id:c24a5a6166c8948aba23d68aa39e206fc1410138ad218500749b75e2ae92d730 Name:TEST-pillar-1 Vote:0}"
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -295,7 +296,7 @@ t=2001-09-09T01:50:00+0000 lvl=dbug msg="successfully create project" module=emb
 t=2001-09-09T01:50:20+0000 lvl=dbug msg="voted for hash" module=embedded contract=common pillar-vote="&{Id:c24a5a6166c8948aba23d68aa39e206fc1410138ad218500749b75e2ae92d730 Name:TEST-pillar-1 Vote:1}"
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -385,7 +386,7 @@ t=2001-09-09T02:46:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 t=2001-09-09T02:46:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 TokenName:QuasarCoin TokenSymbol:QSR TokenDomain:zenon.network TotalSupply:+181050000000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll}" minted-amount=500000000000 to-address=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -492,7 +493,7 @@ t=2001-09-09T02:47:00+0000 lvl=dbug msg="successfully created phase" module=embe
 t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1qsrxxxxxxxxxxxxxmrhjll amount=500000000000
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -658,7 +659,7 @@ t=2001-09-09T02:47:40+0000 lvl=dbug msg="delete phase hash due to phase update" 
 t=2001-09-09T02:47:40+0000 lvl=dbug msg="successfully updated phase" module=embedded contract=accelerator old-phase="&{Id:e2b4eb834a20e51f88dba0232c856949b1462ef0f1fe2cb5049bb84063a781ab ProjectId:c24a5a6166c8948aba23d68aa39e206fc1410138ad218500749b75e2ae92d730 Name:Phase 1 Description:Description for phase 1 Url:www.phase1.com ZnnFundsNeeded:+10 QsrFundsNeeded:+10 CreationTimestamp:1000003620 AcceptedTimestamp:0 Status:0}" new-phase="&{Id:d6c8d33db992af0d2b9f3cfa05cfbae093dd2b2deeda7565661f5d6d095be1a7 ProjectId:c24a5a6166c8948aba23d68aa39e206fc1410138ad218500749b75e2ae92d730 Name:Phase 1.1 Description:Description for phase 1.1 Url:www.phase1.com ZnnFundsNeeded:+15 QsrFundsNeeded:+15 CreationTimestamp:1000003660 AcceptedTimestamp:0 Status:0}"
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -855,7 +856,7 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork s
 t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:34d8229bd07586c243c6e74122a18d6d2002694c72964a7186111026a9cec6ab Name:spork-accelerator Description:activate spork for accelerator Activated:true EnforcementHeight:9}"
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	defer z.InsertSendBlock(&nom.AccountBlock{
 		Address:       g.User1.Address,
 		ToAddress:     types.AcceleratorContract,
@@ -986,7 +987,7 @@ t=2001-09-09T04:47:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 t=2001-09-09T04:47:10+0000 lvl=dbug msg="minted ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 TokenName:QuasarCoin TokenSymbol:QSR TokenDomain:zenon.network TotalSupply:+182050000000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll}" minted-amount=500000000000 to-address=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 
 	defer z.CallContract(&nom.AccountBlock{
@@ -1269,7 +1270,7 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1qsrxxxxxxxxxxxxxmrhjll amount=500000000000
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -1369,7 +1370,7 @@ t=2001-09-09T01:50:40+0000 lvl=dbug msg="unable to find pillar" module=embedded 
 t=2001-09-09T01:51:00+0000 lvl=dbug msg="unable to find pillar" module=embedded contract=common param="&{Id:c24a5a6166c8948aba23d68aa39e206fc1410138ad218500749b75e2ae92d730 Name: Vote:0}" send-block-address=z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -1485,7 +1486,7 @@ t=2001-09-09T02:46:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 t=2001-09-09T02:46:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=token token="&{Owner:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 TokenName:QuasarCoin TokenSymbol:QSR TokenDomain:zenon.network TotalSupply:+181050000000000 MaxSupply:+4611686018427387903 Decimals:8 IsMintable:true IsBurnable:true IsUtility:true TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll}" minted-amount=500000000000 to-address=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -1617,7 +1618,7 @@ t=2001-09-09T02:47:00+0000 lvl=dbug msg="successfully created phase" module=embe
 t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1qsrxxxxxxxxxxxxxmrhjll amount=500000000000
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -1799,7 +1800,7 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1qsrxxxxxxxxxxxxxmrhjll amount=500000000000
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	ledgerApi := api.NewLedgerApi(z)
 
@@ -2135,7 +2136,7 @@ t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded cont
 t=2001-09-09T03:47:10+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1qsrxxxxxxxxxxxxxmrhjll amount=500000000000
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	acceleratorAPI := embedded.NewAcceleratorApi(z)
 	ledgerApi := api.NewLedgerApi(z)
 
@@ -2339,7 +2340,7 @@ t=2001-09-09T03:46:50+0000 lvl=dbug msg="updating contract state" module=embedde
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 100)
 	z.ExpectBalance(types.LiquidityContract, types.QsrTokenStandard, 100)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 	z.InsertSendBlock(&nom.AccountBlock{
 		Address:   g.Spork.Address,
 		ToAddress: types.LiquidityContract,
@@ -3014,7 +3015,7 @@ t=2001-09-09T04:47:20+0000 lvl=info msg="received donation" module=embedded cont
 	z.ExpectBalance(types.AcceleratorContract, types.ZnnTokenStandard, 100)
 	z.ExpectBalance(types.AcceleratorContract, types.QsrTokenStandard, 100)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 
 	for i := 1; i <= 50; i++ {
 		z.CallContract(&nom.AccountBlock{

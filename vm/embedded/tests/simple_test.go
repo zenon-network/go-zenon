@@ -493,6 +493,7 @@ func TestSendBlockReceiver(t *testing.T) {
 // Test that the amount of uncommitted account-blocks that can be added to the account pool
 // per account is limited by MaxUncommittedBlocksPerAccount.
 func TestSimple_MaxUncommittedAccountBlocks(t *testing.T) {
+	saveChainGlobals(t)
 	chain.MaxUncommittedBlocksPerAccount = 5
 
 	z := mock.NewMockZenon(t)

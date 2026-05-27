@@ -13,13 +13,14 @@ import (
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
-func activateDynamicPlasma(z mock.MockZenon) {
+func activateDynamicPlasma(t *testing.T, z mock.MockZenon) {
+	saveSporkState(t)
 	z.InsertSendBlock(&nom.AccountBlock{
 		Address:   g.Spork.Address,
 		ToAddress: types.SporkContract,
 		Data: definition.ABISpork.PackMethodPanic(definition.SporkCreateMethodName,
-			"spork-dynamic-plasma",              // name
-			"activate spork for dynamic plasma", // description
+			"dynamic-plasma",              // name
+			"Activates Dynamic Plasma", // description
 		),
 	}, nil, mock.SkipVmChanges)
 	z.InsertNewMomentum()
@@ -45,11 +46,12 @@ func TestDynamicPlasma(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	ledgerApi := api.NewLedgerApi(z)
 	defer z.StopPanic()
+	savePlasmaDefaults(t)
 
 	definition.DefaultMaxBasePlasmaInMomentum = 42000
 	definition.DefaultFusedPlasmaTarget = 10500
 
-	activateDynamicPlasma(z)
+	activateDynamicPlasma(t, z)
 
 	z.InsertSendBlock(&nom.AccountBlock{
 		Address:       g.User1.Address,
@@ -86,11 +88,12 @@ func TestDynamicPlasma_rpc(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	plasmaApi := embedded.NewPlasmaApi(z)
 	defer z.StopPanic()
+	savePlasmaDefaults(t)
 
 	definition.DefaultMaxBasePlasmaInMomentum = 42000
 	definition.DefaultPowPlasmaTarget = 10500
 
-	activateDynamicPlasma(z)
+	activateDynamicPlasma(t, z)
 
 	ab := &nom.AccountBlock{
 		Address:       g.User6.Address,
@@ -120,10 +123,11 @@ func TestDynamicPlasma_SetPlasmaVariables(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	plasmaApi := embedded.NewPlasmaApi(z)
 	defer z.StopPanic()
+	saveGovernanceAddress(t)
 
 	types.GovernanceAddress = g.User1.Address
 
-	activateDynamicPlasma(z)
+	activateDynamicPlasma(t, z)
 
 	ab := &nom.AccountBlock{
 		Address:       g.User1.Address,
