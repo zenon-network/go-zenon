@@ -7,7 +7,6 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
-	"github.com/zenon-network/go-zenon/common/crypto"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
@@ -30,6 +29,71 @@ func checkPtlc(param definition.CreatePtlcParam) error {
 	}
 
 	return nil
+}
+
+func checkStoredPtlcInfo(ptlcInfo *definition.PtlcInfo) error {
+	if ptlcInfo == nil {
+		return constants.ErrDataNonExistent
+	}
+
+	if err := checkPtlc(definition.CreatePtlcParam{
+		ExpirationTime: ptlcInfo.ExpirationTime,
+		PointType:      ptlcInfo.PointType,
+		PointLock:      ptlcInfo.PointLock,
+	}); err != nil {
+		return err
+	}
+
+	if ptlcInfo.Amount == nil || ptlcInfo.Amount.Sign() <= 0 {
+		return constants.ErrInvalidTokenOrAmount
+	}
+
+	if ptlcInfo.ExpirationTime <= 0 {
+		return constants.ErrInvalidExpirationTime
+	}
+
+	return nil
+}
+
+func verifyPtlcSignature(ptlcInfo *definition.PtlcInfo, id types.Hash, destination types.Address, signature []byte) error {
+	signatureSize, ok := definition.PointTypeSignatureSizes[ptlcInfo.PointType]
+	if !ok {
+		return constants.ErrInvalidPointType
+	}
+
+	if len(signature) != int(signatureSize) {
+		ptlcLog.Debug("invalid unlock - signature is wrong size", "id", ptlcInfo.Id, "received-size", len(signature), "expected-size", signatureSize)
+		return constants.ErrInvalidPointSignature
+	}
+
+	unlockMessage := definition.GetPtlcUnlockMessage(ptlcInfo.PointType, id, destination)
+	if ptlcInfo.PointType == definition.PointTypeED25519 {
+		valid, err := wallet.VerifySignature(ed25519.PublicKey(ptlcInfo.PointLock), unlockMessage, signature)
+		if err != nil {
+			return constants.ErrInvalidPointLock
+		}
+		if !valid {
+			return constants.ErrInvalidPointSignature
+		}
+		return nil
+	}
+
+	if ptlcInfo.PointType == definition.PointTypeBIP340 {
+		s, err := schnorr.ParseSignature(signature)
+		if err != nil {
+			return constants.ErrInvalidPointSignature
+		}
+		pk, err := schnorr.ParsePubKey(ptlcInfo.PointLock)
+		if err != nil {
+			return constants.ErrInvalidPointLock
+		}
+		if !s.Verify(unlockMessage, pk) {
+			return constants.ErrInvalidPointSignature
+		}
+		return nil
+	}
+
+	return constants.ErrInvalidPointType
 }
 
 type CreatePtlcMethod struct {
@@ -138,6 +202,11 @@ func (p *ReclaimPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	}
 	common.DealWithErr(err)
 
+	if err := checkStoredPtlcInfo(ptlcInfo); err != nil {
+		ptlcLog.Debug("invalid reclaim - corrupt entry", "id", ptlcInfo.Id, "address", sendBlock.Address, "reason", err)
+		return nil, err
+	}
+
 	// only timelocked can reclaim
 	if ptlcInfo.TimeLocked != sendBlock.Address {
 		ptlcLog.Debug("invalid reclaim - permission denied", "id", ptlcInfo.Id, "address", sendBlock.Address)
@@ -177,6 +246,11 @@ func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock
 	}
 	common.DealWithErr(err)
 
+	if err := checkStoredPtlcInfo(ptlcInfo); err != nil {
+		ptlcLog.Debug("invalid unlock - corrupt entry", "id", ptlcInfo.Id, "address", sendBlock.Address, "reason", err)
+		return nil, err
+	}
+
 	momentum, err := context.GetFrontierMomentum()
 	common.DealWithErr(err)
 
@@ -186,38 +260,9 @@ func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock
 		return nil, constants.ErrExpired
 	}
 
-	// signature must be right size for the type
-	if len(signature) != int(definition.PointTypeSignatureSizes[ptlcInfo.PointType]) {
-		ptlcLog.Debug("invalid unlock - signature is wrong size", "id", ptlcInfo.Id, "address", sendBlock.Address, "received-size", len(signature), "expected-size", definition.PointTypeSignatureSizes[ptlcInfo.PointType])
-		return nil, constants.ErrInvalidPointSignature
-	}
-
-	unlockMessage := crypto.Hash(common.JoinBytes(id.Bytes(), destination.Bytes()))
-	if ptlcInfo.PointType == definition.PointTypeED25519 {
-		valid, err := wallet.VerifySignature(ed25519.PublicKey(ptlcInfo.PointLock), unlockMessage, signature)
-		if err != nil {
-			return nil, err
-		}
-		if !valid {
-			ptlcLog.Debug("invalid unlock - invalid signature", "id", ptlcInfo.Id, "address", sendBlock.Address, "destination", destination, "signature", base64.StdEncoding.EncodeToString(signature))
-			return nil, constants.ErrInvalidPointSignature
-		}
-	} else if ptlcInfo.PointType == definition.PointTypeBIP340 {
-		s, err := schnorr.ParseSignature(signature)
-		if err != nil {
-			return nil, err
-		}
-		pk, err := schnorr.ParsePubKey(ptlcInfo.PointLock)
-		if err != nil {
-			return nil, err
-		}
-		valid := s.Verify(unlockMessage, pk)
-		if !valid {
-			ptlcLog.Debug("invalid unlock - invalid signature", "id", ptlcInfo.Id, "address", sendBlock.Address, "destination", destination, "signature", base64.StdEncoding.EncodeToString(signature))
-			return nil, constants.ErrInvalidPointSignature
-		}
-	} else {
-		// shouldn't get here
+	if err := verifyPtlcSignature(ptlcInfo, id, destination, signature); err != nil {
+		ptlcLog.Debug("invalid unlock - invalid signature", "id", ptlcInfo.Id, "address", sendBlock.Address, "destination", destination, "signature", base64.StdEncoding.EncodeToString(signature), "reason", err)
+		return nil, err
 	}
 
 	common.DealWithErr(ptlcInfo.Delete(context.Storage()))

@@ -9,6 +9,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/crypto"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/abi"
@@ -51,6 +52,8 @@ const (
 	ProxyUnlockPtlcMethodName = "ProxyUnlock"
 
 	variableNamePtlcInfo = "ptlcInfo"
+
+	PtlcUnlockMessageDomain = "zenon-ptlc-unlock:v1"
 )
 
 const (
@@ -128,7 +131,7 @@ func getPtlcInfoKey(hash types.Hash) []byte {
 	return common.JoinBytes(ptlcInfoKeyPrefix, hash.Bytes())
 }
 func isPtlcInfoKey(key []byte) bool {
-	return key[0] == ptlcInfoKeyPrefix[0]
+	return len(key) == 1+types.HashSize && key[0] == ptlcInfoKeyPrefix[0]
 }
 
 func unmarshalPtlcInfoKey(key []byte) (*types.Hash, error) {
@@ -142,6 +145,16 @@ func unmarshalPtlcInfoKey(key []byte) (*types.Hash, error) {
 	}
 
 	return h, nil
+}
+
+func GetPtlcUnlockMessage(pointType uint8, id types.Hash, destination types.Address) []byte {
+	return crypto.Hash(common.JoinBytes(
+		[]byte(PtlcUnlockMessageDomain),
+		types.PtlcContract.Bytes(),
+		[]byte{pointType},
+		id.Bytes(),
+		destination.Bytes(),
+	))
 }
 
 func parsePtlcInfo(key, data []byte) (*PtlcInfo, error) {
