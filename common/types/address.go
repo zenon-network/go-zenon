@@ -43,7 +43,7 @@ var (
 	CommunitySporkAddress = ParseAddressPanic("z1qqvwzz2xq7q5gwk6uhcddgrpxlfcyzc8rsu82s")
 
 	// TODO: Update governance address to governance contract
-	GovernanceAddress = ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	GovernanceAddress = ParseAddressPanic("z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq")
 )
 
 func IsEmbeddedAddress(addr Address) bool {

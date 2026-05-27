@@ -1,4 +1,4 @@
-.PHONY: all clean znnd devnet-keys devnet-up devnet-down \
+.PHONY: all clean znnd devnet-keys devnet-up devnet-down devnet-down-wipe \
 	devnet-sync-up devnet-sync-logs devnet-sync-status devnet-sync-stop devnet-sync-reset
 
 GO ?= latest
@@ -51,6 +51,9 @@ devnet-up:
 # without it, `down` skips the profiled syncnode, which keeps the bridge
 # network alive and leaves the sync node running across the next `devnet-up`.
 devnet-down:
+	docker compose --profile sync down
+
+devnet-down-wipe:
 	docker compose --profile sync down -v
 
 # --- Late-joiner sync node (docker-compose "sync" profile) -------------------

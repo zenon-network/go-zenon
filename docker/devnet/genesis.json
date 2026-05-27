@@ -132,6 +132,13 @@
                 "description": "Activates the libp2p networking stack",
                 "activated": true,
                 "enforcementHeight": 20
+            },
+            {
+                "id": "0000000000000000000000000000000000000000000000000000000000000002",
+                "name": "dynamic-plasma",
+                "description": "Activates Dynamic Plasma",
+                "activated": true,
+                "enforcementHeight": 30
             }
         ]
     },
