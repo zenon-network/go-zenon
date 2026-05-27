@@ -39,6 +39,12 @@ PTLC storage keys must be exactly one prefix byte plus a hash. Empty, short, lon
 
 Wallets and higher-level protocols should treat a `ProxyUnlock` signature as a bearer proof for that specific destination.
 
+Consensus does not distinguish user, embedded, or zero-like destination intent for `ProxyUnlock`; it verifies the signature over exactly the submitted destination. Wallets should apply stricter destination policy before asking users to sign.
+
+## Logging
+
+PTLC logs record signature hashes, not full submitted signatures. Unlock signatures are public witnesses after submission, but logging only hashes reduces accidental witness reuse in off-chain tooling.
+
 ## Limitations
 
 This implementation verifies ordinary ED25519 and BIP340 signatures. It does not specify adaptor signatures, scalar extraction, or a complete cross-chain PTLC swap protocol.
@@ -52,4 +58,4 @@ Protocols that rely on adaptor-signature properties must document:
 
 ## Dependency review
 
-BIP340 support requires `github.com/btcsuite/btcd/btcec/v2/schnorr`. Avoid unrelated dependency upgrades in PTLC changes, and review `go.mod` and `go.sum` separately from contract logic.
+BIP340 support requires `github.com/btcsuite/btcd/btcec/v2/schnorr`. This dependency is consensus-critical after PTLC activation, so upgrades require dedicated BIP340 vector review. Avoid unrelated dependency upgrades in PTLC changes, and review `go.mod` and `go.sum` separately from contract logic.

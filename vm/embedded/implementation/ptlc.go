@@ -3,10 +3,12 @@ package implementation
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"math/big"
 
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/crypto"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
@@ -17,6 +19,18 @@ import (
 var (
 	ptlcLog = common.EmbeddedLogger.New("contract", "ptlc")
 )
+
+func isPositiveAmount(amount *big.Int) bool {
+	return amount != nil && amount.Sign() > 0
+}
+
+func isZeroAmount(amount *big.Int) bool {
+	return amount != nil && amount.Sign() == 0
+}
+
+func signatureHashForLog(signature []byte) string {
+	return base64.StdEncoding.EncodeToString(crypto.Hash(signature))
+}
 
 func checkPtlc(param definition.CreatePtlcParam) error {
 
@@ -116,9 +130,8 @@ func (p *CreatePtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return err
 	}
 
-	// can't create empty ptlcs
-	if block.Amount.Sign() == 0 {
-		ptlcLog.Debug("invalid create - cannot create zero amount", "address", block.Address)
+	if !isPositiveAmount(block.Amount) {
+		ptlcLog.Debug("invalid create - amount must be positive", "address", block.Address)
 		return constants.ErrInvalidTokenOrAmount
 	}
 
@@ -178,7 +191,7 @@ func (p *ReclaimPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrUnpackError
 	}
 
-	if block.Amount.Sign() > 0 {
+	if !isZeroAmount(block.Amount) {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
@@ -261,12 +274,12 @@ func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock
 	}
 
 	if err := verifyPtlcSignature(ptlcInfo, momentum.ChainIdentifier, id, destination, signature); err != nil {
-		ptlcLog.Debug("invalid unlock - invalid signature", "id", ptlcInfo.Id, "address", sendBlock.Address, "destination", destination, "signature", base64.StdEncoding.EncodeToString(signature), "reason", err)
+		ptlcLog.Debug("invalid unlock - invalid signature", "id", ptlcInfo.Id, "address", sendBlock.Address, "destination", destination, "signature-hash", signatureHashForLog(signature), "reason", err)
 		return nil, err
 	}
 
 	common.DealWithErr(ptlcInfo.Delete(context.Storage()))
-	ptlcLog.Debug("unlocked", "ptlcInfo", ptlcInfo, "destination", destination, "signature", base64.StdEncoding.EncodeToString(signature))
+	ptlcLog.Debug("unlocked", "ptlcInfo", ptlcInfo, "destination", destination, "signature-hash", signatureHashForLog(signature))
 
 	return []*nom.AccountBlock{
 		{
@@ -295,7 +308,7 @@ func (p *UnlockPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrUnpackError
 	}
 
-	if block.Amount.Sign() > 0 {
+	if !isZeroAmount(block.Amount) {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
@@ -332,7 +345,7 @@ func (p *ProxyUnlockPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error
 		return constants.ErrUnpackError
 	}
 
-	if block.Amount.Sign() > 0 {
+	if !isZeroAmount(block.Amount) {
 		return constants.ErrInvalidTokenOrAmount
 	}
 

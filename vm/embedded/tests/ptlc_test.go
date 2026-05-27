@@ -121,7 +121,7 @@ func TestPtlc_zero(t *testing.T) {
 	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
 t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:d82f15026ad67abbc99786a9ed5b667ac578a78fb80df4ea573c22e727fd736a Name:spork-ptlc Description:activate spork for ptlc Activated:false EnforcementHeight:0}"
 t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:d82f15026ad67abbc99786a9ed5b667ac578a78fb80df4ea573c22e727fd736a Name:spork-ptlc Description:activate spork for ptlc Activated:true EnforcementHeight:9}"
-t=2001-09-09T01:49:50+0000 lvl=dbug msg="invalid create - cannot create zero amount" module=embedded contract=ptlc address=z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz
+t=2001-09-09T01:49:50+0000 lvl=dbug msg="invalid create - amount must be positive" module=embedded contract=ptlc address=z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz
 `)
 	activatePtlc(t, z)
 
@@ -583,7 +583,7 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg="invalid unlock - entry is expired" modu
 	// Sun Sep 09 2001 01:51:40 GMT+0000
 	// check the time in the logs
 
-	// user2 tries to unlock expired with correct preimage
+	// user2 tries to unlock expired with correct signature
 	mh := ptlcUnlockMessage(z, definition.PointTypeED25519, ptlcId, g.User2.Address)
 	signature := g.User2.Sign(mh)
 	defer z.CallContract(&nom.AccountBlock{
@@ -1063,7 +1063,7 @@ func TestPtlc_unlockBIP340(t *testing.T) {
 	}).Error(t, constants.ErrInvalidPointSignature)
 	z.InsertNewMomentum()
 
-	// user2 unlocks with correct preimage
+	// user2 unlocks with correct signature
 	signature, _ := schnorr.Sign(prv2, mh)
 	sig := signature.Serialize()
 	defer z.CallContract(&nom.AccountBlock{

@@ -42,6 +42,8 @@ PointTypeBIP340
 
 `ProxyUnlock` accepts an explicit destination. Any caller can submit a valid `ProxyUnlock` proof, but the funds still go to the destination covered by the signature. This makes `ProxyUnlock` a bearer-proof flow: possession of a valid signature for `id` and `destination` is enough to submit the unlock transaction.
 
+The contract does not add a consensus restriction on destination class beyond the address encoded in the signed call. Wallets and higher-level protocols should reject zero, embedded, or otherwise unexpected destinations unless that exact destination is intentional for the protocol.
+
 ## HTLC comparison
 
 HTLC unlocks prove knowledge of a preimage for a stored hash digest. PTLC unlocks prove possession of a valid signature for a stored public key/point lock. In this implementation, the signature is an ordinary ED25519 or BIP340 signature over the PTLC unlock message; adaptor-signature scalar revelation is not enforced by the embedded contract.
