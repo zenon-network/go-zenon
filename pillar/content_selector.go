@@ -93,7 +93,7 @@ func (cs *contentSelector) higherPriority(a, b *nom.AccountBlock) bool {
 	}
 
 	err := cs.plasma.HigherPrice(a, b)
-	if err == dp.ErrBlockPriceSame && bytes.Compare(a.Hash.Bytes()[:], b.Hash.Bytes()[:]) > 1 {
+	if err == dp.ErrBlockPriceSame && bytes.Compare(a.Hash.Bytes()[:], b.Hash.Bytes()[:]) > 0 {
 		return true
 	}
 	return err == nil

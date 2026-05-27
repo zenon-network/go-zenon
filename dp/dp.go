@@ -21,7 +21,7 @@ const (
 	// The max amount of fusion and PoW plasma is unlimited in a practical sense.
 	// A theoretical maximum for plasma is used to maintain consistency.
 	MaxFusionUnitsPerAccount  = 100000000
-	MaxFusionPlasmaForAccount = MaxFusionUnitsPerAccount * constants.CostPerFusionUnit
+	MaxFusionPlasmaForAccount = constants.PlasmaPerFusionUnit * constants.CostPerFusionUnit
 	MaxFusedAmountForAccount  = constants.CostPerFusionUnit * MaxFusionUnitsPerAccount
 
 	MaxPoWPlasmaForAccountBlock  = MaxFusionPlasmaForAccount
