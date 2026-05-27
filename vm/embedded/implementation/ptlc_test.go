@@ -15,6 +15,7 @@ import (
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/crypto"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus/api"
@@ -108,6 +109,96 @@ func TestPtlc_VerifySignatureStableErrors(t *testing.T) {
 
 	info.PointType = 99
 	common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, id, destination, nil), constants.ErrInvalidPointType)
+}
+
+func ptlcUnlockMessageForContract(chainIdentifier uint64, contract types.Address, pointType uint8, id types.Hash, destination types.Address) []byte {
+	return crypto.Hash(common.JoinBytes(
+		[]byte(definition.PtlcUnlockMessageDomain),
+		common.Uint64ToBytes(chainIdentifier),
+		contract.Bytes(),
+		[]byte{pointType},
+		id.Bytes(),
+		destination.Bytes(),
+	))
+}
+
+func TestPtlc_VerifySignatureRejectsWrongDomainFields(t *testing.T) {
+	chainIdentifier := uint64(100)
+	id := types.NewHash([]byte("ptlc-domain-id"))
+	otherId := types.NewHash([]byte("ptlc-domain-other-id"))
+	destination := User1.Address
+
+	edInfo := &definition.PtlcInfo{
+		Id:             id,
+		TimeLocked:     User1.Address,
+		TokenStandard:  types.ZnnTokenStandard,
+		Amount:         big.NewInt(1),
+		ExpirationTime: 1000000000,
+		PointType:      definition.PointTypeED25519,
+		PointLock:      User1.Public,
+	}
+
+	common.ExpectError(t, verifyPtlcSignature(edInfo, chainIdentifier, id, destination, User1.Sign(ptlcUnlockMessageForContract(
+		chainIdentifier,
+		types.HtlcContract,
+		definition.PointTypeED25519,
+		id,
+		destination,
+	))), constants.ErrInvalidPointSignature)
+
+	common.ExpectError(t, verifyPtlcSignature(edInfo, chainIdentifier, id, destination, User1.Sign(definition.GetPtlcUnlockMessage(
+		chainIdentifier,
+		definition.PointTypeBIP340,
+		id,
+		destination,
+	))), constants.ErrInvalidPointSignature)
+
+	common.ExpectError(t, verifyPtlcSignature(edInfo, chainIdentifier, id, destination, User1.Sign(definition.GetPtlcUnlockMessage(
+		chainIdentifier,
+		definition.PointTypeED25519,
+		otherId,
+		destination,
+	))), constants.ErrInvalidPointSignature)
+
+	privateKeyBytes := bytes.Repeat([]byte{2}, 32)
+	privateKey, publicKey := btcec.PrivKeyFromBytes(privateKeyBytes)
+	bip340Info := &definition.PtlcInfo{
+		Id:             id,
+		TimeLocked:     User1.Address,
+		TokenStandard:  types.ZnnTokenStandard,
+		Amount:         big.NewInt(1),
+		ExpirationTime: 1000000000,
+		PointType:      definition.PointTypeBIP340,
+		PointLock:      schnorr.SerializePubKey(publicKey),
+	}
+
+	wrongContractSignature, err := schnorr.Sign(privateKey, ptlcUnlockMessageForContract(
+		chainIdentifier,
+		types.HtlcContract,
+		definition.PointTypeBIP340,
+		id,
+		destination,
+	))
+	common.FailIfErr(t, err)
+	common.ExpectError(t, verifyPtlcSignature(bip340Info, chainIdentifier, id, destination, wrongContractSignature.Serialize()), constants.ErrInvalidPointSignature)
+
+	wrongPointTypeSignature, err := schnorr.Sign(privateKey, definition.GetPtlcUnlockMessage(
+		chainIdentifier,
+		definition.PointTypeED25519,
+		id,
+		destination,
+	))
+	common.FailIfErr(t, err)
+	common.ExpectError(t, verifyPtlcSignature(bip340Info, chainIdentifier, id, destination, wrongPointTypeSignature.Serialize()), constants.ErrInvalidPointSignature)
+
+	wrongIdSignature, err := schnorr.Sign(privateKey, definition.GetPtlcUnlockMessage(
+		chainIdentifier,
+		definition.PointTypeBIP340,
+		otherId,
+		destination,
+	))
+	common.FailIfErr(t, err)
+	common.ExpectError(t, verifyPtlcSignature(bip340Info, chainIdentifier, id, destination, wrongIdSignature.Serialize()), constants.ErrInvalidPointSignature)
 }
 
 type validatePtlcSendBlockMethod interface {
@@ -266,75 +357,59 @@ func TestPtlc_BIP340OfficialVectors(t *testing.T) {
 	)
 
 	tests := []struct {
-		name          string
-		pubKey        string
-		message       string
-		signature     string
-		wantVerify    bool
-		wantPubKeyErr bool
+		name      string
+		pubKey    string
+		message   string
+		signature string
+		want      error
 	}{
 		{
-			name:       "vector 0 valid",
-			pubKey:     pubKey0,
-			message:    message0,
-			signature:  "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C0",
-			wantVerify: true,
+			name:      "vector 0 valid",
+			pubKey:    pubKey0,
+			message:   message0,
+			signature: "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C0",
+			want:      nil,
 		},
 		{
-			name:       "vector 3 all-ff message valid",
-			pubKey:     "25D1DFF95105F5253C4022F628A996AD3A0D95FBF21D468A1B33F8C160D8F517",
-			message:    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
-			signature:  "7EB0509757E246F19449885651611CB965ECC1A187DD51B64FDA1EDC9637D5EC97582B9CB13DB3933705B32BA982AF5AF25FD78881EBB32771FC5922EFC66EA3",
-			wantVerify: true,
+			name:      "vector 3 all-ff message valid",
+			pubKey:    "25D1DFF95105F5253C4022F628A996AD3A0D95FBF21D468A1B33F8C160D8F517",
+			message:   "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+			signature: "7EB0509757E246F19449885651611CB965ECC1A187DD51B64FDA1EDC9637D5EC97582B9CB13DB3933705B32BA982AF5AF25FD78881EBB32771FC5922EFC66EA3",
+			want:      nil,
 		},
 		{
-			name:       "vector 7 invalid signature",
-			pubKey:     pubKey1,
-			message:    message1,
-			signature:  "1FA62E331EDBC21C394792D2AB1100A7B432B013DF3F6FF4F99FCB33E0E1515F28890B3EDB6E7189B630448B515CE4F8622A954CFE545735AAEA5134FCCDB2BD",
-			wantVerify: false,
+			name:      "vector 7 invalid signature",
+			pubKey:    pubKey1,
+			message:   message1,
+			signature: "1FA62E331EDBC21C394792D2AB1100A7B432B013DF3F6FF4F99FCB33E0E1515F28890B3EDB6E7189B630448B515CE4F8622A954CFE545735AAEA5134FCCDB2BD",
+			want:      constants.ErrInvalidPointSignature,
 		},
 		{
-			name:       "wrong message",
-			pubKey:     pubKey0,
-			message:    "0100000000000000000000000000000000000000000000000000000000000000",
-			signature:  "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C0",
-			wantVerify: false,
+			name:      "wrong message",
+			pubKey:    pubKey0,
+			message:   "0100000000000000000000000000000000000000000000000000000000000000",
+			signature: "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C0",
+			want:      constants.ErrInvalidPointSignature,
 		},
 		{
-			name:       "wrong x-only public key",
-			pubKey:     pubKey1,
-			message:    message0,
-			signature:  "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C0",
-			wantVerify: false,
+			name:      "wrong x-only public key",
+			pubKey:    pubKey1,
+			message:   message0,
+			signature: "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C0",
+			want:      constants.ErrInvalidPointSignature,
 		},
 		{
-			name:          "vector 14 invalid public key",
-			pubKey:        "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC30",
-			message:       message1,
-			signature:     "6CFF5C3BA86C69EA4B7376F31A9BCB4F74C1976089B2D9963DA2E5543E17776969E89B4C5564D00349106B8497785DD7D1D713A8AE82B32FA79D5F7FC407D39B",
-			wantVerify:    false,
-			wantPubKeyErr: true,
+			name:      "vector 14 invalid public key",
+			pubKey:    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC30",
+			message:   message1,
+			signature: "6CFF5C3BA86C69EA4B7376F31A9BCB4F74C1976089B2D9963DA2E5543E17776969E89B4C5564D00349106B8497785DD7D1D713A8AE82B32FA79D5F7FC407D39B",
+			want:      constants.ErrInvalidPointLock,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			pubKey, err := schnorr.ParsePubKey(mustDecodeHex(t, test.pubKey))
-			if test.wantPubKeyErr {
-				if err == nil {
-					t.Fatalf("expected public key parse error")
-				}
-				return
-			}
-			common.FailIfErr(t, err)
-
-			signature, err := schnorr.ParseSignature(mustDecodeHex(t, test.signature))
-			common.FailIfErr(t, err)
-
-			if got := signature.Verify(mustDecodeHex(t, test.message), pubKey); got != test.wantVerify {
-				t.Fatalf("unexpected verification result: got %v want %v", got, test.wantVerify)
-			}
+			common.ExpectError(t, verifyBIP340Signature(mustDecodeHex(t, test.message), mustDecodeHex(t, test.pubKey), mustDecodeHex(t, test.signature)), test.want)
 		})
 	}
 }

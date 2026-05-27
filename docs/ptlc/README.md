@@ -58,3 +58,4 @@ Operational rollout must activate sporks in chronological order. `PtlcSpork` ass
 
 - [Signing](SIGNING.md)
 - [Security](SECURITY.md)
+- [Release notes](RELEASE_NOTES.md)

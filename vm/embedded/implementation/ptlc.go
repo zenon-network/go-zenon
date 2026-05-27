@@ -20,6 +20,10 @@ var (
 	ptlcLog = common.EmbeddedLogger.New("contract", "ptlc")
 )
 
+// This embedded contract is a PTLC-compatible signature time-lock primitive.
+// It verifies ordinary ED25519 or BIP340 signatures over domain-separated
+// unlock messages; adaptor-signature scalar extraction and full cross-chain
+// swap protocol semantics must be specified by higher-level protocols.
 func isPositiveAmount(amount *big.Int) bool {
 	return amount != nil && amount.Sign() > 0
 }
@@ -30,6 +34,21 @@ func isZeroAmount(amount *big.Int) bool {
 
 func signatureHashForLog(signature []byte) string {
 	return base64.StdEncoding.EncodeToString(crypto.Hash(signature))
+}
+
+func verifyBIP340Signature(message, pointLock, signature []byte) error {
+	s, err := schnorr.ParseSignature(signature)
+	if err != nil {
+		return constants.ErrInvalidPointSignature
+	}
+	pk, err := schnorr.ParsePubKey(pointLock)
+	if err != nil {
+		return constants.ErrInvalidPointLock
+	}
+	if !s.Verify(message, pk) {
+		return constants.ErrInvalidPointSignature
+	}
+	return nil
 }
 
 func checkPtlc(param definition.CreatePtlcParam) error {
@@ -84,6 +103,8 @@ func verifyPtlcSignature(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, 
 	if ptlcInfo.PointType == definition.PointTypeED25519 {
 		valid, err := wallet.VerifySignature(ed25519.PublicKey(ptlcInfo.PointLock), unlockMessage, signature)
 		if err != nil {
+			// Stored-state validation already checks ED25519 point-lock length;
+			// keep this mapping as defense in depth for direct verifier callers.
 			return constants.ErrInvalidPointLock
 		}
 		if !valid {
@@ -93,18 +114,7 @@ func verifyPtlcSignature(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, 
 	}
 
 	if ptlcInfo.PointType == definition.PointTypeBIP340 {
-		s, err := schnorr.ParseSignature(signature)
-		if err != nil {
-			return constants.ErrInvalidPointSignature
-		}
-		pk, err := schnorr.ParsePubKey(ptlcInfo.PointLock)
-		if err != nil {
-			return constants.ErrInvalidPointLock
-		}
-		if !s.Verify(unlockMessage, pk) {
-			return constants.ErrInvalidPointSignature
-		}
-		return nil
+		return verifyBIP340Signature(unlockMessage, ptlcInfo.PointLock, signature)
 	}
 
 	return constants.ErrInvalidPointType

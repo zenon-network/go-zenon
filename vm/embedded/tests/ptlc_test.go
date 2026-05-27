@@ -67,6 +67,44 @@ func ptlcUnlockMessage(z mock.MockZenon, pointType uint8, id types.Hash, destina
 	return definition.GetPtlcUnlockMessage(z.Chain().ChainIdentifier(), pointType, id, destination)
 }
 
+func ptlcUnlockMessageForContract(z mock.MockZenon, contract types.Address, pointType uint8, id types.Hash, destination types.Address) []byte {
+	return crypto.Hash(common.JoinBytes(
+		[]byte(definition.PtlcUnlockMessageDomain),
+		common.Uint64ToBytes(z.Chain().ChainIdentifier()),
+		contract.Bytes(),
+		[]byte{pointType},
+		id.Bytes(),
+		destination.Bytes(),
+	))
+}
+
+func createBIP340Ptlc(t *testing.T, z mock.MockZenon, pointLock []byte, expirationTime int64) types.Hash {
+	t.Helper()
+
+	createBlock := z.InsertSendBlock(&nom.AccountBlock{
+		Address:   g.User1.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
+			expirationTime,
+			definition.PointTypeBIP340,
+			pointLock,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(10 * g.Zexp),
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+
+	return createBlock.Hash
+}
+
+func signBIP340Unlock(t *testing.T, z mock.MockZenon, privateKey *btcec.PrivateKey, id types.Hash, destination types.Address) []byte {
+	t.Helper()
+
+	signature, err := schnorr.Sign(privateKey, ptlcUnlockMessage(z, definition.PointTypeBIP340, id, destination))
+	common.FailIfErr(t, err)
+	return signature.Serialize()
+}
+
 func TestPtlc_spork_gating(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
@@ -418,6 +456,42 @@ func TestPtlc_wrongChainSignature(t *testing.T) {
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
 			ptlcId,
 			wrongChainSignature,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	}).Error(t, constants.ErrInvalidPointSignature)
+	z.InsertNewMomentum()
+
+	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 10*g.Zexp)
+}
+
+func TestPtlc_wrongContractSignature(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	activatePtlc(t, z)
+
+	createBlock := z.InsertSendBlock(&nom.AccountBlock{
+		Address:   g.User1.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
+			int64(genesisTimestamp+300),
+			definition.PointTypeED25519,
+			g.User2.Public,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(10 * g.Zexp),
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+
+	ptlcId := createBlock.Hash
+	wrongContractMessage := ptlcUnlockMessageForContract(z, types.HtlcContract, definition.PointTypeED25519, ptlcId, g.User2.Address)
+	wrongContractSignature := g.User2.Sign(wrongContractMessage)
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.User2.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
+			ptlcId,
+			wrongContractSignature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
@@ -1063,6 +1137,20 @@ func TestPtlc_unlockBIP340(t *testing.T) {
 	}).Error(t, constants.ErrInvalidPointSignature)
 	z.InsertNewMomentum()
 
+	oldMessage := crypto.Hash(common.JoinBytes(ptlcId.Bytes(), g.User2.Address.Bytes()))
+	oldSignature, _ := schnorr.Sign(prv2, oldMessage)
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.User2.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
+			ptlcId,
+			oldSignature.Serialize(),
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0 * g.Zexp),
+	}).Error(t, constants.ErrInvalidPointSignature)
+	z.InsertNewMomentum()
+
 	// user2 unlocks with correct signature
 	signature, _ := schnorr.Sign(prv2, mh)
 	sig := signature.Serialize()
@@ -1183,4 +1271,107 @@ func TestPtlc_proxyUnlockBIP340(t *testing.T) {
 
 	z.ExpectBalance(g.User2.Address, types.ZnnTokenStandard, (8000+10)*g.Zexp)
 	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 0)
+}
+
+func TestPtlc_proxyUnlockBIP340_lifecycle(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	activatePtlc(t, z)
+
+	prv2, pub2 := btcec.PrivKeyFromBytes(g.Secp2PrvKey)
+	pub2bip340 := schnorr.SerializePubKey(pub2)
+
+	expiredId := createBIP340Ptlc(t, z, pub2bip340, int64(genesisTimestamp+300))
+	z.InsertMomentumsTo(30)
+	expiredSignature := signBIP340Unlock(t, z, prv2, expiredId, g.User2.Address)
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.User3.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName,
+			expiredId,
+			g.User2.Address,
+			expiredSignature,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	}).Error(t, constants.ErrExpired)
+	z.InsertNewMomentum()
+
+	reclaimedId := createBIP340Ptlc(t, z, pub2bip340, int64(genesisTimestamp+330))
+	reclaimedSignature := signBIP340Unlock(t, z, prv2, reclaimedId, g.User2.Address)
+	z.InsertMomentumsTo(33)
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.User1.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
+			reclaimedId,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	}).Error(t, nil)
+	z.InsertNewMomentum()
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.User3.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName,
+			reclaimedId,
+			g.User2.Address,
+			reclaimedSignature,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	}).Error(t, constants.ErrDataNonExistent)
+	z.InsertNewMomentum()
+
+	proxyFirstId := createBIP340Ptlc(t, z, pub2bip340, int64(genesisTimestamp+1000))
+	proxyFirstSignature := signBIP340Unlock(t, z, prv2, proxyFirstId, g.User2.Address)
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.User3.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName,
+			proxyFirstId,
+			g.User2.Address,
+			proxyFirstSignature,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	}).Error(t, nil)
+	z.InsertNewMomentum()
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.User2.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
+			proxyFirstId,
+			proxyFirstSignature,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	}).Error(t, constants.ErrDataNonExistent)
+	z.InsertNewMomentum()
+
+	directFirstId := createBIP340Ptlc(t, z, pub2bip340, int64(genesisTimestamp+1000))
+	directFirstSignature := signBIP340Unlock(t, z, prv2, directFirstId, g.User2.Address)
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.User2.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
+			directFirstId,
+			directFirstSignature,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	}).Error(t, nil)
+	z.InsertNewMomentum()
+	defer z.CallContract(&nom.AccountBlock{
+		Address:   g.User3.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName,
+			directFirstId,
+			g.User2.Address,
+			directFirstSignature,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	}).Error(t, constants.ErrDataNonExistent)
+	z.InsertNewMomentum()
 }

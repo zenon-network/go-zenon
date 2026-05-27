@@ -28,6 +28,19 @@ Fields:
 
 The chain identifier is consensus state, not a wallet preference. A signature produced for another Zenon chain id is invalid on this chain.
 
+Wire encoding before hashing:
+
+| Offset | Size | Field | Encoding |
+| ---: | ---: | --- | --- |
+| 0 | 20 | domain | ASCII bytes for `zenon-ptlc-unlock:v1` |
+| 20 | 8 | chain identifier | unsigned 64-bit big-endian integer from `common.Uint64ToBytes` |
+| 28 | 20 | contract address | raw `types.PtlcContract.Bytes()` |
+| 48 | 1 | point type | single unsigned byte |
+| 49 | 32 | PTLC id | raw `types.Hash.Bytes()` of the create block hash |
+| 81 | 20 | destination | raw `types.Address.Bytes()` |
+
+The hash preimage is exactly 101 bytes. The unlock message is `crypto.Hash`, Zenon's SHA3-256 helper, over that preimage.
+
 ## ED25519 mode
 
 `PointTypeED25519` stores a 32-byte ED25519 public key and expects a 64-byte ED25519 signature over the unlock message.
