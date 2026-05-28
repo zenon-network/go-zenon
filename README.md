@@ -22,7 +22,7 @@ This branch includes a local PTLC development and test workflow:
 
 - A dockerized five-node devnet with three producing pillars, one dedicated RPC node, and one non-pillar observer/relay node.
 - Genesis activation for the bridge/liquidity and PTLC sporks on the local devnet.
-- Live PTLC RPC tests that run through the dedicated RPC node by default.
+- Live PTLC RPC tests that run through the dedicated RPC node by default, including a two-party ZNN/QSR swap choreography over predefined testnet terms.
 - Unit, adversarial, and live fuzz coverage for PTLC validation, signature-domain binding, replay competition, expiration, reclaim, and accounting behavior.
 
 Useful commands:

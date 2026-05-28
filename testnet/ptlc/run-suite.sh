@@ -59,6 +59,12 @@ fi
 			if (test == "TestPtlcBIP340ProxyDestinationBindingViaRPC") {
 				return "BIP340 proxy unlock rejects the wrong destination and accepts the bound destination";
 			}
+			if (test == "TestPtlcTwoPartySwapChoreographyViaRPC") {
+				return "Two-party BIP340 swap choreography with off-chain terms, reciprocal ZNN/QSR locks, observed unlock material, and settlement";
+			}
+			if (test == "TestPtlcTwoPartySwapAbortRefundViaRPC") {
+				return "Abort path where Alice funds first, Bob refuses to fund, and Alice reclaims after expiration";
+			}
 			if (test == "TestPtlcExpirationAndReclaimViaRPC") {
 				return "Expiration rejects early reclaim and expired unlock, then allows locker reclaim";
 			}

@@ -61,7 +61,8 @@ and configs are all committed under `docker/devnet/`.
 
 - `go-test.log` is the full verbose `go test` stream.
 - `summary.md` lists the RPC endpoint, suite status, each test case, and
-  the package result.
+  the package result. The suite includes a two-party ZNN/QSR swap
+  choreography and an abort/refund path over predefined devnet terms.
 
 `make ptlc-fuzz` writes the same style of tester-friendly artifacts
 under `test-results/ptlc-fuzz/<timestamp>/`:

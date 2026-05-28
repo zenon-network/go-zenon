@@ -3,6 +3,7 @@
 package ptlc_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/big"
@@ -42,6 +43,23 @@ const (
 	contractSuccess = uint64(1)
 	contractFail    = uint64(2)
 )
+
+type ptlcSwapLeg struct {
+	Name           string
+	Locker         types.Address
+	Destination    types.Address
+	TokenStandard  types.ZenonTokenStandard
+	Amount         *big.Int
+	ExpirationTime int64
+	PointType      uint8
+	PointLock      []byte
+}
+
+type ptlcSwapTerms struct {
+	TradeID    string
+	AliceToBob ptlcSwapLeg
+	BobToAlice ptlcSwapLeg
+}
 
 type harness struct {
 	t      *testing.T
@@ -409,6 +427,111 @@ func oneZNN(multiplier int64) *big.Int {
 	return big.NewInt(multiplier * zexp)
 }
 
+func oneQSR(multiplier int64) *big.Int {
+	return big.NewInt(multiplier * zexp)
+}
+
+func (h *harness) createPtlc(locker *wallet.KeyPair, leg ptlcSwapLeg) types.Hash {
+	h.t.Helper()
+
+	createData := definition.ABIPtlc.PackMethodPanic(
+		definition.CreatePtlcMethodName,
+		leg.ExpirationTime,
+		leg.PointType,
+		leg.PointLock,
+	)
+	ptlcID := h.mustPublishSend(locker, types.PtlcContract, leg.Amount, leg.TokenStandard, createData)
+	if status := h.waitContractStatus(ptlcID); status != contractSuccess {
+		h.t.Fatalf("%s create status = %d, want success", leg.Name, status)
+	}
+	return ptlcID
+}
+
+func (h *harness) assertPtlcMatches(id types.Hash, leg ptlcSwapLeg) {
+	h.t.Helper()
+
+	info := h.waitPtlc(id)
+	if info.TimeLocked != leg.Locker {
+		h.t.Fatalf("%s locker = %s, want %s", leg.Name, info.TimeLocked, leg.Locker)
+	}
+	if info.TokenStandard != leg.TokenStandard {
+		h.t.Fatalf("%s token = %s, want %s", leg.Name, info.TokenStandard, leg.TokenStandard)
+	}
+	if info.Amount.Cmp(leg.Amount) != 0 {
+		h.t.Fatalf("%s amount = %s, want %s", leg.Name, info.Amount, leg.Amount)
+	}
+	if info.ExpirationTime != leg.ExpirationTime {
+		h.t.Fatalf("%s expiration = %d, want %d", leg.Name, info.ExpirationTime, leg.ExpirationTime)
+	}
+	if info.PointType != leg.PointType {
+		h.t.Fatalf("%s point type = %d, want %d", leg.Name, info.PointType, leg.PointType)
+	}
+	if !bytes.Equal(info.PointLock, leg.PointLock) {
+		h.t.Fatalf("%s point lock mismatch", leg.Name)
+	}
+}
+
+func (h *harness) chainIdentifier() uint64 {
+	h.t.Helper()
+
+	momentum, err := h.frontierMomentum()
+	if err != nil {
+		h.t.Fatalf("frontier momentum: %v", err)
+	}
+	return momentum.ChainIdentifier
+}
+
+func (h *harness) signBIP340Unlock(privateKey *btcec.PrivateKey, id types.Hash, destination types.Address) []byte {
+	h.t.Helper()
+
+	message := definition.GetPtlcUnlockMessage(h.chainIdentifier(), definition.PointTypeBIP340, id, destination)
+	signature, err := schnorr.Sign(privateKey, message)
+	if err != nil {
+		h.t.Fatalf("sign BIP340 unlock: %v", err)
+	}
+	return signature.Serialize()
+}
+
+func (h *harness) unlockBIP340Direct(unlocker *wallet.KeyPair, privateKey *btcec.PrivateKey, id types.Hash) types.Hash {
+	h.t.Helper()
+
+	signature := h.signBIP340Unlock(privateKey, id, unlocker.Address)
+	unlockData := definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName, id, signature)
+	unlockHash := h.mustPublishSend(unlocker, types.PtlcContract, big.NewInt(0), types.ZeroTokenStandard, unlockData)
+	if status := h.waitContractStatus(unlockHash); status != contractSuccess {
+		h.t.Fatalf("unlock status = %d, want success", status)
+	}
+	h.waitPtlcDeleted(id)
+	return unlockHash
+}
+
+func unpackUnlockSignature(t *testing.T, data []byte) []byte {
+	t.Helper()
+
+	param := new(definition.UnlockPtlcParam)
+	if err := definition.ABIPtlc.UnpackMethod(param, definition.UnlockPtlcMethodName, data); err != nil {
+		t.Fatalf("unpack unlock data: %v", err)
+	}
+	return append([]byte(nil), param.Signature...)
+}
+
+func verifyObservedBIP340Unlock(t *testing.T, pointLock []byte, chainIdentifier uint64, id types.Hash, destination types.Address, signatureBytes []byte) {
+	t.Helper()
+
+	publicKey, err := schnorr.ParsePubKey(pointLock)
+	if err != nil {
+		t.Fatalf("parse BIP340 point lock: %v", err)
+	}
+	signature, err := schnorr.ParseSignature(signatureBytes)
+	if err != nil {
+		t.Fatalf("parse BIP340 unlock signature: %v", err)
+	}
+	message := definition.GetPtlcUnlockMessage(chainIdentifier, definition.PointTypeBIP340, id, destination)
+	if !signature.Verify(message, publicKey) {
+		t.Fatalf("observed BIP340 unlock signature does not verify for id %s destination %s", id, destination)
+	}
+}
+
 func TestPtlcCreateValidationViaRPC(t *testing.T) {
 	h := newHarness(t)
 	locker := h.keys[1]
@@ -578,6 +701,138 @@ func TestPtlcBIP340ProxyDestinationBindingViaRPC(t *testing.T) {
 	finalRecipient := h.balance(recipient.Address, types.ZnnTokenStandard)
 	if finalRecipient.Cmp(new(big.Int).Add(initialRecipient, amount)) != 0 {
 		t.Fatalf("recipient balance = %s, want %s", finalRecipient, new(big.Int).Add(initialRecipient, amount))
+	}
+}
+
+func TestPtlcTwoPartySwapChoreographyViaRPC(t *testing.T) {
+	h := newHarness(t)
+	alice := h.keys[1]
+	bob := h.keys[3]
+	h.receiveAll(alice)
+	h.receiveAll(bob)
+
+	aliceSwapKey, aliceSwapPub := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{0x41}, 32))
+	bobSwapKey, bobSwapPub := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{0x42}, 32))
+	now := h.currentTimestamp()
+	terms := ptlcSwapTerms{
+		TradeID: "devnet-znn-qsr-bip340-swap",
+		AliceToBob: ptlcSwapLeg{
+			Name:           "alice-locks-znn-for-bob",
+			Locker:         alice.Address,
+			Destination:    bob.Address,
+			TokenStandard:  types.ZnnTokenStandard,
+			Amount:         oneZNN(4),
+			ExpirationTime: now + 900,
+			PointType:      definition.PointTypeBIP340,
+			PointLock:      schnorr.SerializePubKey(bobSwapPub),
+		},
+		BobToAlice: ptlcSwapLeg{
+			Name:           "bob-locks-qsr-for-alice",
+			Locker:         bob.Address,
+			Destination:    alice.Address,
+			TokenStandard:  types.QsrTokenStandard,
+			Amount:         oneQSR(250),
+			ExpirationTime: now + 600,
+			PointType:      definition.PointTypeBIP340,
+			PointLock:      schnorr.SerializePubKey(aliceSwapPub),
+		},
+	}
+
+	if terms.AliceToBob.ExpirationTime <= terms.BobToAlice.ExpirationTime {
+		t.Fatalf("expected Alice's funding leg to have the longer refund window")
+	}
+
+	initialAliceZNN := h.balance(alice.Address, types.ZnnTokenStandard)
+	initialAliceQSR := h.balance(alice.Address, types.QsrTokenStandard)
+	initialBobZNN := h.balance(bob.Address, types.ZnnTokenStandard)
+	initialBobQSR := h.balance(bob.Address, types.QsrTokenStandard)
+	initialContractZNN := h.balance(types.PtlcContract, types.ZnnTokenStandard)
+	initialContractQSR := h.balance(types.PtlcContract, types.QsrTokenStandard)
+
+	t.Logf("%s: Alice and Bob exchange point locks, destinations, amounts, and expirations off-chain", terms.TradeID)
+	aliceToBobID := h.createPtlc(alice, terms.AliceToBob)
+	h.assertPtlcMatches(aliceToBobID, terms.AliceToBob)
+
+	t.Log("Bob verifies Alice's on-chain ZNN PTLC matches the negotiated terms before funding his side")
+	bobToAliceID := h.createPtlc(bob, terms.BobToAlice)
+	h.assertPtlcMatches(bobToAliceID, terms.BobToAlice)
+
+	t.Log("Alice verifies Bob's QSR PTLC, then claims it with her BIP340 unlock signature")
+	aliceUnlockHash := h.unlockBIP340Direct(alice, aliceSwapKey, bobToAliceID)
+	aliceUnlockBlock := h.waitBlock(aliceUnlockHash)
+	observedAliceSignature := unpackUnlockSignature(t, aliceUnlockBlock.Data)
+	verifyObservedBIP340Unlock(t, terms.BobToAlice.PointLock, h.chainIdentifier(), bobToAliceID, alice.Address, observedAliceSignature)
+
+	t.Log("Bob observes Alice's unlock material on-chain, then claims Alice's ZNN PTLC")
+	h.unlockBIP340Direct(bob, bobSwapKey, aliceToBobID)
+
+	h.receiveAll(alice)
+	h.receiveAll(bob)
+
+	if got, want := h.balance(alice.Address, types.ZnnTokenStandard), new(big.Int).Sub(initialAliceZNN, terms.AliceToBob.Amount); got.Cmp(want) != 0 {
+		t.Fatalf("Alice ZNN balance = %s, want %s", got, want)
+	}
+	if got, want := h.balance(alice.Address, types.QsrTokenStandard), new(big.Int).Add(initialAliceQSR, terms.BobToAlice.Amount); got.Cmp(want) != 0 {
+		t.Fatalf("Alice QSR balance = %s, want %s", got, want)
+	}
+	if got, want := h.balance(bob.Address, types.ZnnTokenStandard), new(big.Int).Add(initialBobZNN, terms.AliceToBob.Amount); got.Cmp(want) != 0 {
+		t.Fatalf("Bob ZNN balance = %s, want %s", got, want)
+	}
+	if got, want := h.balance(bob.Address, types.QsrTokenStandard), new(big.Int).Sub(initialBobQSR, terms.BobToAlice.Amount); got.Cmp(want) != 0 {
+		t.Fatalf("Bob QSR balance = %s, want %s", got, want)
+	}
+	if got := h.balance(types.PtlcContract, types.ZnnTokenStandard); got.Cmp(initialContractZNN) != 0 {
+		t.Fatalf("PTLC contract ZNN balance = %s, want %s", got, initialContractZNN)
+	}
+	if got := h.balance(types.PtlcContract, types.QsrTokenStandard); got.Cmp(initialContractQSR) != 0 {
+		t.Fatalf("PTLC contract QSR balance = %s, want %s", got, initialContractQSR)
+	}
+}
+
+func TestPtlcTwoPartySwapAbortRefundViaRPC(t *testing.T) {
+	h := newHarness(t)
+	alice := h.keys[1]
+	bob := h.keys[3]
+	h.receiveAll(alice)
+	h.receiveAll(bob)
+
+	_, bobSwapPub := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{0x52}, 32))
+	abortLeg := ptlcSwapLeg{
+		Name:           "alice-locks-znn-before-bob-refuses",
+		Locker:         alice.Address,
+		Destination:    bob.Address,
+		TokenStandard:  types.ZnnTokenStandard,
+		Amount:         oneZNN(1),
+		ExpirationTime: h.currentTimestamp() + expirationLeadSeconds,
+		PointType:      definition.PointTypeBIP340,
+		PointLock:      schnorr.SerializePubKey(bobSwapPub),
+	}
+
+	initialAliceZNN := h.balance(alice.Address, types.ZnnTokenStandard)
+	initialBobZNN := h.balance(bob.Address, types.ZnnTokenStandard)
+	initialContractZNN := h.balance(types.PtlcContract, types.ZnnTokenStandard)
+
+	t.Log("Alice funds the first leg, but Bob never funds the reciprocal leg")
+	ptlcID := h.createPtlc(alice, abortLeg)
+	h.assertPtlcMatches(ptlcID, abortLeg)
+
+	h.waitTimestampAtLeast(abortLeg.ExpirationTime)
+	reclaim := definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName, ptlcID)
+	reclaimHash := h.mustPublishSend(alice, types.PtlcContract, big.NewInt(0), types.ZeroTokenStandard, reclaim)
+	if status := h.waitContractStatus(reclaimHash); status != contractSuccess {
+		t.Fatalf("abort reclaim status = %d, want success", status)
+	}
+	h.waitPtlcDeleted(ptlcID)
+	h.receiveAll(alice)
+
+	if got := h.balance(alice.Address, types.ZnnTokenStandard); got.Cmp(initialAliceZNN) != 0 {
+		t.Fatalf("Alice ZNN balance after abort refund = %s, want %s", got, initialAliceZNN)
+	}
+	if got := h.balance(bob.Address, types.ZnnTokenStandard); got.Cmp(initialBobZNN) != 0 {
+		t.Fatalf("Bob ZNN balance after abort refund = %s, want %s", got, initialBobZNN)
+	}
+	if got := h.balance(types.PtlcContract, types.ZnnTokenStandard); got.Cmp(initialContractZNN) != 0 {
+		t.Fatalf("PTLC contract ZNN balance after abort refund = %s, want %s", got, initialContractZNN)
 	}
 }
 

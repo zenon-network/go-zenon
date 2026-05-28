@@ -66,6 +66,8 @@ make testnet-ptlc
 
 This resets the dockerized local devnet, waits for the dedicated RPC node, runs `./testnet/ptlc`, writes a human-readable report to `test-results/ptlc/<timestamp>/summary.md`, and then tears the devnet down. The default endpoint is the dedicated RPC node at `http://localhost:35997`.
 
+The live suite includes a two-party swap choreography simulation. Alice and Bob exchange predefined off-chain terms, Alice locks ZNN for Bob, Bob verifies that lock before locking QSR for Alice, Alice unlocks Bob's leg, Bob observes the unlock material, and Bob unlocks Alice's leg. A companion abort test covers the case where Alice funds first, Bob refuses to fund, and Alice reclaims after expiration. These tests model protocol choreography over the embedded signature-lock primitive; they do not turn the embedded contract into a complete adaptor-secret enforcement layer.
+
 Fuzz and adversarial suite:
 
 ```sh
