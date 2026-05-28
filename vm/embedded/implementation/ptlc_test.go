@@ -503,3 +503,227 @@ func TestPtlc_UnlockRejectsCorruptStoredPointType(t *testing.T) {
 		t.Fatalf("expected no generated blocks, got %d", len(blocks))
 	}
 }
+
+func TestPtlc_CreateExpirationBoundary(t *testing.T) {
+	method := &CreatePtlcMethod{definition.CreatePtlcMethodName}
+	tests := []struct {
+		name       string
+		now        int64
+		expiration int64
+		want       error
+	}{
+		{name: "before expiration", now: 100, expiration: 101, want: nil},
+		{name: "at expiration", now: 100, expiration: 100, want: constants.ErrInvalidExpirationTime},
+		{name: "after expiration", now: 100, expiration: 99, want: constants.ErrInvalidExpirationTime},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := newTestPtlcContext(100, test.now)
+			sendBlock := &nom.AccountBlock{
+				Address:       User1.Address,
+				Hash:          types.NewHash([]byte(test.name)),
+				TokenStandard: types.ZnnTokenStandard,
+				Amount:        big.NewInt(1),
+				Data: definition.ABIPtlc.PackMethodPanic(
+					definition.CreatePtlcMethodName,
+					test.expiration,
+					definition.PointTypeED25519,
+					User1.Public,
+				),
+			}
+
+			blocks, err := method.ReceiveBlock(ctx, sendBlock)
+			common.ExpectError(t, err, test.want)
+			if blocks != nil {
+				t.Fatalf("create should not emit contract sends, got %d", len(blocks))
+			}
+			if test.want == nil {
+				info, err := definition.GetPtlcInfo(ctx.Storage(), sendBlock.Hash)
+				common.ExpectError(t, err, nil)
+				if info == nil || info.ExpirationTime != test.expiration {
+					t.Fatalf("unexpected stored PTLC info: %+v", info)
+				}
+			}
+		})
+	}
+}
+
+func FuzzPtlcValidateSendBlockNoPanic(f *testing.F) {
+	validID := types.NewHash([]byte("fuzz-id"))
+	f.Add(uint8(0), definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName, defaultPtlc.ExpirationTime, defaultPtlc.PointType, defaultPtlc.PointLock), int64(2))
+	f.Add(uint8(1), definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName, validID), int64(1))
+	f.Add(uint8(2), definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName, validID, bytes.Repeat([]byte{1}, 64)), int64(1))
+	f.Add(uint8(3), definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName, validID, User1.Address, bytes.Repeat([]byte{1}, 64)), int64(1))
+	f.Add(uint8(0), []byte{}, int64(0))
+	f.Add(uint8(2), []byte{0xff, 0x00, 0x01}, int64(-1))
+
+	methods := []validatePtlcSendBlockMethod{
+		&CreatePtlcMethod{definition.CreatePtlcMethodName},
+		&ReclaimPtlcMethod{definition.ReclaimPtlcMethodName},
+		&UnlockPtlcMethod{definition.UnlockPtlcMethodName},
+		&ProxyUnlockPtlcMethod{definition.ProxyUnlockPtlcMethodName},
+	}
+
+	f.Fuzz(func(t *testing.T, methodIndex uint8, data []byte, amountKind int64) {
+		method := methods[int(methodIndex)%len(methods)]
+		_ = method.ValidateSendBlock(&nom.AccountBlock{
+			Data:          append([]byte(nil), data...),
+			Amount:        fuzzAmount(amountKind),
+			TokenStandard: types.ZnnTokenStandard,
+		})
+	})
+}
+
+func FuzzPtlcStoredInfoValidation(f *testing.F) {
+	f.Add(int64(1), int64(100), definition.PointTypeED25519, []byte(User1.Public))
+	f.Add(int64(1), int64(100), definition.PointTypeBIP340, bytes.Repeat([]byte{2}, 32))
+	f.Add(int64(0), int64(100), definition.PointTypeED25519, []byte(User1.Public))
+	f.Add(int64(1), int64(0), definition.PointTypeED25519, []byte(User1.Public))
+	f.Add(int64(1), int64(100), uint8(99), []byte(User1.Public))
+	f.Add(int64(1), int64(100), definition.PointTypeED25519, []byte(User1.Public[:31]))
+
+	f.Fuzz(func(t *testing.T, amount int64, expiration int64, pointType uint8, pointLock []byte) {
+		info := &definition.PtlcInfo{
+			Id:             types.NewHash([]byte("stored-info-fuzz")),
+			TimeLocked:     User1.Address,
+			TokenStandard:  types.ZnnTokenStandard,
+			Amount:         big.NewInt(amount),
+			ExpirationTime: expiration,
+			PointType:      pointType,
+			PointLock:      append([]byte(nil), pointLock...),
+		}
+
+		err := checkStoredPtlcInfo(info)
+		if err == nil {
+			if amount <= 0 {
+				t.Fatalf("accepted non-positive amount %d", amount)
+			}
+			if expiration <= 0 {
+				t.Fatalf("accepted non-positive expiration %d", expiration)
+			}
+			size, ok := definition.PointTypePubKeySizes[pointType]
+			if !ok {
+				t.Fatalf("accepted invalid point type %d", pointType)
+			}
+			if len(pointLock) != int(size) {
+				t.Fatalf("accepted point lock length %d for point type %d", len(pointLock), pointType)
+			}
+		}
+	})
+}
+
+func FuzzPtlcED25519DomainMutationRejected(f *testing.F) {
+	chainIdentifier := uint64(100)
+	id := types.NewHash([]byte("ed25519-domain-fuzz"))
+	destination := User1.Address
+	validSignature := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, definition.PointTypeED25519, id, destination))
+
+	f.Add(chainIdentifier, id.Bytes(), destination.Bytes(), validSignature)
+	f.Add(chainIdentifier+1, id.Bytes(), destination.Bytes(), validSignature)
+	f.Add(chainIdentifier, types.NewHash([]byte("other-id")).Bytes(), destination.Bytes(), validSignature)
+	f.Add(chainIdentifier, id.Bytes(), types.PubKeyToAddress([]byte("other-destination")).Bytes(), validSignature)
+	f.Add(chainIdentifier, id.Bytes(), destination.Bytes(), validSignature[:63])
+
+	f.Fuzz(func(t *testing.T, chainIdentifier uint64, idBytes []byte, destinationBytes []byte, signature []byte) {
+		id := fuzzHash(idBytes)
+		destination := fuzzAddress(destinationBytes)
+		info := &definition.PtlcInfo{
+			Id:             id,
+			TimeLocked:     User1.Address,
+			TokenStandard:  types.ZnnTokenStandard,
+			Amount:         big.NewInt(1),
+			ExpirationTime: 1000000000,
+			PointType:      definition.PointTypeED25519,
+			PointLock:      User1.Public,
+		}
+
+		err := verifyPtlcSignature(info, chainIdentifier, id, destination, signature)
+		expectedSignature := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, definition.PointTypeED25519, id, destination))
+		if err == nil && !bytes.Equal(signature, expectedSignature) {
+			t.Fatalf("accepted unexpected ED25519 signature for chain=%d id=%s destination=%s", chainIdentifier, id, destination)
+		}
+	})
+}
+
+func FuzzPtlcBIP340DomainMutationRejected(f *testing.F) {
+	privateKeyBytes := bytes.Repeat([]byte{7}, 32)
+	privateKey, publicKey := btcec.PrivKeyFromBytes(privateKeyBytes)
+	chainIdentifier := uint64(100)
+	id := types.NewHash([]byte("bip340-domain-fuzz"))
+	destination := User1.Address
+	validSignature, err := schnorr.Sign(privateKey, definition.GetPtlcUnlockMessage(chainIdentifier, definition.PointTypeBIP340, id, destination))
+	if err != nil {
+		f.Fatalf("sign BIP340 seed: %v", err)
+	}
+
+	f.Add(chainIdentifier, id.Bytes(), destination.Bytes(), validSignature.Serialize())
+	f.Add(chainIdentifier+1, id.Bytes(), destination.Bytes(), validSignature.Serialize())
+	f.Add(chainIdentifier, types.NewHash([]byte("other-id")).Bytes(), destination.Bytes(), validSignature.Serialize())
+	f.Add(chainIdentifier, id.Bytes(), types.PubKeyToAddress([]byte("other-destination")).Bytes(), validSignature.Serialize())
+	f.Add(chainIdentifier, id.Bytes(), destination.Bytes(), validSignature.Serialize()[:63])
+
+	f.Fuzz(func(t *testing.T, chainIdentifier uint64, idBytes []byte, destinationBytes []byte, signature []byte) {
+		id := fuzzHash(idBytes)
+		destination := fuzzAddress(destinationBytes)
+		info := &definition.PtlcInfo{
+			Id:             id,
+			TimeLocked:     User1.Address,
+			TokenStandard:  types.ZnnTokenStandard,
+			Amount:         big.NewInt(1),
+			ExpirationTime: 1000000000,
+			PointType:      definition.PointTypeBIP340,
+			PointLock:      schnorr.SerializePubKey(publicKey),
+		}
+
+		err := verifyPtlcSignature(info, chainIdentifier, id, destination, signature)
+		expectedSignature, signErr := schnorr.Sign(privateKey, definition.GetPtlcUnlockMessage(chainIdentifier, definition.PointTypeBIP340, id, destination))
+		common.FailIfErr(t, signErr)
+		if err == nil && !bytes.Equal(signature, expectedSignature.Serialize()) {
+			t.Fatalf("accepted unexpected BIP340 signature for chain=%d id=%s destination=%s", chainIdentifier, id, destination)
+		}
+	})
+}
+
+func fuzzAmount(kind int64) *big.Int {
+	switch kind & 3 {
+	case 0:
+		return nil
+	case 1:
+		return big.NewInt(0)
+	case 2:
+		amount := big.NewInt(kind)
+		if amount.Sign() <= 0 {
+			amount.Neg(amount)
+			amount.Add(amount, big.NewInt(1))
+		}
+		return amount
+	default:
+		amount := big.NewInt(kind)
+		if amount.Sign() >= 0 {
+			amount.Neg(amount)
+			amount.Sub(amount, big.NewInt(1))
+		}
+		return amount
+	}
+}
+
+func fuzzHash(data []byte) types.Hash {
+	if len(data) == types.HashSize {
+		hash, err := types.BytesToHash(data)
+		if err == nil {
+			return hash
+		}
+	}
+	return types.NewHash(data)
+}
+
+func fuzzAddress(data []byte) types.Address {
+	if len(data) == types.AddressSize {
+		address, err := types.BytesToAddress(data)
+		if err == nil {
+			return address
+		}
+	}
+	return types.PubKeyToAddress(data)
+}

@@ -1,0 +1,15 @@
+{
+    "Path": "/root/.znn/wallet/z1qzedcjmds6cwuqu7wkrvl0dadwwauzaana6g8e",
+    "baseAddress": "z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq",
+    "crypto": {
+        "cipherName": "aes-256-gcm",
+        "kdf": "argon2.IDKey",
+        "cipherData": "0xa134b41603ad95094e298a1c57d477fe77c407c1be91e50488d65d3a17e1ae96a35a32f6fa7135318b5b718109863663",
+        "nonce": "0xb6e042251916ac57efacd429",
+        "argon2Params": {
+            "salt": "0x602d179f3d4f4daec4c478e982024c35"
+        }
+    },
+    "version": 1,
+    "timestamp": 1777716397
+}

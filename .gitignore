@@ -7,6 +7,11 @@
 .DS_Store
 
 build/
+/devnet-keygen
+.gocache/
+
+# Generated test logs/reports include absolute local paths; keep them untracked.
+test-results/
 
 # IDE
 .vscode

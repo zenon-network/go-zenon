@@ -97,6 +97,25 @@ func createBIP340Ptlc(t *testing.T, z mock.MockZenon, pointLock []byte, expirati
 	return createBlock.Hash
 }
 
+func createED25519Ptlc(t *testing.T, z mock.MockZenon, pointLock []byte, expirationTime int64, token types.ZenonTokenStandard, amount *big.Int) types.Hash {
+	t.Helper()
+
+	createBlock := z.InsertSendBlock(&nom.AccountBlock{
+		Address:   g.User1.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
+			expirationTime,
+			definition.PointTypeED25519,
+			pointLock,
+		),
+		TokenStandard: token,
+		Amount:        amount,
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+
+	return createBlock.Hash
+}
+
 func signBIP340Unlock(t *testing.T, z mock.MockZenon, privateKey *btcec.PrivateKey, id types.Hash, destination types.Address) []byte {
 	t.Helper()
 
@@ -1374,4 +1393,119 @@ func TestPtlc_proxyUnlockBIP340_lifecycle(t *testing.T) {
 		Amount:        big.NewInt(0),
 	}).Error(t, constants.ErrDataNonExistent)
 	z.InsertNewMomentum()
+}
+
+func TestPtlc_unlockQsrAccounting(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	activatePtlc(t, z)
+
+	ptlcId := createED25519Ptlc(t, z, g.User2.Public, int64(genesisTimestamp+300), types.QsrTokenStandard, big.NewInt(10*g.Zexp))
+
+	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 12000*g.Zexp)
+	z.ExpectBalance(g.User1.Address, types.QsrTokenStandard, 119990*g.Zexp)
+
+	z.ExpectBalance(g.User2.Address, types.ZnnTokenStandard, 8000*g.Zexp)
+	z.ExpectBalance(g.User2.Address, types.QsrTokenStandard, 80000*g.Zexp)
+
+	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 0)
+	z.ExpectBalance(types.PtlcContract, types.QsrTokenStandard, 10*g.Zexp)
+
+	signature := g.User2.Sign(ptlcUnlockMessage(z, definition.PointTypeED25519, ptlcId, g.User2.Address))
+	unlock := z.CallContract(&nom.AccountBlock{
+		Address:   g.User2.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
+			ptlcId,
+			signature,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	})
+	z.InsertNewMomentum()
+	unlock.Error(t, nil)
+	z.InsertNewMomentum()
+
+	autoreceive(t, z, g.User2.Address)
+	z.InsertNewMomentum()
+
+	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 12000*g.Zexp)
+	z.ExpectBalance(g.User1.Address, types.QsrTokenStandard, 119990*g.Zexp)
+
+	z.ExpectBalance(g.User2.Address, types.ZnnTokenStandard, 8000*g.Zexp)
+	z.ExpectBalance(g.User2.Address, types.QsrTokenStandard, 80010*g.Zexp)
+
+	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 0)
+	z.ExpectBalance(types.PtlcContract, types.QsrTokenStandard, 0)
+}
+
+func TestPtlc_ED25519UnlockReplayCompetition(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	activatePtlc(t, z)
+
+	proxyFirstId := createED25519Ptlc(t, z, g.User2.Public, int64(genesisTimestamp+1000), types.ZnnTokenStandard, big.NewInt(10*g.Zexp))
+	proxyFirstSignature := g.User2.Sign(ptlcUnlockMessage(z, definition.PointTypeED25519, proxyFirstId, g.User2.Address))
+	proxyUnlock := z.CallContract(&nom.AccountBlock{
+		Address:   g.User3.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName,
+			proxyFirstId,
+			g.User2.Address,
+			proxyFirstSignature,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	})
+	z.InsertNewMomentum()
+	proxyUnlock.Error(t, nil)
+
+	directReplay := z.CallContract(&nom.AccountBlock{
+		Address:   g.User2.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
+			proxyFirstId,
+			proxyFirstSignature,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	})
+	z.InsertNewMomentum()
+	directReplay.Error(t, constants.ErrDataNonExistent)
+
+	directFirstId := createED25519Ptlc(t, z, g.User2.Public, int64(genesisTimestamp+1000), types.ZnnTokenStandard, big.NewInt(10*g.Zexp))
+	directFirstSignature := g.User2.Sign(ptlcUnlockMessage(z, definition.PointTypeED25519, directFirstId, g.User2.Address))
+	directUnlock := z.CallContract(&nom.AccountBlock{
+		Address:   g.User2.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
+			directFirstId,
+			directFirstSignature,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	})
+	z.InsertNewMomentum()
+	directUnlock.Error(t, nil)
+
+	proxyReplay := z.CallContract(&nom.AccountBlock{
+		Address:   g.User3.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName,
+			directFirstId,
+			g.User2.Address,
+			directFirstSignature,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	})
+	z.InsertNewMomentum()
+	proxyReplay.Error(t, constants.ErrDataNonExistent)
+
+	autoreceive(t, z, g.User2.Address)
+	z.InsertNewMomentum()
+
+	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 11980*g.Zexp)
+	z.ExpectBalance(g.User2.Address, types.ZnnTokenStandard, 8020*g.Zexp)
+	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 0)
 }

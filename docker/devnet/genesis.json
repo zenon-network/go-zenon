@@ -1,0 +1,183 @@
+{
+    "ChainIdentifier": 69,
+    "ExtraData": "LOCAL DEV-NET",
+    "GenesisTimestampSec": 1739923200,
+    "SporkAddress": "z1qzmzssx28dc0fmvlca05hyxk2kgkgu7n0cj8pl",
+    "PillarConfig": {
+        "Pillars": [
+            {
+                "Name": "dev1",
+                "BlockProducingAddress": "z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq",
+                "RewardWithdrawAddress": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d",
+                "StakeAddress": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d",
+                "Amount": 1500000000000,
+                "RegistrationTime": 0,
+                "RevokeTime": 0,
+                "GiveBlockRewardPercentage": 0,
+                "GiveDelegateRewardPercentage": 100,
+                "PillarType": 1
+            },
+            {
+                "Name": "dev2",
+                "BlockProducingAddress": "z1qz9zr5c7a0p8qljvrwt2cy5j99w98c5myrn2un",
+                "RewardWithdrawAddress": "z1qqleq9qc2u3039fly4ld5qgngdeapa3yks0e3l",
+                "StakeAddress": "z1qqleq9qc2u3039fly4ld5qgngdeapa3yks0e3l",
+                "Amount": 1500000000000,
+                "RegistrationTime": 0,
+                "RevokeTime": 0,
+                "GiveBlockRewardPercentage": 0,
+                "GiveDelegateRewardPercentage": 100,
+                "PillarType": 1
+            },
+            {
+                "Name": "dev3",
+                "BlockProducingAddress": "z1qzedcjmds6cwuqu7wkrvl0dadwwauzaana6g8e",
+                "RewardWithdrawAddress": "z1qq8gll9ey70nym5cjxjqcegymw0g8a4je6kwes",
+                "StakeAddress": "z1qq8gll9ey70nym5cjxjqcegymw0g8a4je6kwes",
+                "Amount": 1500000000000,
+                "RegistrationTime": 0,
+                "RevokeTime": 0,
+                "GiveBlockRewardPercentage": 0,
+                "GiveDelegateRewardPercentage": 100,
+                "PillarType": 1
+            }
+        ],
+        "Delegations": [],
+        "LegacyEntries": []
+    },
+    "TokenConfig": {
+        "Tokens": [
+            {
+                "owner": "z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0",
+                "tokenName": "ZNN",
+                "tokenSymbol": "ZNN",
+                "tokenDomain": "zenon.devnet",
+                "totalSupply": 110500000000000,
+                "maxSupply": 9007199254740991,
+                "decimals": 8,
+                "isMintable": true,
+                "isBurnable": true,
+                "isUtility": true,
+                "tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx"
+            },
+            {
+                "owner": "z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0",
+                "tokenName": "QSR",
+                "tokenSymbol": "QSR",
+                "tokenDomain": "zenon.devnet",
+                "totalSupply": 1060000000000000,
+                "maxSupply": 9007199254740991,
+                "decimals": 8,
+                "isMintable": true,
+                "isBurnable": true,
+                "isUtility": true,
+                "tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll"
+            }
+        ]
+    },
+    "PlasmaConfig": {
+        "Fusions": [
+            {
+                "owner": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d",
+                "id": "85b559d52ef7e23b358cbceb12aeadcf5397bad860d8d50c4cd348246379e913",
+                "amount": 100000000000,
+                "withdrawHeight": 1,
+                "beneficiaryAddress": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d"
+            },
+            {
+                "owner": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d",
+                "id": "8d3a261582f0f7d01b0a7c6024da87e5637b5929cb71bc0f954cf14093e3059e",
+                "amount": 100000000000,
+                "withdrawHeight": 1,
+                "beneficiaryAddress": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d"
+            },
+            {
+                "owner": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d",
+                "id": "347ab55f43bf3e41cfedc07df54bdb30ead1704a1fbcef9e4205e8297e862126",
+                "amount": 100000000000,
+                "withdrawHeight": 1,
+                "beneficiaryAddress": "z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq"
+            },
+            {
+                "owner": "z1qp3yph55qgresyytz83anynr2f4z39x2z3ej3e",
+                "id": "2f7f6a9bbac9f2d9f5a0cb1240ffeed589b1c3d1d7362da319f45d7e97f00831",
+                "amount": 100000000000,
+                "withdrawHeight": 1,
+                "beneficiaryAddress": "z1qp3yph55qgresyytz83anynr2f4z39x2z3ej3e"
+            },
+            {
+                "owner": "z1qp3yph55qgresyytz83anynr2f4z39x2z3ej3e",
+                "id": "54fb6285882cf657d2a0436e2f13a631053f73ef24c7f9c5e4a4bb17ed2fdc8c",
+                "amount": 100000000000,
+                "withdrawHeight": 1,
+                "beneficiaryAddress": "z1qp3yph55qgresyytz83anynr2f4z39x2z3ej3e"
+            }
+        ]
+    },
+    "SwapConfig": {
+        "Entries": []
+    },
+    "SporkConfig": {
+        "Sporks": [
+            {
+                "id": "6d2b1e6cb4025f2f45533f0fe22e9b7ce2014d91cc960471045fa64eee5a6ba3",
+                "name": "az",
+                "description": "az",
+                "activated": true,
+                "enforcementHeight": 0
+            },
+            {
+                "id": "ceb7e3808ef17ea910adda2f3ab547be4cdfb54de8400ce3683258d06be1354b",
+                "name": "htlc",
+                "description": "htlc",
+                "activated": true,
+                "enforcementHeight": 0
+            },
+            {
+                "id": "ddd43466769461c5b5d109c639da0f50a7eeb96ad6e7274b1928a35c431d7b1b",
+                "name": "bridge-liq",
+                "description": "bridge-liq",
+                "activated": true,
+                "enforcementHeight": 0
+            },
+            {
+                "id": "e59f1e97f1096a18c2bc8421345b2633b11b839adb153e96dc65034c95f83f8d",
+                "name": "ptlc",
+                "description": "ptlc",
+                "activated": true,
+                "enforcementHeight": 0
+            }
+        ]
+    },
+    "GenesisBlocks": {
+        "Blocks": [
+            {
+                "Address": "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg",
+                "BalanceList": {
+                    "zts1znnxxxxxxxxxxxxx9z4ulx": 4500000000000
+                }
+            },
+            {
+                "Address": "z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22",
+                "BalanceList": {
+                    "zts1qsrxxxxxxxxxxxxxmrhjll": 1000000000000000,
+                    "zts1znnxxxxxxxxxxxxx9z4ulx": 100000000000000
+                }
+            },
+            {
+                "Address": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d",
+                "BalanceList": {
+                    "zts1qsrxxxxxxxxxxxxxmrhjll": 10000000000000,
+                    "zts1znnxxxxxxxxxxxxx9z4ulx": 1000000000000
+                }
+            },
+            {
+                "Address": "z1qp3yph55qgresyytz83anynr2f4z39x2z3ej3e",
+                "BalanceList": {
+                    "zts1qsrxxxxxxxxxxxxxmrhjll": 50000000000000,
+                    "zts1znnxxxxxxxxxxxxx9z4ulx": 5000000000000
+                }
+            }
+        ]
+    }
+}

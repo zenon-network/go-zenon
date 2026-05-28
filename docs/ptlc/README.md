@@ -54,6 +54,28 @@ The PTLC contract is available only after `types.PtlcSpork` is enforced. The PTL
 
 Operational rollout must activate sporks in chronological order. `PtlcSpork` assumes the prior HTLC and bridge/liquidity sporks have already been activated.
 
+## Testing
+
+The branch includes two PTLC-focused test workflows.
+
+Live RPC testnet suite:
+
+```sh
+make testnet-ptlc
+```
+
+This resets the dockerized local devnet, waits for the dedicated RPC node, runs `./testnet/ptlc`, writes a human-readable report to `test-results/ptlc/<timestamp>/summary.md`, and then tears the devnet down. The default endpoint is the dedicated RPC node at `http://localhost:35997`.
+
+Fuzz and adversarial suite:
+
+```sh
+make ptlc-fuzz
+```
+
+This runs the PTLC unit/adversarial tests and the live Go fuzz targets, then writes a report to `test-results/ptlc-fuzz/<timestamp>/summary.md`. The report lists each test, what it covers, each fuzz target, execution counts, interesting inputs, and raw log locations.
+
+The generated `test-results/` directory is intentionally ignored because logs and summaries include local absolute paths.
+
 ## Related docs
 
 - [Signing](SIGNING.md)
