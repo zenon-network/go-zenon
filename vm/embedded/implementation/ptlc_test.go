@@ -37,7 +37,9 @@ var (
 func TestPtlc_PointType(t *testing.T) {
 	ptlc := defaultPtlc
 	common.ExpectError(t, checkPtlc(ptlc), nil)
-	ptlc.PointType = 1
+	_, bip340PubKey := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{3}, 32))
+	ptlc.PointType = definition.PointTypeBIP340
+	ptlc.PointLock = schnorr.SerializePubKey(bip340PubKey)
 	common.ExpectError(t, checkPtlc(ptlc), nil)
 	ptlc.PointType = 2
 	common.ExpectError(t, checkPtlc(ptlc), constants.ErrInvalidPointType)
@@ -49,6 +51,28 @@ func TestPtlc_LockLength(t *testing.T) {
 	common.ExpectError(t, checkPtlc(ptlc), constants.ErrInvalidPointLock)
 	ptlc.PointType = 1
 	common.ExpectError(t, checkPtlc(ptlc), constants.ErrInvalidPointLock)
+}
+
+func TestPtlc_CreateRejectsInvalidBIP340Point(t *testing.T) {
+	invalidPoint := bytes.Repeat([]byte{0xff}, 32)
+	createData := definition.ABIPtlc.PackMethodPanic(
+		definition.CreatePtlcMethodName,
+		defaultPtlc.ExpirationTime,
+		definition.PointTypeBIP340,
+		invalidPoint,
+	)
+
+	common.ExpectError(t, checkPtlc(definition.CreatePtlcParam{
+		ExpirationTime: defaultPtlc.ExpirationTime,
+		PointType:      definition.PointTypeBIP340,
+		PointLock:      invalidPoint,
+	}), constants.ErrInvalidPointLock)
+
+	common.ExpectError(t, (&CreatePtlcMethod{definition.CreatePtlcMethodName}).ValidateSendBlock(&nom.AccountBlock{
+		Data:          createData,
+		Amount:        big.NewInt(1),
+		TokenStandard: types.ZnnTokenStandard,
+	}), constants.ErrInvalidPointLock)
 }
 
 func TestPtlc_StoredInfoValidation(t *testing.T) {
@@ -199,6 +223,54 @@ func TestPtlc_VerifySignatureRejectsWrongDomainFields(t *testing.T) {
 	))
 	common.FailIfErr(t, err)
 	common.ExpectError(t, verifyPtlcSignature(bip340Info, chainIdentifier, id, destination, wrongIdSignature.Serialize()), constants.ErrInvalidPointSignature)
+}
+
+func TestPtlc_WitnessIsDestinationBound(t *testing.T) {
+	chainIdentifier := uint64(100)
+	id := types.NewHash([]byte("ptlc-destination-bound"))
+	destinationA := User1.Address
+	destinationB := types.HtlcContract
+
+	info := &definition.PtlcInfo{
+		Id:             id,
+		TimeLocked:     User1.Address,
+		TokenStandard:  types.ZnnTokenStandard,
+		Amount:         big.NewInt(1),
+		ExpirationTime: 1000000000,
+		PointType:      definition.PointTypeED25519,
+		PointLock:      User1.Public,
+	}
+
+	signatureA := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, info.PointType, id, destinationA))
+	signatureB := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, info.PointType, id, destinationB))
+	if bytes.Equal(signatureA, signatureB) {
+		t.Fatalf("expected destination-bound witnesses to differ")
+	}
+
+	common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, id, destinationA, signatureA), nil)
+	common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, id, destinationB, signatureA), constants.ErrInvalidPointSignature)
+	common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, id, destinationB, signatureB), nil)
+}
+
+func TestPtlc_WitnessNotPortableAcrossEntries(t *testing.T) {
+	chainIdentifier := uint64(100)
+	idA := types.NewHash([]byte("ptlc-entry-a"))
+	idB := types.NewHash([]byte("ptlc-entry-b"))
+	destination := User1.Address
+
+	info := &definition.PtlcInfo{
+		Id:             idA,
+		TimeLocked:     User1.Address,
+		TokenStandard:  types.ZnnTokenStandard,
+		Amount:         big.NewInt(1),
+		ExpirationTime: 1000000000,
+		PointType:      definition.PointTypeED25519,
+		PointLock:      User1.Public,
+	}
+
+	signature := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, info.PointType, idA, destination))
+	common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, idA, destination, signature), nil)
+	common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, idB, destination, signature), constants.ErrInvalidPointSignature)
 }
 
 type validatePtlcSendBlockMethod interface {
@@ -504,6 +576,118 @@ func TestPtlc_UnlockRejectsCorruptStoredPointType(t *testing.T) {
 	}
 }
 
+func TestPtlc_ReclaimIndependentOfPointFields(t *testing.T) {
+	id := types.NewHash([]byte("reclaim-corrupt-point-fields"))
+	ctx := newTestPtlcContext(100, 200)
+
+	ptlcInfo := &definition.PtlcInfo{
+		Id:             id,
+		TimeLocked:     User1.Address,
+		TokenStandard:  types.ZnnTokenStandard,
+		Amount:         big.NewInt(1),
+		ExpirationTime: 100,
+		PointType:      99,
+		PointLock:      bytes.Repeat([]byte{0xff}, 17),
+	}
+	common.FailIfErr(t, ptlcInfo.Save(ctx.Storage()))
+
+	blocks, err := (&ReclaimPtlcMethod{definition.ReclaimPtlcMethodName}).ReceiveBlock(ctx, &nom.AccountBlock{
+		Address: User1.Address,
+		Data:    definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName, id),
+		Amount:  big.NewInt(0),
+	})
+	common.ExpectError(t, err, nil)
+	if len(blocks) != 1 {
+		t.Fatalf("expected one generated block, got %d", len(blocks))
+	}
+	if blocks[0].ToAddress != User1.Address {
+		t.Fatalf("reclaim destination = %s, want %s", blocks[0].ToAddress, User1.Address)
+	}
+	if blocks[0].Amount.Cmp(ptlcInfo.Amount) != 0 {
+		t.Fatalf("reclaim amount = %s, want %s", blocks[0].Amount, ptlcInfo.Amount)
+	}
+	_, err = definition.GetPtlcInfo(ctx.Storage(), id)
+	common.ExpectError(t, err, constants.ErrDataNonExistent)
+}
+
+func TestPtlc_DoubleUnlockDeletesBeforeSecondWithdrawal(t *testing.T) {
+	chainIdentifier := uint64(100)
+	id := types.NewHash([]byte("double-unlock"))
+	ctx := newTestPtlcContext(chainIdentifier, 100)
+
+	ptlcInfo := &definition.PtlcInfo{
+		Id:             id,
+		TimeLocked:     User1.Address,
+		TokenStandard:  types.ZnnTokenStandard,
+		Amount:         big.NewInt(1),
+		ExpirationTime: 200,
+		PointType:      definition.PointTypeED25519,
+		PointLock:      User1.Public,
+	}
+	common.FailIfErr(t, ptlcInfo.Save(ctx.Storage()))
+
+	signature := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, ptlcInfo.PointType, id, User1.Address))
+	blocks, err := unlockPtlc(ctx, &nom.AccountBlock{Address: User1.Address}, id, User1.Address, signature)
+	common.ExpectError(t, err, nil)
+	if len(blocks) != 1 {
+		t.Fatalf("expected one generated block, got %d", len(blocks))
+	}
+
+	blocks, err = unlockPtlc(ctx, &nom.AccountBlock{Address: User1.Address}, id, User1.Address, signature)
+	common.ExpectError(t, err, constants.ErrDataNonExistent)
+	if blocks != nil {
+		t.Fatalf("expected no generated blocks after second unlock, got %d", len(blocks))
+	}
+}
+
+func TestPtlc_UnlockThenReclaimRace(t *testing.T) {
+	chainIdentifier := uint64(100)
+
+	unlockedID := types.NewHash([]byte("unlock-before-reclaim"))
+	unlockedCtx := newTestPtlcContext(chainIdentifier, 100)
+	unlockedInfo := &definition.PtlcInfo{
+		Id:             unlockedID,
+		TimeLocked:     User1.Address,
+		TokenStandard:  types.ZnnTokenStandard,
+		Amount:         big.NewInt(1),
+		ExpirationTime: 200,
+		PointType:      definition.PointTypeED25519,
+		PointLock:      User1.Public,
+	}
+	common.FailIfErr(t, unlockedInfo.Save(unlockedCtx.Storage()))
+	unlockSignature := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, unlockedInfo.PointType, unlockedID, User1.Address))
+	_, err := unlockPtlc(unlockedCtx, &nom.AccountBlock{Address: User1.Address}, unlockedID, User1.Address, unlockSignature)
+	common.ExpectError(t, err, nil)
+	_, err = (&ReclaimPtlcMethod{definition.ReclaimPtlcMethodName}).ReceiveBlock(unlockedCtx, &nom.AccountBlock{
+		Address: User1.Address,
+		Data:    definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName, unlockedID),
+		Amount:  big.NewInt(0),
+	})
+	common.ExpectError(t, err, constants.ErrDataNonExistent)
+
+	reclaimedID := types.NewHash([]byte("reclaim-before-unlock"))
+	reclaimedCtx := newTestPtlcContext(chainIdentifier, 200)
+	reclaimedInfo := &definition.PtlcInfo{
+		Id:             reclaimedID,
+		TimeLocked:     User1.Address,
+		TokenStandard:  types.ZnnTokenStandard,
+		Amount:         big.NewInt(1),
+		ExpirationTime: 100,
+		PointType:      definition.PointTypeED25519,
+		PointLock:      User1.Public,
+	}
+	common.FailIfErr(t, reclaimedInfo.Save(reclaimedCtx.Storage()))
+	_, err = (&ReclaimPtlcMethod{definition.ReclaimPtlcMethodName}).ReceiveBlock(reclaimedCtx, &nom.AccountBlock{
+		Address: User1.Address,
+		Data:    definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName, reclaimedID),
+		Amount:  big.NewInt(0),
+	})
+	common.ExpectError(t, err, nil)
+	reclaimedSignature := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, reclaimedInfo.PointType, reclaimedID, User1.Address))
+	_, err = unlockPtlc(reclaimedCtx, &nom.AccountBlock{Address: User1.Address}, reclaimedID, User1.Address, reclaimedSignature)
+	common.ExpectError(t, err, constants.ErrDataNonExistent)
+}
+
 func TestPtlc_CreateExpirationBoundary(t *testing.T) {
 	method := &CreatePtlcMethod{definition.CreatePtlcMethodName}
 	tests := []struct {
@@ -547,6 +731,49 @@ func TestPtlc_CreateExpirationBoundary(t *testing.T) {
 			}
 		})
 	}
+}
+
+func expectDefinedPtlcError(t *testing.T, err error) {
+	t.Helper()
+
+	switch err {
+	case nil, constants.ErrInvalidPointType, constants.ErrInvalidPointLock, constants.ErrInvalidPointSignature:
+	default:
+		t.Fatalf("unexpected PTLC error: %v", err)
+	}
+}
+
+func FuzzPtlc_CheckAndVerify(f *testing.F) {
+	id := types.NewHash([]byte("fuzz-ptlc-check-verify"))
+	destination := User1.Address
+	chainIdentifier := uint64(100)
+	validSignature := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, definition.PointTypeED25519, id, destination))
+
+	f.Add(definition.PointTypeED25519, []byte(User1.Public), validSignature)
+	f.Add(definition.PointTypeED25519, []byte{}, []byte{})
+	f.Add(definition.PointTypeBIP340, bytes.Repeat([]byte{0xff}, 32), bytes.Repeat([]byte{0xff}, 64))
+	f.Add(uint8(99), bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{1}, 64))
+
+	f.Fuzz(func(t *testing.T, pointType uint8, pointLock []byte, signature []byte) {
+		err := checkPtlc(definition.CreatePtlcParam{
+			ExpirationTime: 1000000000,
+			PointType:      pointType,
+			PointLock:      pointLock,
+		})
+		expectDefinedPtlcError(t, err)
+
+		info := &definition.PtlcInfo{
+			Id:             id,
+			TimeLocked:     User1.Address,
+			TokenStandard:  types.ZnnTokenStandard,
+			Amount:         big.NewInt(1),
+			ExpirationTime: 1000000000,
+			PointType:      pointType,
+			PointLock:      pointLock,
+		}
+		err = verifyPtlcSignature(info, chainIdentifier, id, destination, signature)
+		expectDefinedPtlcError(t, err)
+	})
 }
 
 func FuzzPtlcValidateSendBlockNoPanic(f *testing.F) {

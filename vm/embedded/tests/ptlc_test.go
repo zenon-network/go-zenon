@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"bytes"
 	"math/big"
 	"testing"
 
@@ -1076,6 +1077,28 @@ t=2001-09-09T01:50:00+0000 lvl=dbug msg="invalid create - cannot create already 
 }
 
 // BIP340 Testing
+
+func TestPtlc_createRejectsInvalidBIP340Point(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	activatePtlc(t, z)
+
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:   g.User1.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
+			int64(genesisTimestamp+300),
+			definition.PointTypeBIP340,
+			bytes.Repeat([]byte{0xff}, 32),
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(10 * g.Zexp),
+	}, constants.ErrInvalidPointLock, mock.NoVmChanges)
+	z.InsertNewMomentum()
+
+	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 12000*g.Zexp)
+	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 0)
+}
 
 func TestPtlc_unlockBIP340(t *testing.T) {
 	z := mock.NewMockZenon(t)

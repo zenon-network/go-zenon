@@ -61,20 +61,18 @@ func checkPtlc(param definition.CreatePtlcParam) error {
 		return constants.ErrInvalidPointLock
 	}
 
+	if param.PointType == definition.PointTypeBIP340 {
+		if _, err := schnorr.ParsePubKey(param.PointLock); err != nil {
+			return constants.ErrInvalidPointLock
+		}
+	}
+
 	return nil
 }
 
-func checkStoredPtlcInfo(ptlcInfo *definition.PtlcInfo) error {
+func checkReclaimablePtlcInfo(ptlcInfo *definition.PtlcInfo) error {
 	if ptlcInfo == nil {
 		return constants.ErrDataNonExistent
-	}
-
-	if err := checkPtlc(definition.CreatePtlcParam{
-		ExpirationTime: ptlcInfo.ExpirationTime,
-		PointType:      ptlcInfo.PointType,
-		PointLock:      ptlcInfo.PointLock,
-	}); err != nil {
-		return err
 	}
 
 	if ptlcInfo.Amount == nil || ptlcInfo.Amount.Sign() <= 0 {
@@ -83,6 +81,22 @@ func checkStoredPtlcInfo(ptlcInfo *definition.PtlcInfo) error {
 
 	if ptlcInfo.ExpirationTime <= 0 {
 		return constants.ErrInvalidExpirationTime
+	}
+
+	return nil
+}
+
+func checkStoredPtlcInfo(ptlcInfo *definition.PtlcInfo) error {
+	if err := checkReclaimablePtlcInfo(ptlcInfo); err != nil {
+		return err
+	}
+
+	if err := checkPtlc(definition.CreatePtlcParam{
+		ExpirationTime: ptlcInfo.ExpirationTime,
+		PointType:      ptlcInfo.PointType,
+		PointLock:      ptlcInfo.PointLock,
+	}); err != nil {
+		return err
 	}
 
 	return nil
@@ -225,7 +239,7 @@ func (p *ReclaimPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	}
 	common.DealWithErr(err)
 
-	if err := checkStoredPtlcInfo(ptlcInfo); err != nil {
+	if err := checkReclaimablePtlcInfo(ptlcInfo); err != nil {
 		ptlcLog.Debug("invalid reclaim - corrupt entry", "id", ptlcInfo.Id, "address", sendBlock.Address, "reason", err)
 		return nil, err
 	}

@@ -53,6 +53,8 @@ Use this mode when the point lock is a Zenon wallet ED25519 public key. `Unlock`
 
 Malformed BIP340 signatures are rejected with `ErrInvalidPointSignature`. Malformed BIP340 public keys are rejected with `ErrInvalidPointLock`.
 
+`Create` validates that a BIP340 point lock is a parseable x-only public key before storing the PTLC. This avoids creating a BIP340 lock that can never be unlocked and can only be reclaimed after expiration.
+
 ## Proxy unlock
 
 For `ProxyUnlock`, the caller and destination can differ. The signature must still be valid for the destination argument:

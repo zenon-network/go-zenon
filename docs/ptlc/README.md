@@ -2,7 +2,7 @@
 
 The PTLC contract is a signature time-locked embedded contract. It stores locked funds, a point/signature type, and a point lock. Before expiration, a valid signature for the stored point lock can unlock funds to the signed destination. At or after expiration, the original locker can reclaim the funds.
 
-This implementation is best understood as a PTLC-compatible signature lock primitive. It verifies ordinary ED25519 or BIP340 signatures. It does not, by itself, specify a full cross-chain adaptor-signature protocol or prove that revealing a signature reveals an adaptor secret. Any higher-level PTLC or swap protocol must document that separately.
+This implementation is best understood as a PTLC-compatible signature lock primitive. It verifies ordinary ED25519 or BIP340 signatures. It does not, by itself, specify a full cross-chain adaptor-signature protocol, validate an HTLC-style plaintext preimage, or prove that revealing a signature reveals an adaptor secret. Any higher-level PTLC or swap protocol must document that separately.
 
 ## Contract
 
@@ -47,6 +47,8 @@ The contract does not add a consensus restriction on destination class beyond th
 ## HTLC comparison
 
 HTLC unlocks prove knowledge of a preimage for a stored hash digest. PTLC unlocks prove possession of a valid signature for a stored public key/point lock. In this implementation, the signature is an ordinary ED25519 or BIP340 signature over the PTLC unlock message; adaptor-signature scalar revelation is not enforced by the embedded contract.
+
+The PTLC unlock witness is bound to the chain id, PTLC contract address, point type, PTLC id, and destination. That protects against replay and proxy redirection, but it also means the witness is not a portable shared secret. Higher-level swap protocols must pin their own off-chain terms, including destinations and signing transcripts, before treating a funded leg as safely claimable.
 
 ## Spork
 

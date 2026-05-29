@@ -13,6 +13,10 @@ build/
 # Generated test logs/reports include absolute local paths; keep them untracked.
 test-results/
 
+# Local test/build artifacts may include absolute machine paths.
+.gocache/
+test-results/
+
 # IDE
 .vscode
 .idea/
