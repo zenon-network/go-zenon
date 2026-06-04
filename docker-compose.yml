@@ -10,6 +10,8 @@ services:
       ZNND_ROLE: pillar
     expose:
       - "35995"
+    ports:
+      - "35991:35997" # HTTP RPC write endpoint for local integration tests
     volumes:
       - pillar-data:/root/.znn
     networks:
@@ -54,6 +56,7 @@ services:
     restart: unless-stopped
     depends_on:
       - pillar
+      - observer
     environment:
       ZNND_ROLE: rpc
     ports:
@@ -64,6 +67,38 @@ services:
     networks:
       devnet:
         ipv4_address: 172.30.0.11
+
+  observer:
+    image: go-zenon-devnet:latest
+    container_name: znnd-devnet-observer
+    restart: unless-stopped
+    depends_on:
+      - pillar
+    environment:
+      ZNND_ROLE: observer
+    expose:
+      - "35995"
+    volumes:
+      - observer-data:/root/.znn
+    networks:
+      devnet:
+        ipv4_address: 172.30.0.14
+
+  explorer:
+    build:
+      context: .
+      dockerfile: docker/explorer/Dockerfile
+    image: go-zenon-devnet-explorer:latest
+    container_name: znnd-devnet-explorer
+    restart: unless-stopped
+    depends_on:
+      - rpc
+    environment:
+      EXPLORER_DEFAULT_ENDPOINT: ${EXPLORER_DEFAULT_ENDPOINT:-http://localhost:35997}
+    ports:
+      - "36000:80" # Zenon explorer
+    networks:
+      - devnet
 
 networks:
   devnet:
@@ -82,4 +117,6 @@ volumes:
   pillar3-data:
     driver: local
   rpc-data:
+    driver: local
+  observer-data:
     driver: local

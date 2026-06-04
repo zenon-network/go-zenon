@@ -6,10 +6,13 @@
     "Net": {
         "ListenHost": "0.0.0.0",
         "ListenPort": 35995,
-        "MinConnectedPeers": 1,
-        "MinPeers": 1,
+        "MinConnectedPeers": 2,
+        "MinPeers": 2,
         "Seeders": [
-            "enode://91125cf1d9986023f41a5ba5b7d171956834873fdf2b3c825208522a7a581d3f56aa9c24d2008d606ec703ab6e23234d506152f9c4094d6732718e408cf76442@172.30.0.10:35995"
+            "enode://91125cf1d9986023f41a5ba5b7d171956834873fdf2b3c825208522a7a581d3f56aa9c24d2008d606ec703ab6e23234d506152f9c4094d6732718e408cf76442@172.30.0.10:35995",
+            "enode://f2428f4541b2f26887e16eb3be5eeb8bfa7de10afa88faf0fa0f9c70ab1b0d55cf644def99baae4e41afedd63fbd0b832c65728c71ee3aad7d0bdba2d3ed680d@172.30.0.12:35995",
+            "enode://de61ad6bd5e852caa9a63ffcf320afae98fdd8b86612f0fb8b8eed6a5fe87526244f2dd087c29d3132755319120dd452fbfe51239b8d2e996ea7ca0285d23aa8@172.30.0.13:35995",
+            "enode://2ac132862baaa3db330bc21181069c496c7f52fa4d87d38ba6968236b04f1ef5c3a9249cc2834a1f5c470bf66addef8fde9e844563a3b6a9c4cacbee2902b063@172.30.0.14:35995"
         ]
     },
     "RPC": {

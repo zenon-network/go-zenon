@@ -2,22 +2,18 @@
     "DataPath": "/root/.znn",
     "GenesisFile": "/root/.znn/genesis.json",
     "LogLevel": "info",
-    "Name": "devnet-pillar3",
+    "Name": "devnet-observer",
     "Net": {
         "ListenHost": "0.0.0.0",
         "ListenPort": 35995,
-        "MinConnectedPeers": 1,
-        "MinPeers": 1,
+        "MinConnectedPeers": 2,
+        "MinPeers": 2,
         "Seeders": [
             "enode://91125cf1d9986023f41a5ba5b7d171956834873fdf2b3c825208522a7a581d3f56aa9c24d2008d606ec703ab6e23234d506152f9c4094d6732718e408cf76442@172.30.0.10:35995",
-            "enode://f2428f4541b2f26887e16eb3be5eeb8bfa7de10afa88faf0fa0f9c70ab1b0d55cf644def99baae4e41afedd63fbd0b832c65728c71ee3aad7d0bdba2d3ed680d@172.30.0.12:35995"
+            "enode://f2428f4541b2f26887e16eb3be5eeb8bfa7de10afa88faf0fa0f9c70ab1b0d55cf644def99baae4e41afedd63fbd0b832c65728c71ee3aad7d0bdba2d3ed680d@172.30.0.12:35995",
+            "enode://de61ad6bd5e852caa9a63ffcf320afae98fdd8b86612f0fb8b8eed6a5fe87526244f2dd087c29d3132755319120dd452fbfe51239b8d2e996ea7ca0285d23aa8@172.30.0.13:35995",
+            "enode://fa238035d186ce937cfca2585419d755b8136266adea99ad25efed764074e43bf5c62f1e9f859059bd96d4e762c1b96cd1934010af0d8ac59e8fb7a8284b2b58@172.30.0.11:35995"
         ]
-    },
-    "Producer": {
-        "Address": "z1qzedcjmds6cwuqu7wkrvl0dadwwauzaana6g8e",
-        "Index": 6,
-        "KeyFilePath": "z1qzedcjmds6cwuqu7wkrvl0dadwwauzaana6g8e",
-        "Password": "devnet"
     },
     "RPC": {
         "EnableHTTP": true,

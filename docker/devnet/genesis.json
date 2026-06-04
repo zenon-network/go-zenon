@@ -52,7 +52,7 @@
                 "tokenName": "ZNN",
                 "tokenSymbol": "ZNN",
                 "tokenDomain": "zenon.devnet",
-                "totalSupply": 110500000000000,
+                "totalSupply": 120500000000000,
                 "maxSupply": 9007199254740991,
                 "decimals": 8,
                 "isMintable": true,
@@ -65,7 +65,7 @@
                 "tokenName": "QSR",
                 "tokenSymbol": "QSR",
                 "tokenDomain": "zenon.devnet",
-                "totalSupply": 1060000000000000,
+                "totalSupply": 1160000000000000,
                 "maxSupply": 9007199254740991,
                 "decimals": 8,
                 "isMintable": true,
@@ -152,6 +152,20 @@
             },
             {
                 "Address": "z1qp3yph55qgresyytz83anynr2f4z39x2z3ej3e",
+                "BalanceList": {
+                    "zts1qsrxxxxxxxxxxxxxmrhjll": 50000000000000,
+                    "zts1znnxxxxxxxxxxxxx9z4ulx": 5000000000000
+                }
+            },
+            {
+                "Address": "z1qpeet8dcjg0m6x6m3tg437wnc42aa2nez2fzth",
+                "BalanceList": {
+                    "zts1qsrxxxxxxxxxxxxxmrhjll": 50000000000000,
+                    "zts1znnxxxxxxxxxxxxx9z4ulx": 5000000000000
+                }
+            },
+            {
+                "Address": "z1qqcam4ycu0ta8333hx38r5j2z3ry9jjfxkc7t5",
                 "BalanceList": {
                     "zts1qsrxxxxxxxxxxxxxmrhjll": 50000000000000,
                     "zts1znnxxxxxxxxxxxxx9z4ulx": 5000000000000

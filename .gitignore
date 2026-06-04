@@ -7,7 +7,8 @@
 .DS_Store
 
 build/
-devnet-keygen
+/devnet-keygen
+.gocache/
 
 # IDE
 .vscode

@@ -6,7 +6,7 @@ SRC="/devnet/${ROLE}"
 DATA_DIR="/root/.znn"
 
 if [ ! -d "$SRC" ]; then
-    echo "unknown ZNND_ROLE='$ROLE' (expected pillar|pillar2|pillar3|rpc)" >&2
+    echo "unknown ZNND_ROLE='$ROLE' (expected a directory under /devnet)" >&2
     exit 1
 fi
 

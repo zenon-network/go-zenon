@@ -1,0 +1,5 @@
+.git
+.gocache
+build
+devnet-keygen
+test-results
