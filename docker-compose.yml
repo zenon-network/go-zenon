@@ -84,6 +84,33 @@ services:
       devnet:
         ipv4_address: 172.30.0.14
 
+  # Cold late joiner used to watch a brand-new node catch up to the chain
+  # frontier. Excluded from `make devnet-up` by the "sync" profile and started
+  # on demand (`make devnet-sync-up`). It seeds from the bootstrap pillar only
+  # and discovers the rest of the network through the discovery DHT, exactly
+  # like a new node joining. No named volume: its chain state lives in the
+  # container's writable layer, so removing the container (`make
+  # devnet-sync-reset`) forces a clean re-sync from genesis, while a plain
+  # stop/start resumes where it left off.
+  syncnode:
+    image: go-zenon-devnet:latest
+    container_name: znnd-devnet-syncnode
+    profiles:
+      - sync
+    restart: "no"
+    depends_on:
+      - pillar
+    environment:
+      ZNND_ROLE: syncnode
+    expose:
+      - "35995"
+    ports:
+      - "35999:35997" # HTTP RPC — watch catch-up via stats.syncInfo
+      - "36001:35998" # WS RPC
+    networks:
+      devnet:
+        ipv4_address: 172.30.0.15
+
   explorer:
     build:
       context: .

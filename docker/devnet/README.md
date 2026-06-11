@@ -5,6 +5,10 @@ with a local web explorer. Three pillars produce in rotation, while a public
 RPC node and a non-pillar observer node provide a more realistic relay/sync
 path. Chain ID `69`, fully isolated from mainnet.
 
+An optional sixth node — the [**sync node**](#sync-node-late-joiner) — stays
+off by default and can be activated on demand to watch a cold node discover
+peers and catch up to the chain frontier.
+
 ## Topology
 
 | Service    | Container               | Static IP      | Role                                           | Host ports        |
@@ -15,8 +19,9 @@ path. Chain ID `69`, fully isolated from mainnet.
 | `rpc`      | `znnd-devnet-rpc`       | `172.30.0.11`  | Public RPC ingress                             | `35997`, `35998`  |
 | `observer` | `znnd-devnet-observer`  | `172.30.0.14`  | Non-pillar observer / relay peer               | _none exposed_    |
 | `explorer` | `znnd-devnet-explorer`  | Docker-assigned | Static Zenon explorer                          | `36000`           |
+| `syncnode` | `znnd-devnet-syncnode`  | `172.30.0.15`  | Cold late joiner (`sync` profile, off by default) | `35999`, `36001` |
 
-All five share the bridge network `znnd-devnet` (`172.30.0.0/24`).
+All core nodes share the bridge network `znnd-devnet` (`172.30.0.0/24`).
 The RPC and observer nodes have stable p2p identities and seed from all
 three pillars plus each other. Pillar 2 and pillar 3 also seed each other,
 which keeps transaction relay from depending on a single bootstrap path.
@@ -44,12 +49,64 @@ proposals.
 
 ```sh
 make devnet-up      # docker compose up -d --build
-make devnet-down    # docker compose down -v   (wipes chain state)
+make devnet-down    # docker compose --profile sync down -v   (wipes chain state + sync node)
 ```
 
 `down -v` is the reset button — the next `up` reproduces the same
 genesis hash because keystores, network-private-keys, `genesis.json`,
 and configs are all committed under `docker/devnet/`.
+
+`make devnet-up` does **not** start the sync node — it lives behind the
+`sync` compose profile. See [Sync node](#sync-node-late-joiner) below.
+
+## Sync node (late joiner)
+
+The `syncnode` service is a cold, non-producing node used to watch how a
+fresh node behaves when it joins an already-running network and catches up
+to the chain frontier. It is excluded from `make devnet-up` by the `sync`
+compose profile, so you bring the core network up first, let it produce
+momentums for a while, then activate the late joiner.
+
+**Auto peer discovery.** Unlike the RPC and observer nodes (which seed from
+every other node), the sync node is configured with a **single seeder — the
+bootstrap pillar** (`172.30.0.10`). It finds pillar 2/3, the RPC node, and
+the observer on its own through the discovery DHT, exactly like a brand-new
+node joining with one known bootstrap address. It also ships **no committed
+p2p identity**: `znnd` generates a random `network-private-key` on first
+start, so nobody seeds *from* it and it never appears in another node's
+seeder list.
+
+Bring the core network up first (`make devnet-up`), then drive the late
+joiner with:
+
+```sh
+make devnet-sync-up       # activate the late joiner (syncs from genesis)
+make devnet-sync-logs     # follow peer discovery + block download
+make devnet-sync-status   # poll {state, currentHeight, targetHeight} over RPC :35999
+```
+
+`devnet-sync-status` calls `stats.syncInfo` on port `35999`. Watch
+`currentHeight` climb toward `targetHeight` (the best peer's height); `state`
+is `0` = unknown, `1` = syncing, `2` = done, `3` = not-enough-peers yet.
+
+To watch the catch-up in the explorer instead of the CLI, point it at the
+late joiner:
+
+```sh
+EXPLORER_DEFAULT_ENDPOINT=http://localhost:35999 docker compose up -d --build explorer
+```
+
+### Reset modes
+
+The sync node keeps its chain state in the container's writable layer (no
+named volume), so the reset level is just how much you tear down before the
+next `up`:
+
+```sh
+make devnet-sync-stop  && make devnet-sync-up   # no wipe — resume from current height
+make devnet-sync-reset && make devnet-sync-up   # wipe sync node only — re-sync from genesis
+make devnet-down       && make devnet-up        # full wipe — whole devnet, incl. sync node
+```
 
 ## RPC endpoints
 
@@ -59,6 +116,8 @@ and configs are all committed under `docker/devnet/`.
 | WebSocket | `ws://localhost:35998`       |
 | Pillar 1 HTTP JSON | `http://localhost:35991` |
 | Explorer | `http://localhost:36000` |
+| Sync node HTTP JSON | `http://localhost:35999` (only while activated) |
+| Sync node WebSocket | `ws://localhost:36001` (only while activated) |
 
 ## Explorer
 
@@ -212,9 +271,11 @@ docker/devnet/
 │   ├── network-private-key
 │   └── wallet/
 │       └── z1qzedcj...a6g8e            # encrypted index-6 keystore
-└── rpc/
-    ├── config.json                     # no producer, public RPC ingress
-    └── network-private-key
+├── rpc/
+│   ├── config.json                     # no producer, public RPC ingress
+│   └── network-private-key
+└── syncnode/                           # cold late joiner (sync profile)
+    └── config.json                     # single bootstrap seeder, no committed key
 ```
 
 All keystores are encrypted with the password `devnet`.
@@ -233,4 +294,8 @@ go run ./cmd/devnet-keygen --verify-genesis docker/devnet/genesis.json
 
 `FORCE=1` will rotate every pillar's p2p key, which changes the enode
 URL baked into the seeders list of every other config file — that's
-fine because the keygen rewrites them all in the same run.
+fine because the keygen rewrites them all in the same run. This includes
+`syncnode/config.json`, whose single bootstrap seeder is rewritten to the
+rotated pillar 1 enode, so the late joiner keeps working after a rotation.
+The sync node has no committed keystore or `network-private-key` — it joins
+with a fresh identity each time it syncs from genesis.

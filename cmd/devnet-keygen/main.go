@@ -60,6 +60,24 @@ var relays = []relaySpec{
 	{Role: "observer", Dir: filepath.Join(devnetDir, "observer"), IP: "172.30.0.14", MinPeers: 2},
 }
 
+// clientSpec describes a non-pillar, non-relay node that joins the devnet like a
+// brand-new node would: it seeds from the bootstrap pillar only and discovers
+// every other peer through the discovery DHT. Clients are never dialled by the
+// rest of the network, so they get no committed p2p key (znnd generates a random
+// identity at first start) and never appear in any other node's seeder list.
+type clientSpec struct {
+	Role              string
+	Dir               string
+	MinPeers          int // peers required before syncing starts
+	MinConnectedPeers int // dynamic dial target (drives peer discovery)
+}
+
+var clients = []clientSpec{
+	// Late joiner used to watch a cold node catch up to the chain frontier.
+	// Activated on demand via the docker-compose "sync" profile.
+	{Role: "syncnode", Dir: filepath.Join(devnetDir, "syncnode"), MinPeers: 1, MinConnectedPeers: 5},
+}
+
 func main() {
 	force := flag.Bool("force", false, "overwrite existing keystores and network-private-keys")
 	verifyGenesis := flag.String("verify-genesis", "", "path to genesis.json to validate (skips key generation)")
@@ -211,7 +229,13 @@ func run(force bool) error {
 		}
 	}
 	for _, r := range relays {
-		if err := writeRelayConfig(filepath.Join(r.Dir, "config.json"), r.Role, relaySeedersExcept(enodes, r.Role), r.MinPeers); err != nil {
+		if err := writeRelayConfig(filepath.Join(r.Dir, "config.json"), r.Role, relaySeedersExcept(enodes, r.Role), r.MinPeers, r.MinPeers); err != nil {
+			return err
+		}
+	}
+	// Clients join as new nodes: a single bootstrap seeder, discover the rest.
+	for _, c := range clients {
+		if err := writeRelayConfig(filepath.Join(c.Dir, "config.json"), c.Role, []string{bootstrapEnode}, c.MinPeers, c.MinConnectedPeers); err != nil {
 			return err
 		}
 	}
@@ -239,6 +263,9 @@ func run(force bool) error {
 	}
 	for _, r := range relays {
 		fmt.Printf("%s enode: %s\n", r.Role, enodes[r.Role])
+	}
+	for _, c := range clients {
+		fmt.Printf("%s: new-node client, seeds from bootstrap %s (no committed identity)\n", c.Role, bootstrapEnode)
 	}
 	return nil
 }
@@ -320,7 +347,7 @@ func writePillarConfig(path, name string, producer types.Address, producerIdx ui
 	return writeJSON(path, cfg)
 }
 
-func writeRelayConfig(path, name string, seeders []string, minPeers int) error {
+func writeRelayConfig(path, name string, seeders []string, minPeers, minConnectedPeers int) error {
 	cfg := map[string]any{
 		"DataPath":    "/root/.znn",
 		"WalletPath":  "/root/.znn/wallet",
@@ -343,7 +370,7 @@ func writeRelayConfig(path, name string, seeders []string, minPeers int) error {
 			"ListenHost":        "0.0.0.0",
 			"ListenPort":        35995,
 			"MinPeers":          minPeers,
-			"MinConnectedPeers": minPeers,
+			"MinConnectedPeers": minConnectedPeers,
 			"Seeders":           seeders,
 		},
 	}
