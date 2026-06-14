@@ -4,12 +4,18 @@
     "LogLevel": "info",
     "Name": "devnet-pillar",
     "Net": {
-        "BootstrapPeers": [],
+        "BootstrapPeers": [
+            "/ip4/172.30.0.12/tcp/35995/p2p/16Uiu2HAmQroSuHiJbVYRSvdU3HCTGuSsy1a3s4Jzx6LMaTVRiyyW",
+            "/ip4/172.30.0.13/tcp/35995/p2p/16Uiu2HAkuhekuWvepiEkfZmsGYmXhsfFmdAbgPKLF3KTPApRGqKk"
+        ],
         "ListenHost": "0.0.0.0",
         "ListenPort": 35995,
-        "MinConnectedPeers": 0,
+        "MinConnectedPeers": 3,
         "MinPeers": 0,
-        "Seeders": []
+        "Seeders": [
+            "enode://b552e26e93a04a13bf6213377b4e3a07e4e6ee2a74a80989aec3fcd7b9a04f157c65e6a084287d407dfc99d229b745ff91a3823115338b57477c25d356976ef9@172.30.0.12:35995",
+            "enode://0417e937b0b16f8b04abf7b32795de64ebb4395a35610cb105d5d40b861f0a77ece61a1262cba06bd0c37cd1a4888ff601f6ba6e22cbe629ecdb0ed9660209a8@172.30.0.13:35995"
+        ]
     },
     "Producer": {
         "Address": "z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq",

@@ -5,14 +5,16 @@
     "Name": "devnet-pillar3",
     "Net": {
         "BootstrapPeers": [
-            "/ip4/172.30.0.10/tcp/35995/p2p/16Uiu2HAmRe2RazMPxYEV1A8Vs7LbVfNVMqBdiw7zgSkBLB3E2vQv"
+            "/ip4/172.30.0.10/tcp/35995/p2p/16Uiu2HAmRe2RazMPxYEV1A8Vs7LbVfNVMqBdiw7zgSkBLB3E2vQv",
+            "/ip4/172.30.0.12/tcp/35995/p2p/16Uiu2HAmQroSuHiJbVYRSvdU3HCTGuSsy1a3s4Jzx6LMaTVRiyyW"
         ],
         "ListenHost": "0.0.0.0",
         "ListenPort": 35995,
-        "MinConnectedPeers": 1,
+        "MinConnectedPeers": 3,
         "MinPeers": 1,
         "Seeders": [
-            "enode://c0e8b1c4cffe16c4aa8d394655fd11a0548cab01281d2838c868cd3a12284717d1e66b410bde0d8aa76cb149fdb4dc252e932f4f92394d651e425628e8761971@172.30.0.10:35995"
+            "enode://c0e8b1c4cffe16c4aa8d394655fd11a0548cab01281d2838c868cd3a12284717d1e66b410bde0d8aa76cb149fdb4dc252e932f4f92394d651e425628e8761971@172.30.0.10:35995",
+            "enode://b552e26e93a04a13bf6213377b4e3a07e4e6ee2a74a80989aec3fcd7b9a04f157c65e6a084287d407dfc99d229b745ff91a3823115338b57477c25d356976ef9@172.30.0.12:35995"
         ]
     },
     "Producer": {
