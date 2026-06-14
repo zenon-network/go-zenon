@@ -23,6 +23,18 @@ import (
 // a cached compare, so the cost is negligible.
 const sporkPollInterval = 1 * time.Second
 
+// swapRetryBase and swapRetryCap bound the exponential backoff between
+// libp2p start attempts during the swap. Every node in the network
+// swaps at the same EnforcementHeight, so a node whose libp2p startup
+// hits a transient failure (FD pressure, lingering socket from the
+// legacy teardown, slow NAT probe) must self-heal rather than sit
+// listener-less until an operator intervenes. Vars rather than consts
+// so tests can compress the schedule.
+var (
+	swapRetryBase = 1 * time.Second
+	swapRetryCap  = 60 * time.Second
+)
+
 // Server is the spork-gated p2p server. It owns exactly one transport
 // backend at any given time — the legacy (devp2p/RLPX) stack before
 // activation, the libp2p stack after — and atomically swaps when the
@@ -55,10 +67,10 @@ type Server struct {
 	// behind home routers can opt-in via the Net.NATPortMap field in
 	// config.json.
 	NATPortMap bool
-	// PeerstoreDir is the on-disk path for the libp2p persistent
-	// peerstore. Forwarded as-is to the libp2p backend. Empty string
-	// disables persistence (libp2p falls back to its default in-memory
-	// peerstore).
+	// PeerstoreDir is the on-disk path for the libp2p backend's peer
+	// database (warm-bootstrap candidates recorded across restarts).
+	// Forwarded as-is to the libp2p backend. Empty string disables
+	// peer persistence.
 	PeerstoreDir string
 
 	// ---- activation gate ----
@@ -132,6 +144,14 @@ func (srv *Server) Start() error {
 	fmt.Printf("\n===== libp2p =====\n")
 	fmt.Printf("Spork not yet active; running on legacy (devp2p/RLPX) backend.\n")
 	fmt.Printf("Will swap to libp2p when the activation spork's EnforcementHeight is reached.\n\n")
+	// Advance notice for operators still on an empty libp2p bootstrap
+	// list (normal during Phase A of the rollout, mandatory to fix
+	// before activation is scheduled). The libp2p backend repeats this
+	// louder — Crit + stderr — if it actually starts with no bootstrap
+	// entries and no remembered peers.
+	if len(srv.Libp2pBootstrapPeers) == 0 {
+		common.P2PLogger.Warn("libp2p bootstrap list is empty; after the activation spork this node will rely on its peer database and inbound connections — populate Net.BootstrapPeers before activation is scheduled")
+	}
 	if err := srv.startLegacyLocked(); err != nil {
 		return err
 	}
@@ -288,16 +308,19 @@ func (srv *Server) buildLibp2p() *libp2p.Server {
 	}
 }
 
-// swapFailed emits the failure banner + structured log when the libp2p
-// backend fails to start during the swap. Extracted so the swap()
-// happy-path code stays linear; called only on the error branch.
-func (srv *Server) swapFailed(err error) {
-	common.P2PLogger.Crit("failed to start libp2p backend during swap; node has no active network listener", "err", err)
+// swapFailed emits the failure banner + structured log when a libp2p
+// start attempt fails during the swap. The caller retries with backoff,
+// so the messaging tells the operator the node is self-healing — but at
+// Crit level because a node with no listener is degraded and recurring
+// attempts are worth an alert.
+func (srv *Server) swapFailed(err error, attempt int, nextRetry time.Duration) {
+	common.P2PLogger.Crit("failed to start libp2p backend during swap; node has no active network listener; will retry",
+		"err", err, "attempt", attempt, "next-retry", nextRetry)
 	// stderr so it stays separable from happy-path stdout in docker
 	// logs / log aggregators.
-	fmt.Fprintf(os.Stderr, "\n===== libp2p swap FAILED =====\n")
+	fmt.Fprintf(os.Stderr, "\n===== libp2p swap attempt %d FAILED =====\n", attempt)
 	fmt.Fprintf(os.Stderr, "Failed to start libp2p backend: %v\n", err)
-	fmt.Fprintf(os.Stderr, "Node has no active network listener. Restart znnd to retry.\n\n")
+	fmt.Fprintf(os.Stderr, "Node has no active network listener. Retrying in %v.\n\n", nextRetry)
 }
 
 // watchActivation polls the spork oracle until either the spork
@@ -355,11 +378,13 @@ func (srv *Server) watchActivation() {
 // and we must not block Peers/PeerCount/Self/AddPeer callers for that
 // duration.
 //
-// If libp2p startup fails the node is left without a network listener.
-// We log Crit so the operator notices but do not crash: the RPC stays
-// up, the chain RPC stays queryable, and a restart will retry libp2p
-// startup directly (the spork is now active, so legacy is never
-// reconstructed).
+// If a libp2p start attempt fails it is retried with exponential
+// backoff (swapRetryBase doubling up to swapRetryCap) until it succeeds
+// or Stop() is called. Each failure logs Crit + a stderr banner so the
+// operator notices, but the node does not crash and needs no manual
+// intervention: the RPC stays up and the chain stays queryable
+// throughout. If the process is restarted instead, the spork is active
+// by then, so Start() goes directly to libp2p.
 func (srv *Server) swap() {
 	srv.swapOnce.Do(func() {
 		common.P2PLogger.Info("libp2p spork EnforcementHeight reached; swapping to libp2p backend")
@@ -375,6 +400,10 @@ func (srv *Server) swap() {
 			srv.mu.Unlock()
 			return // Stop() was called; abort the swap
 		}
+		// Captured for the retry loop below: Stop() nils srv.stopCh, and
+		// the backoff select must keep observing the channel that was
+		// closed rather than a nil field.
+		stopCh := srv.stopCh
 		legacySrv := srv.legacy
 		srv.legacy = nil
 		srv.active = nil
@@ -390,15 +419,37 @@ func (srv *Server) swap() {
 		// probes — each of which can take observable wall time. If we
 		// did this under srv.mu, every Peers()/PeerCount()/Self()/
 		// AddPeer() RPC call would block for that duration.
+		// Startup is retried until it succeeds or Stop() is called. The
+		// backend is rebuilt fresh on every attempt: construction is
+		// cheap (no I/O — see buildLibp2p), and a fresh value avoids
+		// depending on every backend implementation (test stubs
+		// included) being safely re-startable after a failed Start().
 		var newBackend backend
-		if srv.NewLibp2p != nil {
-			newBackend = srv.NewLibp2p()
-		} else {
-			newBackend = srv.buildLibp2p()
-		}
-		if err := newBackend.Start(); err != nil {
-			srv.swapFailed(err)
-			return
+		delay := swapRetryBase
+		for attempt := 1; ; attempt++ {
+			if srv.NewLibp2p != nil {
+				newBackend = srv.NewLibp2p()
+			} else {
+				newBackend = srv.buildLibp2p()
+			}
+			err := newBackend.Start()
+			if err == nil {
+				if attempt > 1 {
+					common.P2PLogger.Info("libp2p backend started during swap after retries", "attempts", attempt)
+				}
+				break
+			}
+			srv.swapFailed(err, attempt, delay)
+
+			select {
+			case <-stopCh:
+				return // Stop() was called; abort the swap
+			case <-time.After(delay):
+			}
+			delay *= 2
+			if delay > swapRetryCap {
+				delay = swapRetryCap
+			}
 		}
 
 		// Stage 3: publish the new backend under the lock. If Stop()

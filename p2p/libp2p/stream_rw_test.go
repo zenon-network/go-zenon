@@ -28,21 +28,21 @@ func newMockStream() *mockStream {
 	}
 }
 
-func (m *mockStream) Read(p []byte) (int, error)        { return m.readBuf.Read(p) }
+func (m *mockStream) Read(p []byte) (int, error)         { return m.readBuf.Read(p) }
 func (m *mockStream) Write(p []byte) (int, error)        { return m.writeBuf.Write(p) }
-func (m *mockStream) Close() error                        { return nil }
-func (m *mockStream) Reset() error                        { return nil }
-func (m *mockStream) CloseRead() error                    { return nil }
-func (m *mockStream) CloseWrite() error                   { return nil }
-func (m *mockStream) SetDeadline(t time.Time) error       { return nil }
-func (m *mockStream) SetReadDeadline(t time.Time) error   { return nil }
-func (m *mockStream) SetWriteDeadline(t time.Time) error  { return nil }
-func (m *mockStream) ID() string                          { return "mock" }
-func (m *mockStream) Protocol() protocol.ID               { return "" }
-func (m *mockStream) SetProtocol(id protocol.ID) error    { return nil }
-func (m *mockStream) Stat() network.Stats                 { return network.Stats{} }
-func (m *mockStream) Conn() network.Conn                  { return nil }
-func (m *mockStream) Scope() network.StreamScope          { return nil }
+func (m *mockStream) Close() error                       { return nil }
+func (m *mockStream) Reset() error                       { return nil }
+func (m *mockStream) CloseRead() error                   { return nil }
+func (m *mockStream) CloseWrite() error                  { return nil }
+func (m *mockStream) SetDeadline(t time.Time) error      { return nil }
+func (m *mockStream) SetReadDeadline(t time.Time) error  { return nil }
+func (m *mockStream) SetWriteDeadline(t time.Time) error { return nil }
+func (m *mockStream) ID() string                         { return "mock" }
+func (m *mockStream) Protocol() protocol.ID              { return "" }
+func (m *mockStream) SetProtocol(id protocol.ID) error   { return nil }
+func (m *mockStream) Stat() network.Stats                { return network.Stats{} }
+func (m *mockStream) Conn() network.Conn                 { return nil }
+func (m *mockStream) Scope() network.StreamScope         { return nil }
 
 // buildRawMessage builds the 8-byte header + RLP payload manually.
 func buildRawMessage(code uint64, payload interface{}) ([]byte, error) {
@@ -262,18 +262,18 @@ type netConnStream struct {
 	conn net.Conn
 }
 
-func (s *netConnStream) Read(p []byte) (int, error)        { return s.conn.Read(p) }
+func (s *netConnStream) Read(p []byte) (int, error)         { return s.conn.Read(p) }
 func (s *netConnStream) Write(p []byte) (int, error)        { return s.conn.Write(p) }
-func (s *netConnStream) Close() error                        { return s.conn.Close() }
-func (s *netConnStream) Reset() error                        { return s.conn.Close() }
-func (s *netConnStream) CloseRead() error                    { return nil }
-func (s *netConnStream) CloseWrite() error                   { return nil }
-func (s *netConnStream) SetDeadline(t time.Time) error       { return s.conn.SetDeadline(t) }
-func (s *netConnStream) SetReadDeadline(t time.Time) error   { return s.conn.SetReadDeadline(t) }
-func (s *netConnStream) SetWriteDeadline(t time.Time) error  { return s.conn.SetWriteDeadline(t) }
-func (s *netConnStream) ID() string                          { return "net-conn" }
-func (s *netConnStream) Protocol() protocol.ID               { return "" }
-func (s *netConnStream) SetProtocol(id protocol.ID) error    { return nil }
-func (s *netConnStream) Stat() network.Stats                 { return network.Stats{} }
-func (s *netConnStream) Conn() network.Conn                  { return nil }
-func (s *netConnStream) Scope() network.StreamScope          { return nil }
+func (s *netConnStream) Close() error                       { return s.conn.Close() }
+func (s *netConnStream) Reset() error                       { return s.conn.Close() }
+func (s *netConnStream) CloseRead() error                   { return nil }
+func (s *netConnStream) CloseWrite() error                  { return nil }
+func (s *netConnStream) SetDeadline(t time.Time) error      { return s.conn.SetDeadline(t) }
+func (s *netConnStream) SetReadDeadline(t time.Time) error  { return s.conn.SetReadDeadline(t) }
+func (s *netConnStream) SetWriteDeadline(t time.Time) error { return s.conn.SetWriteDeadline(t) }
+func (s *netConnStream) ID() string                         { return "net-conn" }
+func (s *netConnStream) Protocol() protocol.ID              { return "" }
+func (s *netConnStream) SetProtocol(id protocol.ID) error   { return nil }
+func (s *netConnStream) Stat() network.Stats                { return network.Stats{} }
+func (s *netConnStream) Conn() network.Conn                 { return nil }
+func (s *netConnStream) Scope() network.StreamScope         { return nil }

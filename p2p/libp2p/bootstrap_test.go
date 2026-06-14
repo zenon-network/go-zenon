@@ -23,8 +23,8 @@ func TestParseBootstrapPeer(t *testing.T) {
 
 func TestParseBootstrapPeer_Invalid(t *testing.T) {
 	tests := []struct {
-		name   string
-		maddr  string
+		name  string
+		maddr string
 	}{
 		{"empty", ""},
 		{"no p2p", "/ip4/172.30.0.10/tcp/35995"},

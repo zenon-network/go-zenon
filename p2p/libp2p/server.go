@@ -22,15 +22,14 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
-	"io"
 	"math/rand"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
-	leveldb "github.com/ipfs/go-ds-leveldb"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
@@ -38,16 +37,15 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
-	"github.com/libp2p/go-libp2p/p2p/host/peerstore/pstoreds"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/p2p"
 	"github.com/zenon-network/go-zenon/p2p/discover"
 
-	libp2ptcp "github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
+	libp2ptcp "github.com/libp2p/go-libp2p/p2p/transport/tcp"
 )
 
 const (
@@ -62,8 +60,8 @@ const (
 	// the cap, with ±30% jitter applied to each step so 100 nodes
 	// restarting simultaneously don't all hit the bootstrap at the same
 	// instant. Reset to zero on a successful connect.
-	dialBackoffBase  = 5 * time.Second
-	dialBackoffCap   = 5 * time.Minute
+	dialBackoffBase   = 5 * time.Second
+	dialBackoffCap    = 5 * time.Minute
 	dialBackoffJitter = 0.3
 
 	// dhtDiscoveryInterval controls how often dhtDiscoveryLoop reads
@@ -114,13 +112,17 @@ type Server struct {
 	// should leave it off to avoid spurious probes leaving their host.
 	NATPortMap bool
 
-	// PeerstoreDir is the on-disk directory for the LevelDB-backed
-	// peerstore. When non-empty, libp2p remembers peers across
-	// restarts and the server's warm-bootstrap path dials known peers
-	// in parallel with BootstrapPeers, removing the runtime dependency
-	// on the bootstrap-node list staying current. When empty, falls
-	// back to libp2p's default in-memory peerstore (every restart is a
-	// cold start).
+	// PeerstoreDir is the on-disk directory for the node's peer
+	// database. When non-empty, every peer that completes a Zenon
+	// handshake is recorded (peer ID, dialable addresses learned via
+	// identify, last-seen time) and the warm-bootstrap path redials
+	// the most-recently-seen of them on startup, in parallel with
+	// BootstrapPeers — removing the runtime dependency on the
+	// bootstrap-node list staying current. Records expire on our own
+	// schedule (peerDBMaxAge, 30 days), not libp2p's 30-minute
+	// post-disconnect address TTL that made the earlier
+	// pstoreds-backed peerstore useless across realistic downtime.
+	// When empty, peers are not remembered across restarts.
 	PeerstoreDir string
 
 	// If NoDial is true, the server will not dial any peers.
@@ -130,16 +132,21 @@ type Server struct {
 	lock    sync.Mutex
 	running bool
 
-	host    host.Host
-	dht     *dht.IpfsDHT
-	// peerstoreDS holds the LevelDB datastore backing libp2p's
-	// persistent peerstore when PeerstoreDir is set. nil for the
-	// in-memory peerstore path. Stop() must Close() this after
-	// host.Close() so libp2p's final peerstore writes flush to disk.
-	peerstoreDS io.Closer
-	ctx         context.Context
-	cancel      context.CancelFunc
-	peerMap     map[string]*Peer
+	host host.Host
+	dht  *dht.IpfsDHT
+	// peerdb is the Zenon-owned persistent record of handshaked peers
+	// (see peerdb.go) backing the warm-bootstrap path. Holds nil when
+	// PeerstoreDir is empty or after Stop(). An atomic pointer rather
+	// than a field guarded by srv.lock because the writers (adoption /
+	// disconnect / dial-failure hooks) run on goroutines that must not
+	// take the lifecycle lock — startupCleanup waits on some of them
+	// while holding it. Stragglers that load the pointer right before
+	// Stop swaps it to nil can still hit a closed DB; goleveldb returns
+	// ErrClosed for that rather than misbehaving.
+	peerdb  atomic.Pointer[peerDB]
+	ctx     context.Context
+	cancel  context.CancelFunc
+	peerMap map[string]*Peer
 	// dialing tracks outbound dials currently in flight, keyed by the
 	// remote libp2p peer.ID string. Used to collapse concurrent dial
 	// attempts for the same peer down to one and avoid wasting an
@@ -157,6 +164,14 @@ type Server struct {
 	delpeer      chan *Peer
 	loopWG       sync.WaitGroup
 	pendingCount int32 // atomic; tracks peers in handshake phase
+
+	// testStartHook, when non-nil, is invoked by Start() at the point
+	// where every resource (context, datastore, host, DHT) is live but
+	// no dial goroutines have been launched. Returning an error aborts
+	// Start(), exercising the startup-cleanup path. Test-only; always
+	// nil in production (same pattern as the switcher's NewLegacy /
+	// NewLibp2p hooks).
+	testStartHook func() error
 }
 
 // dialBackoff carries per-peer state for exponential-backoff redialing.
@@ -278,19 +293,57 @@ func (srv *Server) Stop() {
 	if srv.host != nil {
 		srv.host.Close()
 	}
-	// Capture the peerstore datastore reference under the lock then
-	// close it outside, ordered AFTER host.Close() so libp2p's final
-	// peerstore writes flush before the underlying LevelDB shuts down.
-	peerstoreDS := srv.peerstoreDS
-	srv.peerstoreDS = nil
+	// Detach the peer database now so hooks stop picking it up, but
+	// close it only after loopWG.Wait() so peer-lifecycle hooks that
+	// already hold the pointer have finished writing to it.
+	peerdb := srv.peerdb.Swap(nil)
 	srv.lock.Unlock()
 
 	// Wait outside the lock so goroutines that need to acquire locks can finish.
 	srv.loopWG.Wait()
 
-	if peerstoreDS != nil {
-		if err := peerstoreDS.Close(); err != nil {
-			common.P2PLogger.Warn("error closing peerstore datastore", "err", err)
+	if peerdb != nil {
+		if err := peerdb.Close(); err != nil {
+			common.P2PLogger.Warn("error closing peer database", "err", err)
+		}
+	}
+}
+
+// startupCleanup releases resources acquired by a partially-completed
+// Start() call. Start invokes it via defer on every error return —
+// srv.running is never set on those paths, so Stop() would be a no-op
+// and a mid-construction failure (e.g. DHT creation failing after the
+// host is already listening) would otherwise leak the bound listener
+// and the datastore lock until process exit. The switcher's swap-retry
+// path depends on this: re-running Start() must not collide with a
+// leaked listener from the previous attempt.
+//
+// Teardown order mirrors Stop(): DHT → context cancel → host → drain
+// handler goroutines → peer database, so peer-lifecycle hooks finish
+// writing before the database closes. Like Stop(), fields other than
+// peerdb are left non-nil: an inbound stream handler caught mid-flight
+// may still dereference srv.host or srv.ctx, and the next Start()
+// overwrites every field anyway.
+//
+// Caller must hold srv.lock.
+func (srv *Server) startupCleanup() {
+	if srv.dht != nil {
+		_ = srv.dht.Close()
+	}
+	if srv.cancel != nil {
+		srv.cancel()
+	}
+	if srv.host != nil {
+		_ = srv.host.Close()
+	}
+	// Inbound handlers that slipped in between SetStreamHandler and the
+	// failure hold loopWG entries via runPeer; host.Close() has reset
+	// their streams, so this returns promptly. None of those goroutines
+	// take srv.lock, so waiting while holding it is safe.
+	srv.loopWG.Wait()
+	if pdb := srv.peerdb.Swap(nil); pdb != nil {
+		if cerr := pdb.Close(); cerr != nil {
+			common.P2PLogger.Warn("error closing peer database during startup cleanup", "err", cerr)
 		}
 	}
 }
@@ -314,6 +367,17 @@ func (srv *Server) Start() (err error) {
 	srv.dialing = make(map[string]struct{})
 	srv.backoffs = make(map[string]*dialBackoff)
 	srv.delpeer = make(chan *Peer, 16)
+
+	// Undo partial construction on any failure below. Start acquires
+	// resources in sequence (context → datastore → host → DHT) and the
+	// post-host failure paths would otherwise leak a bound listener and
+	// a locked datastore: srv.running is never set on an error return,
+	// so Stop() would be a no-op against the half-constructed server.
+	defer func() {
+		if err != nil {
+			srv.startupCleanup()
+		}
+	}()
 
 	// Convert ECDSA key to libp2p key
 	privKey, err := ECDSAToLibp2pPrivKey(srv.PrivateKey)
@@ -346,42 +410,30 @@ func (srv *Server) Start() (err error) {
 		opts = append(opts, libp2p.NATPortMap())
 	}
 
-	// Persistent peerstore (optional).
+	// Peer database (optional).
 	//
-	// When PeerstoreDir is set, libp2p remembers peer addresses,
-	// public keys, and protocol-negotiation results across restarts.
-	// On the next startup the warm-bootstrap path (below) dials those
-	// peers in parallel with the configured BootstrapPeers — so a
-	// node that's been online before doesn't depend on the bootstrap
-	// list staying current to rejoin the network.
+	// When PeerstoreDir is set, peers that complete a Zenon handshake
+	// are recorded on disk and the warm-bootstrap path (below) redials
+	// them on the next startup, in parallel with the configured
+	// BootstrapPeers — so a node that's been online before doesn't
+	// depend on the bootstrap list staying current to rejoin.
 	//
-	// Empty PeerstoreDir falls back to libp2p's default in-memory
-	// peerstore; useful for tests and for nodes that explicitly opt
-	// out of persistent state.
+	// The libp2p host itself always uses its default in-memory
+	// peerstore: its address records are identify-managed and expire
+	// 30 minutes after disconnect, which is why they cannot serve as
+	// the restart-survival mechanism (see peerdb.go).
 	if srv.PeerstoreDir != "" {
-		ds, err := leveldb.NewDatastore(srv.PeerstoreDir, nil)
+		pdb, err := openPeerDB(srv.PeerstoreDir)
 		if err != nil {
-			return fmt.Errorf("open peerstore datastore at %q: %w", srv.PeerstoreDir, err)
+			return fmt.Errorf("open peer database at %q: %w", srv.PeerstoreDir, err)
 		}
-		ps, err := pstoreds.NewPeerstore(srv.ctx, ds, pstoreds.DefaultOpts())
-		if err != nil {
-			ds.Close()
-			return fmt.Errorf("create datastore peerstore: %w", err)
-		}
-		srv.peerstoreDS = ds
-		opts = append(opts, libp2p.Peerstore(ps))
-		common.P2PLogger.Info("libp2p peerstore opened", "path", srv.PeerstoreDir)
+		srv.peerdb.Store(pdb)
+		common.P2PLogger.Info("peer database opened", "path", srv.PeerstoreDir)
 	}
 
 	// Create libp2p host
 	srv.host, err = libp2p.New(opts...)
 	if err != nil {
-		// If we opened a peerstore datastore above but failed to bring
-		// the host up, close it now so we don't leak the file handle.
-		if srv.peerstoreDS != nil {
-			srv.peerstoreDS.Close()
-			srv.peerstoreDS = nil
-		}
 		return fmt.Errorf("create libp2p host: %w", err)
 	}
 
@@ -434,6 +486,12 @@ func (srv *Server) Start() (err error) {
 		}
 	}
 
+	if srv.testStartHook != nil {
+		if err := srv.testStartHook(); err != nil {
+			return fmt.Errorf("start hook: %w", err)
+		}
+	}
+
 	// Dial bootstrap peers immediately so the node has peers within seconds of
 	// startup rather than waiting for the first peerMaintenanceLoop tick.
 	if len(srv.BootstrapPeers) > 0 {
@@ -447,22 +505,38 @@ func (srv *Server) Start() (err error) {
 		}
 	}
 
-	// Warm bootstrap from the persistent peerstore.
+	// Warm bootstrap from the peer database.
 	//
-	// On a fresh install or with an in-memory peerstore this is a
-	// no-op (no known peers). On any subsequent restart it dials
-	// peers we successfully connected to before — in parallel with
-	// the configured BootstrapPeers — which lets the node rejoin the
-	// network even if the entire bootstrap list has rotated since the
-	// previous run. This is the primary resilience mechanism against
+	// On a fresh install (or with PeerstoreDir unset) this is a no-op.
+	// On any subsequent restart it dials peers we successfully
+	// handshaked with before — in parallel with the configured
+	// BootstrapPeers — which lets the node rejoin the network even if
+	// the entire bootstrap list has rotated since the previous run.
+	// This is the primary resilience mechanism against
 	// stale-bootstrap-list scenarios; the bootstrap entries become a
 	// first-time-setup dependency rather than a runtime dependency.
 	//
 	// Fan-out is capped at MinConnectedPeers so a long-running node
-	// with hundreds of cached peers doesn't burst all its FDs on
+	// with hundreds of recorded peers doesn't burst all its FDs on
 	// startup. The DHT discovery loop covers the rest as we get going.
-	if !srv.NoDial && srv.host.Peerstore() != nil {
-		srv.warmBootstrap()
+	warmDials := 0
+	if !srv.NoDial && srv.peerdb.Load() != nil {
+		warmDials = srv.warmBootstrap()
+	}
+
+	// Guardrail: with no bootstrap entries and no remembered peers the
+	// node has no outbound path onto the network. That is legitimate
+	// for designated bootstrap nodes (they are the seed; inbound is
+	// their job) but network-fatal if it happens fleet-wide at the
+	// activation swap — so make it loud. Deliberately does not refuse
+	// to start: refusing would partition the node just as hard while
+	// also turning away inbound connections.
+	if !srv.NoDial && len(srv.BootstrapPeers) == 0 && warmDials == 0 {
+		common.P2PLogger.Crit("no libp2p bootstrap peers configured and no remembered peers; node is isolated until inbound peers arrive or Net.BootstrapPeers is populated")
+		fmt.Fprintf(os.Stderr, "\n===== libp2p bootstrap WARNING =====\n")
+		fmt.Fprintf(os.Stderr, "No BootstrapPeers configured and the peer database has no candidates.\n")
+		fmt.Fprintf(os.Stderr, "This node cannot dial out to the network. It keeps listening for\n")
+		fmt.Fprintf(os.Stderr, "inbound connections; expected only for designated bootstrap nodes.\n\n")
 	}
 
 	// Mark running only after all initialization succeeded.
@@ -499,8 +573,53 @@ func (srv *Server) Start() (err error) {
 		}()
 	}
 
+	// Periodically expire stale peer-database records so a node that
+	// runs for months doesn't accumulate unreachable candidates.
+	if srv.peerdb.Load() != nil {
+		srv.loopWG.Add(1)
+		go func() {
+			srv.peerdbCleanupLoop()
+			srv.loopWG.Done()
+		}()
+	}
+
 	common.P2PLogger.Info(fmt.Sprintf("Listening on %s", srv.host.Addrs()))
 	return nil
+}
+
+// recordPeerConnected persists a peer we just completed a Zenon
+// handshake with (or are parting from) so warm bootstrap can redial it
+// across restarts. The stored addresses are the peer's self-advertised
+// listen addresses learned via identify, read from the host's
+// in-memory peerstore — NOT the connection's remote multiaddr, which
+// for inbound peers is an ephemeral source port that cannot be dialed
+// back. extra carries addresses already known-dialable (e.g. the addrs
+// an outbound dial just used) to cover the window where identify
+// hasn't completed yet.
+func (srv *Server) recordPeerConnected(pid peer.ID, extra ...ma.Multiaddr) {
+	pdb := srv.peerdb.Load()
+	if pdb == nil {
+		return
+	}
+	addrs := append(srv.host.Peerstore().Addrs(pid), extra...)
+	pdb.recordConnected(pid, addrs)
+}
+
+// peerdbCleanupLoop runs expire() on the peer database once per
+// peerDBCleanupCycle until the server context is cancelled.
+func (srv *Server) peerdbCleanupLoop() {
+	ticker := time.NewTicker(peerDBCleanupCycle)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-srv.ctx.Done():
+			return
+		case <-ticker.C:
+			if pdb := srv.peerdb.Load(); pdb != nil {
+				pdb.expire()
+			}
+		}
+	}
 }
 
 // handleStream is called when a remote peer opens a stream to us.
@@ -618,6 +737,11 @@ func (srv *Server) handleStream(s network.Stream) {
 	}
 	srv.peerMap[remotePeer.String()] = p
 	srv.peerMu.Unlock()
+
+	// Inbound adoption: identify may not have learned the peer's
+	// listen addresses yet, in which case this records lastSeen only
+	// and the disconnect-time refresh in runPeer fills the addresses.
+	srv.recordPeerConnected(remotePeer)
 
 	srv.loopWG.Add(1)
 	go func() {
@@ -789,6 +913,11 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 	srv.peerMap[info.ID.String()] = p
 	srv.peerMu.Unlock()
 
+	// Outbound adoption: the dialed addresses are known-dialable, so
+	// pass them along in case identify hasn't populated the peerstore
+	// for this peer yet.
+	srv.recordPeerConnected(info.ID, info.Addrs...)
+
 	srv.loopWG.Add(1)
 	go func() {
 		srv.runPeer(p)
@@ -798,43 +927,45 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 	return nil
 }
 
-// warmBootstrap dials known peers from the persistent peerstore on
-// startup. See the call site in Start() for the why.
+// warmBootstrap dials recently-seen peers from the peer database on
+// startup and reports how many dials it launched. See the call site in
+// Start() for the why.
 //
-// Returns immediately if the peerstore has no known peers (fresh
-// install, in-memory peerstore, or just-cleared on-disk peerstore).
-// Caps fan-out at MinConnectedPeers so a node with hundreds of cached
-// peers doesn't burst its FD limit at startup.
-func (srv *Server) warmBootstrap() {
-	known := srv.host.Peerstore().PeersWithAddrs()
-	if len(known) == 0 {
-		return
+// Returns immediately if the database has no candidates (fresh
+// install, or every record expired). Caps fan-out at MinConnectedPeers
+// so a node with many recorded peers doesn't burst its FD limit at
+// startup.
+func (srv *Server) warmBootstrap() int {
+	pdb := srv.peerdb.Load()
+	if pdb == nil {
+		return 0
 	}
-	selfID := srv.host.ID()
 	target := srv.MinConnectedPeers
 	if target <= 0 {
 		target = 8 // sane floor when MinConnectedPeers is unset
 	}
+	// Fetch headroom beyond the dial target since some candidates are
+	// skipped below (self, backoff-suppressed).
+	candidates := pdb.seeds(target * 2)
+	if len(candidates) == 0 {
+		return 0
+	}
+	selfID := srv.host.ID()
 
 	dialed := 0
-	for _, pid := range known {
+	for _, info := range candidates {
 		if dialed >= target {
 			break
 		}
-		if pid == selfID {
+		if info.ID == selfID {
 			continue
 		}
 		// Skip peers we've recently failed to dial; the backoff
 		// machinery will let them through later via the DHT discovery
 		// loop once the backoff window elapses.
-		if !srv.shouldDial(pid.String()) {
+		if !srv.shouldDial(info.ID.String()) {
 			continue
 		}
-		addrs := srv.host.Peerstore().Addrs(pid)
-		if len(addrs) == 0 {
-			continue
-		}
-		info := peer.AddrInfo{ID: pid, Addrs: addrs}
 		dialed++
 		go func(info peer.AddrInfo) {
 			if err := srv.dialPeer(info); err != nil {
@@ -846,8 +977,9 @@ func (srv *Server) warmBootstrap() {
 		}(info)
 	}
 	if dialed > 0 {
-		common.P2PLogger.Info("warm-bootstrap from persistent peerstore", "dialing", dialed, "known", len(known))
+		common.P2PLogger.Info("warm-bootstrap from peer database", "dialing", dialed, "known", len(candidates))
 	}
+	return dialed
 }
 
 // shouldDial reports whether the per-peer backoff schedule currently
@@ -865,6 +997,19 @@ func (srv *Server) shouldDial(peerID string) bool {
 // next earliest redial time using exponential growth (capped at
 // dialBackoffCap) plus ±dialBackoffJitter jitter.
 func (srv *Server) recordDialFailure(peerID string) {
+	// Mirror the failure into the peer database's consecutive-failure
+	// counter (a no-op for peers that never completed a handshake).
+	// Benign dial races ("already connected", "dial in progress")
+	// currently count too; the counter resets on every successful
+	// connect and the prune threshold is generous, so the pollution is
+	// tolerable until dialPeer grows sentinel errors to distinguish
+	// them.
+	if pdb := srv.peerdb.Load(); pdb != nil {
+		if pid, err := peer.Decode(peerID); err == nil {
+			pdb.recordDialFail(pid)
+		}
+	}
+
 	srv.backoffMu.Lock()
 	defer srv.backoffMu.Unlock()
 	b := srv.backoffs[peerID]
@@ -921,6 +1066,7 @@ func (srv *Server) peerMaintenanceLoop() {
 			srv.peerMu.RUnlock()
 
 			if numPeers < srv.MinConnectedPeers && len(srv.BootstrapPeers) > 0 {
+				dialing, suppressed := 0, 0
 				for _, pi := range srv.BootstrapPeers {
 					pi := pi
 					peerKey := pi.ID.String()
@@ -934,8 +1080,10 @@ func (srv *Server) peerMaintenanceLoop() {
 					// nodes restarting after an outage don't all hit
 					// the bootstrap at the same 30s cadence.
 					if !srv.shouldDial(peerKey) {
+						suppressed++
 						continue
 					}
+					dialing++
 					go func() {
 						if err := srv.dialPeer(pi); err != nil {
 							srv.recordDialFailure(peerKey)
@@ -944,6 +1092,16 @@ func (srv *Server) peerMaintenanceLoop() {
 							srv.recordDialSuccess(peerKey)
 						}
 					}()
+				}
+				// One Info line per tick while below the peer minimum,
+				// so an operator can see redial progress (and backoff
+				// suppression) without enabling debug logging. Silent
+				// on healthy nodes — this branch isn't reached at all
+				// once numPeers >= MinConnectedPeers.
+				if dialing > 0 || suppressed > 0 {
+					common.P2PLogger.Info("bootstrap redial sweep",
+						"peers", numPeers, "min", srv.MinConnectedPeers,
+						"dialing", dialing, "backoff-suppressed", suppressed)
 				}
 			}
 		}
@@ -1036,6 +1194,14 @@ func (srv *Server) dhtDiscoveryLoop() {
 					}
 				}(info)
 			}
+			// Mirror of the maintenance loop's summary: visible at the
+			// default log level only while the node is hunting for
+			// peers, so DHT-driven discovery progress is observable.
+			if dialed > 0 {
+				common.P2PLogger.Info("dht discovery: dialing candidates",
+					"dialing", dialed, "table", len(candidates),
+					"peers", numPeers, "min", srv.MinConnectedPeers)
+			}
 		}
 	}
 }
@@ -1060,6 +1226,14 @@ func (srv *Server) peerCleanupLoop() {
 func (srv *Server) runPeer(p *Peer) {
 	common.P2PLogger.Debug(fmt.Sprintf("Added %v", p))
 	reason := p.run()
+
+	// Refresh the peer's database record on the way out: lastSeen is
+	// what ranks warm-bootstrap candidates, and by now identify has had
+	// the whole connection lifetime to learn the peer's listen
+	// addresses.
+	if pid := p.remotePeer(); pid != "" {
+		srv.recordPeerConnected(pid)
+	}
 
 	// Notify the cleanup loop. If the context is already done (server is
 	// stopping and peerCleanupLoop has exited), handle removal here directly

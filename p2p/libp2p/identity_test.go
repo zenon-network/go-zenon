@@ -86,7 +86,7 @@ func TestPubkeyToNodeID(t *testing.T) {
 
 	// Verify it matches the uncompressed pubkey without 0x04 prefix
 	uncompressed := crypto.FromECDSAPub(&key.PublicKey) // 65 bytes with 0x04 prefix
-	expected := uncompressed[1:]                          // strip prefix
+	expected := uncompressed[1:]                        // strip prefix
 
 	if !bytes.Equal(nodeID[:], expected) {
 		t.Fatalf("NodeID mismatch:\n  got:  %x\n  want: %x", nodeID[:], expected)

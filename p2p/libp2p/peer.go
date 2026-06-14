@@ -27,6 +27,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"github.com/zenon-network/go-zenon/common"
@@ -39,8 +40,8 @@ const (
 	baseProtocolLength     = uint64(16)
 	baseProtocolMaxMsgSize = 2 * 1024
 
-	pingInterval      = 15 * time.Second
-	discWriteTimeout  = 1 * time.Second
+	pingInterval     = 15 * time.Second
+	discWriteTimeout = 1 * time.Second
 )
 
 const (
@@ -177,8 +178,14 @@ func (p *Peer) ID() discover.NodeID {
 
 // RemotePeerID returns the libp2p peer ID as a string.
 func (p *Peer) RemotePeerID() string {
+	return p.remotePeer().String()
+}
+
+// remotePeer returns the libp2p peer ID, or "" for test peers with no
+// underlying stream.
+func (p *Peer) remotePeer() peer.ID {
 	if p.rw.stream != nil {
-		return p.rw.stream.Conn().RemotePeer().String()
+		return p.rw.stream.Conn().RemotePeer()
 	}
 	return ""
 }

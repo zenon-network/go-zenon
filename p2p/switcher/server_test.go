@@ -1,16 +1,22 @@
 package switcher
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/inconshreveable/log15"
+	"github.com/libp2p/go-libp2p/core/peer"
 
+	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/p2p"
 	"github.com/zenon-network/go-zenon/p2p/discover"
 )
@@ -82,8 +88,8 @@ type mockBackend struct {
 	mu       sync.Mutex
 	started  bool
 	stopped  bool
-	startErr error         // if set, Start() returns this
-	startFn  func() error  // if set, called instead of default Start logic
+	startErr error        // if set, Start() returns this
+	startFn  func() error // if set, called instead of default Start logic
 	peerCnt  int
 	peers    []p2p.Peer
 	selfNode *discover.Node
@@ -383,32 +389,154 @@ func TestSwapHappyPath(t *testing.T) {
 // TestSwapLibp2pStartFails verifies that when the libp2p backend fails
 // to start during swap, the node is left without an active backend
 // (no panic, no leak).
-func TestSwapLibp2pStartFails(t *testing.T) {
-	oracle := &fakeOracle{active: false}
-	srv, _, libp2pMock := newMockServer(t, oracle)
+// syncBuffer is a concurrency-safe bytes.Buffer for capturing log
+// output written by server goroutines.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
 
-	// Configure libp2p to fail on Start().
-	libp2pMock.startErr = errors.New("libp2p start failed")
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// captureP2PLogs redirects common.P2PLogger into a buffer for the
+// duration of the test.
+func captureP2PLogs(t *testing.T) *syncBuffer {
+	t.Helper()
+	buf := &syncBuffer{}
+	common.P2PLogger.SetHandler(log15.StreamHandler(buf, log15.LogfmtFormat()))
+	t.Cleanup(func() { common.P2PLogger.SetHandler(log15.DiscardHandler()) })
+	return buf
+}
+
+// TestStartWarnsOnEmptyLibp2pBootstrap verifies the Phase-A advance
+// warning fires on legacy startup iff the libp2p bootstrap list is
+// empty.
+func TestStartWarnsOnEmptyLibp2pBootstrap(t *testing.T) {
+	const warnMsg = "libp2p bootstrap list is empty"
+
+	buf := captureP2PLogs(t)
+	oracle := &fakeOracle{active: false}
+	srv, _, _ := newMockServer(t, oracle)
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	srv.Stop()
+	if !strings.Contains(buf.String(), warnMsg) {
+		t.Fatal("missing empty-bootstrap warning on legacy startup")
+	}
+
+	buf2 := captureP2PLogs(t)
+	oracle2 := &fakeOracle{active: false}
+	srv2, _, _ := newMockServer(t, oracle2)
+	srv2.Libp2pBootstrapPeers = []peer.AddrInfo{{ID: "test-peer"}}
+	if err := srv2.Start(); err != nil {
+		t.Fatalf("Start 2: %v", err)
+	}
+	srv2.Stop()
+	if strings.Contains(buf2.String(), warnMsg) {
+		t.Fatal("warning fired despite populated bootstrap list")
+	}
+}
+
+// compressSwapRetry shrinks the swap retry schedule for tests and
+// returns a restore func to defer.
+func compressSwapRetry(base, ceil time.Duration) func() {
+	oldBase, oldCap := swapRetryBase, swapRetryCap
+	swapRetryBase, swapRetryCap = base, ceil
+	return func() { swapRetryBase, swapRetryCap = oldBase, oldCap }
+}
+
+// TestSwapRetriesUntilSuccess verifies that a libp2p backend that fails
+// its first start attempts is rebuilt and retried with backoff until it
+// comes up, and that the node has no active backend while retrying.
+func TestSwapRetriesUntilSuccess(t *testing.T) {
+	defer compressSwapRetry(20*time.Millisecond, 100*time.Millisecond)()
+
+	oracle := &fakeOracle{active: false}
+	srv, legacyMock, libp2pMock := newMockServer(t, oracle)
+
+	// Fail the first two start attempts, succeed on the third.
+	var attempts atomic.Int32
+	libp2pMock.startFn = func() error {
+		n := attempts.Add(1)
+		if n <= 2 {
+			return fmt.Errorf("injected start failure %d", n)
+		}
+		libp2pMock.mu.Lock()
+		libp2pMock.started = true
+		libp2pMock.mu.Unlock()
+		return nil
+	}
 
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-
-	// Activate the spork.
 	oracle.setActive(true)
 
-	// Wait for the watcher to attempt the swap. After the failed
-	// swap, PeerCount should be 0 (no active backend).
-	waitForCondition(t, 5*time.Second, "swap attempt", func() bool {
-		return libp2pMock.isStarted() || srv.PeerCount() == 0
+	waitForCondition(t, 5*time.Second, "swap to complete after retries", func() bool {
+		return libp2pMock.isStarted() && srv.PeerCount() == 10
 	})
 
-	// The node should have no active backend.
-	if srv.PeerCount() != 0 {
-		t.Fatalf("PeerCount = %d after failed swap, want 0", srv.PeerCount())
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("start attempts = %d, want 3", got)
+	}
+	if !legacyMock.isStopped() {
+		t.Fatal("legacy not stopped")
+	}
+	srv.Stop()
+}
+
+// TestSwapRetryAbortsOnStop verifies that a persistently-failing libp2p
+// backend does not keep the retry loop — and therefore Stop(), which
+// waits on the watcher goroutine — alive: the backoff select observes
+// stopCh and exits promptly, even mid-sleep.
+func TestSwapRetryAbortsOnStop(t *testing.T) {
+	defer compressSwapRetry(2*time.Second, 10*time.Second)()
+
+	oracle := &fakeOracle{active: false}
+	srv, _, libp2pMock := newMockServer(t, oracle)
+
+	var attempts atomic.Int32
+	libp2pMock.startFn = func() error {
+		attempts.Add(1)
+		return errors.New("injected: libp2p never starts")
 	}
 
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	oracle.setActive(true)
+
+	waitForCondition(t, 5*time.Second, "first failed swap attempt", func() bool {
+		return attempts.Load() >= 1
+	})
+
+	// The retry loop is now in (or headed into) a 2s backoff sleep.
+	// Stop() must interrupt it rather than wait it out.
+	start := time.Now()
 	srv.Stop()
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("Stop took %v; retry backoff not interrupted", took)
+	}
+
+	if srv.PeerCount() != 0 {
+		t.Fatalf("PeerCount = %d after aborted swap, want 0", srv.PeerCount())
+	}
+	final := attempts.Load()
+	time.Sleep(150 * time.Millisecond)
+	if attempts.Load() != final {
+		t.Fatal("start attempts continued after Stop")
+	}
 }
 
 // TestStopDuringSwapRace verifies that if Stop() arrives while the

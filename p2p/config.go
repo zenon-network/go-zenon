@@ -26,9 +26,9 @@ const (
 	DefaultNetPrivateKeyFile = "network-private-key"
 
 	// DefaultPeerstoreDirName is the conventional subdirectory under
-	// the network data dir where the libp2p backend keeps its
-	// persistent peerstore (a LevelDB database). Sits alongside the
-	// legacy nodeDb but is independent from it.
+	// the network data dir where the libp2p backend keeps its peer
+	// database (a LevelDB database; see p2p/libp2p/peerdb.go). Sits
+	// alongside the legacy nodeDb but is independent from it.
 	DefaultPeerstoreDirName = "libp2p-peerstore"
 )
 
@@ -218,13 +218,14 @@ type Net struct {
 	// their host.
 	NATPortMap bool
 
-	// PeerstoreDir is the on-disk path for the libp2p backend's
-	// LevelDB-backed peerstore. When set, libp2p remembers peers
-	// across restarts: on startup a "warm bootstrap" dials peers from
-	// the peerstore in parallel with the configured BootstrapPeers,
-	// drastically reducing dependence on the bootstrap-node list
-	// staying current. Empty string falls back to an in-memory
-	// peerstore (libp2p default) — every restart is a cold start.
+	// PeerstoreDir is the on-disk path for the libp2p backend's peer
+	// database. When set, every peer that completes a Zenon handshake
+	// is recorded (with its dialable addresses and a last-seen stamp,
+	// expiring after 30 days unseen) and on startup a "warm bootstrap"
+	// redials the most recently seen of them in parallel with the
+	// configured BootstrapPeers, drastically reducing dependence on
+	// the bootstrap-node list staying current. Empty string disables
+	// peer persistence — every restart is a cold start.
 	//
 	// Conventionally set to <DataPath>/network/libp2p-peerstore/ by
 	// node/config.go, alongside the legacy nodeDb at

@@ -13,3 +13,4 @@ build/
 # IDE
 .vscode
 .idea/
+.research/

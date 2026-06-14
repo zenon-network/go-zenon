@@ -64,7 +64,7 @@ type NetConfig struct {
 	// opt-in by setting this to true in config.json.
 	NATPortMap bool
 
-	// PeerstoreDir is an optional override for the libp2p peerstore
+	// PeerstoreDir is an optional override for the libp2p peer-database
 	// directory. When empty (the default), node/config.go places it at
 	// <DataPath>/network/libp2p-peerstore/. Operators normally don't
 	// need to set this; expose only because the legacy nodeDb honors
