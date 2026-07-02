@@ -19,7 +19,7 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 
 	isDynamicPlasmaActive, err := store.IsSporkActive(types.DynamicPlasmaSpork)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var (
@@ -30,7 +30,7 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 	if isDynamicPlasmaActive {
 		config, err := store.GetPlasmaVariables()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		plasma := dp.NewDynamicPlasma(previousMomentum, config)
 		blocks = NewMomentumContentSelector(plasma, w.priorityAddresses).Content(w.chain.GetAllUncommittedAccountBlocks())

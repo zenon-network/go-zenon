@@ -2,7 +2,7 @@
     "ChainIdentifier": 69,
     "ExtraData": "LOCAL DEV-NET",
     "GenesisTimestampSec": 1739923200,
-    "SporkAddress": "z1qzmzssx28dc0fmvlca05hyxk2kgkgu7n0cj8pl",
+    "SporkAddress": "z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq",
     "PillarConfig": {
         "Pillars": [
             {
@@ -80,21 +80,21 @@
             {
                 "owner": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d",
                 "id": "85b559d52ef7e23b358cbceb12aeadcf5397bad860d8d50c4cd348246379e913",
-                "amount": 100000000000,
+                "amount": 1000000000000,
                 "withdrawHeight": 1,
                 "beneficiaryAddress": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d"
             },
             {
                 "owner": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d",
                 "id": "8d3a261582f0f7d01b0a7c6024da87e5637b5929cb71bc0f954cf14093e3059e",
-                "amount": 100000000000,
+                "amount": 1000000000000,
                 "withdrawHeight": 1,
                 "beneficiaryAddress": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d"
             },
             {
                 "owner": "z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d",
                 "id": "347ab55f43bf3e41cfedc07df54bdb30ead1704a1fbcef9e4205e8297e862126",
-                "amount": 100000000000,
+                "amount": 1000000000000,
                 "withdrawHeight": 1,
                 "beneficiaryAddress": "z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq"
             }
