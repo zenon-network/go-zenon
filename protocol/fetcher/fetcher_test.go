@@ -116,6 +116,7 @@ func TestInsert_VerifyBlockFails_DropsPeer(t *testing.T) {
 
 	verifyErr := errors.New("invalid momentum: bad chain identifier")
 	var insertCalled bool
+	var mu sync.Mutex
 
 	h := newTestHarness(
 		func(hash types.Hash) *nom.DetailedMomentum {
@@ -128,7 +129,9 @@ func TestInsert_VerifyBlockFails_DropsPeer(t *testing.T) {
 			return verifyErr
 		},
 		func(momentums []*nom.DetailedMomentum) (int, error) {
+			mu.Lock()
 			insertCalled = true
+			mu.Unlock()
 			return 0, nil
 		},
 	)
@@ -154,6 +157,8 @@ func TestInsert_VerifyBlockFails_DropsPeer(t *testing.T) {
 		// expected
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
 	if insertCalled {
 		t.Error("insertChain should not be called when verification fails")
 	}
@@ -165,6 +170,7 @@ func TestInsert_InsertChainFails_NoBroadcast(t *testing.T) {
 
 	insertErr := errors.New("VM execution failed")
 	var verifyCalled bool
+	var mu sync.Mutex
 
 	h := newTestHarness(
 		func(hash types.Hash) *nom.DetailedMomentum {
@@ -174,7 +180,9 @@ func TestInsert_InsertChainFails_NoBroadcast(t *testing.T) {
 			return nil
 		},
 		func(detailed *nom.DetailedMomentum) error {
+			mu.Lock()
 			verifyCalled = true
+			mu.Unlock()
 			return nil
 		},
 		func(momentums []*nom.DetailedMomentum) (int, error) {
@@ -201,6 +209,8 @@ func TestInsert_InsertChainFails_NoBroadcast(t *testing.T) {
 		// expected
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
 	if !verifyCalled {
 		t.Error("verifyBlock should be called even when insertion fails")
 	}
@@ -264,17 +274,22 @@ func TestInsert_ParentUnknown_Aborts(t *testing.T) {
 	block := newTestMomentum(2, types.Hash{0xff})
 
 	var verifyCalled, insertCalled bool
+	var mu sync.Mutex
 
 	h := newTestHarness(
 		func(hash types.Hash) *nom.DetailedMomentum {
 			return nil // parent not found
 		},
 		func(detailed *nom.DetailedMomentum) error {
+			mu.Lock()
 			verifyCalled = true
+			mu.Unlock()
 			return nil
 		},
 		func(momentums []*nom.DetailedMomentum) (int, error) {
+			mu.Lock()
 			insertCalled = true
+			mu.Unlock()
 			return 1, nil
 		},
 	)
@@ -298,6 +313,8 @@ func TestInsert_ParentUnknown_Aborts(t *testing.T) {
 		// expected
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
 	if verifyCalled {
 		t.Error("verifyBlock should not be called when parent is unknown")
 	}
