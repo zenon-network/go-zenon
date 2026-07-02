@@ -65,12 +65,13 @@ type NetConfig struct {
 	NATPortMap bool
 
 	// PeerstoreDir is an optional override for the libp2p peer-database
-	// directory. When empty (the default), node/config.go places it at
-	// <DataPath>/network/libp2p-peerstore/. Operators normally don't
-	// need to set this; expose only because the legacy nodeDb honors
-	// the analogous DataPath/network convention and we want symmetric
-	// override behaviour.
-	PeerstoreDir string
+	// directory. A pointer so config.json can distinguish "omitted" from
+	// "explicitly set to empty": when the field is omitted (nil),
+	// node/config.go places it at <DataPath>/network/libp2p-peerstore/;
+	// when explicitly set to "", peer persistence is disabled (every
+	// restart is a cold start), per p2p.Config.PeerstoreDir. Operators
+	// normally don't need to set this at all.
+	PeerstoreDir *string
 }
 
 type Config struct {
@@ -215,11 +216,13 @@ func (c *Config) makeNetConfig() *p2p.Net {
 	networkDataDir := filepath.Join(c.DataPath, p2p.DefaultNetDirName)
 	privateKeyFile := filepath.Join(c.DataPath, p2p.DefaultNetPrivateKeyFile)
 
-	// Default the libp2p peerstore to a sibling of the legacy nodeDb,
-	// honoring an explicit operator override if set in config.json.
-	peerstoreDir := c.Net.PeerstoreDir
-	if peerstoreDir == "" {
-		peerstoreDir = filepath.Join(networkDataDir, p2p.DefaultPeerstoreDirName)
+	// Default the libp2p peerstore to a sibling of the legacy nodeDb
+	// unless the operator set an explicit override in config.json. An
+	// explicit empty string disables peer persistence rather than
+	// falling back to the default path.
+	peerstoreDir := filepath.Join(networkDataDir, p2p.DefaultPeerstoreDirName)
+	if c.Net.PeerstoreDir != nil {
+		peerstoreDir = *c.Net.PeerstoreDir
 	}
 
 	return &p2p.Net{

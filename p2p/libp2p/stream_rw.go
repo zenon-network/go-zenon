@@ -82,10 +82,15 @@ func (rw *StreamRW) WriteMsg(msg p2p.Msg) error {
 	rw.stream.SetWriteDeadline(time.Now().Add(frameWriteTimeout))
 	defer rw.stream.SetWriteDeadline(time.Time{})
 
-	// Encode payload
-	payload, err := io.ReadAll(msg.Payload)
+	// Encode payload. Bound the read at maxMessageSize+1 so an oversized
+	// or unbounded Payload reader can't force an unbounded allocation
+	// here — ReadMsg enforces the same cap on the receiving side.
+	payload, err := io.ReadAll(io.LimitReader(msg.Payload, int64(maxMessageSize)+1))
 	if err != nil {
 		return fmt.Errorf("read payload: %w", err)
+	}
+	if len(payload) > maxMessageSize {
+		return fmt.Errorf("message too large: payload exceeds %d bytes", maxMessageSize)
 	}
 
 	// Build 8-byte header

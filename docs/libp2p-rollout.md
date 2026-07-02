@@ -217,11 +217,11 @@ Existing operator configs that only have `Seeders` continue to boot — the libp
 
 ### Persistent peerstore
 
-The libp2p backend remembers peers across restarts via a LevelDB-backed peerstore at `<DataPath>/network/libp2p-peerstore/`. On every successful connection, libp2p records the peer's multiaddrs, public key, and protocol-negotiation results to disk. On the next startup, a "warm bootstrap" path dials up to `MinConnectedPeers` of those known peers in parallel with the configured `BootstrapPeers` — so a node that has been online before can rejoin the network even if every bootstrap entry has since rotated. This is the primary safeguard against the failure mode that left the legacy network with 147 stale seeders: bootstrap nodes are now a first-time-setup dependency, not a continuous-availability dependency.
+The libp2p backend remembers peers across restarts via a LevelDB-backed peerstore at `<DataPath>/network/libp2p-peerstore/`. On every successful Zenon handshake, it records the peer's dialable multiaddrs, a last-seen timestamp, and a dial-failure count to disk (entries expire after 30 days unseen). On the next startup, a "warm bootstrap" path dials up to `MinConnectedPeers` of those known peers in parallel with the configured `BootstrapPeers` — so a node that has been online before can rejoin the network even if every bootstrap entry has since rotated. This is the primary safeguard against the failure mode that left the legacy network with 147 stale seeders: bootstrap nodes are now a first-time-setup dependency, not a continuous-availability dependency.
 
 Disk usage is on the order of ~1MB for a fully populated peerstore (~1000 peers). The directory is created automatically on first start.
 
-Operators normally don't need to configure this. The default path can be overridden via an optional `Net.PeerstoreDir` field in `config.json`; setting it to an empty string falls back to libp2p's in-memory peerstore (every restart becomes a cold start — not recommended in production).
+Operators normally don't need to configure this. The default path can be overridden via an optional `Net.PeerstoreDir` field in `config.json`. Omitting the field uses the default path; explicitly setting it to `""` disables peer persistence — every restart becomes a cold start (not recommended in production).
 
 The peerstore is independent from the legacy `nodeDb` (at `<DataPath>/network/nodes/`); migration between formats is not attempted because the peer-ID encoding and dial endpoints differ between backends.
 

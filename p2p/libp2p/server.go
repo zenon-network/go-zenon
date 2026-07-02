@@ -165,6 +165,12 @@ type Server struct {
 	loopWG       sync.WaitGroup
 	pendingCount int32 // atomic; tracks peers in handshake phase
 
+	// refreshingDHT guards against overlapping RefreshRoutingTable calls
+	// from dhtDiscoveryLoop: a refresh walks the keyspace and can take
+	// longer than dhtDiscoveryInterval, so a tick that fires mid-refresh
+	// must skip rather than pile up a second concurrent walk.
+	refreshingDHT atomic.Bool
+
 	// testStartHook, when non-nil, is invoked by Start() at the point
 	// where every resource (context, datastore, host, DHT) is live but
 	// no dial goroutines have been launched. Returning an error aborts
@@ -482,7 +488,7 @@ func (srv *Server) Start() (err error) {
 			return fmt.Errorf("create DHT: %w", err)
 		}
 		if err := srv.dht.Bootstrap(srv.ctx); err != nil {
-			common.P2PLogger.Debug(fmt.Sprintf("DHT bootstrap failed: %v", err))
+			common.P2PLogger.Warn(fmt.Sprintf("DHT bootstrap failed: %v", err))
 		}
 	}
 
@@ -1111,18 +1117,27 @@ func (srv *Server) peerMaintenanceLoop() {
 // dhtDiscoveryLoop translates the DHT's routing table into Zenon
 // application-protocol dials.
 //
-// The DHT (created in Start) populates its routing table as a side
-// effect of bootstrap walks and the libp2p Identify exchange on each
-// connection — those peers are reachable libp2p hosts, but without
-// this loop they would never become Zenon peers because the rest of
-// the server only ever dials srv.BootstrapPeers. That would leave the
-// network effectively bootstrap-only after activation; if a node's
-// configured bootstrap entries went down, it would never discover
-// replacements.
+// The DHT (created in Start) populates its routing table passively as a
+// side effect of bootstrap walks and the libp2p Identify exchange on
+// each connection. On a small/private network that passive trickle can
+// be too slow: a node below MinConnectedPeers has no way to reach peers
+// its table hasn't heard about yet. So each tick below MinConnectedPeers
+// also kicks off an active RefreshRoutingTable() walk (fire-and-forget,
+// deduplicated by refreshingDHT) that issues real FIND_NODE queries
+// against the DHT to pull in peers beyond whatever Identify happened to
+// deliver — the result lands in the routing table for a later tick to
+// dial. We can't use provider-record rendezvous discovery
+// (routing.NewRoutingDiscovery) here since the DHT is started with
+// DisableProviders/DisableValues; RefreshRoutingTable operates purely at
+// the peer-routing layer, which stays enabled.
+//
+// Without any of this, the Zenon peer set would be effectively
+// bootstrap-only after activation; if a node's configured bootstrap
+// entries went down, it would never discover replacements.
 //
 // The loop is bounded:
 //   - Only runs when len(peerMap) < MinConnectedPeers, so a healthy
-//     node at capacity doesn't dial unnecessarily.
+//     node at capacity doesn't dial or query unnecessarily.
 //   - Defers to dialPeer's own dedup (peerMap + dialing set) and
 //     respects the per-peer backoff machinery via shouldDial, so a
 //     peer that just failed isn't immediately retried.
@@ -1148,6 +1163,8 @@ func (srv *Server) dhtDiscoveryLoop() {
 				continue
 			}
 			needed := srv.MinConnectedPeers - numPeers
+
+			srv.triggerDHTRefresh()
 
 			// Snapshot the routing table. ListPeers returns peer.IDs
 			// the DHT has been able to talk to; we still need a full
@@ -1204,6 +1221,29 @@ func (srv *Server) dhtDiscoveryLoop() {
 			}
 		}
 	}
+}
+
+// triggerDHTRefresh kicks off an active Kademlia routing-table refresh in
+// the background if one isn't already running. The walk can take longer
+// than dhtDiscoveryInterval, and its only effect is a fuller routing
+// table for a later dhtDiscoveryLoop tick to read, so the caller doesn't
+// block on completion — but it's still tracked by loopWG so Stop()'s
+// "blocks until all goroutines have exited" contract holds and this
+// goroutine can't outlive srv.dht.Close().
+func (srv *Server) triggerDHTRefresh() {
+	if !srv.refreshingDHT.CompareAndSwap(false, true) {
+		return
+	}
+	srv.loopWG.Add(1)
+	go func() {
+		defer srv.loopWG.Done()
+		defer srv.refreshingDHT.Store(false)
+		for err := range srv.dht.RefreshRoutingTable() {
+			if err != nil {
+				common.P2PLogger.Debug(fmt.Sprintf("dht routing table refresh: %v", err))
+			}
+		}
+	}()
 }
 
 // peerCleanupLoop waits for peer disconnects and removes them from the map.

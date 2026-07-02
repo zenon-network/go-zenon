@@ -443,7 +443,12 @@ func (srv *Server) swap() {
 
 			select {
 			case <-stopCh:
-				return // Stop() was called; abort the swap
+				// Stop() was called during backoff. Start() returned an
+				// error above, but the backend may still have allocated
+				// resources (e.g. a partially-opened host) before failing;
+				// give it a chance to release them.
+				newBackend.Stop()
+				return
 			case <-time.After(delay):
 			}
 			delay *= 2
