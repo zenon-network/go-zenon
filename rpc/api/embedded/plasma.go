@@ -76,12 +76,14 @@ type FusionEntry struct {
 	Beneficiary      types.Address `json:"beneficiary"`
 	ExpirationHeight uint64        `json:"expirationHeight"`
 	Id               types.Hash    `json:"id"`
+	IsRevocable      bool          `json:"isRevocable"`
 }
 type FusionEntryMarshal struct {
 	QsrAmount        string        `json:"qsrAmount"`
 	Beneficiary      types.Address `json:"beneficiary"`
 	ExpirationHeight uint64        `json:"expirationHeight"`
 	Id               types.Hash    `json:"id"`
+	IsRevocable      bool          `json:"isRevocable"`
 }
 
 func (r *FusionEntry) ToFusionEntryMarshal() *FusionEntryMarshal {
@@ -90,6 +92,7 @@ func (r *FusionEntry) ToFusionEntryMarshal() *FusionEntryMarshal {
 		Beneficiary:      r.Beneficiary,
 		ExpirationHeight: r.ExpirationHeight,
 		Id:               r.Id,
+		IsRevocable:      r.IsRevocable,
 	}
 
 	return aux
@@ -108,6 +111,7 @@ func (r *FusionEntry) UnmarshalJSON(data []byte) error {
 	r.Beneficiary = aux.Beneficiary
 	r.ExpirationHeight = aux.ExpirationHeight
 	r.Id = aux.Id
+	r.IsRevocable = aux.IsRevocable
 	return nil
 }
 
@@ -192,7 +196,7 @@ func (a *PlasmaApi) GetEntriesByAddress(address types.Address, pageIndex, pageSi
 		return nil, api.ErrPageSizeParamTooBig
 	}
 
-	_, context, err := api.GetFrontierContext(a.chain, types.PlasmaContract)
+	momentum, context, err := api.GetFrontierContext(a.chain, types.PlasmaContract)
 	if err != nil {
 		return nil, err
 	}
@@ -208,10 +212,11 @@ func (a *PlasmaApi) GetEntriesByAddress(address types.Address, pageIndex, pageSi
 
 	for i, info := range list[start:end] {
 		entryList[i] = &FusionEntry{
-			info.Amount,
-			info.Beneficiary,
-			info.ExpirationHeight,
-			info.Id,
+			QsrAmount:        info.Amount,
+			Beneficiary:      info.Beneficiary,
+			ExpirationHeight: info.ExpirationHeight,
+			Id:               info.Id,
+			IsRevocable:      momentum.Height >= info.ExpirationHeight,
 		}
 	}
 	return &FusionEntryList{amount, listLen, entryList}, nil
