@@ -13,4 +13,4 @@ build/
 .idea/
 
 # Internal docs working tree (not shipped on this branch)
-docs/
+/docs/

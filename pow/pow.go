@@ -97,7 +97,7 @@ func quickInc(x []byte) []byte {
 // GetThresholdByDifficulty returns the acceptance threshold for the
 // given difficulty as 2^64 - (2^64 / difficulty). A candidate nonce is
 // valid when the first 8 bytes of its digest, read as a little-endian
-// uint64, exceed this threshold, so a higher difficulty shrinks the
+// uint64, meet or exceed this threshold, so a higher difficulty shrinks the
 // accepting range and requires more attempts. It panics if difficulty
 // is nil.
 func GetThresholdByDifficulty(difficulty *big.Int) uint64 {

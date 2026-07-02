@@ -22,7 +22,8 @@ import (
 //     earlier tick if this one is empty.
 //   - GetContent returns the momentums whose timestamps fall inside
 //     the tick, in ascending height order; empty if none were
-//     produced during it.
+//     produced during it. For tick 0 the genesis momentum itself is
+//     excluded, even though its timestamp falls in the tick.
 type ChainTicker interface {
 	common.Ticker
 	IsFinished(tick uint64) bool

@@ -8,7 +8,7 @@ import (
 
 // Ticker maps wall-clock time onto consecutive fixed-length intervals
 // (ticks) counted from a start time, with tick 0 covering the first
-// interval. The consensus layer builds its momentum, epoch and point
+// interval. The consensus layer builds its election-tick and epoch
 // schedules as tickers anchored at the genesis timestamp. Each tick
 // spans [startTime, endTime), end exclusive.
 //

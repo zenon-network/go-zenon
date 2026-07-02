@@ -9,7 +9,8 @@
 // subscription server and the pillar. Init and Start then run the
 // subsystems in dependency order — chain, consensus, event printer,
 // subscription server, pillar — with the protocol manager started
-// last (its Init is a no-op); Stop tears them down in reverse,
+// last (its Init call is commented out); Stop tears them down in
+// reverse,
 // closing the consensus leveldb at the end. The Zenon interface
 // exposes each subsystem to the node shell and the RPC APIs.
 package zenon

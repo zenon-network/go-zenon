@@ -51,9 +51,9 @@ func NewBridgeApi(z zenon.Zenon) *BridgeApi {
 // bridge is halted either while Halted is true (set by the
 // administrator, by a TSS-signed Halt call, or by the Emergency method,
 // which also resets the administrator to the zero address and clears
-// both TSS public keys) or, after an Unhalt call, until
-// UnhaltDurationInMomentums momentums have passed since the
-// UnhaltedAt height. Before the state is first written it reads as
+// both TSS public keys) or, after an Unhalt call, while the momentum
+// height is still at most UnhaltedAt + UnhaltDurationInMomentums.
+// Before the state is first written it reads as
 // defaults: the initial administrator hard-coded in vm/constants, empty
 // keys, not halted.
 //
@@ -197,7 +197,8 @@ func (a *BridgeApi) GetNetworkInfo(networkClass uint32, chainId uint32) (*defini
 
 // GetAllNetworks pages over every network registered with the bridge,
 // ordered by ascending network class and, within a class, ascending
-// chain id. Count is the total number of registered networks. A
+// chain id. Count is the total number of registered networks that
+// parse from storage (unparseable entries are skipped). A
 // pageSize above 1024 is rejected with api.ErrPageSizeParamTooBig.
 //
 // JSON-RPC: embedded.bridge.getAllNetworks
@@ -225,8 +226,8 @@ func (a *BridgeApi) GetAllNetworks(pageIndex, pageSize uint32) (*NetworkInfoList
 }
 
 // NetworkInfoList is one page of bridged networks as reported by
-// GetAllNetworks. Count is the total number of registered networks, not
-// the number of entries in List.
+// GetAllNetworks. Count is the total number of parseable registered
+// networks, not the number of entries in List.
 type NetworkInfoList struct {
 	Count int                       `json:"count"`
 	List  []*definition.NetworkInfo `json:"list"`

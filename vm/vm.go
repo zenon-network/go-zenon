@@ -79,7 +79,7 @@ func NewVM(context vm_context.AccountVmContext) *VM {
 // enoughPlasma checks the block's plasma against the account's
 // resources and fills in the block's plasma accounting fields:
 // FusedPlasma may not exceed AvailablePlasma, TotalPlasma (fused +
-// PoW plasma from Difficulty) is capped at MaxPlasmaForAccountBlock
+// PoW plasma from Difficulty) may not exceed MaxPlasmaForAccountBlock
 // and must cover BasePlasma (recomputed here via
 // GetBasePlasmaForAccountBlock). On success the consumed FusedPlasma
 // is added to the account's chain-plasma counter. Embedded addresses

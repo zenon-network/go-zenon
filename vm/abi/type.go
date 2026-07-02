@@ -9,9 +9,10 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
-// Kinds of ABI argument types, held in Type.T. Besides the Ethereum
-// kinds, AddressTy, TokenStandardTy and HashTy are Zenon-specific and
-// decode to types.Address, types.ZenonTokenStandard and types.Hash.
+// Kinds of ABI argument types, held in Type.T. TokenStandardTy is
+// Zenon-specific; AddressTy and HashTy exist upstream in Ethereum's
+// ABI but decode here to the Zenon types. The three decode to
+// types.Address, types.ZenonTokenStandard and types.Hash.
 const (
 	IntTy byte = iota
 	UintTy

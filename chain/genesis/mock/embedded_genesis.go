@@ -4,8 +4,9 @@
 // three registered pillars, pre-fused plasma for eight pillar keys
 // plus the spork key and several users, ZNN/QSR token definitions
 // mirroring alphanet, one legacy swap entry and funded balances for
-// the pillar, spork and User1 through User5 keys (User6 through
-// User10 hold no genesis balance). All key pairs are derived from
+// the Pillar1 through Pillar8, spork and User1 through User5 keys
+// (Pillar4 through Pillar8 hold larger ZNN/QSR balances than the
+// registered three; User6 through User10 hold no genesis balance). All key pairs are derived from
 // fixed entropy, so addresses and the genesis momentum hash are
 // stable across runs.
 package g

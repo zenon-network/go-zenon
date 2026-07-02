@@ -21,7 +21,9 @@ type accountVmContext struct {
 }
 
 // MomentumStore returns the read-only momentum store the context was
-// created with, fixed at the block's acknowledged momentum.
+// created with: the block's acknowledged momentum on the supervisor
+// path, the frontier store for RPC contexts, or nil for genesis
+// contexts (see NewAccountContext).
 func (ctx *accountVmContext) MomentumStore() store.Momentum {
 	return ctx.momentumStore
 }

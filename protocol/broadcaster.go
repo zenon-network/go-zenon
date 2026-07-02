@@ -16,8 +16,9 @@
 // splits synchronisation between two helpers: package downloader
 // performs bulk batch downloads from the best peer whenever its
 // advertised height exceeds the local frontier, while package fetcher
-// recovers individual announced momentums once the node has caught
-// up. ChainBridge (chain_bridge.go) adapts the chain for both
+// recovers individual announced momentums — hash announcements at any
+// time, directly propagated full momentums only once the node has
+// caught up. ChainBridge (chain_bridge.go) adapts the chain for both
 // directions — serving momentums to remote peers and inserting
 // downloaded ones under the chain insert lock — and Broadcaster
 // (broadcaster.go) inserts momentums and account blocks produced by

@@ -15,8 +15,9 @@ import (
 // SporkApi implements the "embedded.spork" JSON-RPC namespace, which
 // reads the protocol-upgrade records stored in the spork embedded
 // contract as of the frontier momentum. A spork is created and later
-// activated only by send blocks from the spork address (or, between
-// momentum heights 10109240 and 13243712, the community spork address);
+// activated only by send blocks from the spork address (or, from
+// momentum height 10109240 up to but excluding 13243712, the
+// community spork address);
 // activation sets Activated and an EnforcementHeight of the activation
 // momentum's height plus 6, after which the gated feature applies.
 // Every exported method is served as

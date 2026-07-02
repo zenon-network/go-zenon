@@ -90,8 +90,9 @@ type AccountPool interface {
 	// AddAccountBlockTransaction inserts an account-block transaction
 	// into the pool, which may roll back conflicting unconfirmed
 	// blocks of the same account chain; momentum-confirmed blocks are
-	// never rolled back. Forks resolve by the fork-priority rule
-	// described on the AccountPool interface.
+	// never rolled back. Forks resolve by the fork-priority rule: the
+	// block with the higher TotalPlasma/BasePlasma ratio wins, with
+	// ties broken by the smaller hash.
 	AddAccountBlockTransaction(insertLocker sync.Locker, transaction *nom.AccountBlockTransaction) error
 	// ForceAddAccountBlockTransaction inserts like
 	// AddAccountBlockTransaction but skips the fork-priority

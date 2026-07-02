@@ -49,7 +49,7 @@ const (
 
 // Table is the Kademlia routing table: known nodes are kept in
 // buckets indexed by the XOR distance of their ID hash from the local
-// node, most recently active last. Nodes are admitted only after
+// node, most recently active first. Nodes are admitted only after
 // bonding (a ping-pong exchange) and the table refreshes itself with
 // periodic random lookups. The p2p server uses it to find peers to
 // dial, backed by a node database that persists across restarts; the

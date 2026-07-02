@@ -42,8 +42,8 @@ type Supervisor struct {
 // ContractExecution is the result of GenerateAutoReceive: the
 // ContractReceive transaction to insert plus the error returned by
 // the embedded method itself (non-nil when the call failed and was
-// rolled back with a refund; the transaction is still valid and
-// records the failure status).
+// rolled back, with a refund block if the send carried tokens; the
+// transaction is still valid and records the failure status).
 type ContractExecution struct {
 	Transaction   *nom.AccountBlockTransaction
 	ReturnedError error
