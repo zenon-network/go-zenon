@@ -25,8 +25,13 @@ func (t ticker) ToTime(tick uint64) (time.Time, time.Time) {
 	eTime := t.startTime.Add(t.interval * time.Duration(tick+1))
 	return sTime, eTime
 }
-func (t ticker) ToTick(time time.Time) uint64 {
-	subSec := int64(time.Sub(t.startTime).Seconds())
+func (t ticker) ToTick(tm time.Time) uint64 {
+	// times at or before startTime belong to tick 0; without this clamp a
+	// negative difference converts to a huge uint64 tick number
+	if !tm.After(t.startTime) {
+		return 0
+	}
+	subSec := int64(tm.Sub(t.startTime).Seconds())
 	i := uint64(subSec) / uint64(t.interval.Seconds())
 	return i
 }
@@ -52,5 +57,10 @@ func (t ticker) TickMultiplier(bigger Ticker) (uint64, error) {
 }
 
 func NewTicker(startTime time.Time, interval time.Duration) Ticker {
+	// ToTick divides by whole seconds; a sub-second interval would be a
+	// divide by zero at every conversion
+	if interval < time.Second {
+		panic("ticker interval must be at least one second")
+	}
 	return &ticker{startTime: startTime, interval: interval}
 }
