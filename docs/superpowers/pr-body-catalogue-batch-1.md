@@ -57,13 +57,21 @@ commit message.
 ## Wire-visible changes (deliberate, called out)
 
 - #12/#13: storage errors in bridge listings now fail the call instead of
-  silently shrinking pages; unwraps whose token pair was removed are
-  skipped instead of permanently erroring the endpoint.
+  silently shrinking pages; unwraps whose token pair (or network) was
+  removed are filtered out *before* Count and pagination, so removed-pair
+  entries no longer brick the endpoint, Count covers only listable
+  unwraps, and pages stay dense (review follow-up: the first cut of this
+  fix skipped inside the page loop and its nil-pair check was dead code —
+  `CheckNetworkAndPairExist` signals a missing pair via error).
 - #8/#15: `pageSize > 1024` now returns `ErrPageSizeParamTooBig`
   (matching every other paged endpoint).
 - #14: checksummed EVM addresses now match (previously empty result).
 - #10 stays wire-compatible (logs instead of erroring); #53 keeps the
-  misspelled JSON tag for compatibility.
+  misspelled JSON tag for compatibility. The Go-level field rename
+  (`ExceptedBlockNum` → `ExpectedBlockNum`) is source-breaking in theory,
+  but a GitHub-wide code search finds no external module importer of
+  `consensus/api` — every hit is this repo or a full fork carrying its
+  own copy — so it is not a practical break.
 
 ## Explicitly NOT fixed (consensus-sensitive quarantine)
 
