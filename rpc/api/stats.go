@@ -27,7 +27,7 @@ func NewStatsApi(z zenon.Zenon, p2p p2p.Server) *StatsApi {
 	return &StatsApi{
 		z:   z,
 		p2p: p2p,
-		log: common.RPCLogger.New("module", "net_api"),
+		log: common.RPCLogger.New("module", "stats_api"),
 	}
 }
 
