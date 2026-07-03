@@ -2155,6 +2155,24 @@ func TestBridge_GetAllUnwrapTokenRequests_SortStability(t *testing.T) {
 			t.Fatalf("repeated call ordering differs at index %d", i)
 		}
 	}
+
+	// GetAllUnwrapTokenRequestsByToAddress must produce the identical
+	// stable, height-descending order - both filtered (every unwrap above
+	// targets g.User2) and with the empty address, whose branch used to
+	// skip sorting entirely.
+	for _, toAddress := range []string{g.User2.Address.String(), ""} {
+		byAddr, err := bridgeAPI.GetAllUnwrapTokenRequestsByToAddress(toAddress, 0, 100)
+		common.FailIfErr(t, err)
+		if len(byAddr.List) != len(full.List) {
+			t.Fatalf("ByToAddress(%q) length %d != full length %d", toAddress, len(byAddr.List), len(full.List))
+		}
+		for i := range full.List {
+			if byAddr.List[i].TransactionHash != full.List[i].TransactionHash ||
+				byAddr.List[i].LogIndex != full.List[i].LogIndex {
+				t.Fatalf("ByToAddress(%q) ordering differs from full list at index %d", toAddress, i)
+			}
+		}
+	}
 }
 
 func TestBridge_Redeem(t *testing.T) {

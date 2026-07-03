@@ -644,11 +644,10 @@ func (a *BridgeApi) GetAllUnwrapTokenRequestsByToAddress(toAddress string, pageI
 				specificRequests = append(specificRequests, request)
 			}
 		}
-		sort.Slice(specificRequests[:], func(i, j int) bool {
-			return specificRequests[i].RegistrationMomentumHeight > specificRequests[j].RegistrationMomentumHeight
-		})
-
 	}
+	sort.SliceStable(specificRequests, func(i, j int) bool {
+		return specificRequests[i].RegistrationMomentumHeight > specificRequests[j].RegistrationMomentumHeight
+	})
 	result.Count = len(specificRequests)
 	start, end := api.GetRange(pageIndex, pageSize, uint32(len(specificRequests)))
 	momentum, err := context.GetFrontierMomentum()
