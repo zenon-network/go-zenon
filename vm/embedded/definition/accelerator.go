@@ -91,10 +91,14 @@ const (
 
 	ProjectVariableName = "project"
 	PhaseVariableName   = "phase"
+)
 
-	_ byte = iota
-	projectKeyPrefix
-	phaseKeyPrefix
+const (
+	// Historical values inherited from a shared iota const block (iota was
+	// already 11 here, not 0). They are baked into on-chain contract-storage
+	// keys and must never change.
+	projectKeyPrefix byte = 12
+	phaseKeyPrefix   byte = 13
 )
 
 var (
