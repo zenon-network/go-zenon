@@ -423,7 +423,7 @@ func (d *Downloader) findAncestor(p *peer) (uint64, error) {
 		}
 	}
 	// If the head fetch already found an ancestor, return
-	if hash.IsZero() {
+	if !hash.IsZero() {
 		log.Info("common ancestor", "peer", p, "number", number, "hash", hash[:4])
 		return number, nil
 	}
