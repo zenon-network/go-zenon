@@ -10,7 +10,7 @@ import (
 type EpochPillarStats struct {
 	Epoch            uint64   `json:"epoch"`
 	BlockNum         uint64   `json:"blockNum"`
-	ExceptedBlockNum uint64   `json:"exceptedBlockNum"`
+	ExpectedBlockNum uint64   `json:"exceptedBlockNum"` // tag misspelling kept for wire compatibility
 	Weight           *big.Int `json:"weight"`
 	Name             string   `json:"name"`
 }

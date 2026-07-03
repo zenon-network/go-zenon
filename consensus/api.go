@@ -56,7 +56,7 @@ func (obj *API) EpochStats(epoch uint64) (*api.EpochStats, error) {
 		stats.Pillars[pillarName] = &api.EpochPillarStats{
 			Epoch:            epoch,
 			BlockNum:         uint64(v.FactualNum),
-			ExceptedBlockNum: uint64(v.ExpectedNum),
+			ExpectedBlockNum: uint64(v.ExpectedNum),
 			Weight:           v.Weight,
 			Name:             pillarName}
 		stats.TotalBlocks += uint64(v.FactualNum)

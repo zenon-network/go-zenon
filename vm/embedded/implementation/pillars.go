@@ -508,13 +508,13 @@ func computePillarRewardForEpoch(detail *api.EpochStats, name string) *pillarEpo
 		return reward
 	}
 	reward.Weight.Set(selfDetail.Weight)
-	if selfDetail.ExceptedBlockNum == 0 {
+	if selfDetail.ExpectedBlockNum == 0 {
 		return reward
 	}
 
 	var totalExpectedBlockNum uint64 = 0
 	for _, detail := range detail.Pillars {
-		totalExpectedBlockNum += detail.ExceptedBlockNum
+		totalExpectedBlockNum += detail.ExpectedBlockNum
 	}
 
 	// reward = DelegationRewardsPerBlock * totalExpectedBlocks * (selfProducedBlockNum / expectedBlockNum) * (weight / totalWeight)
@@ -530,7 +530,7 @@ func computePillarRewardForEpoch(detail *api.EpochStats, name string) *pillarEpo
 		reward.DelegationReward.Mul(reward.DelegationReward, selfDetail.Weight)
 		tmp.SetUint64(totalExpectedBlockNum)
 		reward.DelegationReward.Mul(reward.DelegationReward, tmp)
-		tmp.SetUint64(selfDetail.ExceptedBlockNum)
+		tmp.SetUint64(selfDetail.ExpectedBlockNum)
 		reward.DelegationReward.Quo(reward.DelegationReward, tmp)
 		reward.DelegationReward.Quo(reward.DelegationReward, detail.TotalWeight)
 	}
@@ -541,7 +541,7 @@ func computePillarRewardForEpoch(detail *api.EpochStats, name string) *pillarEpo
 
 	reward.TotalReward.Add(reward.BlockReward, reward.DelegationReward)
 	reward.ProducedBlockNum = int32(selfDetail.BlockNum)
-	reward.ExpectedBlockNum = int32(selfDetail.ExceptedBlockNum)
+	reward.ExpectedBlockNum = int32(selfDetail.ExpectedBlockNum)
 
 	pillarLog.Debug("computer pillar-reward", "epoch", detail.Epoch, "pillar-name", name, "reward", reward, "total-weight", detail.TotalWeight, "self-weight", selfDetail.Weight)
 	return reward
