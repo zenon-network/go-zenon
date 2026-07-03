@@ -420,7 +420,7 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 		addReward(context, epoch, definition.RewardDeposit{
 			Address: &pillar.RewardWithdrawAddress,
 			Znn:     new(big.Int).Sub(reward.TotalReward, toGiveN),
-			Qsr:     common.Big0,
+			Qsr:     big.NewInt(0),
 		})
 	}
 
@@ -449,7 +449,7 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 					addReward(context, epoch, definition.RewardDeposit{
 						Address: &pillar.RewardWithdrawAddress,
 						Znn:     toBackers,
-						Qsr:     common.Big0,
+						Qsr:     big.NewInt(0),
 					})
 					break
 				}
@@ -465,7 +465,7 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 			addReward(context, epoch, definition.RewardDeposit{
 				Address: &address,
 				Znn:     toBacker,
-				Qsr:     common.Big0,
+				Qsr:     big.NewInt(0),
 			})
 		}
 	}
