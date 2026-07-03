@@ -273,15 +273,6 @@ func (s *Supervisor) packBlock(context vm_context.AccountVmContext, block *nom.A
 	}
 
 	if signFunc != nil {
-		block.Hash = block.ComputeHash()
-		signature, _, publicKey, err := signFunc(block.Hash.Bytes())
-		if err != nil {
-			return nil, err
-		}
-		block.Signature = signature
-		block.PublicKey = publicKey
-	}
-	if signFunc != nil {
 		block.ChangesHash = db.PatchHash(changes)
 		block.Hash = block.ComputeHash()
 		signature, _, publicKey, err := signFunc(block.Hash.Bytes())
