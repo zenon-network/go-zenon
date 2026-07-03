@@ -91,6 +91,10 @@ t=2001-09-09T01:50:00+0000 lvl=dbug msg="successfully create project" module=emb
 	z.InsertNewMomentum() // cemented send block
 	z.InsertNewMomentum() // cemented token-receive-block
 
+	if _, err := acceleratorAPI.GetAll(0, api.RpcMaxPageSize+1); err != api.ErrPageSizeParamTooBig {
+		t.Fatalf("expected ErrPageSizeParamTooBig for oversized pageSize, got %v", err)
+	}
+
 	projectList, err := acceleratorAPI.GetAll(0, 10)
 	common.FailIfErr(t, err)
 

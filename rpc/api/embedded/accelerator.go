@@ -164,6 +164,9 @@ type ProjectList struct {
 // === Getters for projects ===
 
 func (a *AcceleratorApi) GetAll(pageIndex, pageSize uint32) (*ProjectList, error) {
+	if pageSize > api.RpcMaxPageSize {
+		return nil, api.ErrPageSizeParamTooBig
+	}
 	_, context, err := api.GetFrontierContext(a.chain, types.AcceleratorContract)
 	if err != nil {
 		return nil, err
