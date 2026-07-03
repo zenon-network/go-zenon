@@ -2,6 +2,7 @@ package subscribe
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/inconshreveable/log15"
@@ -57,6 +58,7 @@ type Api struct {
 	chain     chain.Chain
 	log       log15.Logger
 	installCh chan *Subscription // add subscription
+	stopped   chan struct{}
 }
 type Server struct {
 	*Api
@@ -64,7 +66,6 @@ type Server struct {
 	started       bool
 	acCh          chan []*AccountBlock
 	mCh           chan *Momentum
-	stopped       chan struct{}
 	subscriptions map[SubscriptionType]map[rpc.ID]*Subscription
 
 	wg sync.WaitGroup
@@ -80,11 +81,11 @@ func GetSubscribeServer(chain chain.Chain) *Server {
 				chain:     chain,
 				log:       common.RPCLogger.New("module", "subscribe_api"),
 				installCh: make(chan *Subscription, installSize),
+				stopped:   make(chan struct{}),
 			},
 
 			acCh:          make(chan []*AccountBlock, acChanSize),
 			mCh:           make(chan *Momentum, mChanSize),
-			stopped:       make(chan struct{}),
 			subscriptions: make(map[SubscriptionType]map[rpc.ID]*Subscription),
 		}
 	}
@@ -260,8 +261,12 @@ func (s *Api) subscribe(ctx context.Context, options *subscriptionOptions) (*rpc
 		return nil, rpc.ErrNotificationsUnsupported
 	}
 	subscription := NewSubscription(notifier, options)
-	s.installCh <- subscription
-	return subscription.rpc, nil
+	select {
+	case s.installCh <- subscription:
+		return subscription.rpc, nil
+	case <-s.stopped:
+		return nil, errors.New("subscribe server is stopped")
+	}
 }
 
 func (s *Api) Momentums(ctx context.Context) (*rpc.Subscription, error) {
