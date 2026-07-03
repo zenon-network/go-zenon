@@ -9,7 +9,6 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
-
 type KeyStore struct {
 	Entropy  []byte
 	Seed     []byte

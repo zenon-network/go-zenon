@@ -10,7 +10,6 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
-
 func parseMomentum(data []byte, err error) (*nom.Momentum, error) {
 	if err == leveldb.ErrNotFound {
 		return nil, nil
