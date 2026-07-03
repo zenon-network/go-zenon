@@ -578,6 +578,45 @@ func (a *BridgeApi) GetUnwrapTokenRequestByHashAndLog(txHash types.Hash, logInde
 	return unwrapRequest, nil
 }
 
+type unwrapPairKey struct {
+	networkClass uint32
+	chainId      uint32
+	tokenAddress string
+}
+
+// filterActiveUnwrapRequests drops requests whose token pair (or whole
+// network) has been removed, so Count and pagination only see listable
+// entries. CheckNetworkAndPairExist signals a missing pair via
+// ErrTokenNotFound / ErrUnknownNetwork rather than a nil pair, so those
+// sentinels mean "skip" while any other error is a genuine storage failure.
+// Pair lookups are cached per (networkClass, chainId, tokenAddress); the
+// cache is returned so page building can reuse it, and holds a non-nil pair
+// for every returned request.
+func filterActiveUnwrapRequests(context vm_context.AccountVmContext, requests []*definition.UnwrapTokenRequest) ([]*definition.UnwrapTokenRequest, map[unwrapPairKey]*definition.TokenPair, error) {
+	active := make([]*definition.UnwrapTokenRequest, 0, len(requests))
+	pairs := make(map[unwrapPairKey]*definition.TokenPair)
+	for _, request := range requests {
+		key := unwrapPairKey{request.NetworkClass, request.ChainId, request.TokenAddress}
+		pair, ok := pairs[key]
+		if !ok {
+			var err error
+			pair, err = implementation.CheckNetworkAndPairExist(context, request.NetworkClass, request.ChainId, request.TokenAddress)
+			if err == constants.ErrTokenNotFound || err == constants.ErrUnknownNetwork {
+				pair, err = nil, nil
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			pairs[key] = pair
+		}
+		if pair == nil {
+			continue
+		}
+		active = append(active, request)
+	}
+	return active, pairs, nil
+}
+
 func (a *BridgeApi) GetAllUnwrapTokenRequests(pageIndex, pageSize uint32) (*UnwrapTokenRequestList, error) {
 	if pageSize > api.RpcMaxPageSize {
 		return nil, api.ErrPageSizeParamTooBig
@@ -588,6 +627,10 @@ func (a *BridgeApi) GetAllUnwrapTokenRequests(pageIndex, pageSize uint32) (*Unwr
 	}
 
 	requests, err := definition.GetUnwrapTokenRequests(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+	requests, pairs, err := filterActiveUnwrapRequests(context, requests)
 	if err != nil {
 		return nil, err
 	}
@@ -611,13 +654,7 @@ func (a *BridgeApi) GetAllUnwrapTokenRequests(pageIndex, pageSize uint32) (*Unwr
 		if err != nil {
 			return nil, err
 		}
-		tokenPair, err := implementation.CheckNetworkAndPairExist(context, requests[i].NetworkClass, requests[i].ChainId, requests[i].TokenAddress)
-		if err != nil {
-			return nil, err
-		}
-		if tokenPair == nil {
-			continue
-		}
+		tokenPair := pairs[unwrapPairKey{requests[i].NetworkClass, requests[i].ChainId, requests[i].TokenAddress}]
 		redeemableIn := a.getRedeemableIn(*requests[i], *tokenPair, *momentum)
 		result.List = append(result.List, &UnwrapTokenRequest{requests[i], token, redeemableIn})
 	}
@@ -651,6 +688,10 @@ func (a *BridgeApi) GetAllUnwrapTokenRequestsByToAddress(toAddress string, pageI
 			}
 		}
 	}
+	specificRequests, pairs, err := filterActiveUnwrapRequests(context, specificRequests)
+	if err != nil {
+		return nil, err
+	}
 	sort.SliceStable(specificRequests, func(i, j int) bool {
 		return specificRequests[i].RegistrationMomentumHeight > specificRequests[j].RegistrationMomentumHeight
 	})
@@ -665,13 +706,7 @@ func (a *BridgeApi) GetAllUnwrapTokenRequestsByToAddress(toAddress string, pageI
 		if err != nil {
 			return nil, err
 		}
-		tokenPair, err := implementation.CheckNetworkAndPairExist(context, specificRequests[i].NetworkClass, specificRequests[i].ChainId, specificRequests[i].TokenAddress)
-		if err != nil {
-			return nil, err
-		}
-		if tokenPair == nil {
-			continue
-		}
+		tokenPair := pairs[unwrapPairKey{specificRequests[i].NetworkClass, specificRequests[i].ChainId, specificRequests[i].TokenAddress}]
 		redeemableIn := a.getRedeemableIn(*specificRequests[i], *tokenPair, *momentum)
 		result.List = append(result.List, &UnwrapTokenRequest{specificRequests[i], token, redeemableIn})
 	}

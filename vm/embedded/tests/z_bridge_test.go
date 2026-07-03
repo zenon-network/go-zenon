@@ -2191,6 +2191,104 @@ func TestBridge_GetAllUnwrapTokenRequests_SortStability(t *testing.T) {
 	}
 }
 
+// TestBridge_GetAllUnwrapTokenRequests_RemovedPairPagination verifies that
+// unwrap requests whose token pair has been removed are excluded *before*
+// Count and pagination are computed. Previously the removed-pair skip
+// happened inside the page loop, so a page consisting entirely of
+// removed-pair unwraps came back empty even though valid unwraps existed on
+// later pages - a naive "empty list means end" client would stop early -
+// and Count included unlistable entries.
+func TestBridge_GetAllUnwrapTokenRequests_RemovedPairPagination(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+
+	activateBridgeStep6(t, z)
+
+	networkClass := uint32(2) // evm
+	chainId := uint32(123)
+	keptTokenAddress := "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+	doomedTokenAddress := "0x6fbdb2315678afecb367f032d93f642f64180aa3"
+	amount := big.NewInt(50 * g.Zexp)
+
+	bridgeAPI := embedded.NewBridgeApi(z)
+	securityInfo, err := bridgeAPI.GetSecurityInfo()
+	common.FailIfErr(t, err)
+
+	// Second pair, QSR at a distinct EVM address, to be removed later.
+	setTokenPair(t, z, g.User5.Address, securityInfo.SoftDelay, networkClass, chainId, types.QsrTokenStandard, doomedTokenAddress, true, true, false,
+		big.NewInt(100), uint32(15), uint32(20), `{"APR": 15, "LockingPeriod": 100}`)
+
+	// 3 unwraps on the surviving ZNN pair, registered first (lower height,
+	// so they sort to the back of the height-descending listing).
+	keptHashes := make(map[types.Hash]bool, 3)
+	for i := 0; i < 3; i++ {
+		hash := types.HexToHashPanic(fmt.Sprintf("%02x"+"02020202020202020202020202020202020202020202020202020202020202", i))
+		keptHashes[hash] = true
+		signature := getUnwrapTokenSignature(t, networkClass, chainId, hash, 300, keptTokenAddress, amount, networkClass)
+		defer z.CallContract(unwrapToken(networkClass, chainId, hash, 300, keptTokenAddress, amount, signature)).
+			Error(t, nil)
+	}
+	insertMomentums(z, 2)
+
+	// 4 unwraps on the doomed QSR pair, registered later (higher height, so
+	// they occupy the front of the listing and fill page 0 at pageSize=4).
+	for i := 0; i < 4; i++ {
+		hash := types.HexToHashPanic(fmt.Sprintf("%02x"+"03030303030303030303030303030303030303030303030303030303030303", 0xf0+i))
+		signature := getUnwrapTokenSignature(t, networkClass, chainId, hash, 400, doomedTokenAddress, amount, networkClass)
+		defer z.CallContract(unwrapToken(networkClass, chainId, hash, 400, doomedTokenAddress, amount, signature)).
+			Error(t, nil)
+	}
+	insertMomentums(z, 2)
+
+	// Sanity: all 7 listable while both pairs exist.
+	full, err := bridgeAPI.GetAllUnwrapTokenRequests(0, 100)
+	common.FailIfErr(t, err)
+	if full.Count != 7 || len(full.List) != 7 {
+		t.Fatalf("before removal: expected count=7 len=7, got count=%d len=%d", full.Count, len(full.List))
+	}
+
+	defer z.CallContract(removeTokenPair(g.User5.Address, networkClass, chainId, types.QsrTokenStandard, doomedTokenAddress)).
+		Error(t, nil)
+	insertMomentums(z, 2)
+
+	// Page 0 at pageSize=4 was previously exactly the four removed-pair
+	// unwraps: Count stayed 7 but List came back empty. Now the removed
+	// entries must not be counted or paginated at all.
+	page0, err := bridgeAPI.GetAllUnwrapTokenRequests(0, 4)
+	common.FailIfErr(t, err)
+	if page0.Count != 3 {
+		t.Fatalf("after removal: expected Count=3, got %d", page0.Count)
+	}
+	if len(page0.List) != 3 {
+		t.Fatalf("after removal: expected 3 entries on page 0, got %d", len(page0.List))
+	}
+	for i, r := range page0.List {
+		if !keptHashes[r.TransactionHash] {
+			t.Fatalf("after removal: page 0 index %d has removed-pair unwrap %v", i, r.TransactionHash)
+		}
+	}
+
+	// Pagination stays dense: pageSize=2 yields pages of 2 and 1.
+	p0, err := bridgeAPI.GetAllUnwrapTokenRequests(0, 2)
+	common.FailIfErr(t, err)
+	p1, err := bridgeAPI.GetAllUnwrapTokenRequests(1, 2)
+	common.FailIfErr(t, err)
+	if len(p0.List) != 2 || len(p1.List) != 1 {
+		t.Fatalf("after removal: expected dense pages 2+1, got %d+%d", len(p0.List), len(p1.List))
+	}
+
+	// ByToAddress must apply the same pre-pagination filtering - every
+	// unwrap above targets g.User2, and the empty address lists everything.
+	for _, toAddress := range []string{g.User2.Address.String(), ""} {
+		byAddr, err := bridgeAPI.GetAllUnwrapTokenRequestsByToAddress(toAddress, 0, 4)
+		common.FailIfErr(t, err)
+		if byAddr.Count != 3 || len(byAddr.List) != 3 {
+			t.Fatalf("ByToAddress(%q) after removal: expected count=3 len=3, got count=%d len=%d",
+				toAddress, byAddr.Count, len(byAddr.List))
+		}
+	}
+}
+
 func TestBridge_Redeem(t *testing.T) {
 	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
 	defer z.StopPanic()
