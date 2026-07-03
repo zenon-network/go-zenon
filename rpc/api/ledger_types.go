@@ -344,11 +344,14 @@ func (block *AccountBlock) prefetchPaired(chain chain.Chain) error {
 func (block *AccountBlock) addConfirmationInfo(chain chain.Chain) error {
 	store := chain.GetFrontierMomentumStore()
 	frontier, err := store.GetFrontierMomentum()
-	confirmationHeight, err := chain.GetFrontierMomentumStore().GetBlockConfirmationHeight(block.Hash)
 	if err != nil {
 		return err
 	}
-	confirmedBlock, err := chain.GetFrontierMomentumStore().GetMomentumByHeight(confirmationHeight)
+	confirmationHeight, err := store.GetBlockConfirmationHeight(block.Hash)
+	if err != nil {
+		return err
+	}
+	confirmedBlock, err := store.GetMomentumByHeight(confirmationHeight)
 	if err != nil {
 		return err
 	}
