@@ -329,11 +329,11 @@ func (a *BridgeApi) GetAllWrapTokenRequests(pageIndex, pageSize uint32) (*WrapTo
 	for i := start; i < end; i++ {
 		token, err := a.getToken(requests[i].TokenStandard)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		confirmationsToFinality, err := a.getConfirmationsToFinality(*requests[i], orchestratorInfo.ConfirmationsToFinality, *momentum)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		wrapReqest := &WrapTokenRequest{requests[i], token, confirmationsToFinality}
 		result.List = append(result.List, wrapReqest)
@@ -380,11 +380,11 @@ func (a *BridgeApi) GetAllWrapTokenRequestsByToAddress(toAddress string, pageInd
 	for i := start; i < end; i++ {
 		token, err := a.getToken(specificRequests[i].TokenStandard)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		confirmationsToFinality, err := a.getConfirmationsToFinality(*specificRequests[i], orchestratorInfo.ConfirmationsToFinality, *momentum)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		wrapRequest := &WrapTokenRequest{specificRequests[i], token, confirmationsToFinality}
 		result.List = append(result.List, wrapRequest)
@@ -428,11 +428,11 @@ func (a *BridgeApi) GetAllWrapTokenRequestsByToAddressNetworkClassAndChainId(toA
 	for i := start; i < end; i++ {
 		token, err := a.getToken(specificRequests[i].TokenStandard)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		confirmationsToFinality, err := a.getConfirmationsToFinality(*specificRequests[i], orchestratorInfo.ConfirmationsToFinality, *momentum)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		wrapRequest := &WrapTokenRequest{specificRequests[i], token, confirmationsToFinality}
 		result.List = append(result.List, wrapRequest)
@@ -465,11 +465,11 @@ func (a *BridgeApi) GetAllUnsignedWrapTokenRequests(pageIndex, pageSize uint32) 
 		if request.Signature == "" {
 			token, err := a.getToken(request.TokenStandard)
 			if err != nil {
-				continue
+				return nil, err
 			}
 			confirmationsToFinality, err := a.getConfirmationsToFinality(*request, orchestratorInfo.ConfirmationsToFinality, *momentum)
 			if err != nil {
-				continue
+				return nil, err
 			}
 			wrapRequest := &WrapTokenRequest{request, token, confirmationsToFinality}
 			unsignedRequests = append(unsignedRequests, wrapRequest)
@@ -606,14 +606,14 @@ func (a *BridgeApi) GetAllUnwrapTokenRequests(pageIndex, pageSize uint32) (*Unwr
 	for i := start; i < end; i++ {
 		token, err := a.getToken(requests[i].TokenStandard)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		tokenPair, err := implementation.CheckNetworkAndPairExist(context, requests[i].NetworkClass, requests[i].ChainId, requests[i].TokenAddress)
 		if err != nil {
 			return nil, err
 		}
 		if tokenPair == nil {
-			return nil, errors.New("token pair not found")
+			continue
 		}
 		redeemableIn := a.getRedeemableIn(*requests[i], *tokenPair, *momentum)
 		result.List = append(result.List, &UnwrapTokenRequest{requests[i], token, redeemableIn})
@@ -657,14 +657,14 @@ func (a *BridgeApi) GetAllUnwrapTokenRequestsByToAddress(toAddress string, pageI
 	for i := start; i < end; i++ {
 		token, err := a.getToken(specificRequests[i].TokenStandard)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		tokenPair, err := implementation.CheckNetworkAndPairExist(context, specificRequests[i].NetworkClass, specificRequests[i].ChainId, specificRequests[i].TokenAddress)
 		if err != nil {
 			return nil, err
 		}
 		if tokenPair == nil {
-			return nil, errors.New("token pair not found")
+			continue
 		}
 		redeemableIn := a.getRedeemableIn(*specificRequests[i], *tokenPair, *momentum)
 		result.List = append(result.List, &UnwrapTokenRequest{specificRequests[i], token, redeemableIn})
