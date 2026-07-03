@@ -58,6 +58,9 @@ func (l *LedgerApi) PublishRawTransaction(block *AccountBlock) error {
 		return err
 	}
 	m, err := l.chain.GetFrontierMomentumStore().GetFrontierMomentum()
+	if err != nil {
+		return err
+	}
 	if m == nil {
 		return errors.New("failed to get latest momentum")
 	}
