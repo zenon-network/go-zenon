@@ -707,17 +707,17 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 // process takes blocks from the queue and tries to import them into the chain.
 //
 // The algorithmic flow is as follows:
-//  - The `processing` flag is swapped to 1 to ensure singleton access
-//  - The current `cancel` channel is retrieved to detect sync abortions
-//  - Blocks are iteratively taken from the cache and inserted into the chain
-//  - When the cache becomes empty, insertion stops
-//  - The `processing` flag is swapped back to 0
-//  - A post-exit check is made whether new blocks became available
-//     - This step is important: it handles a potential race condition between
-//       checking for no more work, and releasing the processing "mutex". In
-//       between these state changes, a block may have arrived, but a processing
-//       attempt denied, so we need to re-enter to ensure the block isn't left
-//       to idle in the cache.
+//   - The `processing` flag is swapped to 1 to ensure singleton access
+//   - The current `cancel` channel is retrieved to detect sync abortions
+//   - Blocks are iteratively taken from the cache and inserted into the chain
+//   - When the cache becomes empty, insertion stops
+//   - The `processing` flag is swapped back to 0
+//   - A post-exit check is made whether new blocks became available
+//   - This step is important: it handles a potential race condition between
+//     checking for no more work, and releasing the processing "mutex". In
+//     between these state changes, a block may have arrived, but a processing
+//     attempt denied, so we need to re-enter to ensure the block isn't left
+//     to idle in the cache.
 func (d *Downloader) process() {
 	// Make sure only one goroutine is ever allowed to process blocks at once
 	if !atomic.CompareAndSwapInt32(&d.processing, 0, 1) {
