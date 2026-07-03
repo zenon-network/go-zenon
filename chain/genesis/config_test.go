@@ -101,3 +101,18 @@ func TestPanicDuringValidationReturnsError(t *testing.T) {
 		t.Fatalf("expected nil genesis store, got %v", config)
 	}
 }
+
+// A required non-zero balance must not pass vacuously when the address has
+// no GenesisBlocks entry at all.
+func TestBalanceCheckFailsWithoutGenesisBlock(t *testing.T) {
+	badGenesisJsonStr := strings.Replace(string(emptyGenesisJsonStr),
+		`"Fusions": []`,
+		`"Fusions": [{"owner": "z1qqv2fnc3avjg39dcste4c5lag7l42xyykjf49w", "id": "30a9c36aa27d0b441eff8328a277e417ae0f1661f298f6376858f6819492811a", "amount": 5000000000, "withdrawHeight": 0, "beneficiaryAddress": "z1qqv2fnc3avjg39dcste4c5lag7l42xyykjf49w"}]`, 1)
+	genesisFile := path.Join(t.TempDir(), "genesis.json")
+	common.FailIfErr(t, os.WriteFile(genesisFile, []byte(badGenesisJsonStr), 0777))
+
+	// non-zero fused QSR but no PlasmaContract genesis block backing it
+	if _, err := ReadGenesisConfigFromFile(genesisFile); err != ErrInvalidGenesisConfig {
+		t.Fatalf("expected ErrInvalidGenesisConfig, got %v", err)
+	}
+}
