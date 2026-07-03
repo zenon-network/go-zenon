@@ -120,6 +120,34 @@ func TestAccountPool_Priority(t *testing.T) {
 	common.ExpectString(t, uncommitted[0].Hash.String(), highPriorityBlock.Hash.String())
 }
 
+func TestAccountPool_CachedBlocksAreDefensiveCopies(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+
+	inserted := z.InsertSendBlock(&nom.AccountBlock{
+		Address:     g.User1.Address,
+		FusedPlasma: 21000,
+	}, nil, mock.SkipVmChanges)
+	originalHash := inserted.Hash
+	originalFusedPlasma := inserted.FusedPlasma
+
+	inserted.Hash = types.ZeroHash
+	inserted.FusedPlasma = 1
+
+	uncommitted := z.Chain().GetAllUncommittedAccountBlocks()
+	common.Expect(t, len(uncommitted), 1)
+	common.ExpectString(t, uncommitted[0].Hash.String(), originalHash.String())
+	common.ExpectUint64(t, uncommitted[0].FusedPlasma, originalFusedPlasma)
+
+	uncommitted[0].Hash = types.ZeroHash
+	uncommitted[0].FusedPlasma = 2
+
+	uncommitted = z.Chain().GetAllUncommittedAccountBlocks()
+	common.Expect(t, len(uncommitted), 1)
+	common.ExpectString(t, uncommitted[0].Hash.String(), originalHash.String())
+	common.ExpectUint64(t, uncommitted[0].FusedPlasma, originalFusedPlasma)
+}
+
 func BenchmarkAccountPool_GetAllUncommittedAccountBlocks(b *testing.B) {
 	z := mock.NewMockZenon(b)
 	defer z.StopPanic()

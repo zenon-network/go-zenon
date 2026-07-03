@@ -39,19 +39,24 @@ func (am *accountManager) Add(transaction *nom.AccountBlockTransaction) error {
 	if err := am.db.Add(transaction); err != nil {
 		return err
 	}
-	am.blocks[transaction.Block.Height] = transaction.Block
-	for _, d := range transaction.Block.DescendantBlocks {
+
+	block := transaction.Block.Copy()
+	am.blocks[block.Height] = block
+	for _, d := range block.DescendantBlocks {
 		am.blocks[d.Height] = d
 	}
 	return nil
 }
 
 func (am *accountManager) Pop() error {
-	frontier := db.GetFrontierIdentifier(am.db.Frontier()).Height
+	frontier := db.GetFrontierIdentifier(am.db.Frontier())
 	if err := am.db.Pop(); err != nil {
 		return err
 	}
-	delete(am.blocks, frontier)
+	newFrontier := db.GetFrontierIdentifier(am.db.Frontier())
+	for height := newFrontier.Height + 1; height <= frontier.Height; height += 1 {
+		delete(am.blocks, height)
+	}
 	return nil
 }
 
@@ -60,7 +65,7 @@ func (am *accountManager) BlockByHeight(height uint64) (*nom.AccountBlock, error
 	if !ok {
 		return nil, ErrBlockHeightNotFound
 	}
-	return block, nil
+	return block.Copy(), nil
 }
 
 type accountPool struct {
