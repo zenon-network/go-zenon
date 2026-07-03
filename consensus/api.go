@@ -65,7 +65,9 @@ func (obj *API) EpochStats(epoch uint64) (*api.EpochStats, error) {
 }
 func (obj *API) GetPillarDelegationsByEpoch(epoch uint64) (map[string]*types.PillarDelegationDetail, error) {
 	multiplier, err := obj.er.TickMultiplier(obj.EpochTicker())
-	common.DealWithErr(err)
+	if err != nil {
+		return nil, err
+	}
 
 	result := make(map[string]*types.PillarDelegationDetail, 0)
 
