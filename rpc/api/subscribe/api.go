@@ -14,10 +14,9 @@ import (
 )
 
 const (
-	acChanSize    = 100
-	mChanSize     = 100
-	installSize   = 100
-	uninstallSize = 100
+	acChanSize  = 100
+	mChanSize   = 100
+	installSize = 100
 )
 
 var (
@@ -63,7 +62,6 @@ type Server struct {
 	*Api
 
 	started       bool
-	uninstallCh   chan *Subscription // remove subscription
 	acCh          chan []*AccountBlock
 	mCh           chan *Momentum
 	stopped       chan struct{}
@@ -86,7 +84,6 @@ func GetSubscribeServer(chain chain.Chain) *Server {
 
 			acCh:          make(chan []*AccountBlock, acChanSize),
 			mCh:           make(chan *Momentum, mChanSize),
-			uninstallCh:   make(chan *Subscription, uninstallSize),
 			stopped:       make(chan struct{}),
 			subscriptions: make(map[SubscriptionType]map[rpc.ID]*Subscription),
 		}
@@ -175,8 +172,6 @@ func (s *Server) work() {
 			return
 		case sub := <-s.installCh:
 			s.install(sub)
-		case sub := <-s.uninstallCh:
-			s.uninstall(sub)
 		case momentums := <-s.mCh:
 			s.broadcastMomentums(momentums)
 		case blocks := <-s.acCh:
