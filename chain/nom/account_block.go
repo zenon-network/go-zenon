@@ -337,7 +337,6 @@ type AccountBlockMarshal struct {
 
 	ChangesHash types.Hash `json:"changesHash"` // not included in hash
 
-	producer  *types.Address    // not included in hash, for caching purpose only
 	PublicKey ed25519.PublicKey `json:"publicKey"` // not included in hash
 	Signature []byte            `json:"signature"` // not included in hash
 }

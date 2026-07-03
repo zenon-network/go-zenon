@@ -10,14 +10,6 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
-func (ms *momentumStore) SetFrontier(momentum *nom.Momentum) error {
-	data, err := momentum.Serialize()
-	if err != nil {
-		return err
-	}
-
-	return db.SetFrontier(ms.DB, momentum.Identifier(), data)
-}
 
 func parseMomentum(data []byte, err error) (*nom.Momentum, error) {
 	if err == leveldb.ErrNotFound {
