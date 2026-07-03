@@ -162,11 +162,10 @@ func (s *Supervisor) GenerateAutoReceive(sendBlock *nom.AccountBlock) (*Contract
 	}
 	vm := NewVM(context, s.chain.GetFrontierMomentumStore())
 	block, methodErr, err := vm.generateEmbeddedReceive(template.FromBlockHash)
-	if err := s.verifier.AccountBlock(block); err != nil {
+	if err != nil {
 		return nil, err
 	}
-
-	if err != nil {
+	if err := s.verifier.AccountBlock(block); err != nil {
 		return nil, err
 	}
 	transaction, err := s.packBlock(context, block, nil)
