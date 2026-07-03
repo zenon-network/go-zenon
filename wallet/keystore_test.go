@@ -59,3 +59,26 @@ func TestFindAddressHonorsMaxIndex(t *testing.T) {
 		t.Fatalf("expected to find address at index 2, got index %d", index)
 	}
 }
+
+// Zero must overwrite the secret bytes, not merely drop the references.
+func TestZeroWipesSecretBytes(t *testing.T) {
+	ks := testKeyStore(t)
+	entropy := ks.Entropy
+	seed := ks.Seed
+
+	ks.Zero()
+
+	for i, b := range entropy {
+		if b != 0 {
+			t.Fatalf("entropy byte %d not wiped", i)
+		}
+	}
+	for i, b := range seed {
+		if b != 0 {
+			t.Fatalf("seed byte %d not wiped", i)
+		}
+	}
+	if ks.Entropy != nil || ks.Seed != nil || ks.Mnemonic != "" {
+		t.Fatal("references not cleared")
+	}
+}

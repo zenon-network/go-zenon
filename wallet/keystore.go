@@ -41,8 +41,17 @@ func keyStoreFromEntropy(entropy []byte) (*KeyStore, error) {
 }
 
 func (ks *KeyStore) Zero() {
+	// overwrite the backing arrays before dropping the references; niling
+	// alone leaves the secret bytes in memory until GC
+	for i := range ks.Entropy {
+		ks.Entropy[i] = 0
+	}
+	for i := range ks.Seed {
+		ks.Seed[i] = 0
+	}
 	ks.Entropy = nil
 	ks.Seed = nil
+	// Go strings are immutable; the mnemonic cannot be scrubbed in place
 	ks.Mnemonic = ""
 	ks.BaseAddress = types.ZeroAddress
 }
