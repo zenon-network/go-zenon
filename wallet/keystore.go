@@ -55,7 +55,7 @@ func (ks *KeyStore) DeriveForFullPath(ipath string) (path string, key *KeyPair, 
 	if err != nil {
 		return "", nil, err
 	}
-	return path, key, nil
+	return ipath, key, nil
 }
 func (ks *KeyStore) DeriveForIndexPath(index uint32) (path string, key *KeyPair, err error) {
 	return ks.DeriveForFullPath(fmt.Sprintf(ZenonAccountPathFormat, index))
