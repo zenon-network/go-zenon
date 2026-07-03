@@ -9,11 +9,21 @@ import (
 	"github.com/zenon-network/go-zenon/vm/vm_context"
 )
 
+// Upper bounds on request parameters, shared by the JSON-RPC handlers
+// in this package and in rpc/api/embedded: a pageSize parameter above
+// RpcMaxPageSize is rejected with ErrPageSizeParamTooBig and a count
+// parameter above RpcMaxCountSize with ErrCountParamTooBig.
 const (
 	RpcMaxPageSize  = 1024
 	RpcMaxCountSize = 1024
 )
 
+// GetRange converts 0-based pagination parameters into a half-open
+// [start, end) window over a list of listLen elements: page number
+// index of size count, clamped to the list bounds. A page that starts
+// at or past the end of the list yields the empty window
+// (listLen, listLen); a page that extends past the end is truncated at
+// listLen.
 func GetRange(index, count, listLen uint32) (uint32, uint32) {
 	start := index * count
 	if start >= listLen {
@@ -26,6 +36,11 @@ func GetRange(index, count, listLen uint32) (uint32, uint32) {
 	return start, end
 }
 
+// GetFrontierContext returns the chain's current frontier momentum
+// together with an account VM context for addr backed by the frontier
+// momentum store and addr's frontier account store. The embedded RPC
+// handlers use it to read embedded-contract state as of the most
+// recent momentum; the returned context has no pillar reader attached.
 func GetFrontierContext(c chain.Chain, addr types.Address) (*nom.Momentum, vm_context.AccountVmContext, error) {
 	store := c.GetFrontierMomentumStore()
 

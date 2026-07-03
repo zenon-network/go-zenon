@@ -15,10 +15,18 @@ var (
 	stakeLog = common.EmbeddedLogger.New("contract", "stake")
 )
 
+// StakeMethod (Stake) locks the sent ZNN for a chosen duration in
+// exchange for a share of the epoch QSR rewards; longer durations
+// earn a higher reward weight. The locked amount is reclaimed with
+// Cancel once the duration has elapsed.
 type StakeMethod struct {
 	MethodName string
 }
 
+// getWeightedStakeAmount returns the stake's reward weight: amount
+// times (9 + duration units) / 10, where a unit is
+// constants.StakeTimeUnitSec (30 days) — 1.0x at the 1-unit minimum,
+// rising 0.1x per extra unit to 2.1x at the 12-unit maximum.
 func getWeightedStakeAmount(amount *big.Int, stakingTime int64) *big.Int {
 	weighted := big.NewInt(9 + stakingTime/constants.StakeTimeUnitSec)
 	weighted.Mul(weighted, amount)
@@ -26,9 +34,18 @@ func getWeightedStakeAmount(amount *big.Int, stakingTime int64) *big.Int {
 	return weighted
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *StakeMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a duration in seconds, carried by a send
+// of at least constants.StakeMinAmount ZNN
+// (constants.ErrInvalidTokenOrAmount otherwise). The duration must be
+// a whole multiple of constants.StakeTimeUnitSec between
+// constants.StakeTimeMinSec and constants.StakeTimeMaxSec, else
+// constants.ErrInvalidStakingPeriod.
 func (p *StakeMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	var stakeTime int64
@@ -47,6 +64,12 @@ func (p *StakeMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIStake.PackMethod(p.MethodName, stakeTime)
 	return err
 }
+
+// ReceiveBlock creates the StakeInfo entry, with the send block's
+// hash as id, the sent amount, its weighted amount, the frontier
+// momentum's timestamp as start time and start plus duration as
+// expiration time. It cannot fail past validation and emits no
+// descendant blocks.
 func (p *StakeMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -73,13 +96,21 @@ func (p *StakeMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBloc
 	return nil, nil
 }
 
+// CancelStakeMethod (Cancel) revokes one of the sender's expired
+// stake entries by id and refunds the locked ZNN; rewards already
+// accrued stay collectable via CollectReward.
 type CancelStakeMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedWWithdraw tier, covering the one
+// refund block the cancellation sends back.
 func (p *CancelStakeMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
+
+// ValidateSendBlock accepts a stake-entry id (the hash of the
+// original Stake send block) carried by a send with no tokens.
 func (p *CancelStakeMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	id := new(types.Hash)
@@ -95,6 +126,15 @@ func (p *CancelStakeMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIStake.PackMethod(p.MethodName, id)
 	return err
 }
+
+// ReceiveBlock revokes the stake entry stored under the sender's
+// address and the given id — a missing entry fails with
+// constants.ErrDataNonExistent, so only the staker can cancel — once
+// the frontier momentum has reached the expiration time
+// (constants.RevokeNotDue before that). The revoke time is stamped
+// and the stored amount zeroed; the entry itself is kept until
+// computeStakeRewardsForEpoch pays its final epoch and deletes it.
+// One descendant send refunds the locked ZNN to the staker.
 func (p *CancelStakeMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -137,13 +177,21 @@ func (p *CancelStakeMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	}, nil
 }
 
+// UpdateEmbeddedStakeMethod (Update) advances the stake contract's
+// reward bookkeeping. Anyone may call it; it is throttled to one run
+// every constants.UpdateMinNumMomentums momentums.
 type UpdateEmbeddedStakeMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *UpdateEmbeddedStakeMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts an argument-less call carrying no
+// tokens.
 func (p *UpdateEmbeddedStakeMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -158,6 +206,11 @@ func (p *UpdateEmbeddedStakeMethod) ValidateSendBlock(block *nom.AccountBlock) e
 	block.Data, err = definition.ABIStake.PackMethod(p.MethodName)
 	return err
 }
+
+// ReceiveBlock runs the update throttle (constants.ErrUpdateTooRecent
+// when called again too soon) and then distributes the stake rewards
+// of every epoch that has become due (updateStakeRewards), crediting
+// RewardDeposit entries collectable via CollectReward.
 func (p *UpdateEmbeddedStakeMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -172,7 +225,11 @@ func (p *UpdateEmbeddedStakeMethod) ReceiveBlock(context vm_context.AccountVmCon
 	return nil, err
 }
 
-// weighted stake amount over time
+// getWeightedStake integrates the entry's weighted amount over time:
+// weighted amount times the seconds the entry was active inside
+// [startTime, endTime), clipped to the entry's start time and — for
+// revoked entries — its revoke time; zero when the windows don't
+// overlap.
 func getWeightedStake(info *definition.StakeInfo, startTime, endTime int64) *big.Int {
 	startTime = common.MaxInt64(startTime, info.StartTime)
 	if info.RevokeTime != 0 {
@@ -188,6 +245,12 @@ func getWeightedStake(info *definition.StakeInfo, startTime, endTime int64) *big
 	return cumulatedStake
 }
 
+// computeStakeRewardsForEpoch splits the epoch's QSR reward
+// (constants.StakeQsrRewardPerEpoch) among all stake entries pro-rata
+// to their time-weighted stake (getWeightedStake) over the epoch,
+// crediting each staker's RewardDeposit. Entries revoked before the
+// epoch's end have now earned their last reward and are deleted; when
+// no stake was active the epoch's reward is simply not distributed.
 func computeStakeRewardsForEpoch(context vm_context.AccountVmContext, epoch uint64) error {
 	startTime, endTime := context.EpochTicker().ToTime(epoch)
 
@@ -233,6 +296,10 @@ func computeStakeRewardsForEpoch(context vm_context.AccountVmContext, epoch uint
 	return nil
 }
 
+// updateStakeRewards distributes the rewards of every epoch that has
+// become due, advancing the epoch marker one epoch at a time until
+// checkAndPerformUpdateEpoch reports the next epoch is still too
+// recent.
 func updateStakeRewards(context vm_context.AccountVmContext) error {
 	lastEpoch, err := definition.GetLastEpochUpdate(context.Storage())
 	if err != nil {

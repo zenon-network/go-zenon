@@ -10,6 +10,13 @@ import (
 	"github.com/zenon-network/go-zenon/consensus/storage"
 )
 
+// Points tracks pillar performance on two schedules anchored at
+// genesis: period points, one per election tick, and epoch points,
+// one per 24-hour epoch. Each point records, per pillar, the number
+// of momentums it was expected to produce (its elected slots), the
+// number it actually produced, and the delegated weight backing it —
+// the weights served by the pillar RPC API and used for reward
+// computations.
 type Points interface {
 	// MomentumEventListener is used to precompute points as momentums come, so API calls have hot data
 	chain.MomentumEventListener
@@ -17,6 +24,10 @@ type Points interface {
 	GetEpochPoints() PointsReader
 }
 
+// points implements Points. On construction it binary-searches the
+// consensus database for the last persisted period point; from there
+// InsertMomentum walks every newly completed period and epoch tick so
+// points are generated as the chain advances.
 type points struct {
 	log          common.Logger
 	epochPoints  PointsReader
@@ -68,6 +79,10 @@ func (p *points) GetEpochPoints() PointsReader {
 	return p.epochPoints
 }
 
+// InsertMomentum implements chain.MomentumEventListener: it runs
+// under the chain insert lock after each committed momentum and
+// generates (and persists) the points of every period and epoch tick
+// completed before the momentum's tick, so API reads find them ready.
 func (p *points) InsertMomentum(detailed *nom.DetailedMomentum) {
 	block := detailed.Momentum
 
@@ -100,10 +115,19 @@ func (p *points) InsertMomentum(detailed *nom.DetailedMomentum) {
 		p.lastCompletedEpoch = epochTick - 1
 	}
 }
+
+// DeleteMomentum implements chain.MomentumEventListener as a no-op:
+// stale points are detected lazily by GetPoint, which invalidates a
+// stored point whose end hash no longer matches the chain.
 func (p *points) DeleteMomentum(*nom.DetailedMomentum) {
 }
 
-// PointsReader can read pillar statistics of epoch or period
+// PointsReader reads pillar statistic points on one tick schedule —
+// election ticks for period points, 24-hour ticks for epoch points —
+// and is itself the Ticker of that schedule. GetPoint computes the
+// point on demand; finished ticks are persisted in the consensus
+// database and recomputed only if a reorganization changed the
+// underlying momentums.
 type PointsReader interface {
 	common.Ticker
 	// Returns nil, nil for points which are in the future
@@ -126,6 +150,10 @@ func newCompoundPoints(lower PointsReader, chainTicker ChainTicker, db *storage.
 	}
 }
 
+// compoundPoints derives points on a coarser schedule by aggregating
+// lowerMultiplier consecutive points of a finer one (epoch points
+// over period points): production counts are summed and each pillar's
+// weight is averaged over the lower points present so far.
 type compoundPoints struct {
 	ChainTicker
 	db     *storage.DB
@@ -203,7 +231,7 @@ func (compound *compoundPoints) generatePointFromLower(tick uint64, endBlock *no
 		}
 	}
 
-	// Divide weight by lowerMultiplier
+	// Divide each weight by the number of lower points present.
 	result.TotalWeight.Set(big.NewInt(0))
 	bigRate := big.NewInt(numPresent)
 	for _, p := range result.Pillars {
@@ -214,6 +242,10 @@ func (compound *compoundPoints) generatePointFromLower(tick uint64, endBlock *no
 	return result, nil
 }
 
+// periodPoints computes one point per election tick directly from
+// the chain: produced momentums are counted from the tick's content,
+// expected momentums from the tick's election schedule, and weight
+// from the election's delegations.
 type periodPoints struct {
 	ChainTicker
 	db  *storage.DB

@@ -1,3 +1,16 @@
+// Package node is the top-level container that runs a Zenon node: it
+// locks the data directory, starts the wallet, builds the Zenon core
+// and the p2p server, and exposes the public RPC over HTTP and
+// WebSocket.
+//
+// NewNode prepares the instance — acquiring the data-directory file
+// lock, starting the wallet manager, constructing the Zenon core from
+// the derived config and assembling the p2p server from the network
+// config and the protocol's sub-protocols. Start then brings the
+// Zenon core online, starts the p2p server and serves the public RPC
+// APIs; Stop reverses that, stopping the p2p server, wallet and Zenon
+// core, shutting down RPC and releasing the data-directory lock. Wait
+// blocks until the node is stopped.
 package node
 
 import (
@@ -40,6 +53,12 @@ type Node struct {
 	dataDirLock fileutil.Releaser // prevents concurrent use of instance directory
 }
 
+// NewNode prepares a Node from conf without starting it: it locks the
+// data directory, starts the wallet manager, builds the Zenon core
+// from the derived zenon config and assembles the p2p server from the
+// network config and the protocol's sub-protocols. It fails if the
+// data directory is already in use by another instance. Call Start to
+// bring the node online.
 func NewNode(conf *Config) (*Node, error) {
 	var err error
 
@@ -98,6 +117,9 @@ func NewNode(conf *Config) (*Node, error) {
 	return node, nil
 }
 
+// Start brings the node online: it inits and starts the Zenon core,
+// starts the p2p server and serves the public RPC APIs over the
+// configured HTTP and WebSocket endpoints.
 func (node *Node) Start() error {
 	node.lock.Lock()
 	defer node.lock.Unlock()
@@ -116,6 +138,10 @@ func (node *Node) Start() error {
 
 	return nil
 }
+
+// Stop shuts the node down in reverse of Start: it stops the p2p
+// server, the wallet and the Zenon core, shuts down the RPC servers,
+// releases the data-directory lock and unblocks Wait.
 func (node *Node) Stop() error {
 	node.lock.Lock()
 	defer node.lock.Unlock()
@@ -139,16 +165,23 @@ func (node *Node) Stop() error {
 
 	return nil
 }
+
+// Wait blocks until the node is stopped.
 func (node *Node) Wait() {
 	<-node.stop
 }
 
+// Zenon returns the node's Zenon core.
 func (node *Node) Zenon() zenon.Zenon {
 	return node.z
 }
+
+// Config returns the node's configuration.
 func (node *Node) Config() *Config {
 	return node.config
 }
+
+// WalletManager returns the node's wallet manager.
 func (node *Node) WalletManager() *wallet.Manager {
 	return node.walletManager
 }

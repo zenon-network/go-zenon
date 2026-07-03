@@ -4,6 +4,12 @@ import (
 	"sync"
 )
 
+// eventManager implements EventManager: it keeps the registered
+// producer-event listeners and fans each ProducerEvent out to them.
+// broadcastNewProducerEvent is called from the consensus work
+// goroutine and invokes every listener synchronously, in registration
+// order, while holding the mutex — so a slow listener delays both the
+// other listeners and Register/UnRegister.
 type eventManager struct {
 	listeners []EventListener
 	changes   sync.Mutex

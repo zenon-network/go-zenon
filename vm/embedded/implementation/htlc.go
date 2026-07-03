@@ -17,10 +17,16 @@ var (
 	htlcLog = common.EmbeddedLogger.New("contract", "htlc")
 )
 
-// Neither the DenyProxyUnlock nor the AllowProxyUnlock methods delete the HtlcProxyUnlockInfo in storage
-// This means there are really 3 states: Default, ExplicitDeny, ExplicitAllow
-// And once an address has explicitly denied/allowed proxy unlock, it can no longer go back to using the default
-// This is to ensure that if we ever change the default to deny, addresses that have called the Allow method will still work as expected
+// GetHtlcProxyUnlockStatus reports whether the address accepts proxy
+// unlocks: its HtlcProxyUnlockInfo entry when one exists, the default
+// of true otherwise.
+//
+// Neither DenyProxyUnlock nor AllowProxyUnlock deletes the entry, so
+// there are really 3 states: Default, ExplicitDeny and ExplicitAllow,
+// and once an address has explicitly denied/allowed proxy unlock it
+// can no longer go back to using the default. This ensures that if
+// the default ever changes to deny, addresses that have called the
+// Allow method will still work as expected.
 func GetHtlcProxyUnlockStatus(context vm_context.AccountVmContext, address types.Address) (bool, error) {
 	info, err := definition.GetHtlcProxyUnlockInfo(context.Storage(), address)
 	if err != nil {
@@ -34,6 +40,12 @@ func GetHtlcProxyUnlockStatus(context vm_context.AccountVmContext, address types
 	}
 }
 
+// checkHtlc validates the static fields of a CreateHtlcParam: the
+// hash type must be definition.HashTypeSHA3 or
+// definition.HashTypeSHA256 (constants.ErrInvalidHashType otherwise)
+// and the hash lock must be exactly the type's digest length per
+// definition.HashTypeDigestSizes (constants.ErrInvalidHashDigest
+// otherwise).
 func checkHtlc(param definition.CreateHtlcParam) error {
 
 	if param.HashType != definition.HashTypeSHA3 && param.HashType != definition.HashTypeSHA256 {
@@ -47,13 +59,24 @@ func checkHtlc(param definition.CreateHtlcParam) error {
 	return nil
 }
 
+// CreateHtlcMethod (Create) locks the sent tokens in a new
+// hashed-timelock entry: before the expiration time they can only be
+// unlocked to the hash-locked counterparty by revealing the hash
+// lock's preimage; at or after it the time-locked creator can reclaim
+// them. The entry id is the hash of the creating send block.
 type CreateHtlcMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; creating sends no
+// response block.
 func (p *CreateHtlcMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed definition.CreateHtlcParam
+// passing the checkHtlc rules, carried by a positive amount of any
+// token; a zero amount fails with constants.ErrInvalidTokenOrAmount.
 func (p *CreateHtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -82,6 +105,13 @@ func (p *CreateHtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	)
 	return err
 }
+
+// ReceiveBlock saves the definition.HtlcInfo entry keyed by the send
+// block's hash, with the sender as TimeLocked and the sent amount
+// held by the contract. The expiration time must be strictly after
+// the frontier momentum's timestamp, else
+// constants.ErrInvalidExpirationTime. No descendant blocks are
+// emitted.
 func (p *CreateHtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		htlcLog.Debug("invalid create - syntactic validation failed", "address", sendBlock.Address, "reason", err)
@@ -118,13 +148,21 @@ func (p *CreateHtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 	return nil, nil
 }
 
+// ReclaimHtlcMethod (Reclaim) returns an expired entry's tokens to
+// its time-locked creator, the only address allowed to call it.
 type ReclaimHtlcMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedWWithdraw tier, covering the one
+// refund block the call sends back.
 func (p *ReclaimHtlcMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
+
+// ValidateSendBlock accepts a packed entry id (types.Hash) carrying
+// no tokens; a positive amount fails with
+// constants.ErrInvalidTokenOrAmount.
 func (p *ReclaimHtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(types.Hash)
@@ -140,6 +178,13 @@ func (p *ReclaimHtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIHtlc.PackMethod(p.MethodName, param)
 	return err
 }
+
+// ReceiveBlock deletes the entry and returns one descendant send
+// refunding its amount to the time-locked creator. The entry must
+// exist (constants.ErrDataNonExistent), the sender must be its
+// TimeLocked address (constants.ErrPermissionDenied) and the frontier
+// momentum's timestamp must be at or after the expiration time, else
+// constants.ReclaimNotDue.
 func (p *ReclaimHtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		htlcLog.Debug("invalid reclaim - syntactic validation failed", "address", sendBlock.Address, "reason", err)
@@ -187,13 +232,24 @@ func (p *ReclaimHtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	}, nil
 }
 
+// UnlockHtlcMethod (Unlock) pays out an unexpired entry by revealing
+// the hash lock's preimage. The tokens always go to the entry's
+// HashLocked address regardless of who calls: by default any address
+// may submit the preimage (a proxy unlock), but a HashLocked address
+// that has called DenyProxyUnlock must unlock its entries itself.
 type UnlockHtlcMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedWWithdraw tier, covering the one
+// payout block the call sends back.
 func (p *UnlockHtlcMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
+
+// ValidateSendBlock accepts a packed definition.UnlockHtlcParam
+// (entry id, preimage) carrying no tokens; a positive amount fails
+// with constants.ErrInvalidTokenOrAmount.
 func (p *UnlockHtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.UnlockHtlcParam)
@@ -209,6 +265,17 @@ func (p *UnlockHtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIHtlc.PackMethod(p.MethodName, param.Id, param.Preimage)
 	return err
 }
+
+// ReceiveBlock deletes the entry and returns one descendant send
+// paying its amount to the HashLocked address. The entry must exist
+// (constants.ErrDataNonExistent); when the HashLocked address has
+// denied proxy unlocks — see GetHtlcProxyUnlockStatus — only it may
+// call, else constants.ErrPermissionDenied. The frontier momentum's
+// timestamp must be strictly before the expiration time
+// (constants.ErrExpired at or after it) and the preimage must be at
+// most KeyMaxSize bytes with its HashType digest (SHA3-256 or
+// SHA-256) equal to the entry's hash lock, else
+// constants.ErrInvalidPreimage.
 func (p *UnlockHtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		htlcLog.Debug("invalid unlock - syntactic validation failed", "address", sendBlock.Address, "reason", err)
@@ -277,14 +344,24 @@ func (p *UnlockHtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 	}, nil
 }
 
+// DenyHtlcProxyUnlockMethod (DenyProxyUnlock) opts the sender out of
+// proxy unlocks: entries hash-locked to it can then only be unlocked
+// by the sender itself. The setting is permanent in the sense that
+// the stored entry is never deleted — see GetHtlcProxyUnlockStatus —
+// though it can be flipped back with AllowProxyUnlock.
 type DenyHtlcProxyUnlockMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *DenyHtlcProxyUnlockMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
 
+// ValidateSendBlock accepts an argument-less call carrying no
+// tokens: extra ABI arguments fail with constants.ErrUnpackError and
+// a non-zero Amount with constants.ErrInvalidTokenOrAmount.
 func (p *DenyHtlcProxyUnlockMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -300,6 +377,10 @@ func (p *DenyHtlcProxyUnlockMethod) ValidateSendBlock(block *nom.AccountBlock) e
 	return err
 }
 
+// ReceiveBlock saves the sender's definition.HtlcProxyUnlockInfo with
+// Allowed set to false, overwriting any earlier choice. Past
+// validation only a storage failure can make it error, and it emits
+// no descendant blocks.
 func (p *DenyHtlcProxyUnlockMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		htlcLog.Debug("invalid create - syntactic validation failed", "address", sendBlock.Address, "reason", err)
@@ -316,14 +397,23 @@ func (p *DenyHtlcProxyUnlockMethod) ReceiveBlock(context vm_context.AccountVmCon
 	return nil, nil
 }
 
+// AllowHtlcProxyUnlockMethod (AllowProxyUnlock) opts the sender into
+// proxy unlocks, matching the current default. Calling it records an
+// explicit entry that survives any future change of the default —
+// see GetHtlcProxyUnlockStatus.
 type AllowHtlcProxyUnlockMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *AllowHtlcProxyUnlockMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
 
+// ValidateSendBlock accepts an argument-less call carrying no
+// tokens: extra ABI arguments fail with constants.ErrUnpackError and
+// a non-zero Amount with constants.ErrInvalidTokenOrAmount.
 func (p *AllowHtlcProxyUnlockMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -339,6 +429,10 @@ func (p *AllowHtlcProxyUnlockMethod) ValidateSendBlock(block *nom.AccountBlock) 
 	return err
 }
 
+// ReceiveBlock saves the sender's definition.HtlcProxyUnlockInfo with
+// Allowed set to true, overwriting any earlier choice. Past
+// validation only a storage failure can make it error, and it emits
+// no descendant blocks.
 func (p *AllowHtlcProxyUnlockMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		htlcLog.Debug("invalid create - syntactic validation failed", "address", sendBlock.Address, "reason", err)

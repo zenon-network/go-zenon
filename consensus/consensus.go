@@ -1,3 +1,24 @@
+// Package consensus elects which pillar produces each momentum and
+// tracks how well pillars keep their production schedule.
+//
+// Time is divided into fixed ticks anchored at the genesis timestamp
+// (common.Ticker): an election tick lasts BlockTime * NodeCount
+// seconds (300 on Alphanet) and is split into NodeCount slots of
+// BlockTime seconds, one momentum each; an epoch lasts EpochDuration
+// (24 hours). For every tick the election manager (election.go) seeds
+// a deterministic algorithm (election_algorithm.go) with a proof
+// momentum taken two ticks back and assigns each slot to a pillar —
+// part by delegated weight, part at random. The points system
+// (points.go) records, per pillar and per tick or epoch, how many
+// momentums were expected versus actually produced, along with the
+// delegated weight backing the pillar.
+//
+// The Consensus object wires these together: it registers the
+// election and points caches as chain listeners so they stay warm as
+// momentums are committed, runs a goroutine that broadcasts a
+// ProducerEvent at the start of every slot so the local pillar can
+// produce, and verifies the producer of incoming momentums for the
+// momentum verifier.
 package consensus
 
 import (
@@ -17,9 +38,16 @@ import (
 )
 
 var (
+	// EpochDuration is the length of one consensus epoch. Epochs are
+	// counted from the genesis timestamp by the epoch ticker; pillar
+	// production statistics (EpochStats) and the embedded contracts'
+	// reward computations are aggregated per epoch.
 	EpochDuration = time.Hour * 24
 )
 
+// consensus implements Consensus by composing the event manager
+// (producer-event fan-out), the election manager and the points
+// system, all sharing one consensus database.
 type consensus struct {
 	log     common.Logger
 	genesis time.Time
@@ -34,6 +62,9 @@ type consensus struct {
 	closed chan struct{}
 }
 
+// FrontierPillarReader returns a PillarReader that follows the
+// frontier momentum store, so each call observes the current chain
+// head.
 func (cs *consensus) FrontierPillarReader() api.PillarReader {
 	return &API{
 		momentumStore: cs.chain.GetFrontierMomentumStore(),
@@ -41,6 +72,11 @@ func (cs *consensus) FrontierPillarReader() api.PillarReader {
 		points:        cs.points,
 	}
 }
+
+// FixedPillarReader returns a PillarReader pinned to the chain state
+// identified by identifier, for reads that must be reproducible —
+// e.g. the VM evaluating embedded-contract logic at a block's
+// acknowledged momentum.
 func (cs *consensus) FixedPillarReader(identifier types.HashHeight) api.PillarReader {
 	return &API{
 		momentumStore: cs.chain.GetMomentumStore(identifier),
@@ -49,7 +85,12 @@ func (cs *consensus) FixedPillarReader(identifier types.HashHeight) api.PillarRe
 	}
 }
 
-// NewConsensus instantiates a new consensus object
+// NewConsensus wires up the consensus module for the given chain: an
+// election manager and points system backed by a consensus database
+// whose caches hold roughly one week of election ticks, an epoch
+// ticker anchored at the genesis timestamp, and an event manager for
+// producer events. With testing true, Start skips the producer-event
+// goroutine.
 func NewConsensus(db db.DB, chain chain.Chain, testing bool) Consensus {
 	genesisTimestamp := chain.GetGenesisMomentum().Timestamp
 	epochTicker := common.NewTicker(*genesisTimestamp, EpochDuration)
@@ -70,6 +111,9 @@ func NewConsensus(db db.DB, chain chain.Chain, testing bool) Consensus {
 	}
 }
 
+// GetMomentumProducer returns the address elected to produce the
+// momentum slot starting exactly at timestamp; it errors if timestamp
+// is not a slot start time of its election tick.
 func (cs *consensus) GetMomentumProducer(timestamp time.Time) (*types.Address, error) {
 	election, err := cs.electionManager.ElectionByTime(timestamp)
 	if err != nil {
@@ -82,6 +126,11 @@ func (cs *consensus) GetMomentumProducer(timestamp time.Time) (*types.Address, e
 	}
 	return nil, errors.Errorf("couldn't find producer for timestamp")
 }
+
+// VerifyMomentumProducer reports whether the momentum's producer
+// (the address of its signing key) is the pillar elected for the
+// momentum's timestamp. The momentum verifier rejects momentums for
+// which this returns false.
 func (cs *consensus) VerifyMomentumProducer(momentum *nom.Momentum) (bool, error) {
 	expected, err := cs.GetMomentumProducer(*momentum.Timestamp)
 	if err != nil {
@@ -93,9 +142,14 @@ func (cs *consensus) VerifyMomentumProducer(momentum *nom.Momentum) (bool, error
 	return false, nil
 }
 
+// Init implements Consensus; it has nothing to initialize.
 func (cs *consensus) Init() error {
 	return nil
 }
+
+// Start launches the producer-event goroutine (unless in testing
+// mode) and registers the points system and the election manager as
+// chain momentum-event listeners.
 func (cs *consensus) Start() error {
 	cs.log.Info("starting ...")
 	defer cs.log.Info("started")
@@ -114,6 +168,9 @@ func (cs *consensus) Start() error {
 	cs.chain.Register(cs.electionManager)
 	return nil
 }
+
+// Stop unregisters the chain listeners and waits for the
+// producer-event goroutine to finish.
 func (cs *consensus) Stop() error {
 	cs.log.Info("stopping ...")
 	defer cs.log.Info("stopped")
@@ -126,7 +183,14 @@ func (cs *consensus) Stop() error {
 	return nil
 }
 
-// work runs in a different go routine and broadcasts ProducerEvent to all modules which called Register on EventManager
+// work runs in its own goroutine and broadcasts ProducerEvents to
+// all listeners registered on the EventManager. After waiting for the
+// genesis timestamp it loops over election ticks: it computes the
+// election for the current tick, sleeps until each slot's start time
+// and broadcasts that slot's event (skipping slots that already
+// ended), then sleeps until the tick ends and moves to the next one.
+// Events are therefore delivered at slot start, from this goroutine —
+// not under the chain insert lock.
 func (cs *consensus) work() {
 	// wait for genesis to begin
 	for (cs.chain.GetGenesisMomentum().Timestamp).After(time.Now()) {

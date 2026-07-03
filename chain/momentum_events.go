@@ -6,6 +6,9 @@ import (
 	"github.com/zenon-network/go-zenon/chain/nom"
 )
 
+// momentumEventManager implements MomentumEventManager: a
+// mutex-guarded listener list to which the momentum pool broadcasts
+// Insert/DeleteMomentum events synchronously, in registration order.
 type momentumEventManager struct {
 	listeners []MomentumEventListener
 	changes   sync.Mutex
@@ -34,12 +37,16 @@ func (em *momentumEventManager) broadcastDeleteMomentum(detailed *nom.DetailedMo
 	}
 }
 
+// Register appends listener to the broadcast list; registering the
+// same listener twice delivers events twice.
 func (em *momentumEventManager) Register(listener MomentumEventListener) {
 	em.changes.Lock()
 	defer em.changes.Unlock()
 
 	em.listeners = append(em.listeners, listener)
 }
+
+// UnRegister removes the first registration of listener, if any.
 func (em *momentumEventManager) UnRegister(listener MomentumEventListener) {
 	em.changes.Lock()
 	defer em.changes.Unlock()

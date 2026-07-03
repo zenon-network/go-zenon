@@ -6,6 +6,10 @@ import (
 	"github.com/syndtr/goleveldb/leveldb/util"
 )
 
+// memDBWrapper adapts goleveldb's in-memory memdb to the raw backend
+// interface. It is the only backend that implements changesInternal,
+// which makes memory-backed DBs (and snapshot overlays, whose top
+// layer is a memdb) the only ones that support DB.Changes.
 type memDBWrapper struct {
 	*memdb.DB
 }
@@ -43,6 +47,11 @@ func newMemDBInternal() db {
 	}
 }
 
+// NewMemDB returns an empty in-memory DB. Unlike the LevelDB-backed
+// flavours it fully supports Changes, so it serves as the scratch
+// state for building patches (for example the frontier bookkeeping in
+// Manager.Add), as the account pool's uncommitted state, and in
+// tests.
 func NewMemDB() DB {
 	return enableDelete(newMemDBInternal())
 }

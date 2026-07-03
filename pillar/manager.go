@@ -1,3 +1,10 @@
+// Package pillar implements the block-producing side of a node. Its
+// Manager registers as the sole production listener for consensus
+// ProducerEvents and, when an event names this node's coinbase pillar,
+// hands off to a fresh goroutine that produces a momentum for the
+// slot. The underlying worker
+// holds the chain insert lock while generating the momentum and any
+// auto-generated contract-receive blocks, then broadcasts the result.
 package pillar
 
 import (
@@ -25,6 +32,11 @@ type manager struct {
 	broadcaster protocol.Broadcaster
 }
 
+// NewPillar returns a Manager that produces momentums for this node.
+// It creates a VM supervisor and worker over chain and consensus and
+// uses broadcaster to publish produced blocks. The coinbase pillar key
+// is not set here; callers must call SetCoinBase before the Manager
+// will produce.
 func NewPillar(chain chain.Chain, consensus consensus.Consensus, broadcaster protocol.Broadcaster) Manager {
 	supervisor := vm.NewSupervisor(chain, consensus)
 	return &manager{

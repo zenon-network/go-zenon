@@ -1,3 +1,14 @@
+// Package g provides the deterministic genesis used by the test
+// suites (the zenon mock node and the embedded-contract tests):
+// EmbeddedGenesis is a GenesisConfig on ChainIdentifier 100 with
+// three registered pillars, pre-fused plasma for eight pillar keys
+// plus the spork key and several users, ZNN/QSR token definitions
+// mirroring alphanet, one legacy swap entry and funded balances for
+// the Pillar1 through Pillar8, spork and User1 through User5 keys
+// (Pillar4 through Pillar8 hold larger ZNN/QSR balances than the
+// registered three; User6 through User10 hold no genesis balance). All key pairs are derived from
+// fixed entropy, so addresses and the genesis momentum hash are
+// stable across runs.
 package g
 
 import (
@@ -14,18 +25,27 @@ import (
 )
 
 const (
-	// Sunday, September 9, 2001 1:46:40
+	// genesisTimestamp is the mock genesis momentum's Unix timestamp
+	// — Sunday, September 9, 2001 1:46:40.
 	genesisTimestamp = 1000000000
-	// 10 ^ 8
+	// Zexp is one whole coin in base units (10^8); both ZNN and QSR
+	// use 8 decimals.
 	Zexp = 100000000
 )
 
+// The variables below are the fixed test fixtures: the secp256k1
+// swap keys, the deterministic Ed25519 identities (spork, pillars,
+// users) and the EmbeddedGenesis config that seeds the mock network
+// with them.
 var (
-	// Secp256k1 keys below.
-	// Used to test swap messages for both legacy-register and swap
-	// generate with > openssl ecparam -genkey -name secp256k1 -rand /dev/urandom -out priv-2.pem
-	//               > openssl ec -in priv-2.pem -text -out pub-2.pem
-
+	// The Secp* values are secp256k1 keys used to test swap messages
+	// for both legacy-register and swap. They were generated with:
+	//
+	//	openssl ecparam -genkey -name secp256k1 -rand /dev/urandom -out priv-2.pem
+	//	openssl ec -in priv-2.pem -text -out pub-2.pem
+	//
+	// Secp1KeyIdHex is the key-id hash that owns the genesis swap
+	// entry and the legacy-pillar entry.
 	Secp1PrvKey    = hexutil.MustDecode("0x7e412f0a36c21518519013a0f9b498f6bbd36b4c9861573e0662680d06cd2a40")
 	Secp1PubKeyB64 = base64.StdEncoding.EncodeToString(hexutil.MustDecode("0x047306c325fa7216723bee068c0f2ba1438217c22a0736df41434ac32ba38c04f55c8e3ef9be61377f191016df05ab0fcca8a0b9b505371101c460c59aeede6ab6"))
 	Secp1KeyIdHex  = "c955c2b650452d670179068995a51132463e2d13f7519d64ff283af99dd14b43"
@@ -33,6 +53,12 @@ var (
 	Secp2PrvKey    = hexutil.MustDecode("0xd7ef0ace1c32429605291c09fe4fb3c3dc7dde472e203b29c0911e199713c66e")
 	Secp2PubKeyB64 = base64.StdEncoding.EncodeToString(hexutil.MustDecode("0x047e21bcfbb9bba1da40e373922d8a14c19d11bd3b58eb0c2700f29655e389e70c9291e32d929b54ae6efc04ad3e3a82c1ebd8222ccc0e29ea1c4c3fb97f80f4fe"))
 
+	// The test identities below are Ed25519 key pairs derived from
+	// fixed entropy, so their addresses never change. Spork is the
+	// genesis SporkAddress; Pillar1 through Pillar3 are registered as
+	// pillars at genesis (Pillar4 through Pillar8 are funded so tests
+	// can register more), and User1 through User10 are plain test
+	// accounts — User6 through User10 hold no genesis balance.
 	Spork, _   = wallet.DeriveWithIndex(1, hexutil.MustDecode("0x01234567890123456789012345678900"))
 	Pillar1, _ = wallet.DeriveWithIndex(1, hexutil.MustDecode("0x01234567890123456789012345678901"))
 	Pillar2, _ = wallet.DeriveWithIndex(2, hexutil.MustDecode("0x01234567890123456789012345678901"))
@@ -54,6 +80,9 @@ var (
 	User9, _  = wallet.DeriveWithIndex(9, hexutil.MustDecode("0x01234567890123456789012345678902"))
 	User10, _ = wallet.DeriveWithIndex(10, hexutil.MustDecode("0x01234567890123456789012345678902"))
 
+	// The PillarNName variables are the registered names of the
+	// genesis pillars (1-3) and the conventional names tests use
+	// when registering the remaining pillar keys (4-8).
 	Pillar1Name = "TEST-pillar-1"
 	Pillar2Name = "TEST-pillar-cool"
 	Pillar3Name = "TEST-pillar-znn"
@@ -63,6 +92,9 @@ var (
 	Pillar7Name = "TEST-pillar-community-7"
 	Pillar8Name = "TEST-pillar-eight-eclipse"
 
+	// PillarKeys lists all eight pillar key pairs in order; the mock
+	// zenon node runs one block-producing pillar manager per key so
+	// every elected producer can deliver its momentums.
 	PillarKeys = []*wallet.KeyPair{
 		Pillar1,
 		Pillar2,
@@ -74,6 +106,9 @@ var (
 		Pillar8,
 	}
 
+	// AllKeyPairs lists every test identity — pillars, users and the
+	// spork key — so tests can resolve any address back to its key
+	// pair for signing.
 	AllKeyPairs = []*wallet.KeyPair{
 		Pillar1,
 		Pillar2,
@@ -96,6 +131,12 @@ var (
 		Spork,
 	}
 
+	// EmbeddedGenesis is the GenesisConfig the mock zenon node is
+	// built on (genesis.NewGenesis(g.EmbeddedGenesis)); its momentum
+	// hash is pinned by TestGenesisCheckSum. It deliberately mirrors
+	// the alphanet structure — same token definitions, same contract
+	// sections — but on ChainIdentifier 100 with deterministic test
+	// keys.
 	EmbeddedGenesis = &genesis.GenesisConfig{
 		ChainIdentifier:     100,
 		ExtraData:           "This is the genesis config used for testing",

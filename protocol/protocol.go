@@ -20,12 +20,16 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
-// Supported versions of the eth protocol (first is primary).
+// ProtocolVersions lists the supported versions of the eth protocol
+// (first is primary).
 var ProtocolVersions = []uint{61}
 
-// Number of implemented message corresponding to different protocol versions.
+// ProtocolLengths holds the number of implemented message codes for
+// each entry of ProtocolVersions.
 var ProtocolLengths = []uint64{9}
 
+// ProtocolMaxMsgSize is the maximum size accepted for a single
+// protocol message; larger messages disconnect the sending peer.
 const (
 	ProtocolMaxMsgSize = 10 * 1024 * 1024 // Maximum cap on the size of a protocol message
 )
@@ -45,6 +49,11 @@ const (
 
 type errCode int
 
+// Protocol error codes, reported when a peer is disconnected for
+// misbehaving: oversized or undecodable messages, handshake
+// mismatches (protocol version, network id or genesis hash), a
+// missing, repeated or out-of-order status message, or activity from
+// a peer that has been suspended.
 const (
 	ErrMsgTooLarge = iota
 	ErrDecode

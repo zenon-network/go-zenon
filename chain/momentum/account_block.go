@@ -25,6 +25,8 @@ func (ms *momentumStore) GetAccountBlocksByHeight(address types.Address, height,
 	return ms.GetAccountStore(address).MoreByHeight(height, count)
 }
 
+// addAccountBlockHeader records the hash-to-header index entry that
+// makes a confirmed block findable by GetAccountBlockByHash.
 func (ms *momentumStore) addAccountBlockHeader(header types.AccountHeader) error {
 	data, err := header.Serialize()
 	if err != nil {
@@ -32,6 +34,12 @@ func (ms *momentumStore) addAccountBlockHeader(header types.AccountHeader) error
 	}
 	return ms.DB.Put(getAccountHeaderByHashKey(header.Hash), data)
 }
+
+// GetAccountBlockByHash resolves hash through the header index
+// written at confirmation time and loads the block from its account
+// chain. It returns nil with a nil error when the hash is unknown —
+// in particular for blocks that exist only in the account pool and
+// have not been confirmed by a momentum yet.
 func (ms *momentumStore) GetAccountBlockByHash(hash types.Hash) (*nom.AccountBlock, error) {
 	data, err := ms.DB.Get(getAccountHeaderByHashKey(hash))
 

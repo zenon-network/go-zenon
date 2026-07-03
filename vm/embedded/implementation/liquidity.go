@@ -19,13 +19,25 @@ var (
 	liquidityLog = common.EmbeddedLogger.New("contract", "liquidity")
 )
 
+// UpdateEmbeddedLiquidityMethod (Update) is the original liquidity
+// update, registered while the contract is a plain emission sink: it
+// mints each due epoch's liquidity share of the network emission to
+// the contract itself, distributing nothing. The bridge-and-liquidity
+// spork replaces it with UpdateRewardEmbeddedLiquidityMethod — see
+// vm/embedded/embedded.go.
 type UpdateEmbeddedLiquidityMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the descendant mint calls
+// are contract sends, which need no plasma.
 func (method *UpdateEmbeddedLiquidityMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts an argument-less call carrying no
+// tokens: extra ABI arguments fail with constants.ErrUnpackError and
+// a non-zero Amount with constants.ErrInvalidTokenOrAmount.
 func (method *UpdateEmbeddedLiquidityMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -40,6 +52,12 @@ func (method *UpdateEmbeddedLiquidityMethod) ValidateSendBlock(block *nom.Accoun
 	block.Data, err = definition.ABILiquidity.PackMethod(method.MethodName)
 	return err
 }
+
+// ReceiveBlock processes all due reward epochs, subject to the
+// common update throttle (constants.ErrUpdateTooRecent when called
+// again within constants.UpdateMinNumMomentums momentums), and
+// returns the descendant mint calls produced by
+// updateLiquidityRewards.
 func (method *UpdateEmbeddedLiquidityMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := method.ValidateSendBlock(sendBlock); err != nil {
 		liquidityLog.Debug("invalid update - syntactic validation failed", "address", sendBlock.Address, "reason", err)
@@ -54,6 +72,10 @@ func (method *UpdateEmbeddedLiquidityMethod) ReceiveBlock(context vm_context.Acc
 	return updateLiquidityRewards(context)
 }
 
+// computeLiquidityRewardsForEpoch returns the two descendant blocks
+// that mint the epoch's liquidity share of the network emission —
+// constants.LiquidityRewardForEpoch — in ZNN and QSR to the liquidity
+// contract itself.
 func computeLiquidityRewardsForEpoch(context vm_context.AccountVmContext, epoch uint64) ([]*nom.AccountBlock, error) {
 	totalZnnAmount, totalQsrAmount := constants.LiquidityRewardForEpoch(epoch)
 
@@ -84,6 +106,12 @@ func computeLiquidityRewardsForEpoch(context vm_context.AccountVmContext, epoch 
 	}, nil
 }
 
+// updateLiquidityRewards advances the epoch ratchet over every due
+// epoch — see checkAndPerformUpdateEpoch — collecting the mint blocks
+// of computeLiquidityRewardsForEpoch, and stops early once the result
+// already holds constants.MaxEpochsPerUpdate blocks. Note that the
+// stop condition counts blocks (two per epoch) rather than epochs and
+// is checked after the ratchet has already advanced.
 func updateLiquidityRewards(context vm_context.AccountVmContext) ([]*nom.AccountBlock, error) {
 	lastEpoch, err := definition.GetLastEpochUpdate(context.Storage())
 	if err != nil {
@@ -108,16 +136,29 @@ func updateLiquidityRewards(context vm_context.AccountVmContext) ([]*nom.Account
 	}
 }
 
+// FundMethod (Fund) lets the spork address move ZNN and QSR from the
+// liquidity contract's balance to the accelerator contract as a
+// donation, funding accelerator projects from the accumulated
+// liquidity emission.
 type FundMethod struct {
 	MethodName string
 }
 
+// Fee returns a zero fee. It is not part of the embedded.Method
+// interface and has no callers.
 func (p *FundMethod) Fee() (*big.Int, error) {
 	return big.NewInt(0), nil
 }
+
+// GetPlasma quotes the EmbeddedSimple tier; the descendant donations
+// are contract sends, which need no plasma.
 func (p *FundMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed definition.FundParam (ZNN and
+// QSR amounts) sent by the spork address; any other sender fails with
+// constants.ErrPermissionDenied.
 func (p *FundMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	if block.Address != *types.SporkAddress {
 		return constants.ErrPermissionDenied
@@ -133,6 +174,12 @@ func (p *FundMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, param.ZnnReward, param.QsrReward)
 	return err
 }
+
+// ReceiveBlock returns two descendant sends donating the requested
+// ZNN and QSR amounts to the accelerator contract via Donate. The
+// contract's balance must cover both amounts, else
+// constants.ErrInvalidTokenOrAmount. While the accelerator spork is
+// not enforced the call is a no-op.
 func (p *FundMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -179,16 +226,28 @@ func (p *FundMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock
 	return blocks, nil
 }
 
+// BurnZnnMethod (BurnZnn) lets the spork address burn ZNN from the
+// liquidity contract's balance, removing part of the accumulated
+// liquidity emission from circulation.
 type BurnZnnMethod struct {
 	MethodName string
 }
 
+// Fee returns a zero fee. It is not part of the embedded.Method
+// interface and has no callers.
 func (p *BurnZnnMethod) Fee() (*big.Int, error) {
 	return big.NewInt(0), nil
 }
+
+// GetPlasma quotes the EmbeddedSimple tier; the descendant burn is a
+// contract send, which needs no plasma.
 func (p *BurnZnnMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed definition.BurnParam (the burn
+// amount) sent by the spork address; any other sender fails with
+// constants.ErrPermissionDenied.
 func (p *BurnZnnMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	if block.Address != *types.SporkAddress {
 		return constants.ErrPermissionDenied
@@ -204,6 +263,11 @@ func (p *BurnZnnMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, param.BurnAmount)
 	return err
 }
+
+// ReceiveBlock returns one descendant send burning the requested
+// amount through the token contract's Burn method. The contract's
+// ZNN balance must cover it, else constants.ErrInvalidTokenOrAmount.
+// While the accelerator spork is not enforced the call is a no-op.
 func (p *BurnZnnMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -237,13 +301,29 @@ func (p *BurnZnnMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBl
 	return blocks, nil
 }
 
+// SetTokenTupleMethod (SetTokenTuple) is the administrator method
+// that replaces the contract's whole list of stakable token tuples —
+// each a ZTS with its ZNN and QSR reward percentages and minimum
+// stake amount. The change is protected by a soft-delay time
+// challenge.
 type SetTokenTupleMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *SetTokenTupleMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed definition.TokenTuplesParam
+// carrying no tokens. Its four arrays must have equal lengths
+// (constants.ErrForbiddenParam otherwise) and, when non-empty, every
+// token standard must parse to a non-zero ZTS without duplicates and
+// the ZNN and QSR percentages must each sum to their basis-point
+// denominators — constants.LiquidityZnnTotalPercentages and
+// constants.LiquidityQsrTotalPercentages (both 10,000) — else
+// constants.ErrInvalidPercentages.
 func (p *SetTokenTupleMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.TokenTuplesParam)
@@ -292,6 +372,14 @@ func (p *SetTokenTupleMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, param.TokenStandards, param.ZnnPercentages, param.QsrPercentages, param.MinAmounts)
 	return err
 }
+
+// ReceiveBlock replaces the token-tuple list in the LiquidityInfo.
+// Security must be initialized (CheckSecurityInitialized) and the
+// sender must be the administrator, else
+// constants.ErrPermissionDenied. The change passes a TimeChallenge
+// over the encoded tuples with the security info's SoftDelay: the
+// first call only records the challenge and the list is saved when
+// the call is repeated with identical parameters after the delay.
 func (p *SetTokenTupleMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -350,10 +438,17 @@ func (p *SetTokenTupleMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 	return nil, nil
 }
 
+// LiquidityStakeMethod (LiquidityStake) locks the sent amount of a
+// configured token tuple's ZTS for the chosen duration, earning a
+// share of the per-token liquidity rewards weighted by amount and
+// duration.
 type LiquidityStakeMethod struct {
 	MethodName string
 }
 
+// getWeightedLiquidityStakeAmount scales the staked amount by the
+// constants.LiquidityStakeWeights multiplier for the chosen duration:
+// a stake of n time units counts n times its amount.
 func getWeightedLiquidityStakeAmount(amount *big.Int, stakingTime int64) *big.Int {
 	period := stakingTime / constants.StakeTimeUnitSec
 	weighted := big.NewInt(constants.LiquidityStakeWeights[period])
@@ -361,9 +456,18 @@ func getWeightedLiquidityStakeAmount(amount *big.Int, stakingTime int64) *big.In
 	return weighted
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; staking sends no
+// response block.
 func (p *LiquidityStakeMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed duration in seconds, which must
+// be a whole number of constants.StakeTimeUnitSec units between
+// constants.StakeTimeMinSec and constants.StakeTimeMaxSec (1 to 12
+// units of 30 days), else constants.ErrInvalidStakingPeriod. The
+// sent token and amount are only checked in ReceiveBlock, against
+// the configured token tuples.
 func (p *LiquidityStakeMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	var stakeTime int64
@@ -379,6 +483,14 @@ func (p *LiquidityStakeMethod) ValidateSendBlock(block *nom.AccountBlock) error 
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, stakeTime)
 	return err
 }
+
+// ReceiveBlock saves a definition.LiquidityStakeEntry keyed by the
+// send block's hash, with the weighted amount from
+// getWeightedLiquidityStakeAmount and the expiration set one duration
+// past the frontier momentum. The sent token must be a configured
+// tuple (constants.ErrInvalidToken otherwise) and the amount at least
+// its MinAmount, else constants.ErrInvalidTokenOrAmount. No
+// descendant blocks are emitted.
 func (p *LiquidityStakeMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -424,13 +536,21 @@ func (p *LiquidityStakeMethod) ReceiveBlock(context vm_context.AccountVmContext,
 	return nil, nil
 }
 
+// CancelLiquidityStakeMethod (CancelLiquidityStake) refunds an
+// expired liquidity stake entry to its owner.
 type CancelLiquidityStakeMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedWWithdraw tier, covering the one
+// refund block the call sends back.
 func (p *CancelLiquidityStakeMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
+
+// ValidateSendBlock accepts a packed entry id (types.Hash) carrying
+// no tokens; a non-zero amount fails with
+// constants.ErrInvalidTokenOrAmount.
 func (p *CancelLiquidityStakeMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	id := new(types.Hash)
@@ -445,6 +565,14 @@ func (p *CancelLiquidityStakeMethod) ValidateSendBlock(block *nom.AccountBlock) 
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, id)
 	return err
 }
+
+// ReceiveBlock refunds the staked amount in one descendant send. The
+// entry is looked up by id and sender (constants.ErrDataNonExistent
+// when absent) and must have expired, else constants.RevokeNotDue.
+// Rather than deleting the entry it records the revoke time and
+// zeroes the amount, leaving the next reward run to count the stake's
+// active time and delete it — see
+// computeLiquidityStakeRewardsForEpoch.
 func (p *CancelLiquidityStakeMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -487,13 +615,25 @@ func (p *CancelLiquidityStakeMethod) ReceiveBlock(context vm_context.AccountVmCo
 	}, nil
 }
 
+// UpdateRewardEmbeddedLiquidityMethod (Update) replaces
+// UpdateEmbeddedLiquidityMethod once the bridge-and-liquidity spork
+// is enforced: instead of parking the epoch emission in the contract
+// it distributes it — plus any administrator-set additional rewards —
+// to liquidity stakers as collectable reward deposits, one epoch per
+// call.
 type UpdateRewardEmbeddedLiquidityMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the descendant mint and
+// burn calls are contract sends, which need no plasma.
 func (method *UpdateRewardEmbeddedLiquidityMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts an argument-less call carrying no
+// tokens: extra ABI arguments fail with constants.ErrUnpackError and
+// a non-zero Amount with constants.ErrInvalidTokenOrAmount.
 func (method *UpdateRewardEmbeddedLiquidityMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -508,6 +648,12 @@ func (method *UpdateRewardEmbeddedLiquidityMethod) ValidateSendBlock(block *nom.
 	block.Data, err = definition.ABILiquidity.PackMethod(method.MethodName)
 	return err
 }
+
+// ReceiveBlock processes the next due reward epoch, subject to the
+// common update throttle (constants.ErrUpdateTooRecent when called
+// again within constants.UpdateMinNumMomentums momentums), and
+// returns the descendant blocks produced by
+// updateLiquidityStakeRewards.
 func (method *UpdateRewardEmbeddedLiquidityMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := method.ValidateSendBlock(sendBlock); err != nil {
 		liquidityLog.Debug("invalid update - syntactic validation failed", "address", sendBlock.Address, "reason", err)
@@ -522,7 +668,10 @@ func (method *UpdateRewardEmbeddedLiquidityMethod) ReceiveBlock(context vm_conte
 	return updateLiquidityStakeRewards(context)
 }
 
-// weighted liquidity stake amount over time
+// getWeightedLiquidityStake integrates the entry's weighted amount
+// over time: the weighted amount times the seconds of overlap
+// between [startTime, endTime) and the stake's active interval, from
+// its start until its revoke time (or indefinitely while unrevoked).
 func getWeightedLiquidityStake(info *definition.LiquidityStakeEntry, startTime, endTime int64) *big.Int {
 	startTime = common.MaxInt64(startTime, info.StartTime)
 	if info.RevokeTime != 0 {
@@ -538,6 +687,28 @@ func getWeightedLiquidityStake(info *definition.LiquidityStakeEntry, startTime, 
 	return cumulatedStake
 }
 
+// computeLiquidityStakeRewardsForEpoch distributes the epoch's
+// liquidity rewards to stakers. While the contract is halted it only
+// mints the epoch emission (constants.LiquidityRewardForEpoch) to the
+// contract itself, exactly like the pre-spork Update. Otherwise:
+//   - when the contract's balance covers the administrator-set
+//     additional rewards (see SetAdditionalReward), they are added to
+//     the distributable totals and burned from the balance — the
+//     burn offsets the later mints, since deposits are paid out as
+//     freshly minted coins by CollectReward
+//   - the ZNN and QSR totals are split between the configured token
+//     tuples by their basis-point percentages (out of
+//     constants.LiquidityZnnTotalPercentages /
+//     constants.LiquidityQsrTotalPercentages)
+//   - each token's share is divided among its stake entries pro-rata
+//     to their time-weighted stake over the epoch
+//     (getWeightedLiquidityStake), credited via addReward and
+//     collected through CollectReward; entries revoked before the
+//     epoch's end are deleted
+//   - crediting more than the totals fails with
+//     constants.ErrInvalidRewards, and any undistributed remainder
+//     (rounding dust, tokens without stakers) is minted to the
+//     contract itself
 func computeLiquidityStakeRewardsForEpoch(context vm_context.AccountVmContext, epoch uint64) ([]*nom.AccountBlock, error) {
 	liquidityInfo, err := definition.GetLiquidityInfo(context.Storage())
 	if err != nil {
@@ -718,6 +889,10 @@ func computeLiquidityStakeRewardsForEpoch(context vm_context.AccountVmContext, e
 	return blocks, nil
 }
 
+// updateLiquidityStakeRewards advances the epoch ratchet by at most
+// one epoch — unlike updateLiquidityRewards it does not loop — and
+// returns that epoch's blocks from
+// computeLiquidityStakeRewardsForEpoch, or none when no epoch is due.
 func updateLiquidityStakeRewards(context vm_context.AccountVmContext) ([]*nom.AccountBlock, error) {
 	lastEpoch, err := definition.GetLastEpochUpdate(context.Storage())
 	if err != nil {
@@ -741,13 +916,23 @@ func updateLiquidityStakeRewards(context vm_context.AccountVmContext) ([]*nom.Ac
 	return result, nil
 }
 
+// SetIsHalted (SetIsHalted) is the administrator method that halts
+// or resumes the contract, taking effect immediately — no time
+// challenge. While halted, reward runs mint the epoch emission to
+// the contract itself instead of distributing it to stakers.
 type SetIsHalted struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *SetIsHalted) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed bool — the new halted state —
+// carried by no tokens; a non-zero amount fails with
+// constants.ErrInvalidTokenOrAmount.
 func (p *SetIsHalted) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -763,6 +948,10 @@ func (p *SetIsHalted) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, *param)
 	return err
 }
+
+// ReceiveBlock saves the new IsHalted flag in the LiquidityInfo. The
+// sender must be the administrator, else
+// constants.ErrPermissionDenied. No descendant blocks are emitted.
 func (p *SetIsHalted) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -790,13 +979,24 @@ func (p *SetIsHalted) ReceiveBlock(context vm_context.AccountVmContext, sendBloc
 	return nil, nil
 }
 
+// UnlockLiquidityStakeEntries (UnlockLiquidityStakeEntries) is the
+// administrator method that expires every active stake entry of one
+// token immediately, letting holders cancel and withdraw without
+// waiting out their chosen durations — typically when a tuple is
+// retired from the reward configuration.
 type UnlockLiquidityStakeEntries struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *UnlockLiquidityStakeEntries) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts an argument-less call carrying a zero
+// amount; the token whose entries to unlock is given by the send
+// block's TokenStandard field rather than an ABI argument.
 func (p *UnlockLiquidityStakeEntries) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -811,6 +1011,12 @@ func (p *UnlockLiquidityStakeEntries) ValidateSendBlock(block *nom.AccountBlock)
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName)
 	return err
 }
+
+// ReceiveBlock brings the expiration time of every entry of the send
+// block's token standard forward to the frontier momentum's
+// timestamp, leaving already-expired entries untouched. The sender
+// must be the administrator, else constants.ErrPermissionDenied. No
+// descendant blocks are emitted.
 func (p *UnlockLiquidityStakeEntries) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -838,13 +1044,25 @@ func (p *UnlockLiquidityStakeEntries) ReceiveBlock(context vm_context.AccountVmC
 	return nil, nil
 }
 
+// SetAdditionalReward (SetAdditionalReward) is the administrator
+// method that sets the extra ZNN and QSR amounts distributed to
+// stakers each epoch from the contract's own balance, on top of the
+// network emission — see computeLiquidityStakeRewardsForEpoch. The
+// change is protected by a soft-delay time challenge.
 type SetAdditionalReward struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *SetAdditionalReward) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed
+// definition.SetAdditionalRewardParam (ZNN and QSR amounts) carrying
+// no tokens; a non-zero amount fails with
+// constants.ErrInvalidTokenOrAmount.
 func (p *SetAdditionalReward) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -860,6 +1078,14 @@ func (p *SetAdditionalReward) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, param.ZnnReward, param.QsrReward)
 	return err
 }
+
+// ReceiveBlock saves the new reward amounts in the LiquidityInfo.
+// The sender must be the administrator, else
+// constants.ErrPermissionDenied. The change passes a TimeChallenge
+// over the packed amounts with the security info's SoftDelay: the
+// first call only records the challenge and the amounts are saved
+// when the call is repeated with identical parameters after the
+// delay.
 func (p *SetAdditionalReward) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -914,13 +1140,24 @@ func (p *SetAdditionalReward) ReceiveBlock(context vm_context.AccountVmContext, 
 	return nil, nil
 }
 
+// ChangeAdministratorLiquidity (ChangeAdministrator) is the
+// administrator method that hands the role to another address,
+// protected by an administrator-delay time challenge; the liquidity
+// counterpart of the bridge's ChangeAdministratorMethod.
 type ChangeAdministratorLiquidity struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *ChangeAdministratorLiquidity) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed types.Address carrying no
+// tokens. The address is re-parsed to verify its checksum, which the
+// ABI alone does not, and must not be the zero address, else
+// constants.ErrForbiddenParam.
 func (p *ChangeAdministratorLiquidity) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -944,6 +1181,14 @@ func (p *ChangeAdministratorLiquidity) ValidateSendBlock(block *nom.AccountBlock
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, address)
 	return err
 }
+
+// ReceiveBlock replaces the administrator in the LiquidityInfo.
+// Security must be initialized (CheckSecurityInitialized) and the
+// sender must be the current administrator, else
+// constants.ErrPermissionDenied. The change passes a TimeChallenge
+// over the new address with the security info's AdministratorDelay:
+// the first call only records the challenge and the handover happens
+// when the call is repeated with the same address after the delay.
 func (p *ChangeAdministratorLiquidity) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -995,13 +1240,26 @@ func (p *ChangeAdministratorLiquidity) ReceiveBlock(context vm_context.AccountVm
 	return nil, nil
 }
 
+// NominateGuardiansLiquidity (NominateGuardians) is the
+// administrator method that installs the contract's guardian set —
+// the addresses able to elect a new administrator after an emergency
+// — protected by an administrator-delay time challenge; the
+// liquidity counterpart of the bridge's NominateGuardiansMethod.
 type NominateGuardiansLiquidity struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *NominateGuardiansLiquidity) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed slice of at least
+// constants.MinGuardians addresses (constants.ErrInvalidGuardians
+// otherwise) carrying no tokens. Each address is re-parsed to verify
+// its checksum, which the ABI alone does not, and must not be the
+// zero address, else constants.ErrForbiddenParam.
 func (p *NominateGuardiansLiquidity) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -1030,6 +1288,15 @@ func (p *NominateGuardiansLiquidity) ValidateSendBlock(block *nom.AccountBlock) 
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, guardians)
 	return err
 }
+
+// ReceiveBlock replaces the guardian set in the SecurityInfo,
+// resetting all guardian votes to empty. The sender must be the
+// administrator, else constants.ErrPermissionDenied. The guardians
+// are sorted by address string before hashing and storing, making
+// the time challenge order-insensitive; the change passes a
+// TimeChallenge with the security info's AdministratorDelay and is
+// applied when the call is repeated with the same set after the
+// delay.
 func (p *NominateGuardiansLiquidity) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -1085,13 +1352,24 @@ func (p *NominateGuardiansLiquidity) ReceiveBlock(context vm_context.AccountVmCo
 	return nil, nil
 }
 
+// ProposeAdministratorLiquidity (ProposeAdministrator) is the
+// guardian method that votes for a new administrator while the
+// contract is in emergency (administrator zeroed); the liquidity
+// counterpart of the bridge's ProposeAdministratorMethod.
 type ProposeAdministratorLiquidity struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *ProposeAdministratorLiquidity) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed types.Address carrying no
+// tokens. The address is re-parsed to verify its checksum, which the
+// ABI alone does not, and must not be the zero address, else
+// constants.ErrForbiddenParam.
 func (p *ProposeAdministratorLiquidity) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -1115,6 +1393,15 @@ func (p *ProposeAdministratorLiquidity) ValidateSendBlock(block *nom.AccountBloc
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName, *address)
 	return err
 }
+
+// ReceiveBlock records the guardian sender's vote, overwriting its
+// previous one. The administrator must be the zero address
+// (constants.ErrNotEmergency otherwise) and the sender a guardian,
+// else constants.ErrNotGuardian. Once a proposed address gathers the
+// votes of a strict majority of guardian slots it becomes the new
+// administrator and all votes are reset; as with the bridge's
+// machinery, a duplicated guardian address still casts one vote but
+// widens the majority threshold. No descendant blocks are emitted.
 func (p *ProposeAdministratorLiquidity) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -1186,13 +1473,24 @@ func (p *ProposeAdministratorLiquidity) ReceiveBlock(context vm_context.AccountV
 	return nil, nil
 }
 
+// EmergencyLiquidity (Emergency) is the administrator's kill switch:
+// it renounces the administrator role and halts the contract in a
+// single, immediate call. Control can only be restored by the
+// guardians through ProposeAdministrator; the liquidity counterpart
+// of the bridge's EmergencyMethod.
 type EmergencyLiquidity struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *EmergencyLiquidity) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts an argument-less call carrying no
+// tokens: extra ABI arguments fail with constants.ErrUnpackError and
+// a non-zero Amount with constants.ErrInvalidTokenOrAmount.
 func (p *EmergencyLiquidity) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	if err := definition.ABILiquidity.UnpackEmptyMethod(p.MethodName, block.Data); err != nil {
@@ -1206,6 +1504,13 @@ func (p *EmergencyLiquidity) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABILiquidity.PackMethod(p.MethodName)
 	return err
 }
+
+// ReceiveBlock zeroes the administrator and sets IsHalted in the
+// LiquidityInfo. Security must be initialized
+// (CheckSecurityInitialized) and the sender must be the
+// administrator, else constants.ErrPermissionDenied. There is no
+// time challenge — the emergency takes effect at once. No descendant
+// blocks are emitted.
 func (p *EmergencyLiquidity) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err

@@ -13,6 +13,10 @@ func getAccountZNNBalance(address types.Address) []byte {
 	return common.JoinBytes(accountZNNBalancePrefix, address.Bytes())
 }
 
+// getZnnBalance reads the per-address ZNN balance cache that
+// AddAccountBlockTransaction maintains; it lets the pillar delegation
+// computation weigh backers without opening every account store.
+// Missing entries read as zero.
 func (ms *momentumStore) getZnnBalance(address types.Address) (*big.Int, error) {
 	data, err := ms.DB.Get(getAccountZNNBalance(address))
 	if err == leveldb.ErrNotFound {

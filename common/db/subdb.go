@@ -4,6 +4,9 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 )
 
+// removePatchKeyPrefix is a PatchReplayer that copies operations into
+// another Patch with the first prefixLength bytes stripped from every
+// key; subDB uses it to report changes in subset key space.
 type removePatchKeyPrefix struct {
 	prefixLength int
 	Patch
@@ -13,6 +16,10 @@ func (edp *removePatchKeyPrefix) Put(key []byte, value []byte) {
 	edp.Patch.Put(key[edp.prefixLength:], value)
 }
 
+// subDB implements DB.Subset on a raw backend: every key is
+// transparently prefixed on writes and reads, and stripped of the
+// prefix in iteration and change reporting, so callers operate in
+// their own key space while sharing the parent's storage.
 type subDB struct {
 	prefix []byte
 	db     db
@@ -55,6 +62,8 @@ func (u *subDB) changesInternal(prefix []byte) (Patch, error) {
 	return p.Patch, nil
 }
 
+// subIterator strips the subset prefix from iterated keys so they
+// appear in the subset's own key space.
 type subIterator struct {
 	prefixLen int
 	StorageIterator

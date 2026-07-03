@@ -1,3 +1,18 @@
+// Package zenon is the node's central orchestrator: it owns the
+// chain, consensus, verifier, protocol, pillar producer and
+// broadcaster and drives their shared lifecycle.
+//
+// NewZenon wires the subsystems together — the chain over its nom
+// db.Manager, consensus over its own leveldb, the verifier over both,
+// then the protocol manager (fed by a chain bridge and VM
+// supervisor), the broadcaster, the event printer, the RPC
+// subscription server and the pillar. Init and Start then run the
+// subsystems in dependency order — chain, consensus, event printer,
+// subscription server, pillar — with the protocol manager started
+// last (its Init call is commented out); Stop tears them down in
+// reverse,
+// closing the consensus leveldb at the end. The Zenon interface
+// exposes each subsystem to the node shell and the RPC APIs.
 package zenon
 
 import (
@@ -26,6 +41,12 @@ type zenon struct {
 	levelDb     *leveldb.DB
 }
 
+// NewZenon constructs a Zenon from cfg, wiring every subsystem but
+// starting none: the chain, consensus, verifier, protocol manager
+// (with its chain bridge and VM supervisor), broadcaster, event
+// printer, RPC subscription server and pillar. When the config names
+// a producing key pair it is set as the pillar's coinbase. Call Init
+// then Start to bring the node online.
 func NewZenon(cfg *Config) (Zenon, error) {
 	z := &zenon{
 		config: cfg,

@@ -5,12 +5,18 @@ import (
 	"github.com/syndtr/goleveldb/leveldb/comparer"
 )
 
+// newMergedDb layers the given backends into one view; see mergedDB.
 func newMergedDb(dbs []db) db {
 	return &mergedDB{
 		dbs: dbs,
 	}
 }
 
+// mergedDB presents a stack of raw backends as a single one. Reads
+// return the value from the first (topmost) layer that has the key;
+// writes and change tracking go to the first layer only. Stacking a
+// fresh memdb on top of a read-only base is how this package builds
+// copy-on-write snapshots and historical version views.
 type mergedDB struct {
 	dbs []db
 }
@@ -55,6 +61,11 @@ const (
 	iteratorFinished = 1
 )
 
+// mergedIterator merges the per-layer iterators of a mergedDB into a
+// single ascending key sequence. When several layers hold the same
+// key, the topmost (lowest index) layer wins — newMergedIterator and
+// step always scan layers in order and keep the first best key — and
+// the shadowed entries are consumed silently.
 type mergedIterator struct {
 	cmp comparer.BasicComparer
 

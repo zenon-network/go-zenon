@@ -7,9 +7,17 @@ import (
 )
 
 var (
+	// existsByte is prepended to every stored value by enableDeleteDB
+	// so that a deleted key (stored as an empty record) can be told
+	// apart from a live one.
 	existsByte = []byte{0}
 )
 
+// enableDeletePatch is a PatchReplayer that translates a patch from
+// the encoded representation back to the logical one: empty records
+// become Delete operations and the exists byte is stripped from
+// values. Encoded patches never contain Delete operations, so Delete
+// panics.
 type enableDeletePatch struct {
 	p Patch
 }
@@ -25,6 +33,12 @@ func (p *enableDeletePatch) Delete(key []byte) {
 	panic("impossible")
 }
 
+// enableDeleteDB implements the full DB interface on top of a raw
+// backend that has no Delete. Every logical value v is stored as
+// existsByte+v and Delete stores an empty record, so deletions stay
+// visible to overlays, change patches and historical reconstruction
+// instead of silently unmasking older values. Get translates both a
+// missing key and an empty record into leveldb.ErrNotFound.
 type enableDeleteDB struct {
 	db db
 }
@@ -92,6 +106,9 @@ func (d *enableDeleteDB) Subset(prefix []byte) DB {
 	return enableDelete(newSubDB(prefix, d.db))
 }
 
+// enableDeleteIterator decodes iterated values: deletion markers are
+// reported as nil values (callers such as DebugDB skip them) and live
+// values have the exists byte stripped.
 type enableDeleteIterator struct {
 	StorageIterator
 }
@@ -109,6 +126,9 @@ func newEnableDeleteIterator(iterator StorageIterator) StorageIterator {
 		StorageIterator: iterator,
 	}
 }
+
+// enableDelete upgrades a raw backend to the full DB interface; every
+// public DB constructor in this package goes through it.
 func enableDelete(db db) DB {
 	return &enableDeleteDB{
 		db: db,

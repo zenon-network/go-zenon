@@ -12,6 +12,9 @@ import (
 )
 
 var (
+	// ErrNothingToGenerate is returned by the contract generator when an
+	// embedded contract's sequencer queue is empty, so no auto-generated
+	// receive block is produced for it.
 	ErrNothingToGenerate = errors.Errorf("nothing to generate. sequencer-queue is empty")
 )
 

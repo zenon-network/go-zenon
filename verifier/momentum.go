@@ -17,8 +17,23 @@ import (
 	"github.com/zenon-network/go-zenon/wallet"
 )
 
+// MomentumVerifier validates momentums. Momentum checks the momentum's
+// fields and the account-blocks it contains; MomentumTransaction validates
+// the changes-hash, hash, signature and elected producer once the momentum
+// has been embedded in a transaction. Genesis momentums (height 1) are
+// rejected here, as they are produced only during chain bootstrap.
 type MomentumVerifier interface {
+	// Momentum verifies a detailed momentum: chain-identifier, version,
+	// timestamp (present, not more than ten seconds ahead, strictly after
+	// the previous timestamp), the previous momentum link, an empty data
+	// field, and that the content headers match the prefetched
+	// account-blocks and form a valid per-account chain. It does not check
+	// the hash, signature or producer; use MomentumTransaction for those.
 	Momentum(momentum *nom.DetailedMomentum) error
+	// MomentumTransaction checks that the changes-hash matches the patch,
+	// that the hash matches the computed hash, that the Ed25519 signature
+	// over Hash.Bytes is valid, and that the producer is the pillar the
+	// consensus elected for the slot via VerifyMomentumProducer.
 	MomentumTransaction(transaction *nom.MomentumTransaction) error
 }
 
@@ -61,6 +76,9 @@ func (mv *momentumVerifier) MomentumTransaction(transaction *nom.MomentumTransac
 	}).all()
 }
 
+// NewMomentumVerifier returns a MomentumVerifier that resolves momentum
+// stores from chain and uses consensus to confirm the elected producer of
+// each momentum transaction.
 func NewMomentumVerifier(chain chain.Chain, consensus consensus.Consensus) MomentumVerifier {
 	return &momentumVerifier{
 		log:       common.VerifierLogger.New("type", "momentum"),

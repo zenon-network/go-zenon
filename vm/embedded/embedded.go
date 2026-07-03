@@ -1,3 +1,23 @@
+// Package embedded routes account blocks sent to the embedded
+// contracts — the system contracts compiled into the node at the
+// fixed addresses defined in common/types — to executable Go code.
+//
+// Each contract pairs the ABI parsed in vm/embedded/definition with
+// a map from method name to the Method (from
+// vm/embedded/implementation) that executes it. The VM resolves a
+// send block through GetEmbeddedMethod: the first four bytes of the
+// block's Data select the ABI method by selector, and the method's
+// name selects the implementation.
+//
+// The available method set grows with the activated sporks. Four
+// registries are built at package init, each extending the previous
+// one: getOrigin holds the genesis contracts, getAccelerator adds
+// the accelerator contract plus reward collection and liquidity
+// funding, getBridgeAndLiquidity adds the bridge contract and the
+// liquidity administration and staking methods, and getHtlc adds the
+// HTLC contract. GetEmbeddedMethod picks the registry of the newest
+// spork enforced at the context's momentum, so the same call is
+// resolved against whatever method set is active at that height.
 package embedded
 
 import (
@@ -10,27 +30,36 @@ import (
 	"github.com/zenon-network/go-zenon/vm/vm_context"
 )
 
-// Method defines interfaces of embedded contracts
+// Method is the interface every embedded contract method implements;
+// the implementations live in vm/embedded/implementation.
 type Method interface {
 	// GetPlasma returns the required plasma to call this Method.
-	// This cost includes the upfront cost for the embedded receive-block.
+	// This cost includes the upfront cost for the embedded
+	// receive-block.
 	GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error)
 
 	// ValidateSendBlock is called as a static check on send-blocks.
-	// All send blocks need to pass this verification before being added in the chain.
+	// All send blocks need to pass this verification before being
+	// added in the chain.
 	ValidateSendBlock(block *nom.AccountBlock) error
 
-	// ReceiveBlock is called to generate the descendant blocks and to apply the sendBlock
-	// The actual receive-block is generated in the VM.
-	// If an error occurred (returned err) the context is rollback and the tokens are refunded.
+	// ReceiveBlock is called to generate the descendant blocks and to
+	// apply the sendBlock. The actual receive-block is generated in
+	// the VM. If an error occurred (returned err) the context is
+	// rolled back and the tokens are refunded.
 	ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error)
 }
 
+// embeddedImplementation is one contract's executable surface: the
+// methods keyed by ABI method name, plus the parsed ABI used to map a
+// block's 4-byte selector back to that name.
 type embeddedImplementation struct {
 	m   map[string]Method
 	abi abi.ABIContract
 }
 
+// The four spork-progressive method registries, built once at package
+// init; GetEmbeddedMethod selects among them per call.
 var (
 	originEmbedded             = getOrigin()
 	acceleratorEmbedded        = getAccelerator()
@@ -38,6 +67,9 @@ var (
 	bridgeAndLiquidityEmbedded = getBridgeAndLiquidity()
 )
 
+// getHtlc extends getBridgeAndLiquidity with the HTLC contract:
+// create, reclaim and unlock, plus the proxy-unlock allow and deny
+// methods. Active once the HTLC spork is enforced.
 func getHtlc() map[types.Address]*embeddedImplementation {
 	contracts := getBridgeAndLiquidity()
 	contracts[types.HtlcContract] = &embeddedImplementation{
@@ -53,6 +85,12 @@ func getHtlc() map[types.Address]*embeddedImplementation {
 	return contracts
 }
 
+// getBridgeAndLiquidity extends getAccelerator with the full bridge
+// contract and upgrades the liquidity contract from a donation sink
+// to a managed contract: token-tuple configuration, liquidity
+// staking, reward collection and the guardian/administrator security
+// methods it shares with the bridge. Active once the bridge and
+// liquidity spork is enforced.
 func getBridgeAndLiquidity() map[types.Address]*embeddedImplementation {
 	contracts := getAccelerator()
 	contracts[types.BridgeContract] = &embeddedImplementation{
@@ -97,6 +135,13 @@ func getBridgeAndLiquidity() map[types.Address]*embeddedImplementation {
 	return contracts
 }
 
+// getAccelerator extends getOrigin with the accelerator contract
+// (donations, project and phase management, pillar voting) and
+// changes introduced alongside it: CollectReward on the pillar,
+// sentinel and stake contracts is re-registered at the plain
+// EmbeddedSimple tier (down from EmbeddedSimple plus
+// EmbeddedWWithdraw), and the liquidity contract gains Fund and
+// BurnZnn. Active once the accelerator spork is enforced.
 func getAccelerator() map[types.Address]*embeddedImplementation {
 	contracts := getOrigin()
 	contracts[types.AcceleratorContract] = &embeddedImplementation{
@@ -121,6 +166,12 @@ func getAccelerator() map[types.Address]*embeddedImplementation {
 	return contracts
 }
 
+// getOrigin builds the genesis method set: plasma fusing, pillar and
+// sentinel registration, token issuance, swap retrieval, staking and
+// spork management. The liquidity and accelerator addresses start
+// with placeholders only — Update and Donate for liquidity, Donate
+// for the accelerator — until their sporks unlock the full
+// contracts.
 func getOrigin() map[types.Address]*embeddedImplementation {
 	return map[types.Address]*embeddedImplementation{
 		types.PlasmaContract: {
@@ -206,10 +257,18 @@ func getOrigin() map[types.Address]*embeddedImplementation {
 	}
 }
 
-// GetEmbeddedMethod finds method instance of embedded contract by address and abiSelector
-// - returns constants.ErrNotContractAddress in case address is not an embedded address (bad prefix)
-// - returns constants.ErrContractDoesntExist in case the address doesn't link to a valid embedded contract
-// - returns constants.ErrContractMethodNotFound if the method doesn't exist
+// GetEmbeddedMethod resolves the embedded-contract method addressed
+// by address and abiSelector (the first four bytes of a send block's
+// Data). The lookup runs against the registry of the newest spork
+// enforced at the context's momentum, so methods behind an
+// un-enforced spork are not found.
+//   - returns constants.ErrNotContractAddress in case address is not
+//     an embedded address (bad prefix)
+//   - returns constants.ErrContractDoesntExist in case the address
+//     doesn't link to a valid embedded contract
+//   - returns constants.ErrContractMethodNotFound if the selector
+//     matches no ABI method or the method is not in the active
+//     registry
 func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Address, abiSelector []byte) (Method, error) {
 	if !types.IsEmbeddedAddress(address) {
 		return nil, constants.ErrNotContractAddress

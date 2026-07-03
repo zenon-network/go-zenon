@@ -33,8 +33,14 @@ import (
 )
 
 var (
-	ErrClientQuit                = errors.New("client is closed")
-	ErrNoResult                  = errors.New("no result in JSON-RPC response")
+	// ErrClientQuit is returned by client calls after Close has been
+	// called on the client.
+	ErrClientQuit = errors.New("client is closed")
+	// ErrNoResult is returned when a JSON-RPC response carries
+	// neither a result nor an error.
+	ErrNoResult = errors.New("no result in JSON-RPC response")
+	// ErrSubscriptionQueueOverflow is returned when a subscription's
+	// notification buffer fills faster than the client can drain it.
 	ErrSubscriptionQueueOverflow = errors.New("subscription queue overflow")
 	errClientReconnected         = errors.New("client reconnected")
 	errDead                      = errors.New("connection lost")
@@ -188,8 +194,8 @@ func DialContext(ctx context.Context, rawurl string) (*Client, error) {
 	}
 }
 
-// Client retrieves the client from the context, if any. This can be used to perform
-// 'reverse calls' in a handler method.
+// ClientFromContext retrieves the client from the context, if any.
+// This can be used to perform 'reverse calls' in a handler method.
 func ClientFromContext(ctx context.Context) (*Client, bool) {
 	client, ok := ctx.Value(clientContextKey{}).(*Client)
 	return client, ok
@@ -335,9 +341,9 @@ func (c *Client) BatchCall(b []BatchElem) error {
 	return c.BatchCallContext(ctx, b)
 }
 
-// BatchCall sends all given requests as a single batch and waits for the server
-// to return a response for all of them. The wait duration is bounded by the
-// context's deadline.
+// BatchCallContext sends all given requests as a single batch and
+// waits for the server to return a response for all of them. The wait
+// duration is bounded by the context's deadline.
 //
 // In contrast to CallContext, BatchCallContext only returns errors that have occurred
 // while sending the request. Any error specific to a request is reported through the

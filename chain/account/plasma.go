@@ -12,6 +12,10 @@ func getChainPlasmaKey() []byte {
 	return chainPlasmaKey
 }
 
+// GetChainPlasma returns the cumulative FusedPlasma consumed by the
+// blocks of this account chain (zero if never written). The plasma
+// availability check subtracts the stable counter from the frontier
+// counter to charge unconfirmed blocks (see vm.AvailablePlasma).
 func (as *accountStore) GetChainPlasma() (*big.Int, error) {
 	data, err := as.DB.Get(getChainPlasmaKey())
 	if err == leveldb.ErrNotFound {
@@ -23,6 +27,9 @@ func (as *accountStore) GetChainPlasma() (*big.Int, error) {
 
 	return big.NewInt(0).SetBytes(data), nil
 }
+
+// AddChainPlasma adds a block's FusedPlasma to the cumulative
+// chain-plasma counter; the VM calls it once per applied block.
 func (as *accountStore) AddChainPlasma(add uint64) error {
 	plasma, err := as.GetChainPlasma()
 	if err != nil {

@@ -35,6 +35,19 @@ func errResp(code errCode, format string, v ...interface{}) error {
 	return fmt.Errorf("%v - %v", code, fmt.Sprintf(format, v...))
 }
 
+// ProtocolManager drives the eth subprotocol on top of the p2p
+// server. It exposes one p2p.Protocol per supported version through
+// SubProtocols and runs a handler loop for every connected peer:
+// after the status handshake the peer is registered with the
+// downloader and the loop dispatches its messages, serving history
+// requests from the chain and feeding inbound momentums to the
+// downloader or fetcher and account blocks to the bridge's pool.
+//
+// Two background loops complete the picture: the syncer, on new
+// connections and every few seconds, runs the downloader against the
+// best peer once at least minPeers are connected, and only downloads
+// when that peer advertises a higher frontier; the txsync loop sends
+// pending account blocks to each newly connected peer.
 type ProtocolManager struct {
 	minPeers       int
 	protVer, netId int
@@ -135,6 +148,9 @@ func (pm *ProtocolManager) removePeer(id string) {
 	}
 }
 
+// Start launches the background sync loops: the syncer, which fires
+// downloader runs, and the transaction sync loop, which seeds new
+// peers with pending account blocks.
 func (pm *ProtocolManager) Start() {
 	// start sync handlers
 	pm.wg.Add(1)
@@ -148,6 +164,9 @@ func (pm *ProtocolManager) Start() {
 	}()
 }
 
+// Stop terminates the sync loops and waits for in-flight download and
+// processing work to drain; with a download in progress this can take
+// several seconds.
 func (pm *ProtocolManager) Stop() {
 	// Showing a log message. During download / process this could actually
 	// take between 5 to 10 seconds and therefor feedback is required.
@@ -472,6 +491,9 @@ func (pm *ProtocolManager) BroadcastAccountBlock(tx *nom.AccountBlock) {
 	log.Info("propagated account-block to peers", "num-peers", len(peers), "account-block-header", tx.Header())
 }
 
+// SyncInfo reports the current sync state together with the local
+// frontier momentum height and the height advertised by the best
+// peer. See SyncState for how the state is derived.
 func (pm *ProtocolManager) SyncInfo() *SyncInfo {
 	return pm.syncInfo()
 }

@@ -9,6 +9,10 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
+// SetFrontier stores block as the new frontier entry of this version
+// (see db.SetFrontier). In normal operation the db.Manager writes
+// frontier entries itself when committing transactions, so this
+// helper is currently unused.
 func (as *accountStore) SetFrontier(block *nom.AccountBlock) error {
 	data, err := block.Serialize()
 	if err != nil {
@@ -18,6 +22,9 @@ func (as *accountStore) SetFrontier(block *nom.AccountBlock) error {
 	return db.SetFrontier(as.DB, block.Identifier(), data)
 }
 
+// parseAccountBlock deserializes a stored account-block entry,
+// translating leveldb.ErrNotFound into a nil block with a nil error —
+// the not-found convention all getters of this store share.
 func parseAccountBlock(data []byte, err error) (*nom.AccountBlock, error) {
 	if err == leveldb.ErrNotFound {
 		return nil, nil
@@ -42,6 +49,9 @@ func (as *accountStore) ByHeight(height uint64) (*nom.AccountBlock, error) {
 	return parseAccountBlock(db.GetEntryByHeight(as.DB, height))
 }
 
+// MoreByHeight returns the count blocks starting at height in
+// ascending order; heights past the frontier yield nil entries in the
+// result.
 func (as *accountStore) MoreByHeight(height, count uint64) ([]*nom.AccountBlock, error) {
 	answer := make([]*nom.AccountBlock, 0)
 	for i := 0; i < int(count); i += 1 {

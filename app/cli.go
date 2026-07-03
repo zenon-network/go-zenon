@@ -1,3 +1,7 @@
+// Package app builds the znnd command-line application. It wires the
+// urfave/cli app, its global flags and subcommands (version, license), the
+// before/action/after hooks, and constructs and runs the node Manager that
+// owns the node lifecycle. Run is the entry point invoked by cmd/znnd.
 package app
 
 import (
@@ -22,6 +26,9 @@ var (
 	nodeManager *Manager
 )
 
+// Run parses os.Args and runs the znnd cli application. On error it
+// prints to stderr and exits the process with a non-zero status; it
+// does not return in that case.
 func Run() {
 	err := app.Run(os.Args)
 	if err != nil {
@@ -30,6 +37,11 @@ func Run() {
 	}
 }
 
+// Stop stops the running node Manager and reports a clean shutdown. It
+// must be called after Run has initialised nodeManager; otherwise it
+// panics on the nil nodeManager dereference, before DealWithErr is ever
+// reached. (Manager.Stop currently always returns nil, so the
+// DealWithErr call here never triggers a panic of its own.)
 func Stop() {
 	err := nodeManager.Stop()
 	common.DealWithErr(err)

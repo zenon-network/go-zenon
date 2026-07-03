@@ -14,6 +14,9 @@ type Argument struct {
 	Indexed bool // indexed is only used by events
 }
 
+// Arguments is the ordered input list of a method or variable; its
+// Pack and Unpack methods implement the ABI encoding for the whole
+// tuple.
 type Arguments []Argument
 
 // UnmarshalJSON implements json.Unmarshaler interface
@@ -43,7 +46,11 @@ func (arguments Arguments) isTuple() bool {
 	return len(arguments) > 1
 }
 
-// Unpack performs the operation hexdata -> Go format
+// Unpack decodes ABI-encoded data into v, which must be a pointer.
+// Multi-argument tuples unpack into a struct (fields paired with
+// arguments by capitalised name or an abi:"name" struct tag) or into a
+// slice/array of at least len(arguments) assignable elements; a
+// single argument may also unpack into a pointer to the bare value.
 func (arguments Arguments) Unpack(v interface{}, data []byte) error {
 	// make sure the passed value is arguments pointer
 	if reflect.Ptr != reflect.ValueOf(v).Kind() {
@@ -176,7 +183,11 @@ func (arguments Arguments) UnpackValues(data []byte) ([]interface{}, error) {
 	return retval, nil
 }
 
-// Pack performs the operation Go format -> Hexdata
+// Pack ABI-encodes args, which must match the argument list in count
+// and type. Static values are packed in-place, one (or, for fixed
+// arrays, several) 32-byte word each; dynamic values (string, bytes,
+// slices) leave an offset word in-place and append their length and
+// payload after the static section.
 func (arguments Arguments) Pack(args ...interface{}) ([]byte, error) {
 	// Make sure arguments match up and pack them
 	abiArgs := arguments

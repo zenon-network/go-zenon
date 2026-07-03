@@ -6,8 +6,20 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Ticker converts time units into ticks.
-// End time of a thick is exclusive.
+// Ticker maps wall-clock time onto consecutive fixed-length intervals
+// (ticks) counted from a start time, with tick 0 covering the first
+// interval. The consensus layer builds its election-tick and epoch
+// schedules as tickers anchored at the genesis timestamp. Each tick
+// spans [startTime, endTime), end exclusive.
+//
+// ToTime returns the start and end time of the given tick. ToTick is
+// the inverse, returning the tick whose interval contains t; t must not
+// precede the ticker's start time and the interval arithmetic operates
+// at whole-second granularity. TickMultiplier returns how many of this
+// ticker's ticks make up one tick of bigger; it errors if the two
+// tickers have different start times, if this ticker's interval is the
+// longer one, or if the bigger interval is not an exact multiple of
+// this one.
 type Ticker interface {
 	// ToTime returns [startTime, endTime) for tick
 	ToTime(tick uint64) (time.Time, time.Time)
@@ -51,6 +63,9 @@ func (t ticker) TickMultiplier(bigger Ticker) (uint64, error) {
 	return uint64(bDuration / cDuration), nil
 }
 
+// NewTicker returns a Ticker whose tick 0 starts at startTime and whose
+// ticks are interval long. The interval must be a whole number of
+// seconds, at least one, for ToTick to divide correctly.
 func NewTicker(startTime time.Time, interval time.Duration) Ticker {
 	return &ticker{startTime: startTime, interval: interval}
 }

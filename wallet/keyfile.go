@@ -15,6 +15,10 @@ const (
 	argonName          = "argon2.IDKey"
 )
 
+// KeyFile is the on-disk, password-protected form of a KeyStore. It
+// records the base address in the clear for identification and stores
+// the BIP-39 entropy encrypted under Crypto. Path is the absolute file
+// path it was read from or will be written to, and is not serialized.
 type KeyFile struct {
 	Path string
 
@@ -38,6 +42,11 @@ type argon2Params struct {
 	Salt hexutil.Bytes `json:"salt"`
 }
 
+// ReadKeyFile reads and JSON-decodes the key file at path, recording
+// the path on the returned KeyFile. It rejects files whose version,
+// cipher, or KDF do not match what this build supports, returning
+// ErrKeyFileInvalidVersion, ErrKeyFileInvalidCipher, or
+// ErrKeyFileInvalidKDF respectively. It does not decrypt the contents.
 func ReadKeyFile(path string) (*KeyFile, error) {
 	keyFileJson, err := os.ReadFile(path)
 	if err != nil {
@@ -72,6 +81,12 @@ func (kf *KeyFile) Write() error {
 	return os.WriteFile(kf.Path, keyFileJson, 0700)
 }
 
+// Decrypt recovers the KeyStore from the key file using password. It
+// re-derives the Argon2id key from password and the stored salt, opens
+// the AES-256-GCM ciphertext to recover the BIP-39 entropy, and rebuilds
+// the key store (mnemonic, seed, and base address) from it. It returns
+// ErrWrongPassword when the password does not authenticate the
+// ciphertext.
 func (kf *KeyFile) Decrypt(password string) (*KeyStore, error) {
 	derivedKey := new(passwordHash)
 	err := derivedKey.SetFromJSON(password, kf.Crypto.Argon2Params)

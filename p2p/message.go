@@ -65,10 +65,13 @@ func (msg Msg) Discard() error {
 	return err
 }
 
+// MsgReader is the read half of a message transport: ReadMsg returns
+// the next message, blocking until one arrives.
 type MsgReader interface {
 	ReadMsg() (Msg, error)
 }
 
+// MsgWriter is the write half of a message transport.
 type MsgWriter interface {
 	// WriteMsg sends a message. It will block until the message's
 	// Payload has been consumed by the other end.

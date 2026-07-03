@@ -4,6 +4,12 @@ import (
 	"math/big"
 )
 
+// Frequently used big.Int constants: small values (Big0 through Big256),
+// the powers of two BigP255 (2^255) and BigP256 (2^256), and their
+// predecessors BigP255m1 and BigP256m1, the maximum values of signed and
+// unsigned 256-bit integers. They are shared pointers, so callers must
+// treat them as read-only and never use them as targets of in-place
+// big.Int operations.
 var (
 	Big0      = big.NewInt(0)
 	Big1      = big.NewInt(1)
@@ -19,6 +25,7 @@ var (
 	BigP256m1 = new(big.Int).Sub(BigP256, big.NewInt(1))
 )
 
+// MinInt64 returns the smaller of x and y.
 func MinInt64(x, y int64) int64 {
 	if x < y {
 		return x
@@ -26,6 +33,7 @@ func MinInt64(x, y int64) int64 {
 	return y
 }
 
+// MaxInt64 returns the larger of x and y.
 func MaxInt64(x, y int64) int64 {
 	if x > y {
 		return x

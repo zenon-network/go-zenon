@@ -1,0 +1,14 @@
+version: "2"
+linters:
+  default: none
+  enable:
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: exported
+          arguments: ["disableStutteringCheck"]
+        - name: package-comments
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -9,6 +9,10 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
+// checkAccountBalance verifies that addr's GenesisBlocks balances
+// match required exactly: no extra tokens, no amount mismatches and
+// no missing tokens with a non-zero required amount. An address
+// absent from GenesisBlocks passes vacuously.
 func checkAccountBalance(g *GenesisConfig, addr types.Address, required map[types.ZenonTokenStandard]*big.Int) error {
 	// Check account balance for enough qsr
 	for _, block := range g.GenesisBlocks.Blocks {
@@ -38,6 +42,11 @@ func checkAccountBalance(g *GenesisConfig, addr types.Address, required map[type
 	return nil
 }
 
+// CheckGenesis runs all consistency checks on an untrusted genesis
+// config and returns the first failure; ReadGenesisConfigFromFile
+// rejects configs that do not pass. The individual Check* functions
+// are exported so the embedded and mock genesis tests can exercise
+// them one by one.
 func CheckGenesis(g *GenesisConfig) error {
 	if err := CheckFieldsExist(g); err != nil {
 		return err
@@ -57,6 +66,8 @@ func CheckGenesis(g *GenesisConfig) error {
 	return nil
 }
 
+// CheckFieldsExist verifies that every mandatory section of the
+// config is present; only SporkConfig and ExtraData are optional.
 func CheckFieldsExist(g *GenesisConfig) error {
 	if g.GenesisBlocks == nil {
 		return errors.Errorf("GenesisBlocks is nil")
@@ -78,6 +89,10 @@ func CheckFieldsExist(g *GenesisConfig) error {
 	}
 	return nil
 }
+
+// CheckPlasmaInfo verifies that no fusion entry is nil and that the
+// plasma contract's QSR balance in GenesisBlocks equals the total
+// fused amount.
 func CheckPlasmaInfo(g *GenesisConfig) error {
 	totalAmount := big.NewInt(0)
 
@@ -92,6 +107,10 @@ func CheckPlasmaInfo(g *GenesisConfig) error {
 		types.QsrTokenStandard: totalAmount,
 	})
 }
+
+// CheckSwapAccount verifies that every swap entry declares both ZNN
+// and QSR amounts and that the swap contract itself holds no genesis
+// balance — swapped funds are minted at retrieval, not pre-funded.
 func CheckSwapAccount(g *GenesisConfig) error {
 	given := map[types.ZenonTokenStandard]*big.Int{
 		types.ZnnTokenStandard: big.NewInt(0),
@@ -106,6 +125,9 @@ func CheckSwapAccount(g *GenesisConfig) error {
 
 	return checkAccountBalance(g, types.SwapContract, given)
 }
+
+// CheckPillarBalance verifies that the pillar contract's ZNN balance
+// in GenesisBlocks equals the sum of all pillars' staked amounts.
 func CheckPillarBalance(g *GenesisConfig) error {
 	totalAmount := big.NewInt(0)
 
@@ -117,6 +139,11 @@ func CheckPillarBalance(g *GenesisConfig) error {
 		types.ZnnTokenStandard: totalAmount,
 	})
 }
+
+// CheckTokenTotalSupply verifies that the declared tokens and the
+// distributed balances agree: every token's TotalSupply must equal
+// the sum given out via GenesisBlocks, and no balance may use a ZTS
+// that is not declared in TokenConfig.
 func CheckTokenTotalSupply(g *GenesisConfig) error {
 	given := make(map[types.ZenonTokenStandard]*big.Int)
 	for _, block := range g.GenesisBlocks.Blocks {
@@ -155,7 +182,10 @@ func CheckTokenTotalSupply(g *GenesisConfig) error {
 	return nil
 }
 
-// CheckGenesisCheckSum ensures that the hash of the account blocks don't change during the build.
+// CheckGenesisCheckSum ensures the genesis construction is
+// reproducible across builds: it fabricates the full genesis state
+// from g and compares the resulting momentum hash against expected,
+// pinning the deterministic construction.
 func CheckGenesisCheckSum(g *GenesisConfig, expected types.Hash) error {
 	genesis := NewGenesis(g)
 	checkSum := genesis.GetGenesisMomentum().Hash

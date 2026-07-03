@@ -14,11 +14,23 @@ import (
 )
 
 const (
-	l1CacheSize                  = 400
-	l2CacheSize                  = 100
+	// l1CacheSize and l2CacheSize are the entry counts of the two LRU
+	// caches of reconstructed historical views kept by the
+	// LevelDB-backed Manager: l1 holds versions close to the frontier
+	// (the common case during syncing and RPC queries), l2 the
+	// occasional deep look-back.
+	l1CacheSize = 400
+	l2CacheSize = 100
+	// maximumCacheHeightDifference is the frontier distance (in
+	// heights) below which a reconstructed version is cached in l1
+	// rather than l2.
 	maximumCacheHeightDifference = 360
 )
 
+// Top-level key-space prefixes inside the Manager's LevelDB: the
+// current (frontier) state lives under frontierByte, while patchByte
+// and rollbackByte hold, per height, the serialized patch that
+// produced that version and its precomputed inverse.
 var (
 	frontierByte = []byte{85}
 	patchByte    = []byte{102}
@@ -32,6 +44,9 @@ func absDiff(x, y uint64) uint64 {
 	return x - y
 }
 
+// getOpenFilesCacheCapacity returns the LevelDB open-files cache size
+// for NewLevelDBManager, reduced on Darwin because of macOS's low
+// default file-descriptor limits.
 func getOpenFilesCacheCapacity() int {
 	switch runtime.GOOS {
 	case "darwin":
@@ -43,6 +58,22 @@ func getOpenFilesCacheCapacity() int {
 	}
 }
 
+// Manager is the versioned database underneath each ledger (the
+// momentum chain and every account chain). Every version is
+// identified by the hash-height of the Commit that produced it.
+//
+// Frontier returns a snapshot of the latest version and Get one of an
+// arbitrary committed version (nil if the identifier is unknown);
+// both are copy-on-write, so writing to them never affects the
+// manager. GetPatch returns the state patch that was applied at the
+// given identifier (nil if unknown). Add appends a Transaction on top
+// of the current frontier and Pop rolls the frontier back one
+// version.
+//
+// Individual methods are internally synchronized, but Add and Pop
+// perform unlocked read-then-write sequences, so writers must be
+// externally serialized — in practice the chain's insert lock is the
+// single writer.
 type Manager interface {
 	Frontier() DB
 	Get(types.HashHeight) DB
@@ -55,6 +86,12 @@ type Manager interface {
 	Location() string
 }
 
+// memdbManager is the in-memory Manager: every version is kept alive
+// in the versions map as a copy-on-write overlay over its parent, so
+// Get is a map lookup plus Snapshot. previous links each version to
+// its parent for Pop, and patches keeps the patch applied at each
+// identifier. stableDB/stableIdentifier mark the base version the
+// manager started from, below which Pop refuses to go.
 type memdbManager struct {
 	stableDB           DB
 	stableIdentifier   types.HashHeight
@@ -66,6 +103,11 @@ type memdbManager struct {
 	changes sync.Mutex
 }
 
+// NewMemDBManager returns an in-memory Manager rooted at the current
+// frontier of rawDB; that version becomes the stable base that cannot
+// be popped. Writes are layered over rawDB in memory and are never
+// persisted. The account pool uses one per account chain to track
+// blocks that are not yet confirmed by a momentum.
 func NewMemDBManager(rawDB DB) Manager {
 	frontierIdentifier := GetFrontierIdentifier(rawDB)
 	return &memdbManager{
@@ -98,6 +140,13 @@ func (m *memdbManager) GetPatch(identifier types.HashHeight) Patch {
 	defer m.changes.Unlock()
 	return m.patches[identifier]
 }
+
+// Add applies the transaction's patch — extended with the frontier
+// bookkeeping of each commit (see SetFrontier) — on a snapshot of the
+// previous version and registers the result as the new frontier.
+// Intermediate commits map to the same DB, with an empty patch. It
+// fails if the transaction's previous identifier is not the current
+// frontier.
 func (m *memdbManager) Add(transaction Transaction) error {
 	commits := transaction.GetCommits()
 	previous := commits[0].Previous()
@@ -151,6 +200,10 @@ func (m *memdbManager) Add(transaction Transaction) error {
 
 	return nil
 }
+
+// Pop discards the frontier version and makes its parent the new
+// frontier. It fails when the frontier is the stable base the manager
+// was created from.
 func (m *memdbManager) Pop() error {
 	m.changes.Lock()
 	defer m.changes.Unlock()
@@ -179,11 +232,21 @@ func (m *memdbManager) Location() string {
 	return "in-memory"
 }
 
+// rollbackCache is one cached historical reconstruction: raw holds
+// the rollback overlay accumulated so far and frontier records the
+// frontier it has been folded up to, so a later Get only needs to
+// apply the rollback patches of newer heights.
 type rollbackCache struct {
 	frontier types.HashHeight
 	raw      db
 }
 
+// ldbManager is the persistent Manager. The LevelDB holds only the
+// frontier state plus, for every height, the patch that produced it
+// and its precomputed inverse (see the key-space prefixes above);
+// historical versions are reconstructed on demand in Get and memoized
+// in the l1/l2 LRU caches. The changes mutex serializes individual
+// methods; after Stop, the read methods return nil.
 type ldbManager struct {
 	location string
 	l1Cache  *lru.Cache
@@ -193,6 +256,10 @@ type ldbManager struct {
 	stopped  bool
 }
 
+// NewLevelDBManager opens (or creates) the versioned database in dir
+// and returns the persistent Manager backed by it. It panics if the
+// database cannot be opened. This is the production manager for both
+// the momentum ledger and the stable account ledgers.
 func NewLevelDBManager(dir string) Manager {
 	opts := &opt.Options{OpenFilesCacheCapacity: getOpenFilesCacheCapacity()}
 	ldb, err := leveldb.OpenFile(dir, opts)
@@ -218,6 +285,17 @@ func (m *ldbManager) Frontier() DB {
 	snapshot, _ := m.ldb.GetSnapshot()
 	return NewLevelDBSnapshotWrapper(snapshot).Subset(frontierByte)
 }
+
+// Get reconstructs the state at identifier by starting from a
+// LevelDB snapshot of the frontier and folding in the rollback
+// patches of every height above identifier, in ascending order with
+// first-write-wins semantics (ApplyWithoutOverride), which is
+// equivalent to undoing them newest-first. The accumulated overlay is
+// memoized per identifier — in l1Cache for versions within
+// maximumCacheHeightDifference of the frontier, in l2Cache otherwise
+// — so subsequent calls only fold the heights added since. It returns
+// nil for unknown identifiers, an empty DB for the zero identifier,
+// and the frontier view when identifier is the frontier itself.
 func (m *ldbManager) Get(identifier types.HashHeight) DB {
 	m.changes.Lock()
 	defer m.changes.Unlock()
@@ -296,6 +374,9 @@ func (m *ldbManager) GetPatch(identifier types.HashHeight) Patch {
 	}
 	return m.getPatch(identifier)
 }
+
+// getPatch loads the persisted patch for identifier's height; note
+// that the lookup is by height only, the hash is not checked.
 func (m *ldbManager) getPatch(identifier types.HashHeight) Patch {
 	snapshot, _ := m.ldb.GetSnapshot()
 	value, err := snapshot.Get(common.JoinBytes(patchByte, common.Uint64ToBytes(identifier.Height)), nil)
@@ -308,6 +389,9 @@ func (m *ldbManager) getPatch(identifier types.HashHeight) Patch {
 	common.DealWithErr(err)
 	return patch
 }
+
+// getRollback loads the persisted inverse patch of the given height,
+// or nil if none is stored.
 func (m *ldbManager) getRollback(height uint64) Patch {
 	snapshot, _ := m.ldb.GetSnapshot()
 	value, err := snapshot.Get(common.JoinBytes(rollbackByte, common.Uint64ToBytes(height)), nil)
@@ -321,6 +405,13 @@ func (m *ldbManager) getRollback(height uint64) Patch {
 	return patch
 }
 
+// Add extends the transaction's patch with the frontier bookkeeping
+// of each commit, computes its inverse against the previous version
+// and, if the transaction builds on the current frontier, persists
+// the patch and its rollback by height and applies the patch to the
+// frontier state. A transaction whose previous identifier is not the
+// frontier is silently ignored (nil error) — unlike the in-memory
+// manager, which reports it.
 func (m *ldbManager) Add(transaction Transaction) error {
 	commits := transaction.GetCommits()
 
@@ -373,6 +464,10 @@ func (m *ldbManager) Add(transaction Transaction) error {
 	}
 	return nil
 }
+
+// Pop undoes the frontier version by applying its persisted rollback
+// patch to the frontier state and deleting the patch/rollback records
+// of that height.
 func (m *ldbManager) Pop() error {
 	frontierIdentifier := GetFrontierIdentifier(m.Frontier())
 	rollbackPatch := m.getRollback(frontierIdentifier.Height)

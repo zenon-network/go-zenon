@@ -13,6 +13,8 @@ import (
 )
 
 var (
+	// ErrElectionBeforeGenesis is returned when an election is
+	// requested for a time or tick before the genesis timestamp.
 	ErrElectionBeforeGenesis = errors.New("election time/tick before genesis timestamp")
 )
 
@@ -27,6 +29,9 @@ func getMomentumBeforeTime(chain chain.Chain, t time.Time) (*nom.Momentum, error
 	return block, nil
 }
 
+// electionResult is the outcome of one election tick: the tick's
+// [STime, ETime) window, the slot-by-slot producer schedule and the
+// pillar delegations the selection was computed from.
 type electionResult struct {
 	STime       time.Time
 	ETime       time.Time
@@ -35,6 +40,10 @@ type electionResult struct {
 	Tick        uint64
 }
 
+// generateProducers expands the elected addresses into consecutive
+// BlockTime-second ProducerEvents starting at the tick's start time,
+// one slot per address; it returns nil if the address count does not
+// match NodeCount.
 func generateProducers(info *Context, tick uint64, producerAddresses []types.Address) []*ProducerEvent {
 	sTime, _ := info.ToTime(tick)
 	var producers []*ProducerEvent
@@ -65,6 +74,10 @@ func genElectionResult(info *Context, tick uint64, data *storage.ElectionData) *
 	return result
 }
 
+// electionManager computes election results on demand and caches
+// them in the consensus database, keyed by proof-momentum hash. It
+// embeds the election-tick Context, so it is also the Ticker of the
+// election schedule.
 type electionManager struct {
 	log common.Logger
 	Context
@@ -73,6 +86,20 @@ type electionManager struct {
 	algo  ElectionAlgorithm
 	db    *storage.DB
 }
+
+// ElectionReader exposes election results on the election-tick
+// schedule and is itself the Ticker of that schedule (one tick =
+// BlockTime * NodeCount seconds from genesis).
+//
+// Every tick's election is derived from a proof momentum: the latest
+// momentum before the end of tick-2 (one second past genesis for
+// ticks 0 and 1). Sampling two ticks back makes the input final
+// before the tick begins, so all nodes elect the same producers.
+//
+//   - ElectionByTime and ElectionByTick return the tick's producer
+//     schedule and the delegations it was computed from.
+//   - DelegationsByTick returns the detailed per-backer delegations
+//     at the tick's proof momentum.
 type ElectionReader interface {
 	common.Ticker
 	ElectionByTime(t time.Time) (*electionResult, error)
@@ -136,6 +163,10 @@ func (em *electionManager) DelegationsByTick(tick uint64) ([]*types.PillarDelega
 
 	return store.ComputePillarDelegations()
 }
+
+// genProofTime returns the timestamp whose preceding momentum anchors
+// the election of tick: the end of tick-2, or one second after the
+// genesis timestamp for ticks 0 and 1.
 func (em *electionManager) genProofTime(tick uint64) time.Time {
 	if tick < 2 {
 		return em.GenesisTime.Add(time.Second)
@@ -144,6 +175,12 @@ func (em *electionManager) genProofTime(tick uint64) time.Time {
 	return endTime
 }
 
+// generateProducers runs the election anchored at proofBlock: it
+// computes the pillar delegations at that state, lets the election
+// algorithm select the producers, and caches the result in the
+// consensus database keyed by the proof-momentum hash so repeated
+// requests (and reorganizations onto the same proof) are served from
+// cache.
 func (em *electionManager) generateProducers(proofBlock *nom.Momentum) (*storage.ElectionData, error) {
 	hashH := types.HashHeight{Hash: proofBlock.Hash, Height: proofBlock.Height}
 	store := em.chain.GetMomentumStore(proofBlock.Identifier())
@@ -182,7 +219,10 @@ func (em *electionManager) generateProducers(proofBlock *nom.Momentum) (*storage
 	return electionData, nil
 }
 
-// InsertMomentum pre-computes electionData when a tick is completed
+// InsertMomentum implements chain.MomentumEventListener: it runs
+// under the chain insert lock after each committed momentum and
+// pre-computes the election data anchored at the end of the previous
+// tick, keeping the cache warm for upcoming elections.
 func (em *electionManager) InsertMomentum(detailed *nom.DetailedMomentum) {
 	block := detailed.Momentum
 
@@ -206,6 +246,10 @@ func (em *electionManager) InsertMomentum(detailed *nom.DetailedMomentum) {
 		return
 	}
 }
+
+// DeleteMomentum implements chain.MomentumEventListener as a no-op:
+// cached election data is keyed by proof-momentum hash, so entries
+// computed on a rolled-back branch are simply never looked up again.
 func (em *electionManager) DeleteMomentum(*nom.DetailedMomentum) {
 	// No need to worry about deleted momentums since electionData uses the proofBlock hash as a key
 	return

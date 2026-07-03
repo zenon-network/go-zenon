@@ -30,8 +30,8 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 )
 
-// An implementation of nat.Interface can map local ports to ports
-// accessible from the Internet.
+// Interface is implemented by mechanisms that can map local ports to
+// ports accessible from the Internet.
 type Interface interface {
 	// These methods manage a mapping between a port on the local
 	// machine to a port that can be connected to from the internet.
@@ -54,12 +54,12 @@ type Interface interface {
 // The following formats are currently accepted.
 // Note that mechanism names are not case-sensitive.
 //
-//     "" or "none"         return nil
-//     "extip:77.12.33.4"   will assume the local machine is reachable on the given IP
-//     "any"                uses the first auto-detected mechanism
-//     "upnp"               uses the Universal Plug and Play protocol
-//     "pmp"                uses NAT-PMP with an auto-detected gateway address
-//     "pmp:192.168.0.1"    uses NAT-PMP with the given gateway address
+//	"" or "none"         return nil
+//	"extip:77.12.33.4"   will assume the local machine is reachable on the given IP
+//	"any"                uses the first auto-detected mechanism
+//	"upnp"               uses the Universal Plug and Play protocol
+//	"pmp"                uses NAT-PMP with an auto-detected gateway address
+//	"pmp:192.168.0.1"    uses NAT-PMP with the given gateway address
 func Parse(spec string) (Interface, error) {
 	var (
 		parts = strings.SplitN(spec, ":", 2)

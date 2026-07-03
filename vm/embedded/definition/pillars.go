@@ -16,6 +16,11 @@ import (
 )
 
 const (
+	// jsonPillars is the ABI JSON of the pillar embedded contract:
+	// registration (normal and legacy), pillar updates, revocation,
+	// delegation and the shared deposit/reward methods, plus the
+	// stored pillar, producer-index, legacy-slot, delegation and
+	// epoch-history variables. Parsed into ABIPillars.
 	jsonPillars = `
 	[
 {"type":"function","name":"Update", "inputs":[]},
@@ -79,13 +84,27 @@ const (
 		]}
 	]`
 
-	RegisterMethodName       = "Register"
+	// RegisterMethodName names the method that registers a new pillar
+	// against the full ZNN stake and deposited QSR requirements.
+	RegisterMethodName = "Register"
+	// LegacyRegisterMethodName names the method that registers a
+	// pillar against a legacy slot, proving ownership of a swap-era
+	// public key with a signature.
 	LegacyRegisterMethodName = "RegisterLegacy"
 
+	// UpdatePillarMethodName names the method that changes a pillar's
+	// producing address, reward address and reward-sharing
+	// percentages.
 	UpdatePillarMethodName = "UpdatePillar"
-	RevokeMethodName       = "Revoke"
-	DelegateMethodName     = "Delegate"
-	UndelegateMethodName   = "Undelegate"
+	// RevokeMethodName names the method that revokes a pillar and
+	// returns its staked ZNN.
+	RevokeMethodName = "Revoke"
+	// DelegateMethodName names the method by which an address
+	// delegates its ZNN balance weight to a pillar.
+	DelegateMethodName = "Delegate"
+	// UndelegateMethodName names the method that removes the caller's
+	// delegation.
+	UndelegateMethodName = "Undelegate"
 
 	pillarInfoVariableName          = "pillarInfo"
 	producingPillarNameVariableName = "producingPillarName"
@@ -95,7 +114,7 @@ const (
 )
 
 var (
-	// ABIPillars is abi definition of pillar contract
+	// ABIPillars is the parsed ABI of the pillar embedded contract.
 	ABIPillars = abi.JSONToABIContract(strings.NewReader(jsonPillars))
 
 	pillarInfoKeyPrefix          = []byte{1}
@@ -104,11 +123,21 @@ var (
 	delegationInfoKeyPrefix      = []byte{4}
 	pillarEpochHistoryKeyPrefix  = []byte{5}
 
-	AnyPillarType    = uint8(0)
+	// AnyPillarType matches every pillar type when filtering with
+	// GetPillarsList.
+	AnyPillarType = uint8(0)
+	// LegacyPillarType marks a pillar registered through
+	// RegisterLegacy against a legacy (swap-era) pillar slot.
 	LegacyPillarType = uint8(1)
+	// NormalPillarType marks a pillar registered through Register
+	// with the full QSR deposit requirement.
 	NormalPillarType = uint8(2)
 )
 
+// RegisterParam carries the arguments of Register and UpdatePillar:
+// the pillar name, its block-producing and reward-collection
+// addresses and the percentages (0-100) of its momentum and
+// delegation rewards it gives away to delegators.
 type RegisterParam struct {
 	Name                         string
 	ProducerAddress              types.Address
@@ -116,12 +145,24 @@ type RegisterParam struct {
 	GiveBlockRewardPercentage    uint8
 	GiveDelegateRewardPercentage uint8
 }
+
+// LegacyRegisterParam carries the arguments of RegisterLegacy: the
+// normal registration parameters plus a base64 legacy public key and
+// a signature proving ownership of the legacy pillar slot.
 type LegacyRegisterParam struct {
 	RegisterParam
 	PublicKey string
 	Signature string
 }
 
+// PillarInfo is the stored state of a pillar. Name is the unique
+// identifier; BlockProducingAddress signs the momentums the pillar
+// produces, RewardWithdrawAddress may collect its rewards and
+// StakeAddress is the registrant that locked the ZNN deposit (Amount,
+// smallest units) and controls the pillar. RegistrationTime and
+// RevokeTime are unix seconds; RevokeTime is zero while the pillar is
+// active. Entries are stored under pillarInfoKeyPrefix (1) followed
+// by the SHA3-256 hash of the name.
 type PillarInfo struct {
 	Name                         string
 	BlockProducingAddress        types.Address
@@ -135,9 +176,14 @@ type PillarInfo struct {
 	PillarType                   uint8
 }
 
+// IsActive reports whether the pillar has not been revoked
+// (RevokeTime is zero).
 func (pillar *PillarInfo) IsActive() bool {
 	return pillar.RevokeTime == 0
 }
+
+// Save stores the full pillar state under its name key, returning any
+// pack or put error.
 func (pillar *PillarInfo) Save(context db.DB) error {
 	data, err := ABIPillars.PackVariable(
 		pillarInfoVariableName,
@@ -158,6 +204,8 @@ func (pillar *PillarInfo) Save(context db.DB) error {
 	return context.Put(GetPillarInfoKey(pillar.Name), data)
 }
 
+// GetPillarInfoKey returns pillarInfoKeyPrefix followed by the
+// SHA3-256 hash of the pillar name.
 func GetPillarInfoKey(name string) []byte {
 	return common.JoinBytes(pillarInfoKeyPrefix, types.NewHash([]byte(name)).Bytes())
 }
@@ -172,6 +220,9 @@ func parsePillarInfo(data []byte) (*PillarInfo, error) {
 		return nil, constants.ErrDataNonExistent
 	}
 }
+
+// GetPillarInfo returns the pillar registered under name, or
+// constants.ErrDataNonExistent if no such pillar exists.
 func GetPillarInfo(context db.DB, name string) (*PillarInfo, error) {
 	key := GetPillarInfoKey(name)
 	if data, err := context.Get(key); err != nil {
@@ -180,6 +231,11 @@ func GetPillarInfo(context db.DB, name string) (*PillarInfo, error) {
 		return parsePillarInfo(data)
 	}
 }
+
+// GetPillarsList returns the stored pillars in storage-key order
+// (by hash of name, not alphabetical), optionally restricted to
+// active ones and to a single pillar type; AnyPillarType matches all
+// types.
 func GetPillarsList(context db.DB, onlyActive bool, pillarType uint8) ([]*PillarInfo, error) {
 	iterator := context.NewIterator(pillarInfoKeyPrefix)
 	defer iterator.Release()
@@ -205,11 +261,19 @@ func GetPillarsList(context db.DB, onlyActive bool, pillarType uint8) ([]*Pillar
 	return list, nil
 }
 
+// ProducingPillar is the index entry from a block-producing address
+// to the pillar name using it. Entries are never deleted, so a
+// producing address can only ever be reused by the same pillar; the
+// implementation consults this index when validating Register and
+// UpdatePillar. Keyed by the producing address.
 type ProducingPillar struct {
 	Producing *types.Address
 	Name      string
 }
 
+// Save stores the pillar name under the producing-address key,
+// returning any pack or put error; the address is recovered from the
+// key when parsing.
 func (ppName *ProducingPillar) Save(context db.DB) error {
 	data, err := ABIPillars.PackVariable(
 		producingPillarNameVariableName,
@@ -221,6 +285,8 @@ func (ppName *ProducingPillar) Save(context db.DB) error {
 	return context.Put(GetProducingPillarKey(*ppName.Producing), data)
 }
 
+// GetProducingPillarKey returns producingPillarNameKeyPrefix (2)
+// followed by the producing address bytes.
 func GetProducingPillarKey(producing types.Address) []byte {
 	return common.JoinBytes(producingPillarNameKeyPrefix, producing.Bytes())
 }
@@ -254,6 +320,10 @@ func parseProducingPillar(key []byte, data []byte) (*ProducingPillar, error) {
 		return nil, constants.ErrDataNonExistent
 	}
 }
+
+// GetProducingPillarName returns the index entry mapping address to
+// the pillar name that uses (or once used) it as block producer, or
+// constants.ErrDataNonExistent if the address was never assigned.
 func GetProducingPillarName(context db.DB, address types.Address) (*ProducingPillar, error) {
 	key := GetProducingPillarKey(address)
 	if data, err := context.Get(key); err != nil {
@@ -263,11 +333,17 @@ func GetProducingPillarName(context db.DB, address types.Address) (*ProducingPil
 	}
 }
 
+// DelegationInfo records that Backer delegates its ZNN balance weight
+// to the pillar Name. Stored under delegationInfoKeyPrefix (4)
+// followed by the backer address bytes, so each address holds at most
+// one delegation; only the name is packed as the value.
 type DelegationInfo struct {
 	Backer types.Address
 	Name   string
 }
 
+// Save stores the delegation under the backer's key, returning any
+// pack or put error.
 func (delegation *DelegationInfo) Save(context db.DB) error {
 	data, err := ABIPillars.PackVariable(
 		delegationInfoVariableName,
@@ -278,6 +354,8 @@ func (delegation *DelegationInfo) Save(context db.DB) error {
 	}
 	return context.Put(getDelegationInfoKey(delegation.Backer), data)
 }
+
+// Delete removes the backer's delegation.
 func (delegation *DelegationInfo) Delete(context db.DB) error {
 	return context.Delete(getDelegationInfoKey(delegation.Backer))
 }
@@ -315,6 +393,9 @@ func parseDelegationInfo(key, data []byte) (*DelegationInfo, error) {
 		return nil, constants.ErrDataNonExistent
 	}
 }
+
+// GetDelegationInfo returns the delegation of address, or
+// constants.ErrDataNonExistent if it does not delegate.
 func GetDelegationInfo(context db.DB, address types.Address) (*DelegationInfo, error) {
 	key := getDelegationInfoKey(address)
 	if data, err := context.Get(key); err != nil {
@@ -323,6 +404,9 @@ func GetDelegationInfo(context db.DB, address types.Address) (*DelegationInfo, e
 		return parseDelegationInfo(key, data)
 	}
 }
+
+// GetDelegationsList returns every stored delegation, in storage-key
+// (backer address byte) order.
 func GetDelegationsList(context db.DB) ([]*DelegationInfo, error) {
 	iterator := context.NewIterator(delegationInfoKeyPrefix)
 	defer iterator.Release()
@@ -346,11 +430,21 @@ func GetDelegationsList(context db.DB) ([]*DelegationInfo, error) {
 	return list, nil
 }
 
+// LegacyPillarEntry tracks how many pillar slots remain attached to a
+// legacy (swap-era) public key. KeyIdHash is the SHA-256 of the
+// Bitcoin-style key id of that key and PillarCount the remaining
+// registrations; RegisterLegacy decrements the count and deletes the
+// entry when it reaches zero. Entries are seeded from the genesis
+// configuration and stored under legacyPillarEntryKeyPrefix (3)
+// followed by the 32 key-id-hash bytes.
 type LegacyPillarEntry struct {
 	PillarCount uint8      `json:"pillarCount"`
 	KeyIdHash   types.Hash `json:"keyIdHash"`
 }
 
+// Save stores the remaining count under the legacyPillarEntryKeyPrefix
+// plus key-id-hash key, returning any pack or put error; the hash is
+// recovered from the key when parsing.
 func (legacy *LegacyPillarEntry) Save(context db.DB) error {
 	data, err := ABIPillars.PackVariable(
 		legacyPillarEntryVariableName,
@@ -360,6 +454,8 @@ func (legacy *LegacyPillarEntry) Save(context db.DB) error {
 	}
 	return context.Put(getLegacyPillarEntryKey(legacy.KeyIdHash), data)
 }
+
+// Delete removes the legacy entry once all its slots are used.
 func (legacy *LegacyPillarEntry) Delete(context db.DB) error {
 	return context.Delete(getLegacyPillarEntryKey(legacy.KeyIdHash))
 }
@@ -396,6 +492,9 @@ func parseLegacyPillarEntry(key, data []byte) (*LegacyPillarEntry, error) {
 		return nil, constants.ErrDataNonExistent
 	}
 }
+
+// GetLegacyPillarEntry returns the legacy entry of keyIdHash, or
+// constants.ErrDataNonExistent if the key has no remaining slots.
 func GetLegacyPillarEntry(context db.DB, keyIdHash types.Hash) (*LegacyPillarEntry, error) {
 	key := getLegacyPillarEntryKey(keyIdHash)
 	if data, err := context.Get(key); err != nil {
@@ -404,6 +503,9 @@ func GetLegacyPillarEntry(context db.DB, keyIdHash types.Hash) (*LegacyPillarEnt
 		return parseLegacyPillarEntry(key, data)
 	}
 }
+
+// GetLegacyPillarList returns every legacy entry with remaining
+// slots, in storage-key (key-id-hash byte) order.
 func GetLegacyPillarList(context db.DB) ([]*LegacyPillarEntry, error) {
 	iterator := context.NewIterator(legacyPillarEntryKeyPrefix)
 	defer iterator.Release()
@@ -429,6 +531,13 @@ func GetLegacyPillarList(context db.DB) ([]*LegacyPillarEntry, error) {
 	return list, nil
 }
 
+// PillarEpochHistory is the per-epoch performance record of a pillar:
+// its reward-sharing percentages, the momentums it produced versus
+// the number it was expected to produce, and its election weight in
+// Epoch. Entries are stored under pillarEpochHistoryKeyPrefix (5)
+// followed by the epoch as 8 little-endian bytes and the raw name
+// bytes, so one epoch's records share a key prefix and iterate in
+// name byte order.
 type PillarEpochHistory struct {
 	Name                         string   `json:"name"`
 	Epoch                        uint64   `json:"epoch"`
@@ -439,6 +548,9 @@ type PillarEpochHistory struct {
 	Weight                       *big.Int `json:"weight"`
 }
 
+// Save stores the record under its epoch+name key, returning any pack
+// or put error; epoch and name are recovered from the key when
+// parsing.
 func (peh *PillarEpochHistory) Save(context db.DB) error {
 	data, err := ABIPillars.PackVariable(
 		pillarEpochHistoryVariableName,
@@ -489,6 +601,10 @@ func parsePillarEpochHistoryEntry(key, data []byte) (*PillarEpochHistory, error)
 		return nil, constants.ErrDataNonExistent
 	}
 }
+
+// GetPillarEpochHistoryList returns the records of every pillar for
+// the given epoch, in storage-key (name byte) order; an epoch without
+// records yields an empty list.
 func GetPillarEpochHistoryList(context db.DB, epoch uint64) ([]*PillarEpochHistory, error) {
 	iterator := context.NewIterator(getPillarEpochHistoryPrefixKey(epoch))
 	defer iterator.Release()
@@ -511,6 +627,9 @@ func GetPillarEpochHistoryList(context db.DB, epoch uint64) ([]*PillarEpochHisto
 	return list, nil
 }
 
+// PillarEpochHistoryMarshal is the JSON form of PillarEpochHistory,
+// with the weight rendered as a base-10 string to survive clients
+// that parse numbers as 64-bit floats.
 type PillarEpochHistoryMarshal struct {
 	Name                         string `json:"name"`
 	Epoch                        uint64 `json:"epoch"`
@@ -521,6 +640,8 @@ type PillarEpochHistoryMarshal struct {
 	Weight                       string `json:"weight"`
 }
 
+// ToPillarEpochHistoryMarshal converts the record to its JSON form
+// with a string-encoded weight.
 func (g *PillarEpochHistory) ToPillarEpochHistoryMarshal() *PillarEpochHistoryMarshal {
 	aux := &PillarEpochHistoryMarshal{
 		Name:                         g.Name,
@@ -534,10 +655,13 @@ func (g *PillarEpochHistory) ToPillarEpochHistoryMarshal() *PillarEpochHistoryMa
 	return aux
 }
 
+// MarshalJSON encodes the record through PillarEpochHistoryMarshal.
 func (g *PillarEpochHistory) MarshalJSON() ([]byte, error) {
 	return json.Marshal(g.ToPillarEpochHistoryMarshal())
 }
 
+// UnmarshalJSON decodes the record from its PillarEpochHistoryMarshal
+// form, parsing the string weight back into a big.Int.
 func (g *PillarEpochHistory) UnmarshalJSON(data []byte) error {
 	aux := new(PillarEpochHistoryMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {

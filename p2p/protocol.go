@@ -51,6 +51,8 @@ type Cap struct {
 	Version uint
 }
 
+// RlpData returns the capability in the shape it is RLP-encoded in
+// the devp2p handshake: a two-element list of name and version.
 func (cap Cap) RlpData() interface{} {
 	return []interface{}{cap.Name, cap.Version}
 }

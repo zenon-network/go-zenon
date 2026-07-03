@@ -10,6 +10,35 @@ import (
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
+// Momentum is a view over the momentum ledger at a specific version —
+// one momentum-chain database version, implemented by chain/momentum.
+// Besides the momentum chain itself it exposes the momentum-confirmed
+// state of every account chain (GetAccountStore, GetAccountDB and
+// GetAccountMailbox return copy-on-write snapshots of per-address
+// subsets) and read helpers over embedded-contract state.
+//
+// Identifier returns the frontier momentum's hash-height (zero for an
+// empty store). Getters return nil entries with a nil error when the
+// requested entry does not exist; GetAccountBlockByHash resolves
+// through a hash-to-header index that contains only
+// momentum-confirmed blocks. GetMomentumBeforeTime returns the most
+// recent momentum whose timestamp is strictly before the given time,
+// or nil if there is none. PrefetchMomentum expands a momentum's
+// Content headers into the full account blocks of a
+// nom.DetailedMomentum, the form broadcast to momentum event
+// listeners.
+//
+// GetBlockWhichReceives returns the confirmed receive block that
+// consumed the given send-block hash, and GetBlockConfirmationHeight
+// the height of the momentum that confirmed a block (0 if
+// unconfirmed).
+//
+// AddAccountBlockTransaction applies a confirmed account block's
+// state patch onto the per-address subset and updates the derived
+// indexes (header-by-hash, confirmation heights, mailboxes, embedded
+// sequencer, cached ZNN balances). The momentum VM calls it for every
+// header in a momentum's content; the resulting writes become the
+// Changes patch of the nom.MomentumTransaction.
 type Momentum interface {
 	Genesis
 

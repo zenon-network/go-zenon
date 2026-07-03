@@ -25,6 +25,8 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
+// MetadataApi is the namespace under which the server exposes its
+// own built-in methods, such as module discovery.
 const MetadataApi = "rpc"
 
 // CodecOption specifies which type of messages a codec supports.

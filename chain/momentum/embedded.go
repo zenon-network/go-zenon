@@ -10,6 +10,8 @@ import (
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
+// GetActivePillars reads the list of non-revoked pillars of any type
+// from the pillar embedded contract's storage.
 func (ms *momentumStore) GetActivePillars() ([]*definition.PillarInfo, error) {
 	sd, err := ms.getEmbeddedStore(types.PillarContract)
 	if err != nil {
@@ -56,6 +58,12 @@ func (ms *momentumStore) computeBackers(infos []*definition.DelegationInfo) (*ma
 	}
 	return &result, nil
 }
+
+// ComputePillarDelegations weighs every active pillar by the summed
+// ZNN balances of the accounts delegating to it (read from the cached
+// per-address ZNN balance index), returning the details sorted
+// descending by weight with ties broken by name. The consensus
+// election uses this to pick producers.
 func (ms *momentumStore) ComputePillarDelegations() ([]*types.PillarDelegationDetail, error) {
 	delegations, _ := ms.getAllDelegations()
 	backers, err := ms.computeBackers(delegations)
@@ -103,6 +111,9 @@ func (ms *momentumStore) ComputePillarDelegations() ([]*types.PillarDelegationDe
 	return pillarDelegationDetails, nil
 }
 
+// GetStakeBeneficialAmount returns the QSR amount fused for the
+// benefit of addr, read from the plasma embedded contract's storage;
+// it determines the account's fusion-backed plasma.
 func (ms *momentumStore) GetStakeBeneficialAmount(addr types.Address) (*big.Int, error) {
 	sd, err := ms.getEmbeddedStore(types.PlasmaContract)
 	if err != nil {
@@ -115,6 +126,9 @@ func (ms *momentumStore) GetStakeBeneficialAmount(addr types.Address) (*big.Int,
 	}
 	return fused.Amount, nil
 }
+
+// GetTokenInfoByTs reads a token's metadata from the token embedded
+// contract's storage; it returns nil if the token does not exist.
 func (ms *momentumStore) GetTokenInfoByTs(ts types.ZenonTokenStandard) (*definition.TokenInfo, error) {
 	sd, err := ms.getEmbeddedStore(types.TokenContract)
 	if err != nil {
@@ -123,6 +137,9 @@ func (ms *momentumStore) GetTokenInfoByTs(ts types.ZenonTokenStandard) (*definit
 
 	return definition.GetTokenInfo(sd.Storage(), ts)
 }
+
+// GetAllDefinedSporks reads every spork ever created from the spork
+// embedded contract's storage, activated or not.
 func (ms *momentumStore) GetAllDefinedSporks() ([]*definition.Spork, error) {
 	sd, err := ms.getEmbeddedStore(types.SporkContract)
 	if err != nil {
@@ -131,6 +148,11 @@ func (ms *momentumStore) GetAllDefinedSporks() ([]*definition.Spork, error) {
 
 	return definition.GetAllSporks(sd.Storage()), nil
 }
+
+// IsSporkActive reports whether the given implemented spork is
+// activated with an enforcement height at or below the frontier
+// momentum; it gates spork-dependent features in the VM and verifier.
+// It is always false at height 1 (the genesis momentum).
 func (ms *momentumStore) IsSporkActive(implemented *types.ImplementedSpork) (bool, error) {
 	frontier, err := ms.GetFrontierMomentum()
 	if err != nil {

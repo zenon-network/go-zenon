@@ -16,6 +16,14 @@
 
 package downloader
 
+// DoneEvent signals that a synchronisation run finished successfully.
+// The event types in this file are retained from the upstream
+// go-ethereum downloader; nothing in go-zenon emits or consumes them.
 type DoneEvent struct{}
+
+// StartEvent signals that a synchronisation run has started.
 type StartEvent struct{}
+
+// FailedEvent signals that a synchronisation run failed, carrying the
+// error that ended it.
 type FailedEvent struct{ Err error }

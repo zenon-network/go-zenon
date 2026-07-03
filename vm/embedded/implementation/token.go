@@ -16,10 +16,29 @@ var (
 	tokenLog = common.EmbeddedLogger.New("contract", "token")
 )
 
+// IssueMethod (IssueToken) creates a new ZTS token against the
+// non-refundable constants.TokenIssueAmount ZNN fee (1 ZNN), kept by
+// the token contract. The new token's ZTS identifier is derived from
+// the hash of the issuing send block and the entire initial supply is
+// delivered to the issuer.
 type IssueMethod struct {
 	MethodName string
 }
 
+// checkToken validates the static fields of an IssueParam:
+//   - the name is 1 to constants.TokenNameLengthMax bytes of
+//     alphanumeric runs separated by single dots, dashes or
+//     underscores
+//   - the symbol is 1 to constants.TokenSymbolLengthMax bytes of
+//     uppercase alphanumerics and is neither "ZNN" nor "QSR"
+//   - the domain is empty or a valid domain name of at most
+//     constants.TokenDomainLengthMax bytes
+//   - decimals are at most constants.TokenMaxDecimals
+//
+// Text violations fail with constants.ErrTokenInvalidText. The max
+// supply must be positive, at most constants.TokenMaxSupplyBig and at
+// least the total supply — exactly equal for non-mintable tokens —
+// else constants.ErrTokenInvalidAmount.
 func checkToken(param definition.IssueParam) error {
 	// Valid names
 	if len(param.TokenName) == 0 || len(param.TokenName) > constants.TokenNameLengthMax {
@@ -67,13 +86,24 @@ func checkToken(param definition.IssueParam) error {
 	}
 	return nil
 }
+
+// newTokenID derives a token's ZTS identifier from the hash of the
+// send block that issued it, making identifiers unique without a
+// counter.
 func newTokenID(sendBlockHash types.Hash) types.ZenonTokenStandard {
 	return types.NewZenonTokenStandard(sendBlockHash.Bytes())
 }
 
+// GetPlasma quotes the EmbeddedWWithdraw tier, covering the one
+// descendant send that delivers the initial supply.
 func (p *IssueMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
+
+// ValidateSendBlock accepts a packed definition.IssueParam passing
+// the checkToken rules, carried by a send of exactly
+// constants.TokenIssueAmount ZNN; any other token or amount fails
+// with constants.ErrInvalidTokenOrAmount.
 func (p *IssueMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.IssueParam)
@@ -105,6 +135,13 @@ func (p *IssueMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		param.IsUtility)
 	return err
 }
+
+// ReceiveBlock issues the token: the ZTS identifier is derived from
+// the send block's hash — a collision fails with
+// constants.ErrIDNotUnique — and the TokenInfo is saved with the
+// sender as owner. The initial TotalSupply is credited to the token
+// contract's balance and returned to the issuer in one plain
+// descendant send; the ZNN fee stays with the contract.
 func (p *IssueMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -153,13 +190,24 @@ func (p *IssueMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBloc
 	}, nil
 }
 
+// MintMethod (Mint) creates new supply of an existing mintable token
+// and delivers it to a receive address. Only the token's owner may
+// mint, except for ZNN and QSR, which any embedded contract may mint
+// — this is how rewards and swap claims are paid out.
 type MintMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedWWithdraw tier, covering the one
+// descendant send that delivers the minted tokens.
 func (p *MintMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
+
+// ValidateSendBlock accepts a packed definition.MintParam (token
+// standard, amount, receive address) carrying no tokens; a
+// non-positive mint amount fails with
+// constants.ErrInvalidTokenOrAmount.
 func (p *MintMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.MintParam)
@@ -176,6 +224,17 @@ func (p *MintMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIToken.PackMethod(p.MethodName, param.TokenStandard, param.Amount, param.ReceiveAddress)
 	return err
 }
+
+// ReceiveBlock mints the requested amount: the token must exist
+// (constants.ErrDataNonExistent), be mintable
+// (constants.ErrPermissionDenied) and the amount must fit under
+// MaxSupply (constants.ErrTokenInvalidAmount). For ZNN and QSR the
+// sender must be an embedded contract; for any other token it must be
+// the owner (constants.ErrPermissionDenied). The total supply and the
+// contract's balance grow by the amount and one descendant send
+// delivers it to the receive address — packed as a Donate call when
+// the receiver is an embedded contract, so the auto-generated receive
+// succeeds.
 func (p *MintMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -236,13 +295,22 @@ func (p *MintMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock
 	}, nil
 }
 
+// BurnMethod (Burn) destroys the tokens carried by the send block,
+// reducing the total supply. Anyone may burn a burnable token; the
+// owner may burn even when the token is not burnable.
 type BurnMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *BurnMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts an argument-less call carrying a positive
+// amount of the token to burn; a zero amount fails with
+// constants.ErrInvalidTokenOrAmount.
 func (p *BurnMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -257,6 +325,14 @@ func (p *BurnMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIToken.PackMethod(p.MethodName)
 	return err
 }
+
+// ReceiveBlock burns the sent amount: the token must exist
+// (constants.ErrDataNonExistent) and either be burnable or be burned
+// by its owner (constants.ErrPermissionDenied otherwise). The total
+// supply and the contract's balance shrink by the amount; for
+// non-mintable tokens MaxSupply is reduced alongside, preserving the
+// MaxSupply == TotalSupply invariant. No descendant blocks are
+// emitted.
 func (p *BurnMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -285,13 +361,23 @@ func (p *BurnMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock
 	return nil, nil
 }
 
+// UpdateTokenMethod (UpdateToken) lets a token's owner transfer
+// ownership and change the mintable and burnable flags. IsMintable is
+// one-way: it can be turned off — pinning MaxSupply to the current
+// TotalSupply — but never back on; IsBurnable toggles freely.
 type UpdateTokenMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *UpdateTokenMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed definition.UpdateTokenParam
+// (token standard, owner, mintable and burnable flags) carrying no
+// tokens.
 func (p *UpdateTokenMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.UpdateTokenParam)
@@ -307,6 +393,13 @@ func (p *UpdateTokenMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIToken.PackMethod(p.MethodName, param.TokenStandard, param.Owner, param.IsMintable, param.IsBurnable)
 	return err
 }
+
+// ReceiveBlock applies the changes to the token, which must exist
+// (constants.ErrDataNonExistent) and be owned by the sender
+// (constants.ErrPermissionDenied). Trying to re-enable IsMintable
+// fails with constants.ErrForbiddenParam; disabling it sets MaxSupply
+// to the current TotalSupply. The owner and IsBurnable changes apply
+// as given.
 func (p *UpdateTokenMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err

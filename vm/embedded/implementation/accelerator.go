@@ -17,6 +17,9 @@ var (
 	acceleratorLog = common.EmbeddedLogger.New("contract", "accelerator")
 )
 
+// IsAcceleratorRunning fails with constants.ErrAcceleratorEnded once
+// more than constants.AcceleratorDuration seconds have elapsed since
+// the genesis momentum; every accelerator method is gated on it.
 func IsAcceleratorRunning(context vm_context.AccountVmContext) error {
 	frontierMomentum, err := context.GetFrontierMomentum()
 	genesisMomentum := context.GetGenesisMomentum()
@@ -29,6 +32,19 @@ func IsAcceleratorRunning(context vm_context.AccountVmContext) error {
 	return nil
 }
 
+// checkMetaDataStatic validates the static fields shared by project
+// and phase submissions:
+//   - the name is 1 to constants.ProjectNameLengthMax bytes
+//     (constants.ErrInvalidName)
+//   - the description is 1 to constants.ProjectDescriptionLengthMax
+//     bytes (constants.ErrInvalidDescription)
+//   - the url is non-empty and matches a permissive
+//     domain-with-optional-scheme pattern
+//     (constants.ErrForbiddenParam)
+//   - the requested funds are at most
+//     constants.ProjectZnnMaximumFunds /
+//     constants.ProjectQsrMaximumFunds
+//     (constants.ErrAcceleratorInvalidFunds)
 func checkMetaDataStatic(param *definition.AcceleratorParam) error {
 	if len(param.Name) == 0 ||
 		len(param.Name) > constants.ProjectNameLengthMax {
@@ -50,6 +66,9 @@ func checkMetaDataStatic(param *definition.AcceleratorParam) error {
 	return nil
 }
 
+// checkReceivedFunds reports whether the project's phases together
+// request exactly the project's needed ZNN and QSR — the condition on
+// which a project counts as fully funded and is marked completed.
 func checkReceivedFunds(context vm_context.AccountVmContext, project *definition.Project) bool {
 	znnFunds := new(big.Int).Set(project.ZnnFundsNeeded)
 	qsrFunds := new(big.Int).Set(project.QsrFundsNeeded)
@@ -67,6 +86,11 @@ func checkReceivedFunds(context vm_context.AccountVmContext, project *definition
 	return true
 }
 
+// checkPhaseFunds fails with constants.ErrAcceleratorInvalidFunds
+// when the project's phases are inconsistent with its budget: no
+// single phase and no sum of phases may request more ZNN or QSR than
+// the project needs, and the project's needs must stay within the
+// constants.Project*MaximumFunds caps.
 func checkPhaseFunds(context vm_context.AccountVmContext, project *definition.Project) error {
 	znnPhaseFunds := big.NewInt(0)
 	for _, phaseId := range project.PhaseIds {
@@ -100,13 +124,25 @@ func checkPhaseFunds(context vm_context.AccountVmContext, project *definition.Pr
 	return nil
 }
 
+// CreateProjectMethod (CreateProject) submits a new accelerator
+// funding project against the non-refundable
+// constants.ProjectCreationAmount ZNN fee (1 ZNN), kept by the
+// contract. The project starts in voting status with its id open for
+// pillar votes.
 type CreateProjectMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *CreateProjectMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed definition.AcceleratorParam
+// passing the checkMetaDataStatic rules, carried by a send of exactly
+// constants.ProjectCreationAmount ZNN; any other token or amount
+// fails with constants.ErrInvalidTokenOrAmount.
 func (p *CreateProjectMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.AcceleratorParam)
@@ -127,6 +163,13 @@ func (p *CreateProjectMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIAccelerator.PackMethod(p.MethodName, param.Name, param.Description, param.Url, param.ZnnFundsNeeded, param.QsrFundsNeeded)
 	return err
 }
+
+// ReceiveBlock creates the project — gated on IsAcceleratorRunning —
+// with the send block's hash as id, the sender as owner, the frontier
+// timestamp as creation time, definition.VotingStatus and no phases,
+// and registers the id as a votable hash so pillars can vote on it
+// via VoteByName / VoteByProdAddress. No descendant blocks are
+// emitted.
 func (p *CreateProjectMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -164,16 +207,30 @@ func (p *CreateProjectMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 	return nil, nil
 }
 
+// AddPhaseMethod (AddPhase) lets a project's owner submit the next
+// funding phase of an active project; each phase needs its own pillar
+// vote before the Update run pays it out.
 type AddPhaseMethod struct {
 	MethodName string
 }
 
+// Fee returns a zero fee. It is not part of the embedded.Method
+// interface and has no callers.
 func (p *AddPhaseMethod) Fee() (*big.Int, error) {
 	return big.NewInt(0), nil
 }
+
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *AddPhaseMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed definition.AcceleratorParam —
+// the project id plus the phase metadata, passing the
+// checkMetaDataStatic rules. Unlike most methods it places no
+// restriction on the sent token or amount; anything sent along stays
+// with the contract.
 func (p *AddPhaseMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.AcceleratorParam)
@@ -189,6 +246,16 @@ func (p *AddPhaseMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIAccelerator.PackMethod(p.MethodName, param.Id, param.Name, param.Description, param.Url, param.ZnnFundsNeeded, param.QsrFundsNeeded)
 	return err
 }
+
+// ReceiveBlock appends a new phase to the project — gated on
+// IsAcceleratorRunning. The project must exist
+// (constants.ErrDataNonExistent), be owned by the sender, be in
+// definition.ActiveStatus and have no unpaid current phase (all
+// constants.ErrPermissionDenied). The phase is created with the send
+// block's hash as id and definition.VotingStatus, appended to the
+// project's phase list and registered as a votable hash; phase
+// budgets exceeding the project's remaining needs roll the call back
+// via checkPhaseFunds.
 func (p *AddPhaseMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -250,6 +317,10 @@ func (p *AddPhaseMethod) ReceiveBlock(context vm_context.AccountVmContext, sendB
 	return nil, nil
 }
 
+// checkAcceleratorVotes tallies the pillar votes on a project or
+// phase id: it passes when the yes votes strictly outnumber the no
+// votes and the total turnout strictly exceeds
+// constants.VoteAcceptanceThreshold percent of the active pillars.
 func checkAcceleratorVotes(context vm_context.AccountVmContext, id types.Hash, numPillars uint32) bool {
 	breakdown := definition.GetVoteBreakdown(context.Storage(), id)
 
@@ -267,13 +338,23 @@ func checkAcceleratorVotes(context vm_context.AccountVmContext, id types.Hash, n
 	return ok
 }
 
+// UpdateEmbeddedAcceleratorMethod (Update) advances the accelerator
+// state machine: it resolves project votes and pays out accepted
+// phases from the contract's balance. Anyone may call it; it is
+// throttled to one run every constants.UpdateMinNumMomentums
+// momentums.
 type UpdateEmbeddedAcceleratorMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedWWithdraw tier, covering the phase
+// payout blocks an update may send.
 func (p *UpdateEmbeddedAcceleratorMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
+
+// ValidateSendBlock accepts an argument-less call carrying no
+// tokens.
 func (p *UpdateEmbeddedAcceleratorMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -288,6 +369,25 @@ func (p *UpdateEmbeddedAcceleratorMethod) ValidateSendBlock(block *nom.AccountBl
 	block.Data, err = definition.ABIAccelerator.PackMethod(p.MethodName)
 	return err
 }
+
+// ReceiveBlock runs the accelerator update — gated on
+// IsAcceleratorRunning and the update throttle
+// (constants.ErrUpdateTooRecent). Projects are processed oldest
+// current phase first (projects without phases last):
+//   - a project in voting whose constants.AcceleratorProjectVotingPeriod
+//     window is still open becomes active when its votes pass
+//     checkAcceleratorVotes; once the window has passed it is closed
+//   - an active project's current phase in voting is paid when its
+//     votes pass, the phase budget is consistent, the contract's
+//     balance covers both the ZNN and QSR needs and fewer than
+//     constants.MaxBlocksPerUpdate payout blocks have accumulated:
+//     the phase is marked paid and two descendant sends transfer the
+//     requested ZNN and QSR to the project owner, with the phase id
+//     as block data; phases that cannot be paid stay in voting for a
+//     later update
+//
+// A project whose phases have received everything it asked for is
+// marked completed.
 func (p *UpdateEmbeddedAcceleratorMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -424,13 +524,24 @@ func (p *UpdateEmbeddedAcceleratorMethod) ReceiveBlock(context vm_context.Accoun
 	return blocks, nil
 }
 
+// UpdatePhaseMethod (UpdatePhase) lets a project's owner replace the
+// current phase while it is still in voting, restarting the vote from
+// scratch.
 type UpdatePhaseMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *UpdatePhaseMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed definition.AcceleratorParam —
+// the project id plus the replacement phase metadata, passing the
+// checkMetaDataStatic rules. Like AddPhase it places no restriction
+// on the sent token or amount; anything sent along stays with the
+// contract.
 func (p *UpdatePhaseMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.AcceleratorParam)
@@ -446,6 +557,19 @@ func (p *UpdatePhaseMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIAccelerator.PackMethod(p.MethodName, param.Id, param.Name, param.Description, param.Url, param.ZnnFundsNeeded, param.QsrFundsNeeded)
 	return err
 }
+
+// ReceiveBlock replaces the project's current phase — gated on
+// IsAcceleratorRunning. The project must exist
+// (constants.ErrDataNonExistent) and be owned by the sender
+// (constants.ErrPermissionDenied); the current phase must exist
+// (constants.ErrDataNonExistent) and still be in
+// definition.VotingStatus (constants.ErrPermissionDenied). A new
+// phase with the send block's hash as id and a fresh creation
+// timestamp takes the old one's slot in the project's phase list —
+// checked against the budget via checkPhaseFunds — and the vote
+// restarts: all pillar votes on the old phase and its votable hash
+// are deleted, the new id is registered and the old phase entry
+// removed.
 func (p *UpdatePhaseMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err

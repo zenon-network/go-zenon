@@ -1,3 +1,24 @@
+// Package chain orchestrates the node's dual ledger. The momentum
+// pool owns the persistent momentum chain — a db.Manager whose
+// versions are momentums and whose state embeds the
+// momentum-confirmed ("stable") state of every account chain — while
+// the account pool layers unconfirmed account blocks on top, in one
+// in-memory db.Manager per address. The store interfaces both pools
+// expose are defined in chain/store.
+//
+// All ledger writes are serialized through a single chain-wide mutex:
+// writers (the pillar's momentum and contract-receive generators, the
+// protocol broadcaster and chain bridge) hold the locker returned by
+// AcquireInsert across an insertion. Account blocks first enter the
+// account pool; when a pillar produces a momentum confirming them,
+// the momentum VM copies their patches into the momentum store and
+// AddMomentumTransaction commits the result, broadcasting an
+// InsertMomentum event to the registered MomentumEventListeners — the
+// account pool itself (which rebuilds its managers over the new
+// stable state), the consensus points and election caches, the event
+// printer and the RPC subscription server. RollbackTo pops momentums
+// one by one, emitting a DeleteMomentum event per momentum, upon
+// which the account pool discards all unconfirmed state.
 package chain
 
 import (
@@ -17,6 +38,9 @@ var (
 	inserterLog = common.ChainLogger.New("submodule", "chain-insert-mutex")
 )
 
+// chain implements Chain by composing the account pool, the momentum
+// pool and the momentum event manager over a shared db.Manager; the
+// insert mutex serializes all ledger writers (see AcquireInsert).
 type chain struct {
 	log common.Logger
 
@@ -29,6 +53,10 @@ type chain struct {
 	insert       sync.Mutex
 }
 
+// NewChain assembles the chain module on top of chainManager — the
+// momentum-chain db.Manager, persistent in production — wiring the
+// account pool to draw its stable account state from the momentum
+// pool's frontier. Call Init then Start before use.
 func NewChain(chainManager db.Manager, genesis store.Genesis) *chain {
 	momentumPool := NewMomentumPool(chainManager, genesis)
 	return &chain{
@@ -41,6 +69,13 @@ func NewChain(chainManager db.Manager, genesis store.Genesis) *chain {
 	}
 }
 
+// Init prepares the ledger for use: it verifies (or, on an empty
+// database, inserts) the genesis momentum, publishes the genesis
+// spork address into types.SporkAddress, registers the account pool
+// as a momentum event listener and verifies that every activated
+// spork is implemented by this build — if one is not, the node prints
+// an upgrade notice and terminates with exit status 2 (see
+// GotAllActiveSporksImplemented).
 func (c *chain) Init() error {
 	c.log.Info("initializing ...")
 	defer c.log.Info("initialized")
@@ -82,12 +117,18 @@ func (c *chain) Init() error {
 
 	return nil
 }
+
+// Start is part of the module lifecycle; the chain has no background
+// work, so it only logs and returns nil.
 func (c *chain) Start() error {
 	c.log.Info("starting ...")
 	defer c.log.Info("started")
 
 	return nil
 }
+
+// Stop unregisters the account pool from momentum events and shuts
+// down the underlying database manager.
 func (c *chain) Stop() error {
 	c.log.Info("stopping ...")
 	defer c.log.Info("stopped")
@@ -97,6 +138,11 @@ func (c *chain) Stop() error {
 	return c.chainManager.Stop()
 }
 
+// checkGenesisCompatibility ensures the database matches the
+// configured genesis: an empty database receives the genesis momentum
+// transaction (under the insert lock), otherwise the momentum at
+// height 1 must hash to the configured genesis momentum — if not, the
+// node refuses to start and the database must be removed manually.
 func (c *chain) checkGenesisCompatibility() error {
 	frontierStore := c.GetFrontierMomentumStore()
 	if frontierStore.Identifier().IsZero() {
@@ -121,6 +167,11 @@ func (c *chain) checkGenesisCompatibility() error {
 	return nil
 }
 
+// AcquireInsert blocks until the chain-wide insert mutex is acquired
+// and returns a single-use locker that is already held: Unlock
+// releases the mutex (once only) and Lock panics. The lock is not
+// reentrant — a holder calling AcquireInsert again deadlocks. The
+// reason string is only used for logging.
 func (c *chain) AcquireInsert(reason string) sync.Locker {
 	inserterLog.Debug("waiting", "reason", reason)
 	c.insert.Lock()
@@ -132,6 +183,9 @@ func (c *chain) AcquireInsert(reason string) sync.Locker {
 	}
 }
 
+// inserter is the held-lock token returned by AcquireInsert; methods
+// that take an insertLocker check only that it is non-nil — the token
+// exists to make lock ownership explicit and traceable in logs.
 type inserter struct {
 	reason string
 	mutex  *sync.Mutex

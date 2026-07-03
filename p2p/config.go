@@ -9,6 +9,11 @@ import (
 	"github.com/zenon-network/go-zenon/p2p/discover"
 )
 
+// Defaults applied to the network section of the node configuration:
+// the advertised node name, the listening interface and ports (35995
+// for devp2p, 35997 and 35998 for the HTTP and WebSocket RPC
+// endpoints), the peer-count limits and the location of the node
+// database and network private key inside the data directory.
 const (
 	DefaultNodeName = "znn-node"
 
@@ -27,6 +32,10 @@ const (
 )
 
 var (
+	// DefaultSeeders lists the enode URLs of the Alphanet seeder
+	// nodes. They are used as bootstrap nodes when the configuration
+	// does not name its own seeders, giving a fresh node its first
+	// entry points into the discovery network.
 	DefaultSeeders = []string{
 		"enode://f0e3e1f507c7cc5a2d2cf0eb173c204c820786c7cecbc0118d1cf76e5eaba90348ce57e5c9dee35c27a40f5a44dafc61b8996f00bb33647c66f66c997ce6592b@206.188.197.194:35995",
 		"enode://b65fcbc62293e21ed026f922b986bec16c70dc44de79a11eaaba5650579bd9e5e43630aa0a12eb689dc644b4ccc593fa6e64f189fd892c11eb22917fe46120b6@139.177.178.226:35995",
@@ -147,6 +156,11 @@ var (
 	}
 )
 
+// Net carries the network settings from the node configuration in the
+// shape the p2p Server expects. The node layer builds one with
+// data-directory-relative paths filled in, then copies its fields
+// onto the Server, resolving the private key with PrivateKey and the
+// seeders with Nodes.
 type Net struct {
 	// This field must be set to a valid secp256k1 private key.
 	privateKey *ecdsa.PrivateKey
@@ -220,6 +234,10 @@ func (c *Net) PrivateKey() *ecdsa.PrivateKey {
 	}
 	return key
 }
+
+// Nodes parses the configured seeders into discovery nodes, suitable
+// for the server's bootstrap node list. It fails on the first seeder
+// that is not a valid enode URL.
 func (c *Net) Nodes() ([]*discover.Node, error) {
 	var err error
 	nodes := make([]*discover.Node, len(c.Seeders))

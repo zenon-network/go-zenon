@@ -14,6 +14,11 @@ import (
 	"github.com/zenon-network/go-zenon/vm/vm_context"
 )
 
+// GetDifficultyForPlasma returns the proof-of-work difficulty that
+// yields requiredPlasma (constants.PoWDifficultyPerPlasma — 1500 —
+// per unit). Plasma beyond what PoW may cover for one block
+// (constants.MaxPoWPlasmaForAccountBlock) is rejected with
+// constants.ErrForbiddenParam.
 func GetDifficultyForPlasma(requiredPlasma uint64) (uint64, error) {
 	if requiredPlasma > constants.MaxPoWPlasmaForAccountBlock {
 		return 0, constants.ErrForbiddenParam
@@ -22,6 +27,11 @@ func GetDifficultyForPlasma(requiredPlasma uint64) (uint64, error) {
 	}
 	return requiredPlasma * constants.PoWDifficultyPerPlasma, nil
 }
+
+// DifficultyToPlasma is the inverse of GetDifficultyForPlasma: the
+// plasma granted by a proof-of-work of the given difficulty
+// (difficulty / 1500), capped at
+// constants.MaxPoWPlasmaForAccountBlock.
 func DifficultyToPlasma(difficulty uint64) uint64 {
 	// Check for 0
 	if difficulty == 0 {
@@ -36,6 +46,11 @@ func DifficultyToPlasma(difficulty uint64) uint64 {
 	return difficulty / constants.PoWDifficultyPerPlasma
 }
 
+// FussedAmountToPlasma converts an amount of QSR fused to a
+// beneficiary into its plasma capacity: every whole fusion unit
+// (constants.CostPerFusionUnit, 1 QSR) grants
+// constants.PlasmaPerFusionUnit, capped at
+// constants.MaxFusionPlasmaForAccount (5000 units' worth).
 func FussedAmountToPlasma(amount *big.Int) uint64 {
 	// Check for 0
 	if amount == nil || amount.Sign() <= 0 {
@@ -51,9 +66,14 @@ func FussedAmountToPlasma(amount *big.Int) uint64 {
 }
 
 // AvailablePlasma returns only the total amount of plasma available.
-// *Takes* into consideration used plasma by unconfirmed blocks.
 //
-// Plasma equals to fusedPlasma - plasmaUsedByUnconfirmedBlocks
+// Plasma equals to fusedPlasma - plasmaUsedByUnconfirmedBlocks.
+//
+// fusedPlasma is FussedAmountToPlasma of the QSR fused for the
+// account, and the unconfirmed usage is the difference between the
+// account store's cumulative chain-plasma counter (which includes
+// unconfirmed blocks) and the momentum-confirmed one — plasma spent
+// by a block stops counting once the block is confirmed.
 func AvailablePlasma(momentum store.Momentum, account store.Account) (uint64, error) {
 	address := *account.Address()
 	committed, err := momentum.GetAccountStore(address).GetChainPlasma()
@@ -83,6 +103,13 @@ func AvailablePlasma(momentum store.Momentum, account store.Account) (uint64, er
 }
 
 // GetBasePlasmaForAccountBlock calculates the smallest plasma required for an account block.
+//
+// Three tiers: receive blocks cost a flat
+// constants.AccountBlockBasePlasma; sends to user addresses cost the
+// flat base plus constants.ABByteDataPlasma per byte of Data (capped
+// at constants.MaxDataLength bytes); sends to embedded contracts cost
+// the called method's fixed price from constants.AlphanetPlasmaTable.
+// Blocks issued by embedded addresses cost 0.
 func GetBasePlasmaForAccountBlock(context vm_context.AccountVmContext, block *nom.AccountBlock) (uint64, error) {
 	if types.IsEmbeddedAddress(block.Address) {
 		return 0, nil

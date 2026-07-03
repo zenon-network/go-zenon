@@ -9,6 +9,13 @@ import (
 	"github.com/zenon-network/go-zenon/chain/nom"
 )
 
+// GetMomentumBeforeTime returns the most recent momentum whose
+// timestamp is strictly before timestamp, or nil if even the genesis
+// momentum is not strictly before it. Since momentum timestamps
+// strictly increase in whole seconds, a momentum N heights away is at
+// least N seconds away; the search exploits this to interpolate
+// boundary momentums around the requested time, then finishes with a
+// binary search between them.
 func (ms *momentumStore) GetMomentumBeforeTime(timestamp *time.Time) (*nom.Momentum, error) {
 	// normal logic
 	genesis := ms.GetGenesisMomentum()
@@ -79,6 +86,11 @@ func (ms *momentumStore) GetMomentumBeforeTime(timestamp *time.Time) (*nom.Momen
 	}
 	return block, nil
 }
+
+// binarySearchBeforeTime finds the last momentum in (start, end) with
+// a timestamp strictly before timeNanosecond, assuming start is
+// before it and end is not; timestamps increase along the chain, so
+// sort.Search applies.
 func (ms *momentumStore) binarySearchBeforeTime(start, end *nom.Momentum, timeNanosecond int64) (*nom.Momentum, error) {
 	n := int(end.Height - start.Height + 1)
 

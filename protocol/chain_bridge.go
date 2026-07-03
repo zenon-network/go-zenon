@@ -21,6 +21,12 @@ type chainBridge struct {
 	supervisor *vm.Supervisor
 }
 
+// NewChainBridge returns the ChainBridge used by the protocol layer.
+// Reads are answered from the frontier momentum store; insertions
+// (AddAccountBlocks, InsertChain) apply blocks through the supervisor
+// and commit them while holding the chain insert lock. InsertChain
+// also rolls the chain back by up to 30 momentums when a longer
+// side-chain arrives.
 func NewChainBridge(chain chain.Chain, consensus consensus.Consensus, verifier verifier.Verifier, supervisor *vm.Supervisor) ChainBridge {
 	return chainBridge{
 		chain:      chain,

@@ -34,6 +34,9 @@ import (
 	"github.com/zenon-network/go-zenon/p2p/nat"
 )
 
+// Version is the discovery protocol version. It is carried in every
+// ping packet and stamped on the node database; pings from nodes
+// speaking a different version are rejected.
 const Version = 4
 
 // Errors

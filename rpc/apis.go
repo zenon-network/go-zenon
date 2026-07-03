@@ -1,3 +1,7 @@
+// Package rpc registers the go-zenon API namespaces onto the
+// JSON-RPC server framework in rpc/server. Each namespace pairs a
+// wire prefix with the constructor of the API receiver whose
+// exported methods become remotely callable.
 package rpc
 
 import (
@@ -9,6 +13,13 @@ import (
 	"github.com/zenon-network/go-zenon/zenon"
 )
 
+// getApi builds the rpc.API entries for a single module name. The
+// "ledger" case registers the query-only ledger API, while
+// "ledgerSubscribe" registers the subscription API under the same
+// "ledger" namespace so its subscribe method is reached as
+// ledger.subscribe. The "embedded" case fans out into one entry per
+// embedded contract, and "stats" exposes node statistics. An unknown
+// module yields no entries.
 func getApi(z zenon.Zenon, p2p *p2p.Server, apiModule string) []rpc.API {
 	switch apiModule {
 	case "ledger":
@@ -111,6 +122,9 @@ func getApi(z zenon.Zenon, p2p *p2p.Server, apiModule string) []rpc.API {
 		return []rpc.API{}
 	}
 }
+
+// GetApis returns the rpc.API entries for the named modules,
+// concatenating the result of getApi for each in order.
 func GetApis(z zenon.Zenon, p2p *p2p.Server, apiModule ...string) []rpc.API {
 	var apis []rpc.API
 	for _, m := range apiModule {
@@ -118,6 +132,10 @@ func GetApis(z zenon.Zenon, p2p *p2p.Server, apiModule ...string) []rpc.API {
 	}
 	return apis
 }
+
+// GetPublicApis returns the full set of public API entries: the
+// ledger query and subscription namespaces, every embedded contract
+// namespace, and the stats namespace.
 func GetPublicApis(z zenon.Zenon, p2p *p2p.Server) []rpc.API {
 	return GetApis(z, p2p, "ledger", "ledgerSubscribe", "embedded", "stats")
 }

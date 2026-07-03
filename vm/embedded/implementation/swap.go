@@ -16,6 +16,14 @@ var (
 	swapLog = common.EmbeddedLogger.New("contract", "swap")
 )
 
+// ApplyDecay discounts the deposit's amounts in place by the swap
+// decay schedule at the given epoch: the full value during the first
+// constants.SwapAssetDecayEpochsOffset epochs, then
+// constants.SwapAssetDecayTickValuePercentage of the original lost
+// per tick of constants.SwapAssetDecayTickEpochs epochs, down to
+// nothing once the ticks add up to 100%. Stored entries are never
+// decayed in place: RetrieveAssets applies it at claim time and the
+// swap RPC API at read time.
 func ApplyDecay(deposit *definition.SwapAssets, currentEpoch int) {
 	percentageToGive := 100
 	if currentEpoch < constants.SwapAssetDecayEpochsOffset {
@@ -36,13 +44,26 @@ func ApplyDecay(deposit *definition.SwapAssets, currentEpoch int) {
 	deposit.Qsr.Div(deposit.Qsr, common.Big100)
 }
 
+// SwapRetrieveAssetsMethod (RetrieveAssets) claims the ZNN and QSR
+// attributed to a legacy-chain key. The caller proves ownership of
+// the legacy secp256k1 public key with a signature binding it to the
+// sender's address and receives the balances — discounted by the
+// decay schedule — as freshly minted coins.
 type SwapRetrieveAssetsMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedWDoubleWithdraw tier, covering the up
+// to two mint transactions the claim sends to the token contract.
 func (p *SwapRetrieveAssetsMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWDoubleWithdraw, nil
 }
+
+// ValidateSendBlock accepts a packed definition.ParamRetrieveAssets —
+// a base64 public key and signature — carried by a send with no
+// tokens. The signature must recover to the public key over the
+// retrieve-assets swap message for the sender's address (see
+// CheckSwapSignature).
 func (p *SwapRetrieveAssetsMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.ParamRetrieveAssets)
@@ -61,6 +82,15 @@ func (p *SwapRetrieveAssetsMethod) ValidateSendBlock(block *nom.AccountBlock) er
 	block.Data, err = definition.ABISwap.PackMethod(p.MethodName, param.PublicKey, param.Signature)
 	return err
 }
+
+// ReceiveBlock pays out the SwapAssets entry stored under the public
+// key's key-id hash (PubKeyToKeyIdHash); a missing or already-claimed
+// (both balances zero) entry fails with constants.ErrDataNonExistent.
+// The amounts are decayed to the current epoch (ApplyDecay) and
+// returned as up to two descendant sends instructing the token
+// contract to mint the remaining ZNN and QSR to the sender. The entry
+// is not deleted: its balances are zeroed and saved back, consistent
+// with the definition layer.
 func (p *SwapRetrieveAssetsMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err

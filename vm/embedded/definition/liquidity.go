@@ -14,6 +14,11 @@ import (
 )
 
 const (
+	// jsonLiquidity is the ABI JSON of the liquidity embedded
+	// contract: liquidity staking, reward funding and configuration,
+	// halting and the guardian methods, plus the stored
+	// liquidity-info, token-tuple, stake-entry and security-info
+	// variables. Parsed into ABILiquidity.
 	jsonLiquidity = `
 	[
 		{"type":"function","name":"Update", "inputs":[]},
@@ -86,14 +91,34 @@ const (
 		]}
 	]`
 
-	FundMethodName                        = "Fund"
-	BurnZnnMethodName                     = "BurnZnn"
-	SetTokenTupleMethodName               = "SetTokenTuple"
-	LiquidityStakeMethodName              = "LiquidityStake"
-	CancelLiquidityStakeMethodName        = "CancelLiquidityStake"
+	// FundMethodName names the spork-address method that donates
+	// znnReward ZNN and qsrReward QSR from the liquidity contract's
+	// balance to the accelerator.
+	FundMethodName = "Fund"
+	// BurnZnnMethodName names the spork-address method that burns
+	// burnAmount ZNN from the liquidity contract's balance.
+	BurnZnnMethodName = "BurnZnn"
+	// SetTokenTupleMethodName names the administrator method,
+	// protected by a soft-delay time challenge, that replaces the
+	// set of reward-earning token tuples.
+	SetTokenTupleMethodName = "SetTokenTuple"
+	// LiquidityStakeMethodName names the method that locks the sent
+	// LP tokens as a reward-earning stake for durationInSec seconds.
+	LiquidityStakeMethodName = "LiquidityStake"
+	// CancelLiquidityStakeMethodName names the method by which a
+	// staker revokes an expired stake entry and recovers its tokens.
+	CancelLiquidityStakeMethodName = "CancelLiquidityStake"
+	// UnlockLiquidityStakeEntriesMethodName names the administrator
+	// method that forces every stake entry of the sent block's token
+	// to expire immediately, making it cancellable.
 	UnlockLiquidityStakeEntriesMethodName = "UnlockLiquidityStakeEntries"
-	SetAdditionalRewardMethodName         = "SetAdditionalReward"
-	SetIsHaltedMethodName                 = "SetIsHalted"
+	// SetAdditionalRewardMethodName names the administrator method,
+	// protected by a soft-delay time challenge, that sets the extra
+	// ZNN and QSR distributed each epoch.
+	SetAdditionalRewardMethodName = "SetAdditionalReward"
+	// SetIsHaltedMethodName names the administrator method that
+	// halts or resumes the liquidity contract.
+	SetIsHaltedMethodName = "SetIsHalted"
 
 	liquidityInfoVariableName       = "liquidityInfo"
 	tokenTupleVariableName          = "tokenTuple"
@@ -101,12 +126,24 @@ const (
 )
 
 var (
+	// ABILiquidity is the parsed ABI of the liquidity embedded
+	// contract.
 	ABILiquidity = abi.JSONToABIContract(strings.NewReader(jsonLiquidity))
 
-	LiquidityInfoKeyPrefix       = []byte{1}
+	// LiquidityInfoKeyPrefix is, by itself, the single key under
+	// which the LiquidityInfoVariable is stored.
+	LiquidityInfoKeyPrefix = []byte{1}
+	// LiquidityStakeEntryKeyPrefix prefixes stake entries; the full
+	// key appends the 20-byte staker address and the 32-byte entry
+	// id.
 	LiquidityStakeEntryKeyPrefix = []byte{2}
 )
 
+// LiquidityInfoVariable is the stored form of the liquidity
+// contract's global state, with the token tuples kept as
+// individually ABI-packed byte slices; LiquidityInfo is the unpacked
+// form callers receive. Stored as a single value under
+// LiquidityInfoKeyPrefix (1).
 type LiquidityInfoVariable struct {
 	Administrator types.Address `json:"administrator"`
 	IsHalted      bool          `json:"isHalted"`
@@ -114,6 +151,12 @@ type LiquidityInfoVariable struct {
 	QsrReward     *big.Int      `json:"qsrReward"`
 	TokenTuples   [][]byte      `json:"tokenTuples"`
 }
+
+// LiquidityInfo is the liquidity contract's global state: the
+// administrator address, the halted flag that suspends staking, the
+// additional ZNN and QSR rewards (smallest units) distributed each
+// epoch on top of the protocol emission, and the reward-earning
+// token tuples.
 type LiquidityInfo struct {
 	Administrator types.Address `json:"administrator"`
 	IsHalted      bool          `json:"isHalted"`
@@ -122,6 +165,9 @@ type LiquidityInfo struct {
 	TokenTuples   []TokenTuple  `json:"tokenTuples"`
 }
 
+// LiquidityInfoMarshal is the JSON form of LiquidityInfo, with the
+// rewards rendered as base-10 strings to survive clients that parse
+// numbers as 64-bit floats.
 type LiquidityInfoMarshal struct {
 	Administrator types.Address `json:"administrator"`
 	IsHalted      bool          `json:"isHalted"`
@@ -130,6 +176,8 @@ type LiquidityInfoMarshal struct {
 	TokenTuples   []TokenTuple  `json:"tokenTuples"`
 }
 
+// ToLiquidityInfoMarshal converts the state to its JSON form with
+// string-encoded rewards.
 func (l *LiquidityInfo) ToLiquidityInfoMarshal() LiquidityInfoMarshal {
 	aux := LiquidityInfoMarshal{
 		Administrator: l.Administrator,
@@ -145,10 +193,14 @@ func (l *LiquidityInfo) ToLiquidityInfoMarshal() LiquidityInfoMarshal {
 
 	return aux
 }
+
+// MarshalJSON encodes the state through LiquidityInfoMarshal.
 func (l *LiquidityInfo) MarshalJSON() ([]byte, error) {
 	return json.Marshal(l.ToLiquidityInfoMarshal())
 }
 
+// UnmarshalJSON decodes the state from its LiquidityInfoMarshal
+// form, parsing the string rewards back into big.Int values.
 func (l *LiquidityInfo) UnmarshalJSON(data []byte) error {
 	aux := new(LiquidityInfoMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -165,6 +217,8 @@ func (l *LiquidityInfo) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Save stores the packed state under LiquidityInfoKeyPrefix,
+// returning any pack or put error.
 func (liq *LiquidityInfoVariable) Save(context db.DB) error {
 	data, err := ABILiquidity.PackVariable(
 		liquidityInfoVariableName,
@@ -214,6 +268,12 @@ func parseLiquidityInfo(data []byte) (*LiquidityInfo, error) {
 		}, nil
 	}
 }
+
+// GetLiquidityInfo returns the liquidity contract's state with its
+// token tuples unpacked; tuples that fail to unpack are skipped.
+// When nothing is stored it returns defaults instead of an error:
+// constants.InitialBridgeAdministrator as administrator, not halted,
+// zero rewards and no tuples.
 func GetLiquidityInfo(context db.DB) (*LiquidityInfo, error) {
 	if data, err := context.Get(LiquidityInfoKeyPrefix); err != nil {
 		return nil, err
@@ -222,6 +282,10 @@ func GetLiquidityInfo(context db.DB) (*LiquidityInfo, error) {
 		return upd, err
 	}
 }
+
+// EncodeLiquidityInfo converts a LiquidityInfo into its stored form,
+// ABI-packing each token tuple into a byte slice; it returns the
+// first pack error encountered.
 func EncodeLiquidityInfo(liquidityInfo *LiquidityInfo) (*LiquidityInfoVariable, error) {
 	liquidityInfoVariable := new(LiquidityInfoVariable)
 	if err := liquidityInfoVariable.Administrator.SetBytes(liquidityInfo.Administrator.Bytes()); err != nil {
@@ -242,6 +306,13 @@ func EncodeLiquidityInfo(liquidityInfo *LiquidityInfo) (*LiquidityInfoVariable, 
 	return liquidityInfoVariable, nil
 }
 
+// TokenTuple is the reward configuration of one LP token:
+// TokenStandard is the ZTS in string form, ZnnPercentage and
+// QsrPercentage are its shares of the epoch's liquidity ZNN and QSR
+// rewards in basis points (each set must sum to
+// constants.LiquidityZnnTotalPercentages and
+// constants.LiquidityQsrTotalPercentages, 10,000 = 100%) and
+// MinAmount (smallest units) is the smallest stake accepted.
 type TokenTuple struct {
 	TokenStandard string   `json:"tokenStandard"`
 	ZnnPercentage uint32   `json:"znnPercentage"`
@@ -249,6 +320,9 @@ type TokenTuple struct {
 	MinAmount     *big.Int `json:"minAmount"`
 }
 
+// TokenTupleMarshal is the JSON form of TokenTuple, with the minimum
+// amount rendered as a base-10 string to survive clients that parse
+// numbers as 64-bit floats.
 type TokenTupleMarshal struct {
 	TokenStandard string `json:"tokenStandard"`
 	ZnnPercentage uint32 `json:"znnPercentage"`
@@ -256,6 +330,8 @@ type TokenTupleMarshal struct {
 	MinAmount     string `json:"minAmount"`
 }
 
+// ToTokenTupleMarshal converts the tuple to its JSON form with a
+// string-encoded minimum amount.
 func (s *TokenTuple) ToTokenTupleMarshal() *TokenTupleMarshal {
 	aux := &TokenTupleMarshal{
 		TokenStandard: s.TokenStandard,
@@ -266,10 +342,13 @@ func (s *TokenTuple) ToTokenTupleMarshal() *TokenTupleMarshal {
 	return aux
 }
 
+// MarshalJSON encodes the tuple through TokenTupleMarshal.
 func (s *TokenTuple) MarshalJSON() ([]byte, error) {
 	return json.Marshal(s.ToTokenTupleMarshal())
 }
 
+// UnmarshalJSON decodes the tuple from its TokenTupleMarshal form,
+// parsing the string amount back into a big.Int.
 func (s *TokenTuple) UnmarshalJSON(data []byte) error {
 	aux := new(TokenTupleMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -283,15 +362,21 @@ func (s *TokenTuple) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// FundParam carries the arguments of Fund: the ZNN and QSR amounts
+// (smallest units) to donate to the accelerator.
 type FundParam struct {
 	ZnnReward *big.Int
 	QsrReward *big.Int
 }
 
+// BurnParam carries the argument of BurnZnn: the ZNN amount
+// (smallest units) to burn from the contract's balance.
 type BurnParam struct {
 	BurnAmount *big.Int
 }
 
+// TokenTuplesParam carries the arguments of SetTokenTuple as
+// parallel arrays, one element per TokenTuple.
 type TokenTuplesParam struct {
 	TokenStandards []string
 	ZnnPercentages []uint32
@@ -299,11 +384,23 @@ type TokenTuplesParam struct {
 	MinAmounts     []*big.Int
 }
 
+// SetAdditionalRewardParam carries the arguments of
+// SetAdditionalReward: the extra ZNN and QSR (smallest units)
+// distributed each epoch on top of the protocol emission.
 type SetAdditionalRewardParam struct {
 	ZnnReward *big.Int
 	QsrReward *big.Int
 }
 
+// LiquidityStakeEntry is one liquidity stake: Amount (smallest
+// units) of TokenStandard locked from StartTime until ExpirationTime
+// (unix seconds), with WeightedAmount the duration-weighted amount
+// reward shares are computed from. RevokeTime is zero while the
+// stake is active; CancelLiquidityStake sets it and zeroes Amount
+// after returning the tokens. Id is the hash of the LiquidityStake
+// send block. Entries are stored under LiquidityStakeEntryKeyPrefix
+// (2) followed by the 20-byte staker address and the 32-byte id;
+// both are recovered from the key when parsing.
 type LiquidityStakeEntry struct {
 	Amount         *big.Int                 `json:"amount"`
 	TokenStandard  types.ZenonTokenStandard `json:"tokenStandard"`
@@ -315,6 +412,9 @@ type LiquidityStakeEntry struct {
 	Id             types.Hash               `json:"id"`
 }
 
+// Save stores the entry under its address+id key, packing all fields
+// except the id and stake address; packing failures panic, the put
+// error is returned.
 func (stake *LiquidityStakeEntry) Save(context db.DB) error {
 	return context.Put(
 		getLiquidityStakeEntryKey(stake.Id, stake.StakeAddress),
@@ -328,6 +428,8 @@ func (stake *LiquidityStakeEntry) Save(context db.DB) error {
 			stake.ExpirationTime,
 		))
 }
+
+// Delete removes the stake entry.
 func (stake *LiquidityStakeEntry) Delete(context db.DB) error {
 	return context.Delete(getLiquidityStakeEntryKey(stake.Id, stake.StakeAddress))
 }
@@ -375,6 +477,9 @@ func parseLiquidityStakeEntry(key []byte, data []byte) (*LiquidityStakeEntry, er
 		return nil, constants.ErrDataNonExistent
 	}
 }
+
+// GetLiquidityStakeEntry returns the stake entry of id and address,
+// or constants.ErrDataNonExistent if it does not exist.
 func GetLiquidityStakeEntry(context db.DB, id types.Hash, address types.Address) (*LiquidityStakeEntry, error) {
 	key := getLiquidityStakeEntryKey(id, address)
 	if data, err := context.Get(key); err != nil {
@@ -384,6 +489,9 @@ func GetLiquidityStakeEntry(context db.DB, id types.Hash, address types.Address)
 	}
 }
 
+// IterateLiquidityStakeEntries calls f on every stored stake entry
+// in storage-key (staker address, then id) order, stopping at the
+// first error f returns.
 func IterateLiquidityStakeEntries(context db.DB, f func(entry *LiquidityStakeEntry) error) error {
 	iterator := context.NewIterator(LiquidityStakeEntryKeyPrefix)
 	defer iterator.Release()
@@ -408,6 +516,9 @@ func IterateLiquidityStakeEntries(context db.DB, f func(entry *LiquidityStakeEnt
 	return nil
 }
 
+// LiquidityStakeEntryMarshal is the JSON form of
+// LiquidityStakeEntry, with the amounts rendered as base-10 strings
+// to survive clients that parse numbers as 64-bit floats.
 type LiquidityStakeEntryMarshal struct {
 	Amount         string                   `json:"amount"`
 	TokenStandard  types.ZenonTokenStandard `json:"tokenStandard"`
@@ -419,6 +530,9 @@ type LiquidityStakeEntryMarshal struct {
 	Id             types.Hash               `json:"id"`
 }
 
+// ToLiquidityStakeEntry converts the entry to its JSON form with
+// string-encoded amounts; despite the name it returns a
+// LiquidityStakeEntryMarshal.
 func (stake *LiquidityStakeEntry) ToLiquidityStakeEntry() *LiquidityStakeEntryMarshal {
 	aux := &LiquidityStakeEntryMarshal{
 		Amount:         stake.Amount.String(),
@@ -433,10 +547,14 @@ func (stake *LiquidityStakeEntry) ToLiquidityStakeEntry() *LiquidityStakeEntryMa
 	return aux
 }
 
+// MarshalJSON encodes the entry through LiquidityStakeEntryMarshal.
 func (stake *LiquidityStakeEntry) MarshalJSON() ([]byte, error) {
 	return json.Marshal(stake.ToLiquidityStakeEntry())
 }
 
+// UnmarshalJSON decodes the entry from its
+// LiquidityStakeEntryMarshal form, parsing the string amounts back
+// into big.Int values.
 func (stake *LiquidityStakeEntry) UnmarshalJSON(data []byte) error {
 	aux := new(LiquidityStakeEntryMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -453,7 +571,9 @@ func (stake *LiquidityStakeEntry) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Returns all *active* stake entries for an address
+// GetLiquidityStakeListByAddress returns the active (not revoked)
+// stake entries of address in storage-key order, together with their
+// total staked and total weighted amounts.
 func GetLiquidityStakeListByAddress(context db.DB, address types.Address) ([]*LiquidityStakeEntry, *big.Int, *big.Int, error) {
 	total := big.NewInt(0)
 	weighted := big.NewInt(0)
@@ -474,6 +594,9 @@ func GetLiquidityStakeListByAddress(context db.DB, address types.Address) ([]*Li
 	}
 }
 
+// GetAllLiquidityStakeEntries returns every stored stake entry,
+// active or revoked, in storage-key (staker address, then id) order;
+// database errors panic via common.DealWithErr.
 func GetAllLiquidityStakeEntries(context db.DB) []*LiquidityStakeEntry {
 	iterator := context.NewIterator(LiquidityStakeEntryKeyPrefix)
 	defer iterator.Release()
@@ -493,10 +616,19 @@ func GetAllLiquidityStakeEntries(context db.DB) []*LiquidityStakeEntry {
 	return liquidityStakeEntries
 }
 
+// LiquidityStakeByExpirationTime implements sort.Interface over
+// stake entries, ordering by ascending expiration time
+// (soonest-expiring first) with ties broken by ascending id (hex
+// string comparison, equivalent to byte order).
 type LiquidityStakeByExpirationTime []*LiquidityStakeEntry
 
-func (a LiquidityStakeByExpirationTime) Len() int      { return len(a) }
+// Len implements sort.Interface.
+func (a LiquidityStakeByExpirationTime) Len() int { return len(a) }
+
+// Swap implements sort.Interface.
 func (a LiquidityStakeByExpirationTime) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+
+// Less orders by ascending expiration time, then ascending id.
 func (a LiquidityStakeByExpirationTime) Less(i, j int) bool {
 	if a[i].ExpirationTime == a[j].ExpirationTime {
 		return a[i].Id.String() < a[j].Id.String()

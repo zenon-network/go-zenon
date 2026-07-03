@@ -13,3 +13,6 @@ build/
 # IDE
 .vscode
 .idea/
+
+# Internal docs working tree (not shipped on this branch)
+/docs/

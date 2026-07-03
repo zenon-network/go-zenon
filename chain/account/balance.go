@@ -16,6 +16,8 @@ func getBalancePrefix() []byte {
 	return common.JoinBytes(balanceKeyPrefix)
 }
 
+// GetBalance returns the account's balance of the given token, zero
+// if the account never held it.
 func (as *accountStore) GetBalance(zts types.ZenonTokenStandard) (*big.Int, error) {
 	data, err := as.DB.Get(getBalanceKey(zts))
 	if err == leveldb.ErrNotFound {
@@ -27,12 +29,17 @@ func (as *accountStore) GetBalance(zts types.ZenonTokenStandard) (*big.Int, erro
 
 	return big.NewInt(0).SetBytes(data), nil
 }
+
+// SetBalance overwrites the account's balance of the given token.
 func (as *accountStore) SetBalance(zts types.ZenonTokenStandard, balance *big.Int) error {
 	if err := as.DB.Put(getBalanceKey(zts), common.BigIntToBytes(balance)); err != nil {
 		return err
 	}
 	return nil
 }
+
+// GetBalanceMap returns the account's balance for every token it has
+// ever had a balance entry for.
 func (as *accountStore) GetBalanceMap() (map[types.ZenonTokenStandard]*big.Int, error) {
 	iterator := as.DB.NewIterator(getBalancePrefix())
 	defer iterator.Release()

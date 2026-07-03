@@ -1,6 +1,11 @@
 package genesis
 
 var (
+	// embeddedGenesisStr is the alphanet genesis config embedded in
+	// the binary as a JSON string literal (ChainIdentifier 1, genesis
+	// timestamp 1637755200 — November 24, 2021); decoded once at
+	// startup into embeddedGenesis. Its momentum hash is pinned by
+	// TestGenesisCheckSum.
 	embeddedGenesisStr = `{
   "ChainIdentifier": 1,
   "ExtraData": "000000000000000000004dd040595540d43ce8ff5946eeaa403fb13d0e582d8f#We are all Satoshi#Don't trust. Verify",

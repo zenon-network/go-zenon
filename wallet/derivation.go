@@ -16,9 +16,18 @@ import (
 )
 
 const (
+	// ZenonAccountPathFormat is the BIP-44 derivation path for Zenon
+	// accounts, with a single %d verb for the account index. Coin type
+	// 73404 is registered to Zenon; every segment is hardened, as
+	// required by SLIP-0010 ed25519 derivation.
 	ZenonAccountPathFormat = "m/44'/73404'/%d'"
-	FirstHardenedIndex     = uint32(0x80000000)
-	seedModifier           = "ed25519 seed"
+	// FirstHardenedIndex is the SLIP-0010 offset (2^31) added to a path
+	// segment to form its hardened child index. ed25519 supports only
+	// hardened derivation, so every derived index is at or above it.
+	FirstHardenedIndex = uint32(0x80000000)
+	// seedModifier is the SLIP-0010 HMAC-SHA512 key used to derive the
+	// ed25519 master key from the seed.
+	seedModifier = "ed25519 seed"
 )
 
 var (
@@ -71,6 +80,10 @@ func DeriveForPath(path string, seed []byte) (*KeyPair, error) {
 
 	return key.toKeyPair()
 }
+
+// DeriveWithIndex derives the key pair for account index i from seed,
+// using the standard Zenon path m/44'/73404'/i'. It is shorthand for
+// formatting ZenonAccountPathFormat and calling DeriveForPath.
 func DeriveWithIndex(i uint32, seed []byte) (*KeyPair, error) {
 	path := fmt.Sprintf(ZenonAccountPathFormat, i)
 	return DeriveForPath(path, seed)

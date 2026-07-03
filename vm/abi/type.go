@@ -9,7 +9,10 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
-// Type enumerator
+// Kinds of ABI argument types, held in Type.T. TokenStandardTy is
+// Zenon-specific; AddressTy and HashTy exist upstream in Ethereum's
+// ABI but decode here to the Zenon types. The three decode to
+// types.Address, types.ZenonTokenStandard and types.Hash.
 const (
 	IntTy byte = iota
 	UintTy
@@ -24,7 +27,11 @@ const (
 	HashTy
 )
 
-// Type is the reflection of the supported argument type
+// Type is the parsed form of one ABI argument type string (e.g.
+// "uint256", "address", "hash[2]"): the kind tag in T, the Go
+// reflection kind and type values decode to, the bit size for
+// integers or element count for fixed-size types, and Elem for the
+// element type of slices and arrays.
 type Type struct {
 	Elem *Type
 
@@ -41,7 +48,11 @@ var (
 	typeRegex = regexp.MustCompile("([a-zA-Z]+)([0-9]+)?")
 )
 
-// NewType creates a new reflection type of abi type given in t.
+// NewType parses an ABI type string such as "uint256", "bool",
+// "tokenStandard" or "address[4]" into a Type. Integer types must
+// carry an explicit size (bare "uint"/"int" are rejected; sizes
+// other than 8/16/32/64 map to *big.Int), sizes may not be zero, and
+// at most one slice/array level is supported.
 func NewType(t string) (typ Type, err error) {
 	if t == "uint" || t == "int" {
 		// this should fail because it means that there's something wrong with
