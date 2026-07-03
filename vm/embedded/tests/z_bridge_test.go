@@ -1425,6 +1425,14 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 		t.Fatalf("checksummed ByToAddress query: count=%d len=%d, want 1/1", byAddr.Count, len(byAddr.List))
 	}
 
+	// Wrap/unwrap listings enforce the shared page-size cap.
+	if _, err := bridgeAPI.GetAllWrapTokenRequests(0, api.RpcMaxPageSize+1); err != api.ErrPageSizeParamTooBig {
+		t.Fatalf("expected ErrPageSizeParamTooBig for oversized pageSize, got %v", err)
+	}
+	if _, err := bridgeAPI.GetAllUnwrapTokenRequests(0, api.RpcMaxPageSize+1); err != api.ErrPageSizeParamTooBig {
+		t.Fatalf("expected ErrPageSizeParamTooBig for oversized pageSize, got %v", err)
+	}
+
 	// We remove the network and try to wrap again
 	defer z.CallContract(removeNetwork(g.User5.Address, networkClass, chainId)).Error(t, nil)
 	insertMomentums(z, 2)
