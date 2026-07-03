@@ -1117,17 +1117,6 @@ func (p *TokenPairParam) Hash() []byte {
 	)
 }
 
-type SetTokenPairParam struct {
-	NetworkClass  uint32
-	ChainId       uint32
-	TokenStandard types.ZenonTokenStandard
-	Owned         bool
-	MinAmount     *big.Int
-	FeePercentage uint32
-	RedeemDelay   uint32
-	Metadata      string
-}
-
 type NetworkInfoParam struct {
 	NetworkClass    uint32
 	ChainId         uint32

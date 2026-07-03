@@ -194,7 +194,7 @@ type PhaseMarshal struct {
 	Status            uint8      `json:"status"`
 }
 
-func (phase *Phase) ToProjectMarshal() *PhaseMarshal {
+func (phase *Phase) ToPhaseMarshal() *PhaseMarshal {
 	aux := &PhaseMarshal{
 		Id:                phase.Id,
 		ProjectId:         phase.ProjectId,
@@ -211,7 +211,7 @@ func (phase *Phase) ToProjectMarshal() *PhaseMarshal {
 }
 
 func (phase *Phase) MarshalJSON() ([]byte, error) {
-	return json.Marshal(phase.ToProjectMarshal())
+	return json.Marshal(phase.ToPhaseMarshal())
 }
 
 func (phase *Phase) UnmarshalJSON(data []byte) error {

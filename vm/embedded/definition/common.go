@@ -407,10 +407,10 @@ func unmarshalRewardDepositHistoryEntryKey(key []byte) (uint64, *types.Address, 
 		return 0, nil, errors.Errorf("invalid key! Not RewardDepositHistory key")
 	}
 	address, err := types.BytesToAddress(key[1 : 1+types.AddressSize])
-	epoch := binary.LittleEndian.Uint64(key[1+types.AddressSize : 8+1+types.AddressSize])
 	if err != nil {
 		return 0, nil, err
 	}
+	epoch := binary.LittleEndian.Uint64(key[1+types.AddressSize : 8+1+types.AddressSize])
 	return epoch, &address, nil
 }
 func parseRewardDepositHistoryEntry(key, data []byte) (*RewardDepositHistory, error) {
