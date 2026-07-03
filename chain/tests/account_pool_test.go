@@ -146,6 +146,19 @@ func TestAccountPool_CachedBlocksAreDefensiveCopies(t *testing.T) {
 	common.Expect(t, len(uncommitted), 1)
 	common.ExpectString(t, uncommitted[0].Hash.String(), originalHash.String())
 	common.ExpectUint64(t, uncommitted[0].FusedPlasma, originalFusedPlasma)
+
+	byAddress := z.Chain().GetUncommittedAccountBlocksByAddress(g.User1.Address)
+	common.Expect(t, len(byAddress), 1)
+	common.ExpectString(t, byAddress[0].Hash.String(), originalHash.String())
+	common.ExpectUint64(t, byAddress[0].FusedPlasma, originalFusedPlasma)
+
+	byAddress[0].Hash = types.ZeroHash
+	byAddress[0].FusedPlasma = 3
+
+	byAddress = z.Chain().GetUncommittedAccountBlocksByAddress(g.User1.Address)
+	common.Expect(t, len(byAddress), 1)
+	common.ExpectString(t, byAddress[0].Hash.String(), originalHash.String())
+	common.ExpectUint64(t, byAddress[0].FusedPlasma, originalFusedPlasma)
 }
 
 func BenchmarkAccountPool_GetAllUncommittedAccountBlocks(b *testing.B) {
