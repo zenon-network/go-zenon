@@ -1417,6 +1417,14 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	z.ExpectBalance(types.BridgeContract, types.ZnnTokenStandard, 15*g.Zexp)
 	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 1195500000000)
 
+	// The stored ToAddress is lowercased at write time; a checksummed
+	// (EIP-55 mixed-case) query must still match.
+	byAddr, err := bridgeAPI.GetAllWrapTokenRequestsByToAddress("0xB794F5eA0ba39494cE839613fffBA74279579268", 0, 10)
+	common.DealWithErr(err)
+	if byAddr.Count != 1 || len(byAddr.List) != 1 {
+		t.Fatalf("checksummed ByToAddress query: count=%d len=%d, want 1/1", byAddr.Count, len(byAddr.List))
+	}
+
 	// We remove the network and try to wrap again
 	defer z.CallContract(removeNetwork(g.User5.Address, networkClass, chainId)).Error(t, nil)
 	insertMomentums(z, 2)

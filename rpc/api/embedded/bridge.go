@@ -9,6 +9,7 @@ import (
 	"github.com/zenon-network/go-zenon/vm/embedded/implementation"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/common"
@@ -342,6 +343,9 @@ func (a *BridgeApi) GetAllWrapTokenRequests(pageIndex, pageSize uint32) (*WrapTo
 }
 
 func (a *BridgeApi) GetAllWrapTokenRequestsByToAddress(toAddress string, pageIndex, pageSize uint32) (*WrapTokenRequestList, error) {
+	// stored wrap requests lowercase ToAddress at write time; normalize so
+	// checksummed EVM addresses match
+	toAddress = strings.ToLower(toAddress)
 	_, context, err := api.GetFrontierContext(a.chain, types.BridgeContract)
 	if err != nil {
 		return nil, err
@@ -393,6 +397,7 @@ func (a *BridgeApi) GetAllWrapTokenRequestsByToAddress(toAddress string, pageInd
 }
 
 func (a *BridgeApi) GetAllWrapTokenRequestsByToAddressNetworkClassAndChainId(toAddress string, networkClass, chainId uint32, pageIndex, pageSize uint32) (*WrapTokenRequestList, error) {
+	toAddress = strings.ToLower(toAddress)
 	_, context, err := api.GetFrontierContext(a.chain, types.BridgeContract)
 	if err != nil {
 		return nil, err
