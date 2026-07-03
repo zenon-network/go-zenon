@@ -57,14 +57,20 @@ func (ms *momentumStore) computeBackers(infos []*definition.DelegationInfo) (*ma
 	return &result, nil
 }
 func (ms *momentumStore) ComputePillarDelegations() ([]*types.PillarDelegationDetail, error) {
-	delegations, _ := ms.getAllDelegations()
+	delegations, err := ms.getAllDelegations()
+	if err != nil {
+		return nil, err
+	}
 	backers, err := ms.computeBackers(delegations)
 	if err != nil {
 		return nil, err
 	}
 
 	// query register info
-	registerList, _ := ms.GetActivePillars()
+	registerList, err := ms.GetActivePillars()
+	if err != nil {
+		return nil, err
+	}
 	pillarDelegationDetails := make([]*types.PillarDelegationDetail, 0, len(registerList))
 	for _, registration := range registerList {
 		pillarDelegationDetails = append(pillarDelegationDetails, &types.PillarDelegationDetail{
