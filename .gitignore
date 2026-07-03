@@ -14,3 +14,6 @@ build/
 .vscode
 .idea/
 .research/
+
+# Internal working material (bug catalogue, triage, plans, PR drafts) — never ship
+docs/
