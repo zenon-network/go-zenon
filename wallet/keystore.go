@@ -9,9 +9,6 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
-const (
-	maxSearchIndex = 128
-)
 
 type KeyStore struct {
 	Entropy  []byte
@@ -61,8 +58,8 @@ func (ks *KeyStore) DeriveForIndexPath(index uint32) (path string, key *KeyPair,
 	return ks.DeriveForFullPath(fmt.Sprintf(ZenonAccountPathFormat, index))
 }
 
-func (ks *KeyStore) FindAddress(address types.Address) (key *KeyPair, index uint32, err error) {
-	for index = uint32(0); index < maxSearchIndex; index++ {
+func (ks *KeyStore) FindAddress(address types.Address, maxIndex uint32) (key *KeyPair, index uint32, err error) {
+	for index = uint32(0); index < maxIndex; index++ {
 		_, key, err = ks.DeriveForIndexPath(index)
 		if err != nil {
 			return nil, 0, err

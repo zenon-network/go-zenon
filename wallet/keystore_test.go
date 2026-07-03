@@ -38,3 +38,24 @@ func TestDeriveForFullPathReturnsPath(t *testing.T) {
 		t.Fatalf("path = %q, want %q", path, ipath)
 	}
 }
+
+// The search must honor the given bound instead of the old package constant.
+func TestFindAddressHonorsMaxIndex(t *testing.T) {
+	ks := testKeyStore(t)
+
+	_, kp, err := ks.DeriveForIndexPath(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := ks.FindAddress(kp.Address, 1); err != ErrAddressNotFound {
+		t.Fatalf("maxIndex=1: expected ErrAddressNotFound, got %v", err)
+	}
+	key, index, err := ks.FindAddress(kp.Address, DefaultMaxIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index != 2 || key.Address != kp.Address {
+		t.Fatalf("expected to find address at index 2, got index %d", index)
+	}
+}
