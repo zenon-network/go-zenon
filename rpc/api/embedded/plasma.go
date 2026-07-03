@@ -99,13 +99,16 @@ func (r *PlasmaInfo) UnmarshalJSON(data []byte) error {
 // FusionEntry is one QSR fusion recorded in the plasma contract: the
 // fused QSR amount in smallest units, the beneficiary address whose
 // plasma it backs, the momentum height starting at which the owner may
-// cancel the fusion and reclaim the QSR, and the entry's id, which is
-// the hash of the send block that created it.
+// cancel the fusion and reclaim the QSR, the entry's id, which is the
+// hash of the send block that created it, and whether the entry is
+// already revocable (the frontier momentum has reached its expiration
+// height).
 type FusionEntry struct {
 	QsrAmount        *big.Int      `json:"qsrAmount"`
 	Beneficiary      types.Address `json:"beneficiary"`
 	ExpirationHeight uint64        `json:"expirationHeight"`
 	Id               types.Hash    `json:"id"`
+	IsRevocable      bool          `json:"isRevocable"`
 }
 
 // FusionEntryMarshal is the JSON wire form of FusionEntry, with
@@ -115,6 +118,7 @@ type FusionEntryMarshal struct {
 	Beneficiary      types.Address `json:"beneficiary"`
 	ExpirationHeight uint64        `json:"expirationHeight"`
 	Id               types.Hash    `json:"id"`
+	IsRevocable      bool          `json:"isRevocable"`
 }
 
 // ToFusionEntryMarshal converts the entry to its JSON wire
@@ -125,6 +129,7 @@ func (r *FusionEntry) ToFusionEntryMarshal() *FusionEntryMarshal {
 		Beneficiary:      r.Beneficiary,
 		ExpirationHeight: r.ExpirationHeight,
 		Id:               r.Id,
+		IsRevocable:      r.IsRevocable,
 	}
 
 	return aux
@@ -148,6 +153,7 @@ func (r *FusionEntry) UnmarshalJSON(data []byte) error {
 	r.Beneficiary = aux.Beneficiary
 	r.ExpirationHeight = aux.ExpirationHeight
 	r.Id = aux.Id
+	r.IsRevocable = aux.IsRevocable
 	return nil
 }
 
@@ -258,9 +264,10 @@ func (a *PlasmaApi) Get(address types.Address) (*PlasmaInfo, error) {
 // address (the address that sent the fuse transactions, not the
 // beneficiary), read from plasma contract state at the frontier
 // momentum and sorted by ascending expiration height with ties broken
-// by beneficiary. QsrAmount and Count in the result cover all of the
-// owner's entries. A pageSize above 1024 is rejected with
-// api.ErrPageSizeParamTooBig.
+// by beneficiary. Each entry's IsRevocable reports whether the frontier
+// momentum height has reached the entry's expiration height. QsrAmount
+// and Count in the result cover all of the owner's entries. A pageSize
+// above 1024 is rejected with api.ErrPageSizeParamTooBig.
 //
 // JSON-RPC: embedded.plasma.getEntriesByAddress
 func (a *PlasmaApi) GetEntriesByAddress(address types.Address, pageIndex, pageSize uint32) (*FusionEntryList, error) {
@@ -268,7 +275,7 @@ func (a *PlasmaApi) GetEntriesByAddress(address types.Address, pageIndex, pageSi
 		return nil, api.ErrPageSizeParamTooBig
 	}
 
-	_, context, err := api.GetFrontierContext(a.chain, types.PlasmaContract)
+	momentum, context, err := api.GetFrontierContext(a.chain, types.PlasmaContract)
 	if err != nil {
 		return nil, err
 	}
@@ -284,10 +291,11 @@ func (a *PlasmaApi) GetEntriesByAddress(address types.Address, pageIndex, pageSi
 
 	for i, info := range list[start:end] {
 		entryList[i] = &FusionEntry{
-			info.Amount,
-			info.Beneficiary,
-			info.ExpirationHeight,
-			info.Id,
+			QsrAmount:        info.Amount,
+			Beneficiary:      info.Beneficiary,
+			ExpirationHeight: info.ExpirationHeight,
+			Id:               info.Id,
+			IsRevocable:      momentum.Height >= info.ExpirationHeight,
 		}
 	}
 	return &FusionEntryList{amount, listLen, entryList}, nil

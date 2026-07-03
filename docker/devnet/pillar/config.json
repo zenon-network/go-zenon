@@ -1,0 +1,38 @@
+{
+    "DataPath": "/root/.znn",
+    "GenesisFile": "/root/.znn/genesis.json",
+    "LogLevel": "info",
+    "Name": "devnet-pillar",
+    "Net": {
+        "ListenHost": "0.0.0.0",
+        "ListenPort": 35995,
+        "MinConnectedPeers": 0,
+        "MinPeers": 0,
+        "Seeders": []
+    },
+    "Producer": {
+        "Address": "z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq",
+        "Index": 0,
+        "KeyFilePath": "z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq",
+        "Password": "devnet"
+    },
+    "RPC": {
+        "EnableHTTP": true,
+        "EnableWS": true,
+        "Endpoints": [],
+        "HTTPCors": [
+            "*"
+        ],
+        "HTTPHost": "0.0.0.0",
+        "HTTPPort": 35997,
+        "HTTPVirtualHosts": [
+            "*"
+        ],
+        "WSHost": "0.0.0.0",
+        "WSOrigins": [
+            "*"
+        ],
+        "WSPort": 35998
+    },
+    "WalletPath": "/root/.znn/wallet"
+}

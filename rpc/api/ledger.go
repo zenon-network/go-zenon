@@ -239,7 +239,8 @@ func (l *LedgerApi) GetAccountBlocksByHeight(address types.Address, height, coun
 // or ErrPageSizeParamTooBig is returned. Pages that extend past the
 // start of the chain are truncated, and a page entirely before block 1
 // yields an empty List. In the result, Count is the total number of
-// blocks in the account chain.
+// blocks in the account chain and More reports whether older blocks
+// exist beyond the returned page.
 //
 // JSON-RPC: ledger.getAccountBlocksByPage
 func (l *LedgerApi) GetAccountBlocksByPage(address types.Address, pageIndex, pageSize uint32) (*AccountBlockList, error) {
@@ -283,6 +284,10 @@ func (l *LedgerApi) GetAccountBlocksByPage(address types.Address, pageIndex, pag
 	for i, j := 0, len(ans.List)-1; i < j; i, j = i+1, j-1 {
 		ans.List[i], ans.List[j] = ans.List[j], ans.List[i]
 	}
+
+	// Set More to true if there are more pages available (startHeight > 1 means we haven't reached the first block)
+	ans.More = startHeight > 1
+
 	return ans, nil
 }
 

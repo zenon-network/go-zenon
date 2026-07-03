@@ -752,12 +752,13 @@ func (a *BridgeApi) GetUnwrapTokenRequestByHashAndLog(txHash types.Hash, logInde
 	return unwrapRequest, nil
 }
 
-// GetAllUnwrapTokenRequests pages over every unwrap request, ordered by
-// its storage key, ascending source transaction hash and then log
-// index, which bears no relation to registration time. Count is the
-// total number of requests. The whole call fails if any request on the
-// page references a token pair that has been removed from its network's
-// configuration.
+// GetAllUnwrapTokenRequests pages over every unwrap request, sorted
+// newest first (descending registration momentum height); the sort is
+// stable, so requests registered at the same height keep their
+// storage-key order — ascending source transaction hash and then log
+// index. Count is the total number of requests. The whole call fails if
+// any request on the page references a token pair that has been removed
+// from its network's configuration.
 //
 // JSON-RPC: embedded.bridge.getAllUnwrapTokenRequests
 func (a *BridgeApi) GetAllUnwrapTokenRequests(pageIndex, pageSize uint32) (*UnwrapTokenRequestList, error) {
@@ -770,6 +771,10 @@ func (a *BridgeApi) GetAllUnwrapTokenRequests(pageIndex, pageSize uint32) (*Unwr
 	if err != nil {
 		return nil, err
 	}
+
+	sort.SliceStable(requests, func(i, j int) bool {
+		return requests[i].RegistrationMomentumHeight > requests[j].RegistrationMomentumHeight
+	})
 
 	result := &UnwrapTokenRequestList{
 		Count: len(requests),
@@ -805,8 +810,8 @@ func (a *BridgeApi) GetAllUnwrapTokenRequests(pageIndex, pageSize uint32) (*Unwr
 // registration momentum height; the comparator has no tie-break, so
 // requests registered at the same height appear in unspecified order).
 // An empty toAddress matches every request but skips the sort, leaving
-// the storage-key order of GetAllUnwrapTokenRequests. Count is the
-// number of matching requests.
+// requests in storage-key order (ascending source transaction hash and
+// then log index). Count is the number of matching requests.
 //
 // JSON-RPC: embedded.bridge.getAllUnwrapTokenRequestsByToAddress
 func (a *BridgeApi) GetAllUnwrapTokenRequestsByToAddress(toAddress string, pageIndex, pageSize uint32) (*UnwrapTokenRequestList, error) {

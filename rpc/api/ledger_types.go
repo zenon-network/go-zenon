@@ -322,7 +322,8 @@ type AccountBlockList struct {
 	Count int `json:"count"`
 	// More reports whether additional blocks may exist beyond the
 	// window the producing method inspected; only
-	// GetUnreceivedBlocksByAddress ever sets it to true.
+	// GetUnreceivedBlocksByAddress and GetAccountBlocksByPage ever set
+	// it to true.
 	More bool `json:"more"`
 }
 
