@@ -160,7 +160,7 @@ func (m *memdbManager) Pop() error {
 
 	previous, ok := m.previous[m.frontierIdentifier]
 	if !ok {
-		return errors.Errorf("can't find previous for ")
+		return errors.Errorf("can't find previous for %v", m.frontierIdentifier)
 	}
 
 	delete(m.previous, m.frontierIdentifier)
