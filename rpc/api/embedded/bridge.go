@@ -254,14 +254,14 @@ func (a *BridgeApi) getRedeemableIn(unwrapTokenRequest definition.UnwrapTokenReq
 	return redeemableIn
 }
 
-func (a *BridgeApi) getConfirmationsToFinality(wrapTokenRequest definition.WrapTokenRequest, confirmationsToFinality uint32, momentum nom.Momentum) (uint64, error) {
+func (a *BridgeApi) getConfirmationsToFinality(wrapTokenRequest definition.WrapTokenRequest, confirmationsToFinality uint32, momentum nom.Momentum) uint64 {
 	var actualConfirmationsToFinality uint64
 	if momentum.Height-wrapTokenRequest.CreationMomentumHeight >= uint64(confirmationsToFinality) {
 		actualConfirmationsToFinality = 0
 	} else {
 		actualConfirmationsToFinality = wrapTokenRequest.CreationMomentumHeight + uint64(confirmationsToFinality) - momentum.Height
 	}
-	return actualConfirmationsToFinality, nil
+	return actualConfirmationsToFinality
 }
 
 func (a *BridgeApi) GetWrapTokenRequestById(id types.Hash) (*WrapTokenRequest, error) {
@@ -288,10 +288,7 @@ func (a *BridgeApi) GetWrapTokenRequestById(id types.Hash) (*WrapTokenRequest, e
 	if err != nil {
 		return nil, err
 	}
-	confirmationsToFinality, err := a.getConfirmationsToFinality(*wrapTokenRequest, orchestratorInfo.ConfirmationsToFinality, *momentum)
-	if err != nil {
-		return nil, err
-	}
+	confirmationsToFinality := a.getConfirmationsToFinality(*wrapTokenRequest, orchestratorInfo.ConfirmationsToFinality, *momentum)
 
 	return &WrapTokenRequest{wrapTokenRequest, token, confirmationsToFinality}, nil
 }
@@ -335,10 +332,7 @@ func (a *BridgeApi) GetAllWrapTokenRequests(pageIndex, pageSize uint32) (*WrapTo
 		if err != nil {
 			return nil, err
 		}
-		confirmationsToFinality, err := a.getConfirmationsToFinality(*requests[i], orchestratorInfo.ConfirmationsToFinality, *momentum)
-		if err != nil {
-			return nil, err
-		}
+		confirmationsToFinality := a.getConfirmationsToFinality(*requests[i], orchestratorInfo.ConfirmationsToFinality, *momentum)
 		wrapReqest := &WrapTokenRequest{requests[i], token, confirmationsToFinality}
 		result.List = append(result.List, wrapReqest)
 	}
@@ -392,10 +386,7 @@ func (a *BridgeApi) GetAllWrapTokenRequestsByToAddress(toAddress string, pageInd
 		if err != nil {
 			return nil, err
 		}
-		confirmationsToFinality, err := a.getConfirmationsToFinality(*specificRequests[i], orchestratorInfo.ConfirmationsToFinality, *momentum)
-		if err != nil {
-			return nil, err
-		}
+		confirmationsToFinality := a.getConfirmationsToFinality(*specificRequests[i], orchestratorInfo.ConfirmationsToFinality, *momentum)
 		wrapRequest := &WrapTokenRequest{specificRequests[i], token, confirmationsToFinality}
 		result.List = append(result.List, wrapRequest)
 	}
@@ -444,10 +435,7 @@ func (a *BridgeApi) GetAllWrapTokenRequestsByToAddressNetworkClassAndChainId(toA
 		if err != nil {
 			return nil, err
 		}
-		confirmationsToFinality, err := a.getConfirmationsToFinality(*specificRequests[i], orchestratorInfo.ConfirmationsToFinality, *momentum)
-		if err != nil {
-			return nil, err
-		}
+		confirmationsToFinality := a.getConfirmationsToFinality(*specificRequests[i], orchestratorInfo.ConfirmationsToFinality, *momentum)
 		wrapRequest := &WrapTokenRequest{specificRequests[i], token, confirmationsToFinality}
 		result.List = append(result.List, wrapRequest)
 	}
@@ -484,10 +472,7 @@ func (a *BridgeApi) GetAllUnsignedWrapTokenRequests(pageIndex, pageSize uint32) 
 			if err != nil {
 				return nil, err
 			}
-			confirmationsToFinality, err := a.getConfirmationsToFinality(*request, orchestratorInfo.ConfirmationsToFinality, *momentum)
-			if err != nil {
-				return nil, err
-			}
+			confirmationsToFinality := a.getConfirmationsToFinality(*request, orchestratorInfo.ConfirmationsToFinality, *momentum)
 			wrapRequest := &WrapTokenRequest{request, token, confirmationsToFinality}
 			unsignedRequests = append(unsignedRequests, wrapRequest)
 		}
@@ -497,13 +482,11 @@ func (a *BridgeApi) GetAllUnsignedWrapTokenRequests(pageIndex, pageSize uint32) 
 		unsignedRequests[i], unsignedRequests[j] = unsignedRequests[j], unsignedRequests[i]
 	}
 
+	start, end := api.GetRange(pageIndex, pageSize, uint32(len(unsignedRequests)))
 	result := &WrapTokenRequestList{
 		Count: len(unsignedRequests),
-		List:  make([]*WrapTokenRequest, len(unsignedRequests)),
+		List:  unsignedRequests[start:end],
 	}
-
-	start, end := api.GetRange(pageIndex, pageSize, uint32(len(unsignedRequests)))
-	result.List = unsignedRequests[start:end]
 	return result, nil
 }
 
