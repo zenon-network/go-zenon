@@ -5,6 +5,8 @@ import (
 	"time"
 
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
+	"github.com/zenon-network/go-zenon/consensus"
+
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/constants"
@@ -131,4 +133,30 @@ t=2001-09-09T01:47:30+0000 lvl=info msg="producing block to update embedded-cont
 t=2001-09-09T01:47:30+0000 lvl=eror msg="failed to update contracts" module=pillar submodule=worker reason="method not found in the abi"
 `)
 	z.InsertNewMomentum()
+}
+
+// The mock overrides global state (clock, epoch duration, logger handlers);
+// Stop must restore all of it or later tests in the same process inherit a
+// stopped chain's clock and silenced loggers.
+func TestStopRestoresGlobalState(t *testing.T) {
+	clockBefore := common.Clock
+	epochBefore := consensus.EpochDuration
+
+	z := NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	if consensus.EpochDuration != time.Hour {
+		t.Fatalf("consensus.EpochDuration = %v while running, want %v", consensus.EpochDuration, time.Hour)
+	}
+	z.StopPanic()
+
+	if common.Clock != clockBefore {
+		t.Fatal("common.Clock not restored after Stop")
+	}
+	if consensus.EpochDuration != epochBefore {
+		t.Fatalf("consensus.EpochDuration = %v, want %v", consensus.EpochDuration, epochBefore)
+	}
+	for i := range AllLoggers {
+		if AllLoggers[i].GetHandler() == nil {
+			t.Fatalf("logger %d handler is nil after Stop", i)
+		}
+	}
 }
