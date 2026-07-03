@@ -51,10 +51,10 @@ func checkAvailableProducingAddress(context vm_context.AccountVmContext, produci
 }
 
 func checkPillarPercentages(param *definition.RegisterParam) error {
-	if param.GiveBlockRewardPercentage > 100 || param.GiveBlockRewardPercentage < 0 {
+	if param.GiveBlockRewardPercentage > 100 {
 		return constants.ErrForbiddenParam
 	}
-	if param.GiveDelegateRewardPercentage > 100 || param.GiveDelegateRewardPercentage < 0 {
+	if param.GiveDelegateRewardPercentage > 100 {
 		return constants.ErrForbiddenParam
 	}
 	return nil
@@ -370,7 +370,6 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 		return err
 	}
 
-	distributed := make(map[types.Address]*big.Int)
 	toGive := make(map[string]*big.Int)
 	pillarInfos, err := definition.GetPillarsList(context.Storage(), false, definition.AnyPillarType)
 
@@ -470,18 +469,6 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 		}
 	}
 
-	// for debug, sort keys and print distributed map
-	distributedAddresses := make([]string, 0, len(distributed))
-	for address := range distributed {
-		distributedAddresses = append(distributedAddresses, address.String())
-	}
-	sort.Strings(distributedAddresses)
-	for _, address := range distributedAddresses {
-		raw, _ := types.ParseAddress(address)
-		amount, _ := distributed[raw]
-		pillarLog.Debug("distribute pillar rewards", "epoch", epoch, "address", address, "amount", amount)
-	}
-
 	return nil
 }
 
@@ -515,9 +502,13 @@ func computePillarRewardForEpoch(detail *api.EpochStats, name string) *pillarEpo
 		TotalReward:      big.NewInt(0),
 		ProducedBlockNum: 0,
 		ExpectedBlockNum: 0,
-		Weight:           new(big.Int).Set(detail.Pillars[name].Weight),
+		Weight:           big.NewInt(0),
 	}
-	if !ok || selfDetail.ExceptedBlockNum == 0 {
+	if !ok {
+		return reward
+	}
+	reward.Weight.Set(selfDetail.Weight)
+	if selfDetail.ExceptedBlockNum == 0 {
 		return reward
 	}
 
