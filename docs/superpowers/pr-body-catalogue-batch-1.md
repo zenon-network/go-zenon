@@ -8,7 +8,7 @@ implementation; the verdicts live in `docs/superpowers/triage-2026-07-03.md`
 (first commit). Each fix is its own commit with the analysis in the
 commit message.
 
-## What is fixed here (42 fix commits)
+## What is fixed here (52 fix commits)
 
 **Chain/store integrity**
 - #26 `chain/momentum`: momentum insertion no longer swallows account-block
