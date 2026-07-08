@@ -354,8 +354,9 @@ func (ap *accountPool) getUncommittedAccountBlocksByAddress(address types.Addres
 
 	stable := ap.getStableAccountStore(address)
 	frontier := ap.getFrontierAccountStore(address)
+	manager := ap.getAccountManager(address)
 	for i := stable.Identifier().Height + 1; i <= frontier.Identifier().Height; i += 1 {
-		block, err := ap.getAccountManager(address).BlockByHeight(i)
+		block, err := manager.BlockByHeight(i)
 		common.DealWithErr(err)
 		blocks = append(blocks, block)
 	}
