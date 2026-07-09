@@ -181,6 +181,11 @@ func TestAccountPool_CachedBlocksDeepCopySliceAndPointerFields(t *testing.T) {
 	originalSignature := append([]byte(nil), inserted.Signature...)
 	originalPublicKey := append([]byte(nil), inserted.PublicKey...)
 
+	// block.PublicKey aliases the global mock keypair (KeyPair.Signer returns
+	// kp.Public), so restore it even if a Fatalf-based assertion exits the test
+	// early; otherwise g.User1's key material stays corrupted for later tests
+	defer copy(inserted.PublicKey, originalPublicKey)
+
 	// mutate the backing arrays of the block the caller still holds
 	inserted.Amount.SetInt64(1)
 	inserted.Data[0] ^= 0xff
@@ -194,11 +199,6 @@ func TestAccountPool_CachedBlocksDeepCopySliceAndPointerFields(t *testing.T) {
 	common.ExpectTrue(t, bytes.Equal(cached.Data, originalData))
 	common.ExpectTrue(t, bytes.Equal(cached.Signature, originalSignature))
 	common.ExpectTrue(t, bytes.Equal(cached.PublicKey, originalPublicKey))
-
-	// block.PublicKey aliases the global mock keypair (KeyPair.Signer returns
-	// kp.Public), so undo the mutations to avoid corrupting g.User1 for other tests
-	inserted.PublicKey[0] ^= 0xff
-	inserted.Signature[0] ^= 0xff
 
 	// mutate the backing arrays of the returned copy
 	cached.Amount.SetInt64(2)
