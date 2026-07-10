@@ -270,6 +270,63 @@ func TestInsert_Success_BroadcastsAfterInsertion(t *testing.T) {
 	}
 }
 
+func TestFilter_ExplicitFetch_AttributesToActualSender(t *testing.T) {
+	parent := newTestMomentum(1, types.Hash{})
+	block := newTestMomentum(2, parent.Hash)
+
+	h := newTestHarness(
+		func(hash types.Hash) *nom.DetailedMomentum {
+			if hash == parent.Hash {
+				return &nom.DetailedMomentum{Momentum: parent}
+			}
+			return nil
+		},
+		func(detailed *nom.DetailedMomentum) error {
+			return errors.New("invalid momentum: bad signature")
+		},
+		func(momentums []*nom.DetailedMomentum) (int, error) {
+			return 0, nil
+		},
+	)
+	defer h.stop()
+
+	// "announcing-peer" announces the hash; it never actually delivers it.
+	if err := h.f.Notify("announcing-peer", block.Hash, time.Now(), func(hashes []types.Hash) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("Notify failed: %v", err)
+	}
+
+	// Wait for the fetcher to move the hash into the "fetching" state, i.e.
+	// past arriveTimeout, so the subsequent delivery is treated as an
+	// explicit fetch response rather than an unsolicited block.
+	time.Sleep(arriveTimeout + 250*time.Millisecond)
+
+	// A different peer ("sending-peer") delivers the (malformed) momentum in
+	// response - this must be attributed to sending-peer, not announcing-peer.
+	remaining := h.f.Filter("sending-peer", []*nom.DetailedMomentum{{Momentum: block}})
+	if len(remaining) != 0 {
+		t.Fatalf("expected explicit fetch to be consumed, got %d remaining", len(remaining))
+	}
+
+	// Only the peer that actually delivered the malformed momentum should be dropped.
+	select {
+	case peer := <-h.droppedPeers:
+		if peer != "sending-peer" {
+			t.Errorf("expected 'sending-peer' to be dropped, got %q", peer)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for peer drop")
+	}
+
+	select {
+	case peer := <-h.droppedPeers:
+		t.Errorf("announcing peer must not be penalized, but dropped: %q", peer)
+	case <-time.After(500 * time.Millisecond):
+		// expected
+	}
+}
+
 func TestInsert_ParentUnknown_Aborts(t *testing.T) {
 	block := newTestMomentum(2, types.Hash{0xff})
 

@@ -347,7 +347,7 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		}
 
 		// Filter out any explicitly requested blocks, deliver the rest to the downloader
-		if blocks := pm.fetcher.Filter(blocks); len(blocks) > 0 {
+		if blocks := pm.fetcher.Filter(p.id, blocks); len(blocks) > 0 {
 			if err := pm.downloader.DeliverBlocks(p.id, blocks); err != nil {
 				log.Debug("failed to deliver blocks", "reason", err)
 			}
