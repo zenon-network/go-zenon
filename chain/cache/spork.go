@@ -16,9 +16,6 @@ func getSporkInfoKeyPrefix(id []byte) []byte {
 
 func (cs *cacheStore) IsSporkActive(implemented *types.ImplementedSpork) (bool, error) {
 	identifier := cs.Identifier()
-	if identifier.Height == 1 {
-		return false, nil
-	}
 
 	data, err := cs.findValue(getSporkInfoKeyPrefix(implemented.SporkId.Bytes()))
 	if err != nil {

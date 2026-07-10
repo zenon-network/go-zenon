@@ -354,6 +354,16 @@ func (abv *accountBlockVerifier) fromHash() error {
 		return ErrABFromBlockMissing
 	}
 
+	// the referenced send must have been confirmed at or before the
+	// momentum this block acknowledges
+	confirmationHeight, err := abv.frontierStore.GetBlockConfirmationHeight(abv.block.FromBlockHash)
+	if err != nil {
+		return InternalError(err)
+	}
+	if confirmationHeight > abv.block.MomentumAcknowledged.Height {
+		return ErrABFromBlockMissing
+	}
+
 	if abv.block.Address != sendBlock.ToAddress {
 		// Use the momentum ledger's true frontier height when comparing
 		if abv.frontierStore.Identifier().Height >= ReceiverMismatchEnforcementHeight {
