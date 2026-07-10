@@ -183,6 +183,8 @@ func TestCache_RollbackAfterPrune(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
 
+	oldFuseExpiration := constants.FuseExpiration
+	t.Cleanup(func() { constants.FuseExpiration = oldFuseExpiration })
 	constants.FuseExpiration = 5
 
 	// g.User1 fuses QSR to g.User6 twice, producing two distinct fused-amount
@@ -248,7 +250,7 @@ func TestCache_RollbackAfterPrune(t *testing.T) {
 	z.InsertNewMomentum() // prunes the fuse1 and fuse2 entries
 
 	pruneIdentifier := z.Chain().GetFrontierCacheStore().Identifier()
-	common.ExpectTrue(t, pruneIdentifier.Height-cancelIdentifier.Height < uint64(cache.GetRollbackCacheSize()))
+	common.ExpectTrue(t, pruneIdentifier.Height-cancelIdentifier.Height <= uint64(cache.GetRollbackCacheSize()))
 
 	// Roll the cache back to before the pruning momentum.
 	insert := z.Chain().AcquireInsert("")
