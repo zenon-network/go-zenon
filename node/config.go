@@ -17,11 +17,10 @@ import (
 )
 
 type ProducerConfig struct {
-	Address           string
-	Index             uint32
-	KeyFilePath       string
-	Password          string
-	PriorityAddresses []string
+	Address     string
+	Index       uint32
+	KeyFilePath string
+	Password    string
 }
 type RPCConfig struct {
 	EnableHTTP bool
@@ -129,18 +128,12 @@ func (c *Config) makeZenonConfig(walletManager *wallet.Manager) (*zenon.Config, 
 		return nil, err
 	}
 
-	priorityAddresses, err := c.makePriorityAddressesMap()
-	if err != nil {
-		return nil, err
-	}
-
 	return &zenon.Config{
 		MinPeers:          c.Net.MinPeers,
 		MinConnectedPeers: c.Net.MinConnectedPeers,
 		ProducingKeyPair:  pillarCoinbase,
 		GenesisConfig:     c.makeGenesisConfig(),
 		DataDir:           c.DataPath,
-		PriorityAddresses: priorityAddresses,
 	}, nil
 }
 func (c *Config) makeGenesisConfig() (genesisConfig store.Genesis) {
@@ -214,20 +207,6 @@ func (c *Config) parseProducer(walletManager *wallet.Manager) (*wallet.KeyPair, 
 	}
 
 	return keyPair, nil
-}
-
-func (c *Config) makePriorityAddressesMap() (map[types.Address]bool, error) {
-	mapped := make(map[types.Address]bool)
-	if c.Producer != nil {
-		for _, address := range c.Producer.PriorityAddresses {
-			parsed, err := types.ParseAddress(address)
-			if err != nil {
-				return nil, fmt.Errorf("invalid priority address %q: %w", address, err)
-			}
-			mapped[parsed] = true
-		}
-	}
-	return mapped, nil
 }
 
 func (c *Config) makeWalletConfig() *wallet.Config {

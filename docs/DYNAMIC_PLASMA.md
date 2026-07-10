@@ -75,6 +75,17 @@ minimumFusedPlasma = AccountBlockBasePlasma * fusionPrice / PriceScaleFactor
 
 If a block's fused plasma is below this, it's rejected. This means as prices rise, the minimum QSR cost per transaction increases.
 
+### Momentum Content Ordering
+
+`pillar/content_selector.go`'s `higherPriority` decides, for any two candidate blocks, which one is included/ordered first. Four rules apply, in order:
+
+1. Contract blocks always outrank user blocks.
+2. Two blocks from the same user address: lower height (older, further back in that account's own chain) wins.
+3. Two blocks from different user addresses: higher block price wins (the `blockValue / BasePlasma` ratio from [Block Pricing](#block-pricing) above).
+4. Equal price: hash comparison breaks the tie.
+
+All contention among user blocks is resolved by the plasma price market — there is no other way to jump the queue.
+
 ### Transaction Limit Per Momentum
 
 **Pre-DP:** A hard cap of 100 blocks per momentum (`MaxAccountBlocksInMomentum` in `chain/account_pool.go:26`). This applies to the total count of user + contract blocks. Both the producer (`accountPool.filterBlocksToCommit`) and verifier (`verifier/momentum.go:233`) enforce this.

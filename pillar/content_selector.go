@@ -14,8 +14,7 @@ type ContentSelector interface {
 }
 
 type contentSelector struct {
-	plasma            dp.DynamicPlasma
-	priorityAddresses map[types.Address]bool
+	plasma dp.DynamicPlasma
 }
 
 func (cs *contentSelector) Content(blocks []*nom.AccountBlock) []*nom.AccountBlock {
@@ -68,24 +67,15 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 // "Does account block A have a higher priority than account block B?"
 // The following rules are applied:
 // 1. Contract blocks always have the higher priority.
-// 2. Priority address blocks have higher priority over other user blocks.
-// 3. When comparing two user blocks from the same address, the block with a lower height has higher priority.
-// 4. When comparing two user blocks from different addresses, the block with a higher block price has higher priority.
-// 5. If blocks are of equal priority price-wise then a block hash comparison will determine which block gets higher priority.
+// 2. When comparing two user blocks from the same address, the block with a lower height has higher priority.
+// 3. When comparing two user blocks from different addresses, the block with a higher block price has higher priority.
+// 4. If blocks are of equal priority price-wise then a block hash comparison will determine which block gets higher priority.
 func (cs *contentSelector) higherPriority(a, b *nom.AccountBlock) bool {
 	if types.IsEmbeddedAddress(b.Address) {
 		return false
 	}
 
 	if types.IsEmbeddedAddress(a.Address) {
-		return true
-	}
-
-	if _, ok := cs.priorityAddresses[b.Address]; ok {
-		return false
-	}
-
-	if _, ok := cs.priorityAddresses[a.Address]; ok {
 		return true
 	}
 
@@ -100,9 +90,8 @@ func (cs *contentSelector) higherPriority(a, b *nom.AccountBlock) bool {
 	return err == nil
 }
 
-func NewMomentumContentSelector(plasma dp.DynamicPlasma, priorityAddresses map[types.Address]bool) ContentSelector {
+func NewMomentumContentSelector(plasma dp.DynamicPlasma) ContentSelector {
 	return &contentSelector{
-		plasma:            plasma,
-		priorityAddresses: priorityAddresses,
+		plasma: plasma,
 	}
 }

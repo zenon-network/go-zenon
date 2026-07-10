@@ -33,7 +33,7 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 			return nil, nil, err
 		}
 		plasma := dp.NewDynamicPlasma(previousMomentum, config)
-		blocks = NewMomentumContentSelector(plasma, w.priorityAddresses).Content(w.chain.GetAllUncommittedAccountBlocks())
+		blocks = NewMomentumContentSelector(plasma).Content(w.chain.GetAllUncommittedAccountBlocks())
 		basePlasma := plasma.ComputeTotalBasePlasma(blocks)
 		m = &nom.Momentum{
 			ChainIdentifier: w.chain.ChainIdentifier(),

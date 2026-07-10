@@ -17,8 +17,7 @@ func TestContent_filterBlocksToCommit(t *testing.T) {
 	}
 	previousMomentum := &nom.Momentum{NextFusionPrice: 1000, NextWorkPrice: 1000, Version: 2}
 	cs := &contentSelector{
-		plasma:            dp.NewDynamicPlasma(previousMomentum, config),
-		priorityAddresses: make(map[types.Address]bool),
+		plasma: dp.NewDynamicPlasma(previousMomentum, config),
 	}
 
 	common.Expect(t, len(cs.filterBlocksToCommit([]*nom.AccountBlock{
@@ -58,11 +57,8 @@ func TestContent_sortBlocksByPriority(t *testing.T) {
 
 	previousMomentum := &nom.Momentum{NextFusionPrice: 1000, NextWorkPrice: 1000, Version: 2}
 	cs := &contentSelector{
-		plasma:            dp.NewDynamicPlasma(previousMomentum, nil),
-		priorityAddresses: make(map[types.Address]bool),
+		plasma: dp.NewDynamicPlasma(previousMomentum, nil),
 	}
-
-	cs.priorityAddresses[address3] = true
 
 	// Contract blocks
 	common.ExpectTrue(t, reflect.DeepEqual(cs.sortBlocksByPriority([]*nom.AccountBlock{
@@ -88,19 +84,6 @@ func TestContent_sortBlocksByPriority(t *testing.T) {
 		{Height: 3, BlockType: nom.BlockTypeContractSend, Address: types.PillarContract},
 		{Height: 4, BlockType: nom.BlockTypeContractSend, Address: types.PillarContract},
 		{Height: 2, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21000, Address: address1},
-	}))
-
-	// Priority address
-	common.ExpectTrue(t, reflect.DeepEqual(cs.sortBlocksByPriority([]*nom.AccountBlock{
-		{Height: 1, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21001, Address: address1},
-		{Height: 2, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21002, Address: address2},
-		{Height: 3, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21000, Address: address3},
-		{Height: 4, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21004, Address: address4},
-	}), []*nom.AccountBlock{
-		{Height: 3, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21000, Address: address3},
-		{Height: 4, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21004, Address: address4},
-		{Height: 2, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21002, Address: address2},
-		{Height: 1, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21001, Address: address1},
 	}))
 
 	// User blocks: same address

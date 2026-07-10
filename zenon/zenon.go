@@ -47,7 +47,6 @@ func NewZenon(cfg *Config) (Zenon, error) {
 
 	if cfg.ProducingKeyPair != nil {
 		z.pillar.SetCoinBase(cfg.ProducingKeyPair)
-		z.pillar.SetPriorityAddresses(cfg.PriorityAddresses)
 	}
 
 	return z, nil
