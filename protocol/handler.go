@@ -431,6 +431,10 @@ func (pm *ProtocolManager) BroadcastMomentum(detailed *nom.DetailedMomentum, pro
 	hash := detailed.Momentum.Hash
 	peers := pm.peers.PeersWithoutBlock(hash)
 
+	// Peers that don't receive the full momentum below still need a hash
+	// announcement if we have the block.
+	announce := peers
+
 	// If propagation is requested, send to a subset of the peer
 	if propagate {
 		numPeers := len(peers)
@@ -445,16 +449,17 @@ func (pm *ProtocolManager) BroadcastMomentum(detailed *nom.DetailedMomentum, pro
 			}
 		}
 		log.Info("propagated momentum to peers", "num-peers", len(transfer), "momentum-identifier", detailed.Momentum.Identifier())
+		announce = peers[numPeers:]
 	}
 
 	// Otherwise if the block is indeed in out own chain, announce it
 	if pm.chainman.HasBlock(hash) {
-		for _, p := range peers {
+		for _, p := range announce {
 			if err := p.SendNewBlockHashes([]types.Hash{hash}); err != nil {
 				log.Debug("failed to announce momentum", "peer-id", p.id, "reason", err)
 			}
 		}
-		log.Info("announced momentum to peers", "num-peers", len(peers), "momentum-identifier", detailed.Momentum.Identifier())
+		log.Info("announced momentum to peers", "num-peers", len(announce), "momentum-identifier", detailed.Momentum.Identifier())
 	}
 }
 
