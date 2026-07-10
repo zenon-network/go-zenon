@@ -58,6 +58,9 @@ func (s *Supervisor) newUserBlockContext(block *nom.AccountBlock) vm_context.Acc
 	if accountStore == nil {
 		panic(fmt.Sprintf("can't find accountStore for %v %v", block.Address, block.Previous()))
 	}
+	if cacheStore == nil {
+		panic(fmt.Sprintf("can't find cacheStore for %v", block.MomentumAcknowledged))
+	}
 	return vm_context.NewAccountContext(
 		nil,
 		accountStore,
@@ -76,6 +79,9 @@ func (s *Supervisor) newEmbeddedBlockContext(block *nom.AccountBlock) vm_context
 	}
 	if accountStore == nil {
 		panic(fmt.Sprintf("can't find accountStore for %v %v", block.Address, block.Previous()))
+	}
+	if cacheStore == nil {
+		panic(fmt.Sprintf("can't find cacheStore for %v", block.MomentumAcknowledged))
 	}
 	if cache == nil {
 		panic(fmt.Sprintf("can't find cache for %v", block.MomentumAcknowledged))

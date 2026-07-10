@@ -21,7 +21,7 @@ func NewCacheStore(identifier types.HashHeight, manager storage.CacheManager) st
 	}
 	frontier := storage.GetFrontierIdentifier(manager.DB())
 	if identifier.Height > frontier.Height {
-		panic("cache store identifier height cannot be greater than db height")
+		return nil
 	}
 	return &cacheStore{
 		identifier: identifier,
