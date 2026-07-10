@@ -44,19 +44,20 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 				continue
 			}
 			if len(contractBatch)+contractBlockCount > int(cs.plasma.MaxContractBlocksInMomentum()) {
+				contractBatch = contractBatch[:0]
 				continue
 			}
 			toCommit = append(toCommit, contractBatch...)
 			contractBlockCount += len(contractBatch)
 			contractBatch = contractBatch[:0]
 		} else {
-			basePlasma += block.BasePlasma
-			if basePlasma > cs.plasma.Config().MaxBasePlasmaInMomentum {
-				break
+			if basePlasma+block.BasePlasma > cs.plasma.Config().MaxBasePlasmaInMomentum {
+				continue
 			}
 			if !cs.plasma.ValidPrice(block) {
-				break
+				continue
 			}
+			basePlasma += block.BasePlasma
 			toCommit = append(toCommit, block)
 		}
 	}

@@ -14,14 +14,15 @@ var (
 	ErrBlockPriceWorse = errors.Errorf("block price is smaller for current block")
 	ErrBlockPriceSame  = errors.Errorf("block price is the same for current block")
 
-	MaxFusedAmountForAccountBig = big.NewInt(MaxFusedAmountForAccount)
+	MaxFusedAmountForAccountBig  = big.NewInt(MaxFusedAmountForAccount)
+	MaxFusionPlasmaForAccountBig = big.NewInt(MaxFusionPlasmaForAccount)
 )
 
 const (
 	// The max amount of fusion and PoW plasma is unlimited in a practical sense.
 	// A theoretical maximum for plasma is used to maintain consistency.
 	MaxFusionUnitsPerAccount  = 100000000
-	MaxFusionPlasmaForAccount = constants.PlasmaPerFusionUnit * constants.CostPerFusionUnit
+	MaxFusionPlasmaForAccount = MaxFusionUnitsPerAccount * constants.PlasmaPerFusionUnit
 	MaxFusedAmountForAccount  = constants.CostPerFusionUnit * MaxFusionUnitsPerAccount
 
 	MaxPoWPlasmaForAccountBlock  = MaxFusionPlasmaForAccount
@@ -152,16 +153,26 @@ func (dp *dynamicPlasma) ValidPrice(block *nom.AccountBlock) bool {
 }
 
 func (dp *dynamicPlasma) HigherPrice(a, b *nom.AccountBlock) error {
-	aRatio := (a.FusedPlasma*dp.workPrice + DifficultyToPlasma(a.Difficulty)*dp.fusionPrice) * b.BasePlasma
-	bRatio := (b.FusedPlasma*dp.workPrice + DifficultyToPlasma(b.Difficulty)*dp.fusionPrice) * a.BasePlasma
+	aValue := new(big.Int).Add(
+		new(big.Int).Mul(new(big.Int).SetUint64(a.FusedPlasma), new(big.Int).SetUint64(dp.workPrice)),
+		new(big.Int).Mul(new(big.Int).SetUint64(DifficultyToPlasma(a.Difficulty)), new(big.Int).SetUint64(dp.fusionPrice)),
+	)
+	aRatio := aValue.Mul(aValue, new(big.Int).SetUint64(b.BasePlasma))
 
-	if aRatio < bRatio {
+	bValue := new(big.Int).Add(
+		new(big.Int).Mul(new(big.Int).SetUint64(b.FusedPlasma), new(big.Int).SetUint64(dp.workPrice)),
+		new(big.Int).Mul(new(big.Int).SetUint64(DifficultyToPlasma(b.Difficulty)), new(big.Int).SetUint64(dp.fusionPrice)),
+	)
+	bRatio := bValue.Mul(bValue, new(big.Int).SetUint64(a.BasePlasma))
+
+	switch aRatio.Cmp(bRatio) {
+	case -1:
 		return ErrBlockPriceWorse
-	} else if aRatio == bRatio {
+	case 0:
 		return ErrBlockPriceSame
+	default:
+		return nil
 	}
-
-	return nil
 }
 
 func (dp *dynamicPlasma) Config() *definition.PlasmaVariables {

@@ -52,8 +52,8 @@ const (
 
 	MaxBasePlasmaInMomentumUpperLimit = uint64(210000000000000) // 10,000,000,000 * constants.AccountBlockBasePlasma
 	MaxBasePlasmaInMomentumLowerLimit = uint64(210000)          // 10 * constants.AccountBlockBasePlasma
-	FusedPlasmaTargetLowerLimit       = uint64(0)
-	PowPlasmaTargetLowerLimit         = uint64(0)
+	FusedPlasmaTargetLowerLimit       = uint64(1)
+	PowPlasmaTargetLowerLimit         = uint64(1)
 	MaxPriceChangePercentUpperLimit   = uint8(100)
 	MaxPriceChangePercentLowerLimit   = uint8(1)
 	PriceChangeDenominatorUpperLimit  = uint8(100)

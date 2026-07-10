@@ -397,7 +397,7 @@ func (ap *accountPool) checkUncommittedBlocksCount(address types.Address) error 
 		return nil
 	}
 	uncommittedBlockCount := frontier.Height - stableFrontier.Height
-	if uncommittedBlockCount+1 >= MaxUncommittedBlocksPerAccount {
+	if uncommittedBlockCount+1 > MaxUncommittedBlocksPerAccount {
 		ap.log.Info("max uncommitted blocks per account reached")
 		return fmt.Errorf(`%w reason: max uncommitted blocks per account reached; address:%v`,
 			ErrFailedToAddAccountBlockTransaction, address)

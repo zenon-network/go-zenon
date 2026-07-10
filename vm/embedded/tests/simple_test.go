@@ -505,11 +505,14 @@ t=2001-09-09T01:46:40+0000 lvl=info msg="inserted block" module=zenon identifier
 t=2001-09-09T01:46:40+0000 lvl=info msg="inserted block" module=zenon identifier="{Address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:3}}"
 t=2001-09-09T01:46:40+0000 lvl=info msg="inserted block" module=zenon identifier="{Address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:4}}"
 t=2001-09-09T01:46:40+0000 lvl=info msg="inserted block" module=zenon identifier="{Address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:5}}"
-t=2001-09-09T01:46:40+0000 lvl=info msg="failed to insert block" module=zenon reason="failed to insert account-block-transaction reason: max uncommitted blocks per account reached; address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz" identifier="{Address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:6}}"
+t=2001-09-09T01:46:40+0000 lvl=info msg="inserted block" module=zenon identifier="{Address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:6}}"
+t=2001-09-09T01:46:40+0000 lvl=info msg="failed to insert block" module=zenon reason="failed to insert account-block-transaction reason: max uncommitted blocks per account reached; address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz" identifier="{Address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:7}}"
 t=2001-09-09T01:46:40+0000 lvl=eror msg="failed to insert own account-block." module=zenon reason="failed to insert account-block-transaction reason: max uncommitted blocks per account reached; address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz"
 `)
 
-	for i := 0; i < int(chain.MaxUncommittedBlocksPerAccount); i += 1 {
+	// MaxUncommittedBlocksPerAccount pending blocks are allowed; the one that
+	// would push the count past it is rejected.
+	for i := 0; i < int(chain.MaxUncommittedBlocksPerAccount)+1; i += 1 {
 		z.InsertSendBlock(&nom.AccountBlock{
 			Address:       g.User1.Address,
 			ToAddress:     g.User2.Address,
@@ -520,5 +523,5 @@ t=2001-09-09T01:46:40+0000 lvl=eror msg="failed to insert own account-block." mo
 
 	frontierAccBlock, err := ledgerApi.GetFrontierAccountBlock(g.User1.Address)
 	common.FailIfErr(t, err)
-	common.Expect(t, frontierAccBlock.Height, 5)
+	common.Expect(t, frontierAccBlock.Height, 6)
 }

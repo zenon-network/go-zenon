@@ -279,7 +279,12 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 	var availablePlasma uint64
 	var requiredFusedPlasma uint64
 
-	if context.IsDynamicPlasmaSporkEnforced() {
+	// NextFusionPrice/NextWorkPrice are only meaningful once the frontier
+	// momentum itself was produced under dynamic plasma; the spork can be
+	// enforced for one momentum before the first v2 momentum lands.
+	dynamicPlasmaActive := context.IsDynamicPlasmaSporkEnforced() && frontierMomentum.Version >= nom.DynamicPlasmaMomentumVersion
+
+	if dynamicPlasmaActive {
 		availablePlasma, err = vm.AvailablePlasmaV2(context.CacheStore(), context)
 		if err != nil {
 			return nil, err
@@ -301,7 +306,7 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 		}, nil
 	} else {
 		var requiredDifficulty uint64
-		if context.IsDynamicPlasmaSporkEnforced() {
+		if dynamicPlasmaActive {
 			effectivePlasma := availablePlasma * dp.PriceScaleFactor / frontierMomentum.NextFusionPrice
 			difficulty, err := dp.GetDifficultyForPlasma(basePlasma - effectivePlasma)
 			if err != nil {
