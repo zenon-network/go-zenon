@@ -389,6 +389,54 @@ func TestSimple_MomentumContent(t *testing.T) {
 	}
 }
 
+// Test that only a valid MomentumAcknowledged HashHeight is accepted
+func TestSimple_MomentumAcknowledgedHashHeight(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+
+	ledgerApi := api.NewLedgerApi(z)
+	frontier, err := ledgerApi.GetFrontierMomentum()
+	common.FailIfErr(t, err)
+
+	// Verify that a non-existing momentum acknowledgment hash is not accepted
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(100 * g.Zexp),
+		MomentumAcknowledged: types.HashHeight{
+			Hash:   types.HexToHashPanic("83a3bf2b54596fc1843373be30b75c65a7cce7fb946d9c673d0d8550a238dc75"),
+			Height: frontier.Height,
+		},
+	}, verifier.ErrABMAMissing, mock.SkipVmChanges)
+
+	z.InsertNewMomentum()
+
+	// Verify that a mismatch in the momentum acknowledgment hash and height is not accepted
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(100 * g.Zexp),
+		MomentumAcknowledged: types.HashHeight{
+			Hash:   frontier.Hash,
+			Height: frontier.Height + 1,
+		},
+	}, verifier.ErrABMAMissing, mock.SkipVmChanges)
+
+	// Expect no error for a valid momentum acknowledgment hash and height
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(100 * g.Zexp),
+		MomentumAcknowledged: types.HashHeight{
+			Hash:   frontier.Hash,
+			Height: frontier.Height,
+		},
+	}, nil, mock.SkipVmChanges)
+}
+
 // Test that an address cannot receive a send block that it is not the receiver of
 func TestSendBlockReceiver(t *testing.T) {
 	z := mock.NewMockZenon(t)

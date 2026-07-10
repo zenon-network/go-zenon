@@ -37,6 +37,7 @@ func GetFrontierContext(c chain.Chain, addr types.Address) (*nom.Momentum, vm_co
 	context := vm_context.NewAccountContext(
 		store,
 		c.GetFrontierAccountStore(addr),
+		c.GetFrontierCacheStore(),
 		nil,
 	)
 	return frontier, context, nil

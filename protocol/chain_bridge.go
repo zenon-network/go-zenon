@@ -176,6 +176,11 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		if err != nil {
 			return 0, errors.Errorf("unable to rollback to %v. Reason:%v", target.Identifier(), err)
 		}
+
+		err = c.chain.RollbackCacheTo(insert, target.Identifier())
+		if err != nil {
+			return 0, errors.Errorf("unable to rollback cache to %v. Reason:%v", target.Identifier(), err)
+		}
 	}
 
 	// Insert momentum now
@@ -201,6 +206,10 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 
 		transaction, err := c.supervisor.ApplyMomentum(detailed)
 		if err != nil {
+			return index + start, err
+		}
+		if err := c.chain.UpdateCache(insert, detailed, transaction.Changes); err != nil {
+			log.Error("error while inserting cache", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
 			return index + start, err
 		}
 		if err := c.chain.AddMomentumTransaction(insert, transaction); err != nil {

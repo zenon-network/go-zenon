@@ -7,6 +7,7 @@ import (
 
 	"github.com/pkg/errors"
 
+	"github.com/zenon-network/go-zenon/chain/cache/storage"
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
@@ -24,20 +25,25 @@ type chain struct {
 	*accountPool
 	*momentumPool
 	*momentumEventManager
+	*chainCache
 
 	chainManager db.Manager
+	cacheManager storage.CacheManager
 	insert       sync.Mutex
 }
 
-func NewChain(chainManager db.Manager, genesis store.Genesis) *chain {
+func NewChain(chainManager db.Manager, cacheManager storage.CacheManager, genesis store.Genesis) *chain {
 	momentumPool := NewMomentumPool(chainManager, genesis)
+	cache := NewChainCache(cacheManager)
 	return &chain{
 		log:                  common.ChainLogger,
 		Genesis:              genesis,
 		accountPool:          newAccountPool(momentumPool),
 		momentumPool:         momentumPool,
 		momentumEventManager: momentumPool.momentumEventManager,
+		chainCache:           cache,
 		chainManager:         chainManager,
+		cacheManager:         cacheManager,
 	}
 }
 
@@ -59,6 +65,11 @@ func (c *chain) Init() error {
 	if err != nil {
 		return err
 	}
+
+	if err := c.chainCache.Init(c.chainManager, frontierStore); err != nil {
+		return err
+	}
+
 	fmt.Printf("Initialized NoM. Height: %v, Hash: %v\n", frontier.Height, frontier.Hash)
 	c.log.Info("initialized nom", "identifier", frontier.Identifier())
 
@@ -93,6 +104,10 @@ func (c *chain) Stop() error {
 	defer c.log.Info("stopped")
 
 	c.UnRegister(c.accountPool)
+
+	if err := c.cacheManager.Stop(); err != nil {
+		return err
+	}
 
 	return c.chainManager.Stop()
 }
