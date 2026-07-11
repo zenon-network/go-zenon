@@ -37,8 +37,23 @@ func NewStreamRW(s network.Stream) *StreamRW {
 	return &StreamRW{stream: s}
 }
 
-// ReadMsg reads a message from the stream.
+// ReadMsg reads a message from the stream, rejecting a frame whose
+// declared size exceeds maxMessageSize before allocating a payload
+// buffer for it.
 func (rw *StreamRW) ReadMsg() (p2p.Msg, error) {
+	return rw.readMsg(maxMessageSize)
+}
+
+// ReadMsgLimited reads a message from the stream like ReadMsg, but
+// rejects a frame whose declared size exceeds maxSize before allocating
+// a payload buffer for it. Used on the pre-adoption handshake path,
+// where the remote hasn't been authenticated yet, so the cap can be
+// tighter than the post-handshake maxMessageSize.
+func (rw *StreamRW) ReadMsgLimited(maxSize uint32) (p2p.Msg, error) {
+	return rw.readMsg(maxSize)
+}
+
+func (rw *StreamRW) readMsg(maxSize uint32) (p2p.Msg, error) {
 	rw.rmu.Lock()
 	defer rw.rmu.Unlock()
 
@@ -55,8 +70,8 @@ func (rw *StreamRW) ReadMsg() (p2p.Msg, error) {
 	size := binary.BigEndian.Uint32(header[4:8])
 
 	// Reject messages exceeding the maximum size before allocating memory
-	if size > maxMessageSize {
-		return p2p.Msg{}, fmt.Errorf("message too large: %d bytes (max %d)", size, maxMessageSize)
+	if size > maxSize {
+		return p2p.Msg{}, fmt.Errorf("message too large: %d bytes (max %d)", size, maxSize)
 	}
 
 	// Read payload
@@ -91,6 +106,9 @@ func (rw *StreamRW) WriteMsg(msg p2p.Msg) error {
 	}
 	if len(payload) > maxMessageSize {
 		return fmt.Errorf("message too large: payload exceeds %d bytes", maxMessageSize)
+	}
+	if msg.Size != uint32(len(payload)) {
+		return fmt.Errorf("declared message size %d does not match payload length %d", msg.Size, len(payload))
 	}
 
 	// Build 8-byte header

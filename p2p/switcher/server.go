@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -132,18 +131,10 @@ func (srv *Server) Start() error {
 
 	if libp2pActive {
 		common.P2PLogger.Info("libp2p spork already active on local chain; starting libp2p backend directly")
-		// stdout banner so the chosen backend is visible in docker logs
-		// (the p2p log file is the definitive record; this is for ops
-		// visibility — see docs/libp2p/libp2p-rollout.md).
-		fmt.Printf("\n===== libp2p =====\n")
-		fmt.Printf("Spork already active at startup; running on libp2p backend.\n\n")
 		return srv.startLibp2pLocked()
 	}
 
 	common.P2PLogger.Info("libp2p spork not active; starting legacy (devp2p/RLPX) backend")
-	fmt.Printf("\n===== libp2p =====\n")
-	fmt.Printf("Spork not yet active; running on legacy (devp2p/RLPX) backend.\n")
-	fmt.Printf("Will swap to libp2p when the activation spork's EnforcementHeight is reached.\n\n")
 	// Advance notice for operators still on an empty libp2p bootstrap
 	// list (normal during Phase A of the rollout, mandatory to fix
 	// before activation is scheduled). The libp2p backend repeats this
@@ -308,19 +299,14 @@ func (srv *Server) buildLibp2p() *libp2p.Server {
 	}
 }
 
-// swapFailed emits the failure banner + structured log when a libp2p
-// start attempt fails during the swap. The caller retries with backoff,
-// so the messaging tells the operator the node is self-healing — but at
-// Crit level because a node with no listener is degraded and recurring
-// attempts are worth an alert.
+// swapFailed logs a structured record when a libp2p start attempt fails
+// during the swap. The caller retries with backoff, so the message
+// tells the operator the node is self-healing — but at Crit level
+// because a node with no listener is degraded and recurring attempts
+// are worth an alert.
 func (srv *Server) swapFailed(err error, attempt int, nextRetry time.Duration) {
 	common.P2PLogger.Crit("failed to start libp2p backend during swap; node has no active network listener; will retry",
 		"err", err, "attempt", attempt, "next-retry", nextRetry)
-	// stderr so it stays separable from happy-path stdout in docker
-	// logs / log aggregators.
-	fmt.Fprintf(os.Stderr, "\n===== libp2p swap attempt %d FAILED =====\n", attempt)
-	fmt.Fprintf(os.Stderr, "Failed to start libp2p backend: %v\n", err)
-	fmt.Fprintf(os.Stderr, "Node has no active network listener. Retrying in %v.\n\n", nextRetry)
 }
 
 // watchActivation polls the spork oracle until either the spork
@@ -388,8 +374,6 @@ func (srv *Server) watchActivation() {
 func (srv *Server) swap() {
 	srv.swapOnce.Do(func() {
 		common.P2PLogger.Info("libp2p spork EnforcementHeight reached; swapping to libp2p backend")
-		fmt.Printf("\n===== libp2p swap starting =====\n")
-		fmt.Printf("Spork EnforcementHeight reached. Tearing down legacy backend and bringing up libp2p.\n\n")
 
 		// Stage 1: detach legacy from active state under the lock so
 		// concurrent reads stop seeing it. Stop the actual backend
@@ -472,7 +456,5 @@ func (srv *Server) swap() {
 		srv.mu.Unlock()
 
 		common.P2PLogger.Info("libp2p swap complete")
-		fmt.Printf("===== libp2p swap complete =====\n")
-		fmt.Printf("Now running on libp2p transport.\n\n")
 	})
 }

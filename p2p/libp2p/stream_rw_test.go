@@ -133,6 +133,44 @@ func TestStreamRW_WriteMsg(t *testing.T) {
 	}
 }
 
+func TestStreamRW_WriteMsg_RejectsSizeLargerThanPayload(t *testing.T) {
+	ms := newMockStream()
+	rw := NewStreamRW(ms)
+
+	msg := p2p.Msg{
+		Code:    1,
+		Size:    100, // claims 100 bytes
+		Payload: bytes.NewReader([]byte("short")),
+	}
+
+	err := rw.WriteMsg(msg)
+	if err == nil {
+		t.Fatal("expected error for msg.Size larger than actual payload")
+	}
+	if ms.writeBuf.Len() != 0 {
+		t.Fatalf("expected nothing written on size mismatch, got %d bytes", ms.writeBuf.Len())
+	}
+}
+
+func TestStreamRW_WriteMsg_RejectsSizeSmallerThanPayload(t *testing.T) {
+	ms := newMockStream()
+	rw := NewStreamRW(ms)
+
+	msg := p2p.Msg{
+		Code:    1,
+		Size:    2, // claims fewer bytes than actually provided
+		Payload: bytes.NewReader([]byte("longer than declared")),
+	}
+
+	err := rw.WriteMsg(msg)
+	if err == nil {
+		t.Fatal("expected error for msg.Size smaller than actual payload")
+	}
+	if ms.writeBuf.Len() != 0 {
+		t.Fatalf("expected nothing written on size mismatch, got %d bytes", ms.writeBuf.Len())
+	}
+}
+
 func TestStreamRW_RoundTrip(t *testing.T) {
 	// Use a net.Pipe so WriteMsg output feeds into ReadMsg
 	c1, c2 := net.Pipe()

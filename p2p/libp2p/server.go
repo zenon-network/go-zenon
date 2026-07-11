@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -86,7 +85,9 @@ type Server struct {
 	// MinConnectedPeers is the minimum number of peers that can be connected.
 	MinConnectedPeers int
 
-	// MaxPendingPeers is the maximum number of peers that can be pending.
+	// MaxPendingPeers is the maximum number of peers that can be
+	// pending in the handshake phase. Zero or negative defaults to
+	// p2p.DefaultMaxPendingPeers.
 	MaxPendingPeers int
 
 	// Discovery specifies whether the peer discovery mechanism should be started.
@@ -153,6 +154,13 @@ type Server struct {
 	// FD + Noise handshake on the losing goroutine. Protected by peerMu.
 	dialing map[string]struct{}
 	peerMu  sync.RWMutex
+	// shuttingDown is set by Stop() (under peerMu) before it calls
+	// loopWG.Wait(). dialPeer and handleStream consult it inside the
+	// same peerMu critical section that inserts a newly-adopted peer
+	// into peerMap, so a handshake completing in Stop()'s teardown
+	// window is rejected instead of calling loopWG.Add(1) after Wait()
+	// may already have returned.
+	shuttingDown bool
 
 	// backoff state for the peerMaintenanceLoop redial path. Protected
 	// by backoffMu (separate from peerMu so dial/disconnect hot paths
@@ -164,6 +172,14 @@ type Server struct {
 	delpeer      chan *Peer
 	loopWG       sync.WaitGroup
 	pendingCount int32 // atomic; tracks peers in handshake phase
+
+	// discoveryWG tracks dhtDiscoveryLoop and the refresh goroutines it
+	// spawns via triggerDHTRefresh, separately from loopWG. Stop() must
+	// drain this group before calling srv.dht.Close() — draining loopWG
+	// alone only guarantees these goroutines don't outlive Stop()
+	// returning, not that they've stopped touching the DHT before it's
+	// closed.
+	discoveryWG sync.WaitGroup
 
 	// refreshingDHT guards against overlapping RefreshRoutingTable calls
 	// from dhtDiscoveryLoop: a refresh walks the keyspace and can take
@@ -178,6 +194,23 @@ type Server struct {
 	// nil in production (same pattern as the switcher's NewLegacy /
 	// NewLibp2p hooks).
 	testStartHook func() error
+
+	// testRefreshHook, when non-nil, is invoked at the start of the
+	// goroutine spawned by triggerDHTRefresh, before it calls
+	// srv.dht.RefreshRoutingTable(). Lets a test hold a refresh
+	// in-flight to deterministically exercise the Stop()-vs-refresh
+	// ordering instead of racing the real 15s ticker. Test-only; always
+	// nil in production (same pattern as testStartHook).
+	testRefreshHook func()
+
+	// testDialAdoptHook, when non-nil, is invoked by dialPeer after the
+	// protocol handshake completes and immediately before it takes
+	// peerMu to adopt the peer. Lets a test hold an outbound dial
+	// goroutine in-flight at that point to deterministically exercise
+	// the Stop()-vs-adoption ordering instead of racing a real network
+	// dial. Test-only; always nil in production (same pattern as
+	// testStartHook).
+	testDialAdoptHook func()
 }
 
 // dialBackoff carries per-peer state for exponential-backoff redialing.
@@ -220,6 +253,10 @@ func (srv *Server) PeerCount() int {
 func (srv *Server) AddPeer(node *discover.Node) {
 	if srv.host == nil {
 		common.P2PLogger.Warn("AddPeer called before Server.Start; ignoring", "node", node)
+		return
+	}
+	if srv.NoDial {
+		common.P2PLogger.Warn("AddPeer called with NoDial set; ignoring", "node", node)
 		return
 	}
 	maddr, err := nodeToMultiaddr(node)
@@ -292,10 +329,28 @@ func (srv *Server) Stop() {
 	}
 	srv.running = false
 
+	// Mark shutting down under peerMu before any teardown step below.
+	// dialPeer/handleStream check this flag inside the same peerMu
+	// critical section they use to adopt a peer, so any adoption that
+	// reaches that section after this line is serialized-after it and
+	// will skip loopWG.Add(1); any adoption that already completed the
+	// Add is serialized-before it, so it's safely included in the
+	// loopWG.Wait() below.
+	srv.peerMu.Lock()
+	srv.shuttingDown = true
+	srv.peerMu.Unlock()
+
+	// Cancel first and drain discoveryWG before touching the DHT: this
+	// stops dhtDiscoveryLoop and waits out any in-flight
+	// triggerDHTRefresh goroutine, so srv.dht.Close() below can't race a
+	// concurrent RefreshRoutingTable() call. Neither of those goroutines
+	// takes srv.lock, so waiting while holding it is safe.
+	srv.cancel()
+	srv.discoveryWG.Wait()
+
 	if srv.dht != nil {
 		srv.dht.Close()
 	}
-	srv.cancel()
 	if srv.host != nil {
 		srv.host.Close()
 	}
@@ -324,20 +379,26 @@ func (srv *Server) Stop() {
 // path depends on this: re-running Start() must not collide with a
 // leaked listener from the previous attempt.
 //
-// Teardown order mirrors Stop(): DHT → context cancel → host → drain
-// handler goroutines → peer database, so peer-lifecycle hooks finish
-// writing before the database closes. Like Stop(), fields other than
-// peerdb are left non-nil: an inbound stream handler caught mid-flight
-// may still dereference srv.host or srv.ctx, and the next Start()
-// overwrites every field anyway.
+// Teardown order mirrors Stop(): context cancel → drain discovery
+// goroutines → DHT → host → drain handler goroutines → peer database, so
+// peer-lifecycle hooks finish writing before the database closes and
+// nothing can touch the DHT after it's closed. Like Stop(), fields other
+// than peerdb are left non-nil: an inbound stream handler caught
+// mid-flight may still dereference srv.host or srv.ctx, and the next
+// Start() overwrites every field anyway.
 //
-// Caller must hold srv.lock.
+// Caller must hold srv.lock. In practice discoveryWG is always already
+// zero here — Start() only launches dhtDiscoveryLoop after every
+// fallible step, so a failure that reaches this cleanup can't have
+// started it — but draining it keeps this path structurally identical
+// to Stop() rather than relying on that ordering.
 func (srv *Server) startupCleanup() {
-	if srv.dht != nil {
-		_ = srv.dht.Close()
-	}
 	if srv.cancel != nil {
 		srv.cancel()
+	}
+	srv.discoveryWG.Wait()
+	if srv.dht != nil {
+		_ = srv.dht.Close()
 	}
 	if srv.host != nil {
 		_ = srv.host.Close()
@@ -373,6 +434,9 @@ func (srv *Server) Start() (err error) {
 	srv.dialing = make(map[string]struct{})
 	srv.backoffs = make(map[string]*dialBackoff)
 	srv.delpeer = make(chan *Peer, 16)
+	srv.peerMu.Lock()
+	srv.shuttingDown = false
+	srv.peerMu.Unlock()
 
 	// Undo partial construction on any failure below. Start acquires
 	// resources in sequence (context → datastore → host → DHT) and the
@@ -500,7 +564,7 @@ func (srv *Server) Start() (err error) {
 
 	// Dial bootstrap peers immediately so the node has peers within seconds of
 	// startup rather than waiting for the first peerMaintenanceLoop tick.
-	if len(srv.BootstrapPeers) > 0 {
+	if !srv.NoDial && len(srv.BootstrapPeers) > 0 {
 		for _, pi := range srv.BootstrapPeers {
 			pi := pi
 			go func() {
@@ -539,10 +603,6 @@ func (srv *Server) Start() (err error) {
 	// also turning away inbound connections.
 	if !srv.NoDial && len(srv.BootstrapPeers) == 0 && warmDials == 0 {
 		common.P2PLogger.Crit("no libp2p bootstrap peers configured and no remembered peers; node is isolated until inbound peers arrive or Net.BootstrapPeers is populated")
-		fmt.Fprintf(os.Stderr, "\n===== libp2p bootstrap WARNING =====\n")
-		fmt.Fprintf(os.Stderr, "No BootstrapPeers configured and the peer database has no candidates.\n")
-		fmt.Fprintf(os.Stderr, "This node cannot dial out to the network. It keeps listening for\n")
-		fmt.Fprintf(os.Stderr, "inbound connections; expected only for designated bootstrap nodes.\n\n")
 	}
 
 	// Mark running only after all initialization succeeded.
@@ -572,10 +632,10 @@ func (srv *Server) Start() (err error) {
 	// effectively bootstrap-only after activation, which is what the
 	// PR review (point 1) flagged.
 	if srv.Discovery && srv.dht != nil && !srv.NoDial {
-		srv.loopWG.Add(1)
+		srv.discoveryWG.Add(1)
 		go func() {
 			srv.dhtDiscoveryLoop()
-			srv.loopWG.Done()
+			srv.discoveryWG.Done()
 		}()
 	}
 
@@ -630,22 +690,22 @@ func (srv *Server) peerdbCleanupLoop() {
 
 // handleStream is called when a remote peer opens a stream to us.
 func (srv *Server) handleStream(s network.Stream) {
-	// Enforce MaxPendingPeers
-	var counted bool
-	if srv.MaxPendingPeers > 0 {
-		pending := atomic.AddInt32(&srv.pendingCount, 1)
-		counted = true
-		if int(pending) > srv.MaxPendingPeers {
-			atomic.AddInt32(&srv.pendingCount, -1)
-			s.Reset()
-			return
-		}
+	// Enforce MaxPendingPeers. Zero or negative falls back to
+	// p2p.DefaultMaxPendingPeers, the same preset node/defaults.go
+	// applies when an operator's config.json omits the field, per the
+	// documented "zero defaults to preset" semantics in p2p/config.go —
+	// rather than disabling the pending-handshake throttle.
+	limit := srv.MaxPendingPeers
+	if limit <= 0 {
+		limit = p2p.DefaultMaxPendingPeers
 	}
-	defer func() {
-		if counted {
-			atomic.AddInt32(&srv.pendingCount, -1)
-		}
-	}()
+	pending := atomic.AddInt32(&srv.pendingCount, 1)
+	if int(pending) > limit {
+		atomic.AddInt32(&srv.pendingCount, -1)
+		s.Reset()
+		return
+	}
+	defer atomic.AddInt32(&srv.pendingCount, -1)
 
 	// Slowloris protection lives entirely in StreamRW: every ReadMsg /
 	// WriteMsg call sets its own per-message deadline. There used to be
@@ -721,6 +781,13 @@ func (srv *Server) handleStream(s network.Stream) {
 	// TOCTOU race that two concurrent handleStream calls would otherwise create.
 	p := newPeerFromStream(rw, s, remoteID, phs.Caps, phs.Name, srv.Protocols)
 	srv.peerMu.Lock()
+	if srv.shuttingDown {
+		srv.peerMu.Unlock()
+		common.P2PLogger.Debug("server shutting down, rejecting connection")
+		s.Reset()
+		_ = srv.host.Network().ClosePeer(remotePeer)
+		return
+	}
 	if len(srv.peerMap) >= srv.MaxPeers {
 		srv.peerMu.Unlock()
 		common.P2PLogger.Debug("max peers reached, rejecting connection")
@@ -742,6 +809,10 @@ func (srv *Server) handleStream(s network.Stream) {
 		return
 	}
 	srv.peerMap[remotePeer.String()] = p
+	// loopWG.Add happens inside the same peerMu critical section as the
+	// shuttingDown check above so it can never race Stop()'s
+	// loopWG.Wait() (see the shuttingDown field doc).
+	srv.loopWG.Add(1)
 	srv.peerMu.Unlock()
 
 	// Inbound adoption: identify may not have learned the peer's
@@ -749,7 +820,6 @@ func (srv *Server) handleStream(s network.Stream) {
 	// and the disconnect-time refresh in runPeer fills the addresses.
 	srv.recordPeerConnected(remotePeer)
 
-	srv.loopWG.Add(1)
 	go func() {
 		srv.runPeer(p)
 		srv.loopWG.Done()
@@ -764,13 +834,12 @@ func (srv *Server) doProtoHandshake(rw *StreamRW) (*protoHandshake, error) {
 		errc <- p2p.Send(rw, handshakeMsg, srv.ourHandshake)
 	}()
 
-	// Read remote handshake
-	msg, err := rw.ReadMsg()
+	// Read remote handshake. ReadMsgLimited enforces baseProtocolMaxMsgSize
+	// before allocating a payload buffer, so an unauthenticated peer can't
+	// force a large allocation by declaring an oversized frame.
+	msg, err := rw.ReadMsgLimited(baseProtocolMaxMsgSize)
 	if err != nil {
 		return nil, fmt.Errorf("read handshake: %w", err)
-	}
-	if msg.Size > baseProtocolMaxMsgSize {
-		return nil, fmt.Errorf("handshake message too big: %d bytes (max %d)", msg.Size, baseProtocolMaxMsgSize)
 	}
 	if msg.Code == discMsg {
 		var reason [1]p2p.DiscReason
@@ -896,9 +965,19 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 
 	p := newPeerFromStream(rw, s, remoteID, phs.Caps, phs.Name, srv.Protocols)
 
+	if srv.testDialAdoptHook != nil {
+		srv.testDialAdoptHook()
+	}
+
 	// Final atomic check-and-insert under lock to prevent races with concurrent
 	// inbound connections or other dialPeer calls for the same peer.
 	srv.peerMu.Lock()
+	if srv.shuttingDown {
+		srv.peerMu.Unlock()
+		s.Reset()
+		_ = srv.host.Network().ClosePeer(info.ID)
+		return errServerStopped
+	}
 	if len(srv.peerMap) >= srv.MaxPeers {
 		srv.peerMu.Unlock()
 		s.Reset()
@@ -917,6 +996,10 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 		return fmt.Errorf("duplicate peer %s", info.ID)
 	}
 	srv.peerMap[info.ID.String()] = p
+	// loopWG.Add happens inside the same peerMu critical section as the
+	// shuttingDown check above so it can never race Stop()'s
+	// loopWG.Wait() (see the shuttingDown field doc).
+	srv.loopWG.Add(1)
 	srv.peerMu.Unlock()
 
 	// Outbound adoption: the dialed addresses are known-dialable, so
@@ -924,7 +1007,6 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 	// for this peer yet.
 	srv.recordPeerConnected(info.ID, info.Addrs...)
 
-	srv.loopWG.Add(1)
 	go func() {
 		srv.runPeer(p)
 		srv.loopWG.Done()
@@ -1227,17 +1309,20 @@ func (srv *Server) dhtDiscoveryLoop() {
 // the background if one isn't already running. The walk can take longer
 // than dhtDiscoveryInterval, and its only effect is a fuller routing
 // table for a later dhtDiscoveryLoop tick to read, so the caller doesn't
-// block on completion — but it's still tracked by loopWG so Stop()'s
-// "blocks until all goroutines have exited" contract holds and this
-// goroutine can't outlive srv.dht.Close().
+// block on completion — but it's tracked by discoveryWG (the same group
+// dhtDiscoveryLoop itself is tracked in) so Stop() can drain it before
+// calling srv.dht.Close(), rather than merely before Stop() returns.
 func (srv *Server) triggerDHTRefresh() {
 	if !srv.refreshingDHT.CompareAndSwap(false, true) {
 		return
 	}
-	srv.loopWG.Add(1)
+	srv.discoveryWG.Add(1)
 	go func() {
-		defer srv.loopWG.Done()
+		defer srv.discoveryWG.Done()
 		defer srv.refreshingDHT.Store(false)
+		if srv.testRefreshHook != nil {
+			srv.testRefreshHook()
+		}
 		for err := range srv.dht.RefreshRoutingTable() {
 			if err != nil {
 				common.P2PLogger.Debug(fmt.Sprintf("dht routing table refresh: %v", err))
@@ -1289,7 +1374,9 @@ func (srv *Server) runPeer(p *Peer) {
 	common.P2PLogger.Debug(fmt.Sprintf("Removed %v (%v)", p, reason))
 }
 
-// parseListenAddr converts "host:port" to a multiaddr.
+// parseListenAddr converts "host:port" to a multiaddr. host must be
+// empty, "0.0.0.0", or a literal IP address — DNS hostnames (e.g.
+// "localhost") are not resolved and return an error.
 func parseListenAddr(addr string) (ma.Multiaddr, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {

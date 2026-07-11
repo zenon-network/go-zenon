@@ -11,9 +11,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/inconshreveable/log15"
+	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"github.com/zenon-network/go-zenon/common"
@@ -232,5 +234,257 @@ func TestStartIsolationGuardrail(t *testing.T) {
 	srv2.Stop()
 	if strings.Contains(buf2.String(), isolationMsg) {
 		t.Fatal("guardrail fired despite warm-bootstrap candidates")
+	}
+}
+
+// waitForPeerCount polls srv.PeerCount() until it reaches want or the
+// deadline elapses.
+func waitForPeerCount(t *testing.T, srv *Server, want int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if srv.PeerCount() >= want {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("PeerCount = %d after %s, want >= %d", srv.PeerCount(), timeout, want)
+}
+
+// TestDHTDiscoveryConnectsIndirectPeer is the regression test the July
+// 2026 review round asked for: a node bootstrapped to only one peer must
+// still reach MinConnectedPeers by discovering a second, indirect peer
+// through the DHT rather than staying bootstrap-only.
+//
+// Topology: A and B bootstrap to each other directly, so each ends up
+// with the other in its own DHT routing table. C is bootstrapped only to
+// A and requires two peers, so it can only reach MinConnectedPeers by
+// learning about B from A's routing table via dhtDiscoveryLoop's active
+// RefreshRoutingTable walk and dialing it.
+func TestDHTDiscoveryConnectsIndirectPeer(t *testing.T) {
+	keyA, keyB, keyC := mustGenKey(t), mustGenKey(t), mustGenKey(t)
+	portA, portB, portC := freePortTCP(t), freePortTCP(t), freePortTCP(t)
+
+	addrInfo := func(key *ecdsa.PrivateKey, port int) peer.AddrInfo {
+		pid, err := PeerIDFromECDSA(key)
+		if err != nil {
+			t.Fatalf("derive peer ID: %v", err)
+		}
+		return peer.AddrInfo{
+			ID:    pid,
+			Addrs: []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port))},
+		}
+	}
+	infoA := addrInfo(keyA, portA)
+	infoB := addrInfo(keyB, portB)
+
+	newDiscoveryServer := func(key *ecdsa.PrivateKey, port, minConnected int, bootstrap []peer.AddrInfo) *Server {
+		return &Server{
+			PrivateKey:        key,
+			Name:              "discovery-test",
+			MaxPeers:          8,
+			MinConnectedPeers: minConnected,
+			Discovery:         true,
+			NoDial:            false,
+			ListenAddr:        fmt.Sprintf("127.0.0.1:%d", port),
+			BootstrapPeers:    bootstrap,
+		}
+	}
+
+	srvA := newDiscoveryServer(keyA, portA, 1, []peer.AddrInfo{infoB})
+	if err := srvA.Start(); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+	defer srvA.Stop()
+
+	srvB := newDiscoveryServer(keyB, portB, 1, []peer.AddrInfo{infoA})
+	if err := srvB.Start(); err != nil {
+		t.Fatalf("start B: %v", err)
+	}
+	defer srvB.Stop()
+
+	// B's bootstrap dial to A (already listening by the time B starts)
+	// establishes the connection; A picks it up as an inbound stream.
+	// Wait for both sides to register it before bringing C up.
+	waitForPeerCount(t, srvA, 1, 10*time.Second)
+	waitForPeerCount(t, srvB, 1, 10*time.Second)
+
+	srvC := newDiscoveryServer(keyC, portC, 2, []peer.AddrInfo{infoA})
+	if err := srvC.Start(); err != nil {
+		t.Fatalf("start C: %v", err)
+	}
+	defer srvC.Stop()
+
+	// C only knows A directly. Reaching MinConnectedPeers=2 requires
+	// dhtDiscoveryLoop to learn about B from A's routing table and dial
+	// it — bounded well past the 15s discovery tick to absorb DHT
+	// convergence and CI scheduling variance.
+	waitForPeerCount(t, srvC, 2, 90*time.Second)
+
+	pidB, err := PeerIDFromECDSA(keyB)
+	if err != nil {
+		t.Fatalf("derive B peer ID: %v", err)
+	}
+	found := false
+	for _, p := range srvC.Peers() {
+		if lp, ok := p.(*Peer); ok && lp.RemotePeerID() == pidB.String() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("C connected to %d peers but not to B (%s) specifically", srvC.PeerCount(), pidB)
+	}
+}
+
+// TestStopWaitsForInFlightDHTRefreshBeforeClosingDHT pins the lifecycle
+// contract Stop() relies on: it must fully drain any in-flight
+// triggerDHTRefresh goroutine before closing the DHT, not merely before
+// Stop() itself returns. testRefreshHook blocks the refresh goroutine
+// mid-flight so the ordering is deterministic instead of racing the
+// real 15s discovery ticker; under -race this would previously have
+// flagged RefreshRoutingTable() racing dht.Close() if Stop() closed the
+// DHT first.
+func TestStopWaitsForInFlightDHTRefreshBeforeClosingDHT(t *testing.T) {
+	srv := &Server{
+		PrivateKey: mustGenKey(t),
+		Name:       "refresh-stop-test",
+		MaxPeers:   8,
+		Discovery:  true,
+		NoDial:     true,
+		ListenAddr: "127.0.0.1:0",
+	}
+
+	inRefresh := make(chan struct{})
+	release := make(chan struct{})
+	srv.testRefreshHook = func() {
+		close(inRefresh)
+		<-release
+	}
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	srv.triggerDHTRefresh()
+
+	select {
+	case <-inRefresh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for refresh goroutine to start")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		srv.Stop()
+		close(stopped)
+	}()
+
+	// Give Stop() time to reach discoveryWG.Wait() before releasing the
+	// refresh goroutine, so the assertion below is meaningful rather
+	// than a race between this goroutine and Stop()'s own scheduling.
+	time.Sleep(100 * time.Millisecond)
+
+	select {
+	case <-stopped:
+		t.Fatal("Stop() returned while the refresh goroutine was still blocked in-flight")
+	default:
+	}
+
+	close(release)
+
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop() did not return after the refresh goroutine was released")
+	}
+}
+
+// TestStopRejectsInFlightDialAdoption pins the lifecycle contract that
+// dialPeer must not adopt a peer (loopWG.Add(1) + peerMap insertion)
+// once Stop() has started tearing the server down, even if the dial's
+// handshake completed before Stop() was called. testDialAdoptHook holds
+// the dialing goroutine in-flight, right after the handshake and before
+// adoption, until after Stop() has already returned — the exact window
+// in which an unguarded dialPeer would call loopWG.Add(1) after
+// loopWG.Wait() had already returned zero, the WaitGroup-reuse panic
+// condition. Stop() itself must not block on this goroutine: it hasn't
+// been adopted (no loopWG entry) yet, so Stop() only needs to make sure
+// it's rejected once it does try to adopt.
+func TestStopRejectsInFlightDialAdoption(t *testing.T) {
+	keyA := mustGenKey(t)
+	keyB := mustGenKey(t)
+	portA := freePortTCP(t)
+
+	srvA := newTestServer(keyA, "", t)
+	srvA.ListenAddr = fmt.Sprintf("127.0.0.1:%d", portA)
+	if err := srvA.Start(); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+	defer srvA.Stop()
+
+	pidA, err := PeerIDFromECDSA(keyA)
+	if err != nil {
+		t.Fatalf("derive A peer ID: %v", err)
+	}
+	infoA := peer.AddrInfo{
+		ID:    pidA,
+		Addrs: []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", portA))},
+	}
+
+	srvB := newTestServer(keyB, "", t)
+	srvB.ListenAddr = "127.0.0.1:0"
+
+	inAdopt := make(chan struct{})
+	release := make(chan struct{})
+	srvB.testDialAdoptHook = func() {
+		close(inAdopt)
+		<-release
+	}
+
+	if err := srvB.Start(); err != nil {
+		t.Fatalf("start B: %v", err)
+	}
+
+	dialErrCh := make(chan error, 1)
+	go func() {
+		dialErrCh <- srvB.dialPeer(infoA)
+	}()
+
+	select {
+	case <-inAdopt:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for dial goroutine to reach the adoption hook")
+	}
+
+	// Stop() must return promptly even though the dial goroutine is
+	// still blocked in the hook: it was never adopted, so it holds no
+	// loopWG entry for Stop() to wait on.
+	stopped := make(chan struct{})
+	go func() {
+		srvB.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop() did not return while waiting on an unadopted dial goroutine")
+	}
+
+	// Only now let the dial goroutine reach the adoption section, after
+	// Stop()'s loopWG.Wait() has already returned zero.
+	close(release)
+
+	select {
+	case err := <-dialErrCh:
+		if !errors.Is(err, errServerStopped) {
+			t.Fatalf("dialPeer error = %v, want errServerStopped", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for dialPeer to return after Stop()")
+	}
+
+	if n := srvB.PeerCount(); n != 0 {
+		t.Fatalf("PeerCount = %d after Stop() rejected the in-flight adoption, want 0", n)
 	}
 }

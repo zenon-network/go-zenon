@@ -39,7 +39,7 @@ func PeerIDFromECDSA(ecdsaKey *ecdsa.PrivateKey) (peer.ID, error) {
 }
 
 // PubkeyToNodeID converts an ECDSA public key to a discover.NodeID (64-byte raw uncompressed key).
-// Same logic as discover.PubkeyID but avoids importing discover.
+// Same logic as discover.PubkeyID but avoids calling it, computing the NodeID directly.
 func PubkeyToNodeID(pub *ecdsa.PublicKey) discover.NodeID {
 	var id discover.NodeID
 	// crypto.FromECDSAPub returns 65-byte uncompressed key with 0x04 prefix
