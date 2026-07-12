@@ -42,6 +42,7 @@ type chainManager interface {
 	Status() (td uint64, currentBlock types.Hash, genesisBlock types.Hash)
 
 	InsertChain(chain []*nom.DetailedMomentum) (int, error)
+	VerifyMomentum(detailed *nom.DetailedMomentum) error
 }
 
 type ChainBridge interface {

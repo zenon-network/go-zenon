@@ -192,11 +192,11 @@ func (rmv *rawMomentumVerifier) content() error {
 		}
 
 		block, ok := blocksLookup[header.Identifier()]
-		if isBatched(block) {
-			continue
-		}
 		if !ok {
 			return errors.Errorf("momentum content header is not present in prefetched account-blocks")
+		}
+		if isBatched(block) {
+			continue
 		}
 
 		if block.Previous() != previous {
