@@ -92,48 +92,43 @@ make devnet-up              # build & start 3 pillars + RPC node
 
 Wait ~2 minutes (~20 momentums at 10s each), then verify:
 
-**1. Docker logs — primary signal:**
+**1. Log file — primary signal:**
+
+Switcher and libp2p diagnostics are structured `P2PLogger` records written to the log file, not to the container's stdout/stderr — `docker-compose logs` will not show them.
 
 ```bash
-docker-compose logs -f pillar pillar2 pillar3 rpc | grep -E '====|spork|backend'
+docker exec <container> tail -f /root/.znn/log/zenon.log | grep -i 'switcher\|libp2p\|swap\|backend'
 ```
 
-You should see four banners across the run:
+You should see four log lines across the run:
 
 ```
 # At startup (every pillar):
-===== libp2p =====
-Spork not yet active; running on legacy (devp2p/RLPX) backend.
-Will swap to libp2p when the activation spork's EnforcementHeight is reached.
+msg="libp2p spork not active; starting legacy (devp2p/RLPX) backend"
 
-# At momentum ~20 (from the chain):
+# At momentum ~20 (from the chain, printed to stdout):
 ===== Congratulations! =====
 Just activated spork 'libp2p'
 
 # Immediately after (from the switcher):
-===== libp2p swap starting =====
-Spork EnforcementHeight reached. Tearing down legacy backend and bringing up libp2p.
+msg="libp2p spork EnforcementHeight reached; swapping to libp2p backend"
 
-===== libp2p swap complete =====
-Now running on libp2p transport.
+msg="libp2p swap complete"
 ```
 
-If the swap fails, the node prints to stderr:
-```
-===== libp2p swap FAILED =====
-Failed to start libp2p backend: <error>
-Node has no active network listener. Restart znnd to retry.
-```
-
-**2. Log file (full record):**
+If the swap fails, the switcher logs at `Crit` level, which also lands in the error log:
 
 ```bash
-docker exec <container> cat /root/.znn/log/zenon.log | grep -i 'switcher\|libp2p\|swap\|backend'
+docker exec <container> cat /root/.znn/log/error/zenon.error.log | grep -i swap
 ```
 
-Expected: `starting legacy backend` → `EnforcementHeight reached; swapping` → `swap complete`
+```
+lvl=crit msg="failed to start libp2p backend during swap; node has no active network listener; will retry" err=<error> attempt=<n> next-retry=<duration>
+```
 
-**3. UDP listener disappears:**
+The node keeps retrying with backoff; RPC stays up throughout.
+
+**2. UDP listener disappears:**
 
 ```bash
 docker exec <container> ss -tunlp | grep 35995
@@ -141,7 +136,7 @@ docker exec <container> ss -tunlp | grep 35995
 
 Pre-swap: both `tcp` and `udp` rows. Post-swap: only `tcp` (libp2p uses TCP only).
 
-**4. Peer ID format via RPC:**
+**3. Peer ID format via RPC:**
 
 ```bash
 curl -s -X POST -H "Content-Type: application/json" \
@@ -151,7 +146,7 @@ curl -s -X POST -H "Content-Type: application/json" \
 
 Pre-swap: 128-char hex strings. Post-swap: base58 strings like `16Uiu2HAm…`.
 
-**5. Goroutine fingerprint (destructive — crashes the container):**
+**4. Goroutine fingerprint (destructive — crashes the container):**
 
 ```bash
 docker kill -s QUIT <container>
@@ -161,11 +156,11 @@ Presence of `yamux` or `kad-dht` stack frames in the dump confirms libp2p is run
 
 ### What "good" looks like
 
-| Phase | Height | Docker logs | UDP :35995 | Peer IDs |
-|-------|--------|-------------|------------|----------|
-| Startup | 0 | `libp2p =====` banner | present | hex |
+| Phase | Height | zenon.log | UDP :35995 | Peer IDs |
+|-------|--------|-----------|------------|----------|
+| Startup | 0 | `starting legacy ... backend` | present | hex |
 | Pre-swap | 1–19 | quiet | present | hex |
-| Activation | ~20 | swap banners | disappears | (briefly empty) |
+| Activation | ~20 | `EnforcementHeight reached` → `swap complete` | disappears | (briefly empty) |
 | Post-swap | 21+ | quiet | absent | base58 |
 
 Momentum production should not stall at the swap.
@@ -311,7 +306,7 @@ For the first 24 hours, monitor:
 |------|----------|------------|
 | Operator misses Phase D binary upgrade | **High** | ≥2 weeks public notice; pillar-coordination check-ins. A node on the placeholder binary stays on legacy forever — safe default but will partition off. |
 | libp2p bootstrap unavailability post-swap | **High** | Bootstrap operators upgrade first (they're a subset of pillar operators). Legacy bootstrap list is not a fallback — different transport. |
-| libp2p host fails to start during swap | **Medium** | Switcher logs `Crit`, prints stderr banner, leaves RPC up. Operator restarts znnd; on restart the spork is active so libp2p starts directly. |
+| libp2p host fails to start during swap | **Medium** | Switcher logs `Crit` to `zenon.log`/`zenon.error.log` and retries with backoff, leaving RPC up. Operator can restart znnd; on restart the spork is active so libp2p starts directly. |
 | Bootstrap-list staleness over time | **Medium** | Persistent peerstore (LevelDB at `<DataPath>/network/libp2p-peerstore/`) means once a node has been online it remembers ~`MinConnectedPeers` peers across restarts. Bootstrap entries become a first-time-setup dependency rather than a runtime dependency. Mitigates the "147 stale seeders" failure mode from the legacy network. |
 | Placeholder spork hash on mainnet | **Low** | Placeholder (`0x...01`) can't match any real `CreateSpork` hash. Node stays on legacy forever — safe default. Risk is operator confusion, not partition. |
 

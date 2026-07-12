@@ -138,7 +138,7 @@ func (srv *Server) Start() error {
 	// Advance notice for operators still on an empty libp2p bootstrap
 	// list (normal during Phase A of the rollout, mandatory to fix
 	// before activation is scheduled). The libp2p backend repeats this
-	// louder — Crit + stderr — if it actually starts with no bootstrap
+	// louder — at Crit — if it actually starts with no bootstrap
 	// entries and no remembered peers.
 	if len(srv.Libp2pBootstrapPeers) == 0 {
 		common.P2PLogger.Warn("libp2p bootstrap list is empty; after the activation spork this node will rely on its peer database and inbound connections — populate Net.BootstrapPeers before activation is scheduled")
@@ -366,8 +366,8 @@ func (srv *Server) watchActivation() {
 //
 // If a libp2p start attempt fails it is retried with exponential
 // backoff (swapRetryBase doubling up to swapRetryCap) until it succeeds
-// or Stop() is called. Each failure logs Crit + a stderr banner so the
-// operator notices, but the node does not crash and needs no manual
+// or Stop() is called. Each failure logs at Crit so the operator
+// notices, but the node does not crash and needs no manual
 // intervention: the RPC stays up and the chain stays queryable
 // throughout. If the process is restarted instead, the spork is active
 // by then, so Start() goes directly to libp2p.
