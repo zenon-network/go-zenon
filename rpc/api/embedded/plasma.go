@@ -289,7 +289,8 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 		if err != nil {
 			return nil, err
 		}
-		requiredFusedPlasma = basePlasma * frontierMomentum.NextFusionPrice / dp.PriceScaleFactor
+		// Round up so the recommended payment always meets the ValidPrice threshold.
+		requiredFusedPlasma = (basePlasma*frontierMomentum.NextFusionPrice + dp.PriceScaleFactor - 1) / dp.PriceScaleFactor
 	} else {
 		availablePlasma, err = vm.AvailablePlasma(context.CacheStore(), context)
 		if err != nil {
@@ -312,7 +313,8 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 			if err != nil {
 				return nil, err
 			}
-			requiredDifficulty = difficulty * frontierMomentum.NextWorkPrice / dp.PriceScaleFactor
+			// Round up so the recommended difficulty always meets the ValidPrice threshold.
+			requiredDifficulty = (difficulty*frontierMomentum.NextWorkPrice + dp.PriceScaleFactor - 1) / dp.PriceScaleFactor
 		} else {
 			requiredDifficulty, err = vm.GetDifficultyForPlasma(basePlasma - availablePlasma)
 			if err != nil {

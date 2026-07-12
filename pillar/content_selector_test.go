@@ -49,6 +49,28 @@ func TestContent_filterBlocksToCommit(t *testing.T) {
 	})), 0)
 }
 
+func TestContent_filterBlocksToCommit_SkipsDescendantsOfSkippedAncestor(t *testing.T) {
+	address1 := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+
+	config := &definition.PlasmaVariables{
+		MaxBasePlasmaInMomentum: 21000 * 5,
+	}
+	previousMomentum := &nom.Momentum{NextFusionPrice: 1000, NextWorkPrice: 1000, Version: 2}
+	cs := &contentSelector{
+		plasma: dp.NewDynamicPlasma(previousMomentum, config),
+	}
+
+	toCommit := cs.filterBlocksToCommit([]*nom.AccountBlock{
+		// Ancestor is underpriced and gets skipped.
+		{Height: 1, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 0, Difficulty: 0, Address: address1},
+		// Descendant is properly priced and would pass on its own, but must also be
+		// skipped so the committed blocks don't have a gap in address1's chain.
+		{Height: 2, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21000, Address: address1},
+	})
+
+	common.Expect(t, len(toCommit), 0)
+}
+
 func TestContent_sortBlocksByPriority(t *testing.T) {
 	address1 := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
 	address2 := types.ParseAddressPanic("z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj")

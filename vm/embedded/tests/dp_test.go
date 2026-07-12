@@ -83,6 +83,33 @@ func TestDynamicPlasma(t *testing.T) {
 	common.ExpectUint64(t, uint64(len(frontier.Content)), 1)
 }
 
+// A single block's FusedPlasma payment can legitimately exceed the legacy
+// per-block cap (10.5M) while remaining well within the dynamic plasma cap,
+// so the block must still be accepted once dynamic plasma is enforced.
+func TestDynamicPlasma_HighFusedPlasmaUsesDynamicPlasmaCap(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	ledgerApi := api.NewLedgerApi(z)
+	defer z.StopPanic()
+	savePlasmaDefaults(t)
+
+	definition.DefaultMaxBasePlasmaInMomentum = 42000
+	definition.DefaultFusedPlasmaTarget = 10500
+
+	activateDynamicPlasma(t, z)
+
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZeroTokenStandard,
+		Amount:        common.Big0,
+		FusedPlasma:   20000000,
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+
+	frontier, _ := ledgerApi.GetFrontierMomentum()
+	common.ExpectUint64(t, uint64(len(frontier.Content)), 1)
+}
+
 // - test plasma.GetRequiredPoWForAccountBlock rpc with increased work price
 func TestDynamicPlasma_rpc(t *testing.T) {
 	z := mock.NewMockZenon(t)

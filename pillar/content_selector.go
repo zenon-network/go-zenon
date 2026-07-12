@@ -33,6 +33,7 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 	basePlasma := uint64(0)
 	toCommit := make([]*nom.AccountBlock, 0, len(blocks))
 	contractBatch := make([]*nom.AccountBlock, 0, int(cs.plasma.MaxContractBlocksInMomentum()))
+	skippedAddresses := make(map[types.Address]bool)
 	for _, block := range blocks {
 		if types.IsEmbeddedAddress(block.Address) {
 			contractBatch = append(contractBatch, block)
@@ -50,10 +51,18 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 			contractBlockCount += len(contractBatch)
 			contractBatch = contractBatch[:0]
 		} else {
+			// Blocks are sorted so that a lower-height block from the same address is always
+			// processed first. Once a block is skipped, every descendant from that address must
+			// also be skipped, otherwise the momentum would contain a gap in that address's chain.
+			if skippedAddresses[block.Address] {
+				continue
+			}
 			if basePlasma+block.BasePlasma > cs.plasma.Config().MaxBasePlasmaInMomentum {
+				skippedAddresses[block.Address] = true
 				continue
 			}
 			if !cs.plasma.ValidPrice(block) {
+				skippedAddresses[block.Address] = true
 				continue
 			}
 			basePlasma += block.BasePlasma

@@ -393,10 +393,16 @@ func (ap *accountPool) checkUncommittedBlocksCount(address types.Address) error 
 		ap.log.Info("failed to get stable frontier block", "reason", err)
 		return fmt.Errorf(`%w reason:%v; address:%v`, ErrFailedToAddAccountBlockTransaction, err, address)
 	}
-	if frontier == nil || stableFrontier == nil {
+	if frontier == nil {
 		return nil
 	}
-	uncommittedBlockCount := frontier.Height - stableFrontier.Height
+	// A never-committed account has no stable frontier yet; treat it as height 0
+	// so its uncommitted blocks are still counted against the limit.
+	var stableHeight uint64
+	if stableFrontier != nil {
+		stableHeight = stableFrontier.Height
+	}
+	uncommittedBlockCount := frontier.Height - stableHeight
 	if uncommittedBlockCount+1 > MaxUncommittedBlocksPerAccount {
 		ap.log.Info("max uncommitted blocks per account reached")
 		return fmt.Errorf(`%w reason: max uncommitted blocks per account reached; address:%v`,

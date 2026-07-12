@@ -71,13 +71,15 @@ func enoughPlasma(context vm_context.AccountVmContext, block *nom.AccountBlock) 
 	}
 
 	var powPlasma uint64
+	maxPlasmaForAccountBlock := uint64(constants.MaxPlasmaForAccountBlock)
 	if context.IsDynamicPlasmaSporkEnforced() {
 		powPlasma = dp.DifficultyToPlasma(block.Difficulty)
+		maxPlasmaForAccountBlock = dp.MaxPoWPlasmaForAccountBlock
 	} else {
 		powPlasma = DifficultyToPlasma(block.Difficulty)
 	}
 	block.TotalPlasma = powPlasma + block.FusedPlasma
-	if block.TotalPlasma > constants.MaxPlasmaForAccountBlock {
+	if block.TotalPlasma > maxPlasmaForAccountBlock {
 		return constants.ErrBlockPlasmaLimitReached
 	}
 

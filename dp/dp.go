@@ -112,15 +112,13 @@ func (dp *dynamicPlasma) ComputeBasePlasma(block *nom.AccountBlock) types.BasePl
 	fusionPriceBig := new(big.Int).SetUint64(dp.fusionPrice)
 	workPriceBig := new(big.Int).SetUint64(dp.workPrice)
 
-	// f = block.FusedPlasma * dp.fusionPrice * dp.workPrice
+	// f = block.FusedPlasma * dp.workPrice
 	f := new(big.Int).SetUint64(block.FusedPlasma)
-	f.Mul(f, fusionPriceBig)
 	f.Mul(f, workPriceBig)
 
-	// p = DifficultyToPlasma(block.Difficulty) * dp.fusionPrice * dp.workPrice
+	// p = DifficultyToPlasma(block.Difficulty) * dp.fusionPrice
 	p := new(big.Int).SetUint64(DifficultyToPlasma(block.Difficulty))
 	p.Mul(p, fusionPriceBig)
-	p.Mul(p, workPriceBig)
 
 	// fusedBasePlasma = f * block.BasePlasma / (f + p)
 	fusedBasePlasma := new(big.Int).Mul(f, basePlasmaBig)

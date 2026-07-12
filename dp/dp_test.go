@@ -102,6 +102,20 @@ func TestWorseBlockPrice(t *testing.T) {
 	common.ExpectError(t, dp.HigherPrice(a, b), ErrBlockPriceWorse)
 }
 
+func TestComputeBasePlasma_WeightsByOppositeResourcePrice(t *testing.T) {
+	dp := &dynamicPlasma{fusionPrice: 2000, workPrice: 1000}
+	difficulty, _ := GetDifficultyForPlasma(10000)
+	block := &nom.AccountBlock{
+		FusedPlasma: 10000,
+		Difficulty:  difficulty,
+		BasePlasma:  930,
+	}
+
+	result := dp.ComputeBasePlasma(block)
+	common.ExpectUint64(t, result.Fusion, 310)
+	common.ExpectUint64(t, result.Pow, 620)
+}
+
 func TestTotalBasePlasma(t *testing.T) {
 	dp := &dynamicPlasma{fusionPrice: 1000, workPrice: 1000}
 	a := &nom.AccountBlock{
