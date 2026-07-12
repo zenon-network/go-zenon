@@ -189,9 +189,8 @@ type Net struct {
 	// MinConnectedPeers is the minimum number of peers that can be connected
 	MinConnectedPeers int
 
-	// MaxPendingPeers is the maximum number of peers that can be pending in the
-	// handshake phase, counted separately for inbound and outbound connections.
-	// Zero defaults to preset values.
+	// MaxPendingPeers is the maximum number of inbound peers that can be
+	// pending in the handshake phase. Zero defaults to preset values.
 	MaxPendingPeers int
 
 	// Name sets the node name of this server.

@@ -251,6 +251,32 @@ func waitForPeerCount(t *testing.T, srv *Server, want int, timeout time.Duration
 	t.Fatalf("PeerCount = %d after %s, want >= %d", srv.PeerCount(), timeout, want)
 }
 
+// dialUntilConnected repeatedly dials target from srv until the connection
+// is established or timeout elapses. Start()'s own bootstrap dial is a
+// fire-and-forget goroutine with no retry, so under full-suite scheduling
+// load a single attempt can lose its race against a fixed deadline; retrying
+// here — rather than trusting that one attempt lands in time — makes the
+// prerequisite deterministic regardless of load. Errors from individual
+// attempts (already connected, dial in progress, transient refusal) are
+// expected and simply retried.
+func dialUntilConnected(t *testing.T, srv *Server, target peer.AddrInfo, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		srv.peerMu.RLock()
+		_, connected := srv.peerMap[target.ID.String()]
+		srv.peerMu.RUnlock()
+		if connected {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s failed to connect to %s within %s", srv.Name, target.ID, timeout)
+		}
+		_ = srv.dialPeer(target)
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 // TestDHTDiscoveryConnectsIndirectPeer is the regression test the July
 // 2026 review round asked for: a node bootstrapped to only one peer must
 // still reach MinConnectedPeers by discovering a second, indirect peer
@@ -303,11 +329,12 @@ func TestDHTDiscoveryConnectsIndirectPeer(t *testing.T) {
 	}
 	defer srvB.Stop()
 
-	// B's bootstrap dial to A (already listening by the time B starts)
-	// establishes the connection; A picks it up as an inbound stream.
-	// Wait for both sides to register it before bringing C up.
+	// Explicitly establish the A-B connection (B dialing A, which is
+	// already listening) rather than relying solely on Start()'s
+	// fire-and-forget bootstrap dial. Wait for both sides to register it
+	// before bringing C up.
+	dialUntilConnected(t, srvB, infoA, 10*time.Second)
 	waitForPeerCount(t, srvA, 1, 10*time.Second)
-	waitForPeerCount(t, srvB, 1, 10*time.Second)
 
 	srvC := newDiscoveryServer(keyC, portC, 2, []peer.AddrInfo{infoA})
 	if err := srvC.Start(); err != nil {

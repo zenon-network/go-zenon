@@ -100,20 +100,27 @@ Switcher and libp2p diagnostics are structured `P2PLogger` records written to th
 docker exec <container> tail -f /root/.znn/log/zenon.log | grep -i 'switcher\|libp2p\|swap\|backend'
 ```
 
-You should see four log lines across the run:
+You should see three log lines in the file across the run:
 
 ```
 # At startup (every pillar):
 msg="libp2p spork not active; starting legacy (devp2p/RLPX) backend"
 
-# At momentum ~20 (from the chain, printed to stdout):
-===== Congratulations! =====
-Just activated spork 'libp2p'
-
-# Immediately after (from the switcher):
+# Immediately after momentum ~20 (from the switcher):
 msg="libp2p spork EnforcementHeight reached; swapping to libp2p backend"
 
 msg="libp2p swap complete"
+```
+
+Separately, on the container's stdout (from the chain, not the log file), you should see the spork activation announcement around the same time:
+
+```bash
+docker-compose logs <container> | grep -A1 'Congratulations'
+```
+
+```
+===== Congratulations! =====
+Just activated spork 'libp2p'
 ```
 
 If the swap fails, the switcher logs at `Crit` level, which also lands in the error log:
