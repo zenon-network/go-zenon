@@ -174,8 +174,8 @@ func (p *SetVariablesMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrForbiddenParam
 	}
 
-	totalPlasmaTarget := param.FusedPlasmaTarget + param.PowPlasmaTarget
-	if totalPlasmaTarget > param.MaxBasePlasmaInMomentum {
+	if param.FusedPlasmaTarget > param.MaxBasePlasmaInMomentum ||
+		param.PowPlasmaTarget > param.MaxBasePlasmaInMomentum-param.FusedPlasmaTarget {
 		return constants.ErrForbiddenParam
 	}
 

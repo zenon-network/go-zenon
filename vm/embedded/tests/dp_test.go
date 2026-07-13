@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"math"
 	"testing"
 
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
@@ -9,6 +10,7 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/rpc/api/embedded"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
@@ -175,4 +177,34 @@ func TestDynamicPlasma_SetPlasmaVariables(t *testing.T) {
 	"MaxPriceChangePercent": 10,
 	"PriceChangeDenominator": 20
 }`)
+}
+
+func TestDynamicPlasma_SetPlasmaVariables_TargetSumBounds(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	saveGovernanceAddress(t)
+
+	types.GovernanceAddress = g.User1.Address
+
+	activateDynamicPlasma(t, z)
+
+	setVariables := func(maxBasePlasma, fusedTarget, powTarget uint64) *nom.AccountBlock {
+		return &nom.AccountBlock{
+			Address:       g.User1.Address,
+			ToAddress:     types.PlasmaContract,
+			TokenStandard: types.ZeroTokenStandard,
+			Amount:        common.Big0,
+			Data: definition.ABIPlasma.PackMethodPanic(definition.SetVariablesMethodName,
+				maxBasePlasma, fusedTarget, powTarget, uint8(10), uint8(20)),
+		}
+	}
+
+	// fusedTarget + powTarget == maxBasePlasmaInMomentum is the accepted boundary
+	z.InsertSendBlock(setVariables(210000, 209999, 1), nil, mock.SkipVmChanges)
+
+	// fusedTarget + powTarget == maxBasePlasmaInMomentum + 1 is rejected
+	z.InsertSendBlock(setVariables(210000, 210000, 1), constants.ErrForbiddenParam, mock.SkipVmChanges)
+
+	// fusedTarget + powTarget must be checked without a uint64 sum that wraps around
+	z.InsertSendBlock(setVariables(210000, math.MaxUint64, 1), constants.ErrForbiddenParam, mock.SkipVmChanges)
 }
