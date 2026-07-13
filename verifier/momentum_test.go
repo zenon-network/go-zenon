@@ -50,7 +50,7 @@ func TestRawMomentumVerifier_Content_MissingAccountBlock_ReturnsError(t *testing
 		momentumStore: &stubMomentumStore{},
 	}
 
-	err := rmv.content()
+	err := rmv.content(false)
 	if err == nil {
 		t.Fatal("expected an error for a content header missing its account block, got nil")
 	}

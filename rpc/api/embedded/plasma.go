@@ -16,6 +16,7 @@ import (
 	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/vm"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/zenon"
 )
@@ -309,12 +310,23 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 		var requiredDifficulty uint64
 		if dynamicPlasmaActive {
 			effectivePlasma := availablePlasma * dp.PriceScaleFactor / frontierMomentum.NextFusionPrice
-			difficulty, err := dp.GetDifficultyForPlasma(basePlasma - effectivePlasma)
+			requiredWorkPlasma := basePlasma - effectivePlasma
+
+			// Round up the price-scaled work-plasma before converting to difficulty, so the
+			// recommended difficulty always meets the ValidPrice threshold. Uses big.Int since
+			// requiredWorkPlasma*NextWorkPrice can overflow uint64 at high dynamic prices.
+			priceScaledWorkPlasma := new(big.Int).Mul(new(big.Int).SetUint64(requiredWorkPlasma), new(big.Int).SetUint64(frontierMomentum.NextWorkPrice))
+			priceScaledWorkPlasma.Add(priceScaledWorkPlasma, new(big.Int).SetUint64(dp.PriceScaleFactor-1))
+			priceScaledWorkPlasma.Div(priceScaledWorkPlasma, new(big.Int).SetUint64(dp.PriceScaleFactor))
+
+			if !priceScaledWorkPlasma.IsUint64() {
+				return nil, constants.ErrForbiddenParam
+			}
+
+			requiredDifficulty, err = dp.GetDifficultyForPlasma(priceScaledWorkPlasma.Uint64())
 			if err != nil {
 				return nil, err
 			}
-			// Round up so the recommended difficulty always meets the ValidPrice threshold.
-			requiredDifficulty = (difficulty*frontierMomentum.NextWorkPrice + dp.PriceScaleFactor - 1) / dp.PriceScaleFactor
 		} else {
 			requiredDifficulty, err = vm.GetDifficultyForPlasma(basePlasma - availablePlasma)
 			if err != nil {

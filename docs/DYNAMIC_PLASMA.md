@@ -136,8 +136,8 @@ Parameters are stored on-chain in the Plasma contract and adjustable via `SetVar
 | Parameter | Default | Bounds | Description |
 |-----------|---------|--------|-------------|
 | `maxBasePlasmaInMomentum` | 4,200,000 | 210,000 – 210,000,000,000,000 | Max base plasma per momentum (default = 200× `AccountBlockBasePlasma`) |
-| `fusedPlasmaTarget` | 1,050,000 | ≥ 0 (and `fusedPlasmaTarget + powPlasmaTarget ≤ maxBasePlasmaInMomentum`) | Target fused plasma usage per momentum (default = 25% of max) |
-| `powPlasmaTarget` | 1,050,000 | ≥ 0 (same combined constraint as above) | Target PoW plasma usage per momentum (default = 25% of max) |
+| `fusedPlasmaTarget` | 1,050,000 | ≥ 1 (and `fusedPlasmaTarget + powPlasmaTarget ≤ maxBasePlasmaInMomentum`) | Target fused plasma usage per momentum (default = 25% of max) |
+| `powPlasmaTarget` | 1,050,000 | ≥ 1 (same combined constraint as above) | Target PoW plasma usage per momentum (default = 25% of max) |
 | `maxPriceChangePercent` | 10 | 1 – 100 | Max price change per adjustment |
 | `priceChangeDenominator` | 20 | 1 – 100 | Denominator for price change calculation |
 
@@ -294,7 +294,7 @@ curl -s http://localhost:35997 -d '{
 
 ### Spork Activation Pattern
 
-The `DynamicPlasmaSpork` in `common/types/spork.go` uses a **placeholder hash** (`0000...0002`). This follows the same pattern as the libp2p spork — the binary is safe-by-default because no on-chain spork can match a placeholder. The release flow is:
+The `DynamicPlasmaSpork` in `common/types/spork.go` uses a **placeholder hash** (`0000...0001`). This follows the same pattern as the libp2p spork — the binary is safe-by-default because no on-chain spork can match a placeholder. The release flow is:
 
 1. **Ship the binary** with the placeholder. `IsSporkActive` always returns false; the network stays on fixed-price plasma.
 2. **Governance broadcasts the CreateSpork tx.** The resulting send-block hash is the real SporkId.
@@ -339,45 +339,6 @@ After activation, new momentums will have `version: 2` with `nextFusionPrice` an
 | Max fusion units change (5000 -> 100,000,000) | **Breaking change** | Pre-DP, accounts were limited to 5000 fusion units. Post-DP, the limit is effectively removed. This is intentional but changes the economics significantly. |
 | `SetVariables` governance | **GovernanceAddress only** | The `SetVariables` method permission-checks `block.Address == types.GovernanceAddress`. `GovernanceAddress` is a hardcoded placeholder with a TODO to migrate to a governance contract. Ensure this key is properly secured (and the TODO resolved) before mainnet. |
 | 100-block limit removed by DP | **Open question** | The pre-DP hard cap of 100 blocks/momentum is replaced by plasma-based limits (~200 user + 80 contract at defaults). The new limit can be raised further via `SetVariables`. Needs testnet soak testing to determine safe throughput ceiling. |
-
----
-
-## Bugs / Code Smells Spotted During Review
-
-### 1. `pillar/content_selector.go:96` — hash tiebreak is dead code
-
-```go
-if err == dp.ErrBlockPriceSame && bytes.Compare(a.Hash.Bytes()[:], b.Hash.Bytes()[:]) > 1 {
-    return true
-}
-```
-
-`bytes.Compare` returns one of `-1, 0, 1`, so `> 1` is **never** true. Rule #5 in the function's own doc comment ("If blocks are of equal priority price-wise then a block hash comparison will determine which block gets higher priority") never fires. On price ties, the sort just preserves input order via `sort.SliceStable`.
-
-Compare with the legacy logic in [`chain/account_pool.go:92`](chain/account_pool.go:92) which uses `> -1`. The intent here is almost certainly `> 0` (or `== 1`).
-
-This is a producer-side bug only — the verifier doesn't re-sort content — so it isn't consensus-breaking, but it makes block selection non-deterministic across pillars when prices tie.
-
-### 2. `dp/dp.go:23-25` — `MaxFusionPlasmaForAccount` uses the wrong multiplier
-
-```go
-MaxFusionUnitsPerAccount  = 100000000
-MaxFusionPlasmaForAccount = MaxFusionUnitsPerAccount * constants.CostPerFusionUnit   // <-- cost, not plasma
-MaxFusedAmountForAccount  = constants.CostPerFusionUnit * MaxFusionUnitsPerAccount
-```
-
-`MaxFusionPlasmaForAccount` should be `MaxFusionUnitsPerAccount * constants.PlasmaPerFusionUnit` (= 2.1×10¹¹) by analogy with the legacy [`vm/constants/plasma.go:53`](vm/constants/plasma.go:53). As written, it is identical to `MaxFusedAmountForAccount` (= 10¹⁶), mixing QSR-atomic units with plasma units.
-
-Knock-on effects:
-
-- [`FusedAmountToPlasma`](dp/dp.go:216) returns `MaxFusionPlasmaForAccount` when `amount >= MaxFusedAmountForAccountBig`. At the cap, the returned plasma jumps from `numUnits * PlasmaPerFusionUnit` (~2.1×10¹¹) to 10¹⁶ — a five-order-of-magnitude discontinuity.
-- `MaxPoWPlasmaForAccountBlock = MaxFusionPlasmaForAccount`, so the per-block PoW cap and `MaxDifficultyForAccountBlock` (`MaxPoWPlasmaForAccountBlock * 1500` ≈ 1.5×10¹⁹) sit just under `uint64.Max`. Multiplying anywhere downstream is a near-overflow risk that the legacy ~3×10¹⁴ bound did not have.
-
-In practice the cap is never reached on a live network (nobody fuses 100M QSR), so the devnet behaves correctly. But the constants look like a copy/paste slip and should be reviewed before mainnet.
-
-### 3. Minor: `verifier/momentum.go` does not validate `Version >= 2` price floor on activation boundary
-
-`nextFusionPrice()` / `nextWorkPrice()` (lines 175-189) check `Version >= 2 && NextFusionPrice < MinResourcePrice`, but `version()` (lines 119-132) demands `Version == 2` (not `>= 2`) when the spork is active. The pair of checks is consistent today, but if a future spork bumps the version again, the price-floor check would silently apply to version 3+ momentums while `version()` rejects them. Not a bug now, but worth a comment so future-you doesn't trip over it.
 
 ---
 
