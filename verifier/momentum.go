@@ -194,6 +194,9 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 	// insert all account-blocks in lookup map, rejecting duplicates so a repeated block can't be
 	// counted twice for dynamic-plasma price accounting while collapsing back to one entry here
 	for _, block := range rmv.accountBlocks {
+		if block == nil {
+			return errors.Errorf("prefetched account-block is nil")
+		}
 		identifier := block.Identifier()
 		if _, ok := blocksLookup[identifier]; ok {
 			return errors.Errorf("duplicate prefetched account-block: %v", identifier)
@@ -206,15 +209,20 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 		return errors.Errorf("momentum content size is different than the size of the prefetched account-blocks")
 	}
 
-	// resolve each content header to its account-block once, in content order, so the rest of this
-	// function operates on a single one-to-one mapping instead of re-deriving it
+	// resolve each content header to its account-block once, in content order, consuming the lookup
+	// entry as it's matched so a duplicate content header can't resolve to the same block twice
 	orderedBlocks := make([]*nom.AccountBlock, len(rmv.momentum.Content))
 	for index, header := range rmv.momentum.Content {
-		block, ok := blocksLookup[header.Identifier()]
-		if !ok {
-			return errors.Errorf("momentum content header is not present in prefetched account-blocks")
+		identifier := header.Identifier()
+		block, ok := blocksLookup[identifier]
+		if !ok || block.Address != header.Address {
+			return errors.Errorf("content header has no matching account-block")
 		}
+		delete(blocksLookup, identifier)
 		orderedBlocks[index] = block
+	}
+	if len(blocksLookup) != 0 {
+		return errors.Errorf("prefetched account-blocks contain entries not referenced by momentum content")
 	}
 
 	if isDynamicPlasmaActive {
