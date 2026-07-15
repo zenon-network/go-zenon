@@ -36,6 +36,9 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 	skippedAddresses := make(map[types.Address]bool)
 	for _, block := range blocks {
 		if types.IsEmbeddedAddress(block.Address) {
+			if skippedAddresses[block.Address] {
+				continue
+			}
 			contractBatch = append(contractBatch, block)
 			// Can't end in BlockTypeContractSend because otherwise the embedded send blocks would
 			// be included but not the embedded receive block, since the embedded receive block
@@ -44,6 +47,9 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 				continue
 			}
 			if len(contractBatch)+contractBlockCount > int(cs.plasma.MaxContractBlocksInMomentum()) {
+				for _, dropped := range contractBatch {
+					skippedAddresses[dropped.Address] = true
+				}
 				contractBatch = contractBatch[:0]
 				continue
 			}
