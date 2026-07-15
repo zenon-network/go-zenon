@@ -77,22 +77,29 @@ func (dp *dynamicPlasma) nextResourcePrice(currentPrice uint64, usedPlasma uint6
 	change.Div(num, denom.SetUint64(uint64(dp.config.PriceChangeDenominator)))
 
 	nextPriceBig := new(big.Int).Add(currentPriceBig, change)
-	if nextPriceBig.Cmp(new(big.Int).SetUint64(MinResourcePrice)) == -1 {
-		return MinResourcePrice
+
+	hundred := big.NewInt(100)
+	// maxNextPrice = currentPrice * (percent + 100) / 100
+	maxNextPrice := new(big.Int).Mul(currentPriceBig, big.NewInt(int64(dp.config.MaxPriceChangePercent)+100))
+	maxNextPrice.Div(maxNextPrice, hundred)
+	if nextPriceBig.Cmp(maxNextPrice) == 1 {
+		nextPriceBig.Set(maxNextPrice)
 	}
 
-	nextPrice := nextPriceBig.Uint64()
-	maxNextPrice := currentPrice * (uint64(dp.config.MaxPriceChangePercent) + 100) / 100
-	if nextPrice > maxNextPrice {
-		return maxNextPrice
+	// minNextPrice = currentPrice * (100 - percent) / 100
+	minNextPrice := new(big.Int).Mul(currentPriceBig, big.NewInt(100-int64(dp.config.MaxPriceChangePercent)))
+	minNextPrice.Div(minNextPrice, hundred)
+	if nextPriceBig.Cmp(minNextPrice) == -1 {
+		nextPriceBig.Set(minNextPrice)
 	}
 
-	minNextPrice := currentPrice * (100 - uint64(dp.config.MaxPriceChangePercent)) / 100
-	if nextPrice < minNextPrice {
-		return minNextPrice
+	// absolute floor applied last
+	minResourcePriceBig := new(big.Int).SetUint64(MinResourcePrice)
+	if nextPriceBig.Cmp(minResourcePriceBig) == -1 {
+		nextPriceBig.Set(minResourcePriceBig)
 	}
 
-	return nextPrice
+	return nextPriceBig.Uint64()
 }
 
 // Calculates nominal base plasma values for fused plasma and PoW plasma. These nominal base plasma
