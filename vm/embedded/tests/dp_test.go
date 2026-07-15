@@ -2,6 +2,7 @@ package tests
 
 import (
 	"math"
+	"math/big"
 	"testing"
 
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
@@ -145,6 +146,40 @@ func TestDynamicPlasma_rpc(t *testing.T) {
 	"availablePlasma": 0,
 	"basePlasma": 21000,
 	"requiredDifficulty": 33075000
+}`)
+}
+
+// GetRequiredPoWForAccountBlock's fusion branch computes requiredFusedPlasma
+// with a big.Int multiply/round-up guard; when an account's fused plasma
+// covers the block's required plasma, no PoW should be requested.
+func TestDynamicPlasma_rpc_FusionCoversRequiredPlasma(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	plasmaApi := embedded.NewPlasmaApi(z)
+	defer z.StopPanic()
+	saveGovernanceAddress(t)
+
+	types.GovernanceAddress = g.User1.Address
+
+	activateDynamicPlasma(t, z)
+
+	defer z.CallContract(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.PlasmaContract,
+		Data:          definition.ABIPlasma.PackMethodPanic(definition.FuseMethodName, g.User6.Address),
+		TokenStandard: types.QsrTokenStandard,
+		Amount:        big.NewInt(10 * g.Zexp),
+	}).Error(t, nil)
+	insertMomentums(z, 2)
+
+	common.Json(plasmaApi.GetRequiredPoWForAccountBlock(embedded.GetRequiredParam{
+		BlockType: nom.BlockTypeUserSend,
+		SelfAddr:  g.User6.Address,
+		ToAddr:    &g.User1.Address,
+	})).Equals(t, `
+{
+	"availablePlasma": 21000,
+	"basePlasma": 21000,
+	"requiredDifficulty": 0
 }`)
 }
 

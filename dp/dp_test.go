@@ -54,6 +54,45 @@ func TestNextWorkPrice(t *testing.T) {
 	common.Json(dp.NextWorkPrice(21000*200), nil).Equals(t, "2200")
 }
 
+// A sustained-high currentPrice must not collapse the clamp arithmetic: the
+// max-change bound is computed entirely in big.Int, so it stays accurate even
+// when currentPrice*percent would overflow a raw uint64 multiplication.
+func TestNextResourcePrice_NoOverflowAtHighCurrentPrice(t *testing.T) {
+	config := &definition.PlasmaVariables{
+		FusedPlasmaTarget:      1000,
+		MaxPriceChangePercent:  100,
+		PriceChangeDenominator: 1,
+	}
+	currentPrice := uint64(1) << 62
+	dp := &dynamicPlasma{fusionPrice: currentPrice, config: config}
+
+	// usedPlasma is double the target, so the raw change equals currentPrice
+	// and the max-change bound (currentPrice * 200 / 100) would overflow a
+	// uint64 multiplication before reaching the final clamp.
+	got := dp.NextFusionPrice(2000)
+	common.ExpectUint64(t, got, currentPrice*2)
+}
+
+// The absolute MinResourcePrice floor must be applied only after the
+// percentage clamps, so a downward step is always bounded by
+// MaxPriceChangePercent instead of collapsing straight to the floor.
+func TestNextResourcePrice_PercentClampAppliesBeforeAbsoluteFloor(t *testing.T) {
+	config := &definition.PlasmaVariables{
+		FusedPlasmaTarget:      1000,
+		MaxPriceChangePercent:  10,
+		PriceChangeDenominator: 1,
+	}
+	currentPrice := uint64(1000000)
+	dp := &dynamicPlasma{fusionPrice: currentPrice, config: config}
+
+	// A small PriceChangeDenominator relative to the price move drives the
+	// raw change below MinResourcePrice, so a floor-first implementation
+	// would return MinResourcePrice (a ~99.9% drop) instead of the
+	// percentage-bounded minimum.
+	got := dp.NextFusionPrice(0)
+	common.ExpectUint64(t, got, currentPrice*90/100)
+}
+
 func TestHigherBlockPrice(t *testing.T) {
 	dp := &dynamicPlasma{fusionPrice: 1241, workPrice: 1052}
 	a := &nom.AccountBlock{

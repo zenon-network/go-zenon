@@ -254,3 +254,51 @@ func TestRawMomentumVerifier_Content_ForgedBasePlasma_ReturnsError(t *testing.T)
 		t.Fatal("expected an error for a momentum whose prices were derived from a forged wire base plasma, got nil")
 	}
 }
+
+// content()'s dynamic-plasma loop must not recompute canonical base plasma for
+// embedded-address blocks: ComputeBasePlasma already special-cases embedded
+// addresses to zero, so the injected canonicalBasePlasma func must never be
+// invoked for them.
+func TestRawMomentumVerifier_Content_EmbeddedAddress_SkipsCanonicalRecompute(t *testing.T) {
+	address := types.PlasmaContract
+	blockHash := types.NewHash([]byte("block"))
+
+	block := &nom.AccountBlock{
+		BlockType: nom.BlockTypeContractReceive,
+		Address:   address,
+		Hash:      blockHash,
+		Height:    1,
+	}
+
+	momentum := &nom.Momentum{
+		Version:         2,
+		NextFusionPrice: 1000,
+		NextWorkPrice:   1000,
+		Content: nom.MomentumContent{
+			{
+				Address: address,
+				HashHeight: types.HashHeight{
+					Hash:   blockHash,
+					Height: 1,
+				},
+			},
+		},
+	}
+
+	accountBlocks := []*nom.AccountBlock{block}
+
+	rmv := &rawMomentumVerifier{
+		momentum:      momentum,
+		accountBlocks: accountBlocks,
+		momentumStore: &stubMomentumStore{},
+		chain:         nil,
+		canonicalBasePlasma: func(chain.Chain, *nom.AccountBlock) (uint64, error) {
+			t.Fatal("canonicalBasePlasma must not be called for an embedded-address block")
+			return 0, nil
+		},
+	}
+
+	if err := rmv.content(true); err != nil {
+		t.Fatalf("expected no error for an untouched embedded-address block, got %v", err)
+	}
+}

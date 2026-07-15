@@ -71,6 +71,36 @@ func TestContent_filterBlocksToCommit_SkipsDescendantsOfSkippedAncestor(t *testi
 	common.Expect(t, len(toCommit), 0)
 }
 
+// When an oversized contract batch spanning multiple addresses is dropped,
+// every address in that batch must be marked skipped, not just the
+// terminating block's address - otherwise a later, smaller batch for one of
+// the dropped addresses could commit while earlier heights from the same
+// drop are missing.
+func TestContent_filterBlocksToCommit_DroppedContractBatchSkipsAllAddresses(t *testing.T) {
+	config := &definition.PlasmaVariables{
+		// MaxContractBlocksInMomentum() == 105000 / EmbeddedSimplePlasma(52500) == 2
+		MaxBasePlasmaInMomentum: 105000,
+	}
+	previousMomentum := &nom.Momentum{NextFusionPrice: 1000, NextWorkPrice: 1000, Version: 2}
+	cs := &contentSelector{
+		plasma: dp.NewDynamicPlasma(previousMomentum, config),
+	}
+
+	toCommit := cs.filterBlocksToCommit([]*nom.AccountBlock{
+		// Batch of 3 embedded blocks spanning two addresses exceeds the
+		// limit of 2 and is dropped in its entirety.
+		{Height: 1, BlockType: nom.BlockTypeContractSend, Address: types.PillarContract},
+		{Height: 1, BlockType: nom.BlockTypeContractSend, Address: types.SentinelContract},
+		{Height: 2, BlockType: nom.BlockTypeContractReceive, Address: types.SentinelContract},
+		// A later, smaller batch for one of the dropped addresses would fit
+		// within the limit on its own, but must still be skipped since an
+		// earlier height for that address was already dropped.
+		{Height: 2, BlockType: nom.BlockTypeContractReceive, Address: types.PillarContract},
+	})
+
+	common.Expect(t, len(toCommit), 0)
+}
+
 func TestContent_sortBlocksByPriority(t *testing.T) {
 	address1 := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
 	address2 := types.ParseAddressPanic("z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj")
