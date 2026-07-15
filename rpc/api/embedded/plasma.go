@@ -290,8 +290,15 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 		if err != nil {
 			return nil, err
 		}
-		// Round up so the recommended payment always meets the ValidPrice threshold.
-		requiredFusedPlasma = (basePlasma*frontierMomentum.NextFusionPrice + dp.PriceScaleFactor - 1) / dp.PriceScaleFactor
+		// Round up so the recommended payment always meets the ValidPrice threshold. Uses
+		// big.Int since basePlasma*NextFusionPrice can overflow uint64 at high dynamic prices.
+		requiredFusedPlasmaBig := new(big.Int).Mul(new(big.Int).SetUint64(basePlasma), new(big.Int).SetUint64(frontierMomentum.NextFusionPrice))
+		requiredFusedPlasmaBig.Add(requiredFusedPlasmaBig, new(big.Int).SetUint64(dp.PriceScaleFactor-1))
+		requiredFusedPlasmaBig.Div(requiredFusedPlasmaBig, new(big.Int).SetUint64(dp.PriceScaleFactor))
+		if !requiredFusedPlasmaBig.IsUint64() {
+			return nil, constants.ErrForbiddenParam
+		}
+		requiredFusedPlasma = requiredFusedPlasmaBig.Uint64()
 	} else {
 		availablePlasma, err = vm.AvailablePlasma(context.CacheStore(), context)
 		if err != nil {
