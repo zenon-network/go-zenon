@@ -5,6 +5,7 @@ import (
 
 	"github.com/pkg/errors"
 
+	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -114,6 +115,18 @@ func AvailablePlasmaV2(cache store.Cache, account store.Account) (uint64, error)
 	} else {
 		return answer.Uint64(), nil
 	}
+}
+
+// CanonicalBasePlasma recomputes an account block's base plasma from its
+// hash-committed fields using the same VM apply-time context (the cache store
+// at MomentumAcknowledged), so consensus never trusts the wire BasePlasma.
+func CanonicalBasePlasma(c chain.Chain, block *nom.AccountBlock) (uint64, error) {
+	cacheStore := c.GetCacheStore(block.MomentumAcknowledged)
+	if cacheStore == nil {
+		return 0, errors.Errorf("can't find cacheStore for %v", block.MomentumAcknowledged)
+	}
+	context := vm_context.NewAccountContext(nil, nil, cacheStore, nil)
+	return GetBasePlasmaForAccountBlock(context, block)
 }
 
 // GetBasePlasmaForAccountBlock calculates the smallest plasma required for an account block.

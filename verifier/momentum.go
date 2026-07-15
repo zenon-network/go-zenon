@@ -24,9 +24,10 @@ type MomentumVerifier interface {
 }
 
 type momentumVerifier struct {
-	log       log15.Logger
-	chain     chain.Chain
-	consensus consensus.Consensus
+	log                 log15.Logger
+	chain               chain.Chain
+	consensus           consensus.Consensus
+	canonicalBasePlasma CanonicalBasePlasmaFunc
 }
 
 func (mv *momentumVerifier) getContext(momentum *nom.Momentum) (store.Momentum, error) {
@@ -50,9 +51,11 @@ func (mv *momentumVerifier) Momentum(detailed *nom.DetailedMomentum) error {
 	}
 
 	return (&rawMomentumVerifier{
-		momentum:      detailed.Momentum,
-		accountBlocks: detailed.AccountBlocks,
-		momentumStore: momentumStore,
+		momentum:            detailed.Momentum,
+		accountBlocks:       detailed.AccountBlocks,
+		momentumStore:       momentumStore,
+		chain:               mv.chain,
+		canonicalBasePlasma: mv.canonicalBasePlasma,
 	}).all()
 }
 func (mv *momentumVerifier) MomentumTransaction(transaction *nom.MomentumTransaction) error {
@@ -62,18 +65,21 @@ func (mv *momentumVerifier) MomentumTransaction(transaction *nom.MomentumTransac
 	}).all()
 }
 
-func NewMomentumVerifier(chain chain.Chain, consensus consensus.Consensus) MomentumVerifier {
+func NewMomentumVerifier(chain chain.Chain, consensus consensus.Consensus, canonicalBasePlasma CanonicalBasePlasmaFunc) MomentumVerifier {
 	return &momentumVerifier{
-		log:       common.VerifierLogger.New("type", "momentum"),
-		chain:     chain,
-		consensus: consensus,
+		log:                 common.VerifierLogger.New("type", "momentum"),
+		chain:               chain,
+		consensus:           consensus,
+		canonicalBasePlasma: canonicalBasePlasma,
 	}
 }
 
 type rawMomentumVerifier struct {
-	momentum      *nom.Momentum
-	accountBlocks []*nom.AccountBlock
-	momentumStore store.Momentum
+	momentum            *nom.Momentum
+	accountBlocks       []*nom.AccountBlock
+	momentumStore       store.Momentum
+	chain               chain.Chain
+	canonicalBasePlasma CanonicalBasePlasmaFunc
 }
 
 func (rmv *rawMomentumVerifier) all() error {
@@ -246,6 +252,11 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 					return errors.Errorf("exceeded maximum allowed contract account blocks in momentum")
 				}
 			} else {
+				canonical, err := rmv.canonicalBasePlasma(rmv.chain, block)
+				if err != nil {
+					return err
+				}
+				block.BasePlasma = canonical
 				if !plasma.ValidPrice(block) {
 					return errors.Errorf("block price is too small")
 				}

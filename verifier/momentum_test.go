@@ -3,9 +3,12 @@ package verifier
 import (
 	"testing"
 
+	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/dp"
+	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
 // stubMomentumStore satisfies store.Momentum by embedding a nil interface and
@@ -16,6 +19,20 @@ type stubMomentumStore struct {
 
 func (*stubMomentumStore) GetFrontierAccountBlock(types.Address) (*nom.AccountBlock, error) {
 	return nil, nil
+}
+
+func (*stubMomentumStore) GetMomentumByHash(types.Hash) (*nom.Momentum, error) {
+	return &nom.Momentum{Version: 1}, nil
+}
+
+func (*stubMomentumStore) GetPlasmaVariables() (*definition.PlasmaVariables, error) {
+	return &definition.PlasmaVariables{
+		MaxBasePlasmaInMomentum: 1_000_000_000,
+		FusedPlasmaTarget:       21000,
+		PowPlasmaTarget:         21000,
+		MaxPriceChangePercent:   10,
+		PriceChangeDenominator:  20,
+	}, nil
 }
 
 // A momentum content header with no matching entry in the prefetched
@@ -159,5 +176,81 @@ func TestRawMomentumVerifier_Content_AddressMismatch_ReturnsError(t *testing.T) 
 	err := rmv.content(false)
 	if err == nil {
 		t.Fatal("expected an error for a content header address mismatching its account block, got nil")
+	}
+}
+
+// content() must recompute a block's price from the injected canonical base
+// plasma rather than trusting the wire BasePlasma, so a momentum whose prices
+// were derived by a byzantine producer from a forged wire value is rejected.
+func TestRawMomentumVerifier_Content_ForgedBasePlasma_ReturnsError(t *testing.T) {
+	const (
+		canonical = uint64(21000)
+		forged    = uint64(100000)
+	)
+
+	address := types.ParseAddressPanic("z1qph8dkja68pg3g6j4spwk9re0kjdkul0amwqnt")
+	blockHash := types.NewHash([]byte("block"))
+
+	block := &nom.AccountBlock{
+		Address:     address,
+		Hash:        blockHash,
+		Height:      1,
+		Difficulty:  0,
+		BasePlasma:  forged,
+		FusedPlasma: canonical,
+	}
+
+	momentum := &nom.Momentum{
+		Version: 2,
+		Content: nom.MomentumContent{
+			{
+				Address: address,
+				HashHeight: types.HashHeight{
+					Hash:   blockHash,
+					Height: 1,
+				},
+			},
+		},
+	}
+
+	config := &definition.PlasmaVariables{
+		MaxBasePlasmaInMomentum: 1_000_000_000,
+		FusedPlasmaTarget:       canonical,
+		PowPlasmaTarget:         canonical,
+		MaxPriceChangePercent:   10,
+		PriceChangeDenominator:  20,
+	}
+
+	// The prices a byzantine producer would have derived from the forged wire
+	// BasePlasma.
+	forgedBlock := &nom.AccountBlock{
+		Address:     address,
+		Hash:        blockHash,
+		Height:      1,
+		Difficulty:  0,
+		BasePlasma:  forged,
+		FusedPlasma: canonical,
+	}
+	byzantinePlasma := dp.NewDynamicPlasma(&nom.Momentum{Version: 1}, config)
+	byzantineBasePlasma := types.BasePlasma{Fusion: 0, Pow: 0}
+	byzantineBasePlasma.Add(byzantinePlasma.ComputeBasePlasma(forgedBlock))
+	momentum.NextFusionPrice = byzantinePlasma.NextFusionPrice(byzantineBasePlasma.Fusion)
+	momentum.NextWorkPrice = byzantinePlasma.NextWorkPrice(byzantineBasePlasma.Pow)
+
+	accountBlocks := []*nom.AccountBlock{block}
+
+	rmv := &rawMomentumVerifier{
+		momentum:      momentum,
+		accountBlocks: accountBlocks,
+		momentumStore: &stubMomentumStore{},
+		chain:         nil,
+		canonicalBasePlasma: func(chain.Chain, *nom.AccountBlock) (uint64, error) {
+			return canonical, nil
+		},
+	}
+
+	err := rmv.content(true)
+	if err == nil {
+		t.Fatal("expected an error for a momentum whose prices were derived from a forged wire base plasma, got nil")
 	}
 }
