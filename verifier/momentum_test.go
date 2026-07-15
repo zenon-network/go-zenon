@@ -96,7 +96,7 @@ func TestRawMomentumVerifier_Content_DuplicateAccountBlock_ReturnsError(t *testi
 // same prefetched account-block, even when a distinct filler block keeps the
 // lookup and content sizes equal.
 func TestRawMomentumVerifier_Content_DuplicateContentHeader_ReturnsError(t *testing.T) {
-	address := types.ParseAddressPanic("z1qph8dkja68pg3g6j4spwk9re0kjdkul0amwqnt")
+	address := types.PlasmaContract
 	blockAHash := types.NewHash([]byte("block-a"))
 	blockBHash := types.NewHash([]byte("block-b"))
 
@@ -110,8 +110,9 @@ func TestRawMomentumVerifier_Content_DuplicateContentHeader_ReturnsError(t *test
 	momentum := &nom.Momentum{
 		Content: nom.MomentumContent{&header, &header},
 	}
+	// Batched contract sends skip chain-order validation, isolating the lookup-consumption check.
 	accountBlocks := []*nom.AccountBlock{
-		{Address: address, Hash: blockAHash, Height: 1},
+		{BlockType: nom.BlockTypeContractSend, Address: address, Hash: blockAHash, Height: 1},
 		{Address: address, Hash: blockBHash, Height: 2},
 	}
 
