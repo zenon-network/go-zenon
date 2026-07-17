@@ -147,7 +147,12 @@ func (m *cacheManager) Stop() error {
 }
 
 func (m *cacheManager) getRollback(height uint64) (db.Patch, error) {
-	snapshot, _ := m.ldb.GetSnapshot()
+	snapshot, err := m.ldb.GetSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	defer snapshot.Release()
+
 	value, err := snapshot.Get(common.JoinBytes(rollbackByte, common.Uint64ToBytes(height)), nil)
 	if err != nil {
 		return nil, err

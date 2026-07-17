@@ -1,6 +1,8 @@
 package db
 
 import (
+	"errors"
+
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/comparer"
 )
@@ -98,10 +100,16 @@ func (mi *mergedIterator) Next() bool {
 	return mi.step()
 }
 func (mi *mergedIterator) Prev() bool {
-	panic("unimplemented")
+	if mi.err == nil {
+		mi.err = errors.New("mergedIterator does not support reverse iteration")
+	}
+	return false
 }
 func (mi *mergedIterator) Last() bool {
-	panic("unimplemented")
+	if mi.err == nil {
+		mi.err = errors.New("mergedIterator does not support reverse iteration")
+	}
+	return false
 }
 func (mi *mergedIterator) Key() []byte {
 	if mi.current == noCurrent || mi.err != nil {

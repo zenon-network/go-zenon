@@ -38,11 +38,15 @@ func (b *broadcaster) CreateMomentum(momentumTransaction *nom.MomentumTransactio
 		return
 	}
 	err = b.chain.AddMomentumTransaction(insert, momentumTransaction)
-	insert.Unlock()
 	if err != nil {
+		if rollbackErr := b.chain.RollbackCacheTo(insert, momentumTransaction.Momentum.Previous()); rollbackErr != nil {
+			b.log.Error("failed to roll back cache after failed momentum insertion", "reason", rollbackErr)
+		}
+		insert.Unlock()
 		b.log.Error("failed to insert own momentum", "reason", err)
 		return
 	}
+	insert.Unlock()
 
 	store := b.chain.GetFrontierMomentumStore()
 	detailed, err = store.PrefetchMomentum(momentumTransaction.Momentum)

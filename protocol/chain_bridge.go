@@ -218,6 +218,9 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		}
 		if err := c.chain.AddMomentumTransaction(insert, transaction); err != nil {
 			log.Error("error while inserting momentum", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+			if rollbackErr := c.chain.RollbackCacheTo(insert, detailed.Momentum.Previous()); rollbackErr != nil {
+				log.Error("error while rolling back cache after failed momentum insertion", "reason", rollbackErr, "momentum-identifier", detailed.Momentum.Identifier())
+			}
 			return index + start, err
 		}
 	}

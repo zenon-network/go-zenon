@@ -60,7 +60,12 @@ func (c *chainCache) update(detailed *nom.DetailedMomentum, changes db.Patch) er
 	momentum := detailed.Momentum
 	c.log.Info("inserting new momentum to chain cache", "identifier", momentum.Identifier())
 	store := c.getFrontierStore()
-	store.ApplyMomentum(detailed, changes)
+	if store == nil {
+		return errors.Errorf("cache frontier store is nil")
+	}
+	if err := store.ApplyMomentum(detailed, changes); err != nil {
+		return err
+	}
 	patch, err := store.Changes()
 	if err != nil {
 		return err
