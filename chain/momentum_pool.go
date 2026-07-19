@@ -42,6 +42,9 @@ func (c *momentumPool) AddMomentumTransaction(insertLocker sync.Locker, transact
 	store := c.getFrontierStore()
 	detailed, err := store.PrefetchMomentum(momentum)
 	if err != nil {
+		if popErr := c.chainManager.Pop(); popErr != nil {
+			c.log.Error("failed to roll back canonical chain after failed momentum insertion", "reason", popErr, "identifier", momentum.Identifier())
+		}
 		return err
 	}
 
@@ -51,6 +54,13 @@ func (c *momentumPool) AddMomentumTransaction(insertLocker sync.Locker, transact
 
 	frontier := c.getFrontierStore()
 	if justNow, unimplemented, err := GotAllActiveSporksImplemented(frontier); err != nil {
+		if popErr := c.chainManager.Pop(); popErr != nil {
+			c.log.Error("failed to roll back canonical chain after failed momentum insertion", "reason", popErr, "identifier", momentum.Identifier())
+		} else {
+			c.changes.Unlock()
+			c.broadcastDeleteMomentum(detailed)
+			c.changes.Lock()
+		}
 		return err
 	} else if unimplemented != nil {
 		c.log.Crit("can't insert momentum because don't have all sporks implemented",
