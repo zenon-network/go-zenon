@@ -25,6 +25,34 @@ type momentumPool struct {
 	changes      sync.Mutex
 }
 
+// ErrCanonicalStateUncertain is returned when a momentum insertion fails and the
+// compensating rollback of the canonical chain also fails, leaving the canonical
+// frontier at an unknown position. Callers must not attempt a cache-only rollback
+// in response and must treat processing as unrecoverable.
+type ErrCanonicalStateUncertain struct {
+	Cause       error
+	RollbackErr error
+}
+
+func (e *ErrCanonicalStateUncertain) Error() string {
+	return fmt.Sprintf("canonical chain state uncertain: insertion failed (%v) and canonical rollback failed (%v)", e.Cause, e.RollbackErr)
+}
+
+func (e *ErrCanonicalStateUncertain) Unwrap() error {
+	return e.Cause
+}
+
+// rollbackFailedInsert undoes a canonical Add() after a later validation step failed.
+// If the rollback itself fails, the canonical frontier is in an unknown position
+// relative to the cache and cause is wrapped in ErrCanonicalStateUncertain.
+func (c *momentumPool) rollbackFailedInsert(cause error, identifier types.HashHeight) error {
+	if popErr := c.chainManager.Pop(); popErr != nil {
+		c.log.Error("failed to roll back canonical chain after failed momentum insertion", "reason", popErr, "cause", cause, "identifier", identifier)
+		return &ErrCanonicalStateUncertain{Cause: cause, RollbackErr: popErr}
+	}
+	return cause
+}
+
 func (c *momentumPool) AddMomentumTransaction(insertLocker sync.Locker, transaction *nom.MomentumTransaction) error {
 	c.log.Info("inserting new momentum", "identifier", transaction.Momentum.Identifier())
 	if insertLocker == nil {
@@ -42,27 +70,15 @@ func (c *momentumPool) AddMomentumTransaction(insertLocker sync.Locker, transact
 	store := c.getFrontierStore()
 	detailed, err := store.PrefetchMomentum(momentum)
 	if err != nil {
-		if popErr := c.chainManager.Pop(); popErr != nil {
-			c.log.Error("failed to roll back canonical chain after failed momentum insertion", "reason", popErr, "identifier", momentum.Identifier())
-		}
-		return err
+		return c.rollbackFailedInsert(err, momentum.Identifier())
 	}
 
-	c.changes.Unlock()
-	c.broadcastInsertMomentum(detailed)
-	c.changes.Lock()
-
 	frontier := c.getFrontierStore()
-	if justNow, unimplemented, err := GotAllActiveSporksImplemented(frontier); err != nil {
-		if popErr := c.chainManager.Pop(); popErr != nil {
-			c.log.Error("failed to roll back canonical chain after failed momentum insertion", "reason", popErr, "identifier", momentum.Identifier())
-		} else {
-			c.changes.Unlock()
-			c.broadcastDeleteMomentum(detailed)
-			c.changes.Lock()
-		}
-		return err
-	} else if unimplemented != nil {
+	justNow, unimplemented, err := GotAllActiveSporksImplemented(frontier)
+	if err != nil {
+		return c.rollbackFailedInsert(err, momentum.Identifier())
+	}
+	if unimplemented != nil {
 		c.log.Crit("can't insert momentum because don't have all sporks implemented",
 			"hash", momentum.Hash, "height", momentum.Height, "unimplemented", unimplemented)
 
@@ -76,7 +92,14 @@ func (c *momentumPool) AddMomentumTransaction(insertLocker sync.Locker, transact
 		fmt.Printf("Please upgrade your znnd binary\n")
 		fmt.Printf("znnd is terminating\n")
 		os.Exit(2)
-	} else if justNow != nil {
+	}
+
+	// All post-insert validation succeeded: listeners can now be notified.
+	c.changes.Unlock()
+	c.broadcastInsertMomentum(detailed)
+	c.changes.Lock()
+
+	if justNow != nil {
 		fmt.Printf("\n")
 		fmt.Printf("===== Congratulations! =====\n")
 		fmt.Printf("Just activated spork '%v'\n", justNow.Name)

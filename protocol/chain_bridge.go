@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/pkg/errors"
 
@@ -218,8 +219,14 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		}
 		if err := c.chain.AddMomentumTransaction(insert, transaction); err != nil {
 			log.Error("error while inserting momentum", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+			var uncertain *chain.ErrCanonicalStateUncertain
+			if errors.As(err, &uncertain) {
+				log.Crit("canonical chain state uncertain after failed momentum insertion, can't continue", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+				os.Exit(2)
+			}
 			if rollbackErr := c.chain.RollbackCacheTo(insert, detailed.Momentum.Previous()); rollbackErr != nil {
-				log.Error("error while rolling back cache after failed momentum insertion", "reason", rollbackErr, "momentum-identifier", detailed.Momentum.Identifier())
+				log.Crit("cache rollback failed after failed momentum insertion, can't continue", "reason", rollbackErr, "cause", err, "momentum-identifier", detailed.Momentum.Identifier())
+				os.Exit(2)
 			}
 			return index + start, err
 		}

@@ -2,6 +2,9 @@ package protocol
 
 import (
 	"fmt"
+	"os"
+
+	"github.com/pkg/errors"
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
@@ -39,8 +42,16 @@ func (b *broadcaster) CreateMomentum(momentumTransaction *nom.MomentumTransactio
 	}
 	err = b.chain.AddMomentumTransaction(insert, momentumTransaction)
 	if err != nil {
+		var uncertain *chain.ErrCanonicalStateUncertain
+		if errors.As(err, &uncertain) {
+			insert.Unlock()
+			b.log.Crit("canonical chain state uncertain after failed momentum insertion, can't continue", "reason", err)
+			os.Exit(2)
+		}
 		if rollbackErr := b.chain.RollbackCacheTo(insert, momentumTransaction.Momentum.Previous()); rollbackErr != nil {
-			b.log.Error("failed to roll back cache after failed momentum insertion", "reason", rollbackErr)
+			insert.Unlock()
+			b.log.Crit("cache rollback failed after failed momentum insertion, can't continue", "reason", rollbackErr, "cause", err)
+			os.Exit(2)
 		}
 		insert.Unlock()
 		b.log.Error("failed to insert own momentum", "reason", err)
