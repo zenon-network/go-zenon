@@ -4,12 +4,12 @@
     "crypto": {
         "cipherName": "aes-256-gcm",
         "kdf": "argon2.IDKey",
-        "cipherData": "0x32b9a44e3b8059ca296afc9b3514379418cc2892f1c31d319ad1002fc65cd3b3c7eebbc7f0d36ca333be94a642bc2b27",
-        "nonce": "0xfd594d350cd59446fa7eba35",
+        "cipherData": "0xc9d3c395508ba5e6bc998636700575f5f0e02f77f171b2337cc39eb642ea5b26c35f61d241a8ba0661d31bcca648c2ff",
+        "nonce": "0xa2d75d26167601915b9481cb",
         "argon2Params": {
-            "salt": "0x3b10aad83f209c821de41dbf5c0638ac"
+            "salt": "0x1314ef2e238f167c2eed3021dd89fa5a"
         }
     },
     "version": 1,
-    "timestamp": 1777716397
+    "timestamp": 1779192425
 }

@@ -31,7 +31,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
-	"github.com/zenon-network/go-zenon/p2p/nat"
+	"github.com/zenon-network/go-zenon/p2p/legacy/nat"
 )
 
 const Version = 4

@@ -46,7 +46,32 @@ type NetConfig struct {
 	MaxPeers          int
 	MaxPendingPeers   int
 
+	// Seeders is the legacy bootstrap list (enode:// format), used by
+	// the devp2p/RLPX backend pre-activation. Existing operator configs
+	// populate this field.
 	Seeders []string
+
+	// BootstrapPeers is the libp2p bootstrap list (multiaddr format),
+	// used by the libp2p backend post-activation. New field; operators
+	// add it to config.json when the spork-gated rollout begins. Omitted
+	// configs fall back to p2p.DefaultBootstrapPeers.
+	BootstrapPeers []string
+
+	// NATPortMap enables UPnP / NAT-PMP port mapping for the libp2p
+	// backend. Default false (matches the pre-libp2p network: legacy
+	// had NAT mapping unconfigured in the standard wiring path, so it
+	// was effectively off). Home operators behind a NATting router can
+	// opt-in by setting this to true in config.json.
+	NATPortMap bool
+
+	// PeerstoreDir is an optional override for the libp2p peer-database
+	// directory. A pointer so config.json can distinguish "omitted" from
+	// "explicitly set to empty": when the field is omitted (nil),
+	// node/config.go places it at <DataPath>/network/libp2p-peerstore/;
+	// when explicitly set to "", peer persistence is disabled (every
+	// restart is a cold start), per p2p.Config.PeerstoreDir. Operators
+	// normally don't need to set this at all.
+	PeerstoreDir *string
 }
 
 type Config struct {
@@ -191,6 +216,15 @@ func (c *Config) makeNetConfig() *p2p.Net {
 	networkDataDir := filepath.Join(c.DataPath, p2p.DefaultNetDirName)
 	privateKeyFile := filepath.Join(c.DataPath, p2p.DefaultNetPrivateKeyFile)
 
+	// Default the libp2p peerstore to a sibling of the legacy nodeDb
+	// unless the operator set an explicit override in config.json. An
+	// explicit empty string disables peer persistence rather than
+	// falling back to the default path.
+	peerstoreDir := filepath.Join(networkDataDir, p2p.DefaultPeerstoreDirName)
+	if c.Net.PeerstoreDir != nil {
+		peerstoreDir = *c.Net.PeerstoreDir
+	}
+
 	return &p2p.Net{
 		PrivateKeyFile:    privateKeyFile,
 		MaxPeers:          c.Net.MaxPeers,
@@ -198,6 +232,9 @@ func (c *Config) makeNetConfig() *p2p.Net {
 		MinConnectedPeers: c.Net.MinConnectedPeers,
 		Name:              fmt.Sprintf("%v %v", metadata.Version, c.Name),
 		Seeders:           c.Net.Seeders,
+		BootstrapPeers:    c.Net.BootstrapPeers,
+		NATPortMap:        c.Net.NATPortMap,
+		PeerstoreDir:      peerstoreDir,
 		NodeDatabase:      networkDataDir,
 		ListenAddr:        c.Net.ListenHost,
 		ListenPort:        c.Net.ListenPort,

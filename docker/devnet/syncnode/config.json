@@ -4,12 +4,15 @@
     "LogLevel": "info",
     "Name": "devnet-syncnode",
     "Net": {
+        "BootstrapPeers": [
+            "/ip4/172.30.0.10/tcp/35995/p2p/16Uiu2HAmRe2RazMPxYEV1A8Vs7LbVfNVMqBdiw7zgSkBLB3E2vQv"
+        ],
         "ListenHost": "0.0.0.0",
         "ListenPort": 35995,
         "MinConnectedPeers": 5,
         "MinPeers": 1,
         "Seeders": [
-            "enode://91125cf1d9986023f41a5ba5b7d171956834873fdf2b3c825208522a7a581d3f56aa9c24d2008d606ec703ab6e23234d506152f9c4094d6732718e408cf76442@172.30.0.10:35995"
+            "enode://c0e8b1c4cffe16c4aa8d394655fd11a0548cab01281d2838c868cd3a12284717d1e66b410bde0d8aa76cb149fdb4dc252e932f4f92394d651e425628e8761971@172.30.0.10:35995"
         ]
     },
     "RPC": {

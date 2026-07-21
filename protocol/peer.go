@@ -41,7 +41,7 @@ const (
 )
 
 type peer struct {
-	*p2p.Peer
+	p2p.Peer
 
 	rw p2p.MsgReadWriter
 
@@ -58,7 +58,7 @@ type peer struct {
 	knownBlocks *lru.Cache // Set of block hashes known to be known by this peer
 }
 
-func newPeer(version, network int, p *p2p.Peer, rw p2p.MsgReadWriter) *peer {
+func newPeer(version, network int, p p2p.Peer, rw p2p.MsgReadWriter) *peer {
 	id := p.ID()
 
 	knownTxs, err := lru.New(maxKnownTxs)
@@ -71,7 +71,7 @@ func newPeer(version, network int, p *p2p.Peer, rw p2p.MsgReadWriter) *peer {
 		rw:          rw,
 		version:     version,
 		network:     network,
-		id:          fmt.Sprintf("%x", id[:8]),
+		id:          fmt.Sprintf("%x", id[:]),
 		knownTxs:    knownTxs,
 		knownBlocks: knownBlocks,
 	}

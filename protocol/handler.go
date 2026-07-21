@@ -82,7 +82,7 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 			Name:    "eth",
 			Version: version,
 			Length:  ProtocolLengths[i],
-			Run: func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
+			Run: func(p p2p.Peer, rw p2p.MsgReadWriter) error {
 				peer := manager.newPeer(int(version), int(networkId), p, rw)
 				manager.newPeerCh <- peer
 				return manager.handle(peer)
@@ -163,7 +163,7 @@ func (pm *ProtocolManager) Stop() {
 	log.Info("Protocol handler stopped")
 }
 
-func (pm *ProtocolManager) newPeer(pv, nv int, p *p2p.Peer, rw p2p.MsgReadWriter) *peer {
+func (pm *ProtocolManager) newPeer(pv, nv int, p p2p.Peer, rw p2p.MsgReadWriter) *peer {
 	return newPeer(pv, nv, p, rw)
 }
 
