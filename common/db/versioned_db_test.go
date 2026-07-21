@@ -1,9 +1,12 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"testing"
+
+	"github.com/syndtr/goleveldb/leveldb"
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -62,6 +65,60 @@ func newMockTransaction(seed int64, db DB) *mockTransaction {
 	return &mockTransaction{
 		patch:  changes,
 		commit: ab,
+	}
+}
+
+func TestLevelDBManagerAddWriteFailureIsAtomic(t *testing.T) {
+	m := NewLevelDBManager(t.TempDir()).(*ldbManager)
+	defer m.Stop()
+
+	before := GetFrontierIdentifier(m.Frontier())
+	transaction := newMockTransaction(1, m.Frontier())
+	identifier := transaction.commit.Identifier()
+	writeErr := errors.New("write failed")
+	m.write = func(*leveldb.Batch) error {
+		return writeErr
+	}
+
+	if err := m.Add(transaction); !errors.Is(err, writeErr) {
+		t.Fatalf("expected write error, got %v", err)
+	}
+	common.Expect(t, GetFrontierIdentifier(m.Frontier()), before)
+
+	for _, key := range [][]byte{
+		common.JoinBytes(patchByte, common.Uint64ToBytes(identifier.Height)),
+		common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height)),
+	} {
+		has, err := m.ldb.Has(key, nil)
+		common.FailIfErr(t, err)
+		common.ExpectTrue(t, !has)
+	}
+}
+
+func TestLevelDBManagerPopWriteFailureIsAtomic(t *testing.T) {
+	m := NewLevelDBManager(t.TempDir()).(*ldbManager)
+	defer m.Stop()
+
+	transaction := newMockTransaction(1, m.Frontier())
+	common.FailIfErr(t, m.Add(transaction))
+	before := GetFrontierIdentifier(m.Frontier())
+	writeErr := errors.New("write failed")
+	m.write = func(*leveldb.Batch) error {
+		return writeErr
+	}
+
+	if err := m.Pop(); !errors.Is(err, writeErr) {
+		t.Fatalf("expected write error, got %v", err)
+	}
+	common.Expect(t, GetFrontierIdentifier(m.Frontier()), before)
+
+	for _, key := range [][]byte{
+		common.JoinBytes(patchByte, common.Uint64ToBytes(before.Height)),
+		common.JoinBytes(rollbackByte, common.Uint64ToBytes(before.Height)),
+	} {
+		has, err := m.ldb.Has(key, nil)
+		common.FailIfErr(t, err)
+		common.ExpectTrue(t, has)
 	}
 }
 
