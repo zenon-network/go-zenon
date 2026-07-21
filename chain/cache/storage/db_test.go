@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/syndtr/goleveldb/leveldb"
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
@@ -20,6 +23,53 @@ func getMockIdentifier(height uint64) types.HashHeight {
 		Hash:   types.NewHash([]byte(fmt.Sprint(height))),
 		Height: height,
 	}
+}
+
+func TestAddWriteFailureIsAtomic(t *testing.T) {
+	m := NewCacheDBManager(t.TempDir()).(*cacheManager)
+	defer m.Stop()
+
+	common.FailIfErr(t, m.Add(getMockIdentifier(1), getMockPatch([]byte{1})))
+	beforeIdentifier := GetFrontierIdentifier(m.DB())
+	beforeDump := db.DebugDB(m.DB())
+	writeErr := errors.New("write failed")
+	m.write = func(*leveldb.Batch) error {
+		return writeErr
+	}
+
+	if err := m.Add(getMockIdentifier(2), getMockPatch([]byte{2})); !errors.Is(err, writeErr) {
+		t.Fatalf("expected write error, got %v", err)
+	}
+	common.Expect(t, GetFrontierIdentifier(m.DB()), beforeIdentifier)
+	common.ExpectString(t, db.DebugDB(m.DB()), beforeDump)
+
+	has, err := m.ldb.Has(common.JoinBytes(rollbackByte, common.Uint64ToBytes(2)), nil)
+	common.FailIfErr(t, err)
+	common.ExpectTrue(t, !has)
+}
+
+func TestPopWriteFailureIsAtomic(t *testing.T) {
+	m := NewCacheDBManager(t.TempDir()).(*cacheManager)
+	defer m.Stop()
+
+	common.FailIfErr(t, m.Add(getMockIdentifier(1), getMockPatch([]byte{1})))
+	common.FailIfErr(t, m.Add(getMockIdentifier(2), getMockPatch([]byte{2})))
+	beforeIdentifier := GetFrontierIdentifier(m.DB())
+	beforeDump := db.DebugDB(m.DB())
+	writeErr := errors.New("write failed")
+	m.write = func(*leveldb.Batch) error {
+		return writeErr
+	}
+
+	if err := m.Pop(); !errors.Is(err, writeErr) {
+		t.Fatalf("expected write error, got %v", err)
+	}
+	common.Expect(t, GetFrontierIdentifier(m.DB()), beforeIdentifier)
+	common.ExpectString(t, db.DebugDB(m.DB()), beforeDump)
+
+	has, err := m.ldb.Has(common.JoinBytes(rollbackByte, common.Uint64ToBytes(2)), nil)
+	common.FailIfErr(t, err)
+	common.ExpectTrue(t, has)
 }
 
 func TestPop(t *testing.T) {

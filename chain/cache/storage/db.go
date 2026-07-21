@@ -44,6 +44,7 @@ type CacheManager interface {
 
 type cacheManager struct {
 	ldb     *leveldb.DB
+	write   func(*leveldb.Batch) error
 	changes sync.Mutex
 	stopped bool
 }
@@ -54,6 +55,9 @@ func NewCacheDBManager(dataDir string) CacheManager {
 	common.DealWithErr(err)
 	return &cacheManager{
 		ldb: db,
+		write: func(batch *leveldb.Batch) error {
+			return db.Write(batch, nil)
+		},
 	}
 }
 
@@ -93,20 +97,22 @@ func (m *cacheManager) Add(identifier types.HashHeight, patch db.Patch) error {
 	if err := frontierPatch.Replay(patch); err != nil {
 		return err
 	}
-	rollbackPatch := db.RollbackPatch(m.DB(), patch)
-
 	m.changes.Lock()
 	defer m.changes.Unlock()
+	if m.stopped {
+		return leveldb.ErrClosed
+	}
 
-	if err := m.ldb.Put(common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height)), rollbackPatch.Dump(), nil); err != nil {
+	rollbackPatch := db.RollbackPatch(db.NewLevelDBWrapperWithFullDelete(m.ldb).Subset(storageByte), patch)
+	batch := new(leveldb.Batch)
+	batch.Put(common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height)), rollbackPatch.Dump())
+	if identifier.Height > rollbackCacheSize {
+		batch.Delete(common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height-rollbackCacheSize)))
+	}
+	if err := db.AppendPatchToLevelDBBatch(batch, storageByte, patch, true); err != nil {
 		return err
 	}
-	if identifier.Height > rollbackCacheSize {
-		if err := m.ldb.Delete(common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height-rollbackCacheSize)), nil); err != nil {
-			return err
-		}
-	}
-	if err := db.ApplyPatch(db.NewLevelDBWrapperWithFullDelete(m.ldb).Subset(storageByte), patch); err != nil {
+	if err := m.write(batch); err != nil {
 		return err
 	}
 	// Compact the db manually since the automatic compaction mechanism causes performance issues when throughput increases.
@@ -117,22 +123,24 @@ func (m *cacheManager) Add(identifier types.HashHeight, patch db.Patch) error {
 }
 
 func (m *cacheManager) Pop() error {
-	frontierIdentifier := GetFrontierIdentifier(m.DB())
+	m.changes.Lock()
+	defer m.changes.Unlock()
+	if m.stopped {
+		return leveldb.ErrClosed
+	}
+
+	frontierIdentifier := GetFrontierIdentifier(db.NewLevelDBWrapper(m.ldb).Subset(storageByte))
 	rollbackPatch, err := m.getRollback(frontierIdentifier.Height)
 	if err != nil {
 		return err
 	}
 
-	m.changes.Lock()
-	defer m.changes.Unlock()
-
-	if err := db.ApplyPatch(db.NewLevelDBWrapperWithFullDelete(m.ldb).Subset(storageByte), rollbackPatch); err != nil {
+	batch := new(leveldb.Batch)
+	if err := db.AppendPatchToLevelDBBatch(batch, storageByte, rollbackPatch, true); err != nil {
 		return err
 	}
-	if err := m.ldb.Delete(common.JoinBytes(rollbackByte, common.Uint64ToBytes(frontierIdentifier.Height)), nil); err != nil {
-		return err
-	}
-	return nil
+	batch.Delete(common.JoinBytes(rollbackByte, common.Uint64ToBytes(frontierIdentifier.Height)))
+	return m.write(batch)
 }
 
 func (m *cacheManager) Stop() error {
