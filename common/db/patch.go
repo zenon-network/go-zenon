@@ -80,6 +80,25 @@ func (pa *patchApplier) Delete(key []byte) {
 	pa.err = pa.db.Delete(key)
 }
 
+type levelDBBatchApplier struct {
+	batch      *leveldb.Batch
+	prefix     []byte
+	fullDelete bool
+}
+
+func (pa *levelDBBatchApplier) Put(key []byte, value []byte) {
+	pa.batch.Put(common.JoinBytes(pa.prefix, key), common.JoinBytes(existsByte, value))
+}
+
+func (pa *levelDBBatchApplier) Delete(key []byte) {
+	key = common.JoinBytes(pa.prefix, key)
+	if pa.fullDelete {
+		pa.batch.Delete(key)
+	} else {
+		pa.batch.Put(key, []byte{})
+	}
+}
+
 type patchValuePrefixer struct {
 	prefix []byte
 	Patch
@@ -185,6 +204,18 @@ func ApplyPatch(db DB, patch Patch) error {
 	}
 	return pa.err
 }
+
+// AppendPatchToLevelDBBatch adds a logical patch to a raw LevelDB batch. The
+// prefix and delete behavior must match the DB wrapper through which the patch
+// would otherwise be applied.
+func AppendPatchToLevelDBBatch(batch *leveldb.Batch, prefix []byte, patch Patch, fullDelete bool) error {
+	return patch.Replay(&levelDBBatchApplier{
+		batch:      batch,
+		prefix:     prefix,
+		fullDelete: fullDelete,
+	})
+}
+
 func ApplyWithoutOverride(db db, patch Patch) error {
 	pa := &patchApplierWO{
 		db: db,
