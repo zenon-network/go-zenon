@@ -25,17 +25,17 @@ type momentumPool struct {
 	changes      sync.Mutex
 }
 
-// ErrCanonicalStateUncertain is returned when a momentum insertion fails and the
-// compensating rollback of the canonical chain also fails, leaving the canonical
-// frontier at an unknown position. Callers must not attempt a cache-only rollback
-// in response and must treat processing as unrecoverable.
+// ErrCanonicalStateUncertain is returned when a failed insertion cannot be
+// compensated or when a multi-step rollback stops after mutating the canonical
+// chain. Callers must not attempt ordinary recovery and must treat processing as
+// unrecoverable.
 type ErrCanonicalStateUncertain struct {
 	Cause       error
 	RollbackErr error
 }
 
 func (e *ErrCanonicalStateUncertain) Error() string {
-	return fmt.Sprintf("canonical chain state uncertain: insertion failed (%v) and canonical rollback failed (%v)", e.Cause, e.RollbackErr)
+	return fmt.Sprintf("canonical chain state uncertain: operation failed (%v); recovery failed (%v)", e.Cause, e.RollbackErr)
 }
 
 func (e *ErrCanonicalStateUncertain) Unwrap() error {
@@ -125,11 +125,22 @@ func (c *momentumPool) RollbackTo(insertLocker sync.Locker, identifier types.Has
 		return errors.Errorf("can't rollback momentums. Expected %v but got %v instead", momentum.Identifier(), identifier)
 	}
 
+	popped := 0
+	rollbackError := func(err error) error {
+		if popped == 0 {
+			return err
+		}
+		return &ErrCanonicalStateUncertain{
+			Cause:       errors.Errorf("canonical rollback to %v stopped after %v successful pop(s)", identifier, popped),
+			RollbackErr: err,
+		}
+	}
+
 	for {
 		store := c.getFrontierStore()
 		frontier, err := store.GetFrontierMomentum()
 		if err != nil {
-			return err
+			return rollbackError(err)
 		}
 
 		if frontier.Height == identifier.Height {
@@ -138,11 +149,12 @@ func (c *momentumPool) RollbackTo(insertLocker sync.Locker, identifier types.Has
 		c.log.Info("rollbacking", "momentum-identifier", frontier.Identifier())
 		detailed, err := store.PrefetchMomentum(frontier)
 		if err != nil {
-			return err
+			return rollbackError(err)
 		}
 		if err := c.chainManager.Pop(); err != nil {
-			return err
+			return rollbackError(err)
 		}
+		popped++
 
 		c.changes.Unlock()
 		c.broadcastDeleteMomentum(detailed)

@@ -16,14 +16,19 @@ import (
 // exactly when Add and Pop succeed or fail, independently of real chain state.
 type fakeMomentumManagerDB struct {
 	frontierDB db.DB
+	frontiers  []db.DB
 	addErr     error
 	popErr     error
+	popErrAt   int
 
 	addCalls int
 	popCalls int
 }
 
 func (m *fakeMomentumManagerDB) Frontier() db.DB {
+	if len(m.frontiers) > 0 {
+		return m.frontiers[len(m.frontiers)-1]
+	}
 	return m.frontierDB
 }
 func (m *fakeMomentumManagerDB) Get(types.HashHeight) db.DB {
@@ -38,7 +43,13 @@ func (m *fakeMomentumManagerDB) Add(db.Transaction) error {
 }
 func (m *fakeMomentumManagerDB) Pop() error {
 	m.popCalls += 1
-	return m.popErr
+	if m.popErr != nil && (m.popErrAt == 0 || m.popErrAt == m.popCalls) {
+		return m.popErr
+	}
+	if len(m.frontiers) > 1 {
+		m.frontiers = m.frontiers[:len(m.frontiers)-1]
+	}
+	return nil
 }
 func (m *fakeMomentumManagerDB) Stop() error {
 	return nil
@@ -88,6 +99,26 @@ func newFrontierMomentumDB(identifier types.HashHeight) db.DB {
 	common.DealWithErr(err)
 	common.DealWithErr(db.SetFrontier(mem, identifier, data))
 	return mem
+}
+
+func newMomentumFrontiers(height uint64) []db.DB {
+	frontiers := make([]db.DB, 0, height)
+	for frontierHeight := uint64(1); frontierHeight <= height; frontierHeight++ {
+		mem := db.NewMemDB()
+		for momentumHeight := uint64(1); momentumHeight <= frontierHeight; momentumHeight++ {
+			identifier := testHashHeight(momentumHeight)
+			m := &nom.Momentum{
+				Hash:         identifier.Hash,
+				PreviousHash: testHashHeight(momentumHeight - 1).Hash,
+				Height:       momentumHeight,
+			}
+			data, err := m.Serialize()
+			common.DealWithErr(err)
+			common.DealWithErr(db.SetFrontier(mem, identifier, data))
+		}
+		frontiers = append(frontiers, mem)
+	}
+	return frontiers
 }
 
 func testTransaction(content nom.MomentumContent) *nom.MomentumTransaction {
@@ -183,4 +214,44 @@ func TestAddMomentumTransaction_Success(t *testing.T) {
 	common.Expect(t, manager.popCalls, 0)
 	common.Expect(t, listener.inserts, 1)
 	common.Expect(t, listener.deletes, 0)
+}
+
+func TestRollbackToFailureAfterPopIsUnrecoverable(t *testing.T) {
+	manager := &fakeMomentumManagerDB{
+		frontiers: newMomentumFrontiers(3),
+		popErr:    errors.New("second pop failed"),
+		popErrAt:  2,
+	}
+	pool, listener := newTestMomentumPool(manager)
+
+	err := pool.RollbackTo(&sync.Mutex{}, testHashHeight(1))
+
+	var uncertain *ErrCanonicalStateUncertain
+	common.ExpectTrue(t, errors.As(err, &uncertain))
+	common.ExpectTrue(t, uncertain.Cause != nil)
+	common.ExpectTrue(t, uncertain.RollbackErr != nil)
+	common.Expect(t, manager.popCalls, 2)
+	common.Expect(t, listener.inserts, 0)
+	common.Expect(t, listener.deletes, 1)
+	common.Expect(t, db.GetFrontierIdentifier(manager.Frontier()), testHashHeight(2))
+}
+
+func TestRollbackToFirstPopFailureLeavesCanonicalStateCertain(t *testing.T) {
+	popErr := errors.New("first pop failed")
+	manager := &fakeMomentumManagerDB{
+		frontiers: newMomentumFrontiers(2),
+		popErr:    popErr,
+		popErrAt:  1,
+	}
+	pool, listener := newTestMomentumPool(manager)
+
+	err := pool.RollbackTo(&sync.Mutex{}, testHashHeight(1))
+
+	var uncertain *ErrCanonicalStateUncertain
+	common.ExpectTrue(t, errors.Is(err, popErr))
+	common.ExpectTrue(t, !errors.As(err, &uncertain))
+	common.Expect(t, manager.popCalls, 1)
+	common.Expect(t, listener.inserts, 0)
+	common.Expect(t, listener.deletes, 0)
+	common.Expect(t, db.GetFrontierIdentifier(manager.Frontier()), testHashHeight(2))
 }
