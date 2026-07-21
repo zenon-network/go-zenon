@@ -94,9 +94,10 @@ func issueMultipleTokensSetup(t *testing.T, z mock.MockZenon) {
 // activate accelerator spork
 // activate bridge spork
 func activateLiquidityStep0(t *testing.T, z mock.MockZenon) {
-	activateAccelerator(z)
-	activateBridge(z)
+	activateAccelerator(t, z)
+	activateBridge(t, z)
 
+	saveBridgeConstants(t)
 	constants.InitialBridgeAdministrator = g.User5.Address
 	constants.MinGuardians = 4
 	constants.MinAdministratorDelay = 20
@@ -500,7 +501,7 @@ func TestLiquidity_Burn(t *testing.T) {
 	defer z.StopPanic()
 	//defer z.SaveLogs(common.EmbeddedLogger).HideHashes().Equals(t, ``)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 
 	// try to burn more than balance
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 0)
@@ -523,7 +524,7 @@ func TestLiquidity_Burn(t *testing.T) {
 	insertMomentums(z, 2)
 
 	// test with bridge activated
-	activateBridge(z)
+	activateBridge(t, z)
 
 	defer z.CallContract(burnLiq(g.Spork.Address, big.NewInt(187200000000))).Error(t, constants.ErrInvalidTokenOrAmount)
 	insertMomentums(z, 2)
@@ -540,7 +541,7 @@ func TestLiquidity_Burn(t *testing.T) {
 func TestLiquidity_Fund(t *testing.T) {
 	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
 	defer z.StopPanic()
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 
 	// non spork with no balance
 	z.InsertSendBlock(fundLiq(g.User1.Address, common.Big100, common.Big100), constants.ErrPermissionDenied, mock.SkipVmChanges)
@@ -576,7 +577,7 @@ func TestLiquidity_Fund(t *testing.T) {
 	z.ExpectBalance(types.LiquidityContract, types.QsrTokenStandard, 5000*g.Zexp-1000*g.Zexp)
 
 	// also test for bridge
-	activateBridge(z)
+	activateBridge(t, z)
 
 	// non spork with balance
 	z.InsertSendBlock(fundLiq(g.User1.Address, common.Big100, common.Big100), constants.ErrPermissionDenied, mock.SkipVmChanges)
@@ -2596,7 +2597,7 @@ t=2001-09-09T01:51:00+0000 lvl=info msg="received donation" module=embedded cont
 t=2001-09-09T01:51:20+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz zts=zts1qsrxxxxxxxxxxxxxmrhjll amount=100
 `)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 0)
 	z.ExpectBalance(types.LiquidityContract, types.QsrTokenStandard, 0)
@@ -2609,7 +2610,7 @@ t=2001-09-09T01:51:20+0000 lvl=info msg="received donation" module=embedded cont
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 100)
 	z.ExpectBalance(types.LiquidityContract, types.QsrTokenStandard, 100)
 
-	activateBridge(z)
+	activateBridge(t, z)
 
 	defer z.CallContract(donateLiq(g.User1.Address, types.ZnnTokenStandard, common.Big100)).Error(t, nil)
 	insertMomentums(z, 2)
@@ -2623,6 +2624,7 @@ t=2001-09-09T01:51:20+0000 lvl=info msg="received donation" module=embedded cont
 func TestLiquidity_Update(t *testing.T) {
 	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
 	defer z.StopPanic()
+	saveSporkState(t)
 	//defer z.SaveLogs(common.EmbeddedLogger).HideHashes().Equals(t, ``)
 
 	for k, _ := range types.ImplementedSporksMap {
@@ -2631,13 +2633,13 @@ func TestLiquidity_Update(t *testing.T) {
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 0)
 	z.ExpectBalance(types.LiquidityContract, types.QsrTokenStandard, 0)
 
-	activateAccelerator(z)
+	activateAccelerator(t, z)
 
 	z.InsertMomentumsTo(60*6*2 + 2)
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 1872*g.Zexp)
 	z.ExpectBalance(types.LiquidityContract, types.QsrTokenStandard, 5000*g.Zexp)
 
-	activateBridge(z)
+	activateBridge(t, z)
 
 	z.InsertMomentumsTo(60*6*3 + 2)
 	z.ExpectBalance(types.LiquidityContract, types.ZnnTokenStandard, 3744*g.Zexp)

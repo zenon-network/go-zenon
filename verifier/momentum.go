@@ -14,6 +14,7 @@ import (
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
+	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/wallet"
 )
 
@@ -23,9 +24,10 @@ type MomentumVerifier interface {
 }
 
 type momentumVerifier struct {
-	log       log15.Logger
-	chain     chain.Chain
-	consensus consensus.Consensus
+	log                 log15.Logger
+	chain               chain.Chain
+	consensus           consensus.Consensus
+	canonicalBasePlasma CanonicalBasePlasmaFunc
 }
 
 func (mv *momentumVerifier) getContext(momentum *nom.Momentum) (store.Momentum, error) {
@@ -49,9 +51,11 @@ func (mv *momentumVerifier) Momentum(detailed *nom.DetailedMomentum) error {
 	}
 
 	return (&rawMomentumVerifier{
-		momentum:      detailed.Momentum,
-		accountBlocks: detailed.AccountBlocks,
-		momentumStore: momentumStore,
+		momentum:            detailed.Momentum,
+		accountBlocks:       detailed.AccountBlocks,
+		momentumStore:       momentumStore,
+		chain:               mv.chain,
+		canonicalBasePlasma: mv.canonicalBasePlasma,
 	}).all()
 }
 func (mv *momentumVerifier) MomentumTransaction(transaction *nom.MomentumTransaction) error {
@@ -61,25 +65,32 @@ func (mv *momentumVerifier) MomentumTransaction(transaction *nom.MomentumTransac
 	}).all()
 }
 
-func NewMomentumVerifier(chain chain.Chain, consensus consensus.Consensus) MomentumVerifier {
+func NewMomentumVerifier(chain chain.Chain, consensus consensus.Consensus, canonicalBasePlasma CanonicalBasePlasmaFunc) MomentumVerifier {
 	return &momentumVerifier{
-		log:       common.VerifierLogger.New("type", "momentum"),
-		chain:     chain,
-		consensus: consensus,
+		log:                 common.VerifierLogger.New("type", "momentum"),
+		chain:               chain,
+		consensus:           consensus,
+		canonicalBasePlasma: canonicalBasePlasma,
 	}
 }
 
 type rawMomentumVerifier struct {
-	momentum      *nom.Momentum
-	accountBlocks []*nom.AccountBlock
-	momentumStore store.Momentum
+	momentum            *nom.Momentum
+	accountBlocks       []*nom.AccountBlock
+	momentumStore       store.Momentum
+	chain               chain.Chain
+	canonicalBasePlasma CanonicalBasePlasmaFunc
 }
 
 func (rmv *rawMomentumVerifier) all() error {
+	isDynamicPlasmaActive, err := rmv.momentumStore.IsSporkActive(types.DynamicPlasmaSpork)
+	if err != nil {
+		return err
+	}
 	if err := rmv.chainIdentifier(); err != nil {
 		return err
 	}
-	if err := rmv.version(); err != nil {
+	if err := rmv.version(isDynamicPlasmaActive); err != nil {
 		return err
 	}
 	if err := rmv.timestamp(); err != nil {
@@ -91,7 +102,13 @@ func (rmv *rawMomentumVerifier) all() error {
 	if err := rmv.data(); err != nil {
 		return err
 	}
-	if err := rmv.content(); err != nil {
+	if err := rmv.nextFusionPrice(); err != nil {
+		return err
+	}
+	if err := rmv.nextWorkPrice(); err != nil {
+		return err
+	}
+	if err := rmv.content(isDynamicPlasmaActive); err != nil {
 		return err
 	}
 	return nil
@@ -105,12 +122,18 @@ func (rmv *rawMomentumVerifier) chainIdentifier() error {
 	}
 	return nil
 }
-func (rmv *rawMomentumVerifier) version() error {
+func (rmv *rawMomentumVerifier) version(isDynamicPlasmaActive bool) error {
 	if rmv.momentum.Version == 0 {
 		return ErrMVersionMissing
 	}
-	if rmv.momentum.Version != 1 {
-		return ErrMVersionInvalid
+	if isDynamicPlasmaActive {
+		if rmv.momentum.Version != 2 {
+			return ErrMVersionInvalid
+		}
+	} else {
+		if rmv.momentum.Version != 1 {
+			return ErrMVersionInvalid
+		}
 	}
 	return nil
 }
@@ -155,20 +178,108 @@ func (rmv *rawMomentumVerifier) data() error {
 	}
 	return nil
 }
-func (rmv *rawMomentumVerifier) content() error {
-	if len(rmv.momentum.Content) > chain.MaxAccountBlocksInMomentum {
-		return ErrMContentTooBig
+func (rmv *rawMomentumVerifier) nextFusionPrice() error {
+	if rmv.momentum.Version == 1 && rmv.momentum.NextFusionPrice != 0 {
+		return ErrMDataMustBeZero
+	} else if rmv.momentum.Version >= 2 && rmv.momentum.NextFusionPrice < dp.MinResourcePrice {
+		return ErrMMinimumValueInvalid
 	}
-	blocksLookup := make(map[types.HashHeight]*nom.AccountBlock)
+	return nil
+}
+func (rmv *rawMomentumVerifier) nextWorkPrice() error {
+	if rmv.momentum.Version == 1 && rmv.momentum.NextWorkPrice != 0 {
+		return ErrMDataMustBeZero
+	} else if rmv.momentum.Version >= 2 && rmv.momentum.NextWorkPrice < dp.MinResourcePrice {
+		return ErrMMinimumValueInvalid
+	}
+	return nil
+}
+func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
+	blocksLookup := make(map[types.HashHeight]*nom.AccountBlock, len(rmv.accountBlocks))
 
-	// insert all account-blocks in lookup map
+	// insert all account-blocks in lookup map, rejecting duplicates so a repeated block can't be
+	// counted twice for dynamic-plasma price accounting while collapsing back to one entry here
 	for _, block := range rmv.accountBlocks {
-		blocksLookup[block.Identifier()] = block
+		if block == nil {
+			return errors.Errorf("prefetched account-block is nil")
+		}
+		identifier := block.Identifier()
+		if _, ok := blocksLookup[identifier]; ok {
+			return errors.Errorf("duplicate prefetched account-block: %v", identifier)
+		}
+		blocksLookup[identifier] = block
 	}
 
 	// sizes are the same
 	if len(blocksLookup) != len(rmv.momentum.Content) {
 		return errors.Errorf("momentum content size is different than the size of the prefetched account-blocks")
+	}
+
+	// resolve each content header to its account-block once, in content order, consuming the lookup
+	// entry as it's matched so a duplicate content header can't resolve to the same block twice
+	orderedBlocks := make([]*nom.AccountBlock, len(rmv.momentum.Content))
+	for index, header := range rmv.momentum.Content {
+		identifier := header.Identifier()
+		block, ok := blocksLookup[identifier]
+		if !ok || block.Address != header.Address {
+			return errors.Errorf("content header has no matching account-block")
+		}
+		delete(blocksLookup, identifier)
+		orderedBlocks[index] = block
+	}
+	if len(blocksLookup) != 0 {
+		return errors.Errorf("prefetched account-blocks contain entries not referenced by momentum content")
+	}
+
+	if isDynamicPlasmaActive {
+		previousMomentum, err := rmv.momentumStore.GetMomentumByHash(rmv.momentum.PreviousHash)
+		if err != nil {
+			return err
+		}
+
+		config, err := rmv.momentumStore.GetPlasmaVariables()
+		if err != nil {
+			return err
+		}
+
+		plasma := dp.NewDynamicPlasma(previousMomentum, config)
+		contractBlockCount := uint64(0)
+		basePlasma := types.BasePlasma{Fusion: 0, Pow: 0}
+		for _, block := range orderedBlocks {
+			if types.IsEmbeddedAddress(block.Address) {
+				contractBlockCount++
+				if contractBlockCount > plasma.MaxContractBlocksInMomentum() {
+					return errors.Errorf("exceeded maximum allowed contract account blocks in momentum")
+				}
+			} else {
+				canonical, err := rmv.canonicalBasePlasma(rmv.chain, block)
+				if err != nil {
+					return err
+				}
+				block.BasePlasma = canonical
+				if !plasma.ValidPrice(block) {
+					return errors.Errorf("block price is too small")
+				}
+				basePlasma.Add(plasma.ComputeBasePlasma(block))
+				if basePlasma.Total() > config.MaxBasePlasmaInMomentum {
+					return ErrMContentTooBig
+				}
+			}
+		}
+
+		nextFusionPrice := plasma.NextFusionPrice(basePlasma.Fusion)
+		if nextFusionPrice != rmv.momentum.NextFusionPrice {
+			return errors.Errorf("mismatch in momentum fusion price: have %d, want %d", nextFusionPrice, rmv.momentum.NextFusionPrice)
+		}
+
+		nextWorkPrice := plasma.NextWorkPrice(basePlasma.Pow)
+		if nextWorkPrice != rmv.momentum.NextWorkPrice {
+			return errors.Errorf("mismatch in momentum work price: have %d, want %d", nextWorkPrice, rmv.momentum.NextWorkPrice)
+		}
+	} else {
+		if len(rmv.momentum.Content) > chain.MaxAccountBlocksInMomentum {
+			return ErrMContentTooBig
+		}
 	}
 
 	// account identifiers make sense when 'applying' blocks; i.e: all pairs of (previous, identifier) match
@@ -177,7 +288,7 @@ func (rmv *rawMomentumVerifier) content() error {
 	// blocks and the headers are put in a valid order, since the pillar selects which blocks and in which order
 	// are inserted in the momentum
 	heads := make(map[types.Address]types.HashHeight)
-	for _, header := range rmv.momentum.Content {
+	for index, header := range rmv.momentum.Content {
 		previous, ok := heads[header.Address]
 		if !ok {
 			pastFrontier, err := rmv.momentumStore.GetFrontierAccountBlock(header.Address)
@@ -191,10 +302,7 @@ func (rmv *rawMomentumVerifier) content() error {
 			}
 		}
 
-		block, ok := blocksLookup[header.Identifier()]
-		if !ok {
-			return errors.Errorf("momentum content header is not present in prefetched account-blocks")
-		}
+		block := orderedBlocks[index]
 		if isBatched(block) {
 			continue
 		}

@@ -41,6 +41,9 @@ var (
 	// until an embedded governance contract is taken into use.
 	// The address belongs to Mariposa01 pillar.
 	CommunitySporkAddress = ParseAddressPanic("z1qqvwzz2xq7q5gwk6uhcddgrpxlfcyzc8rsu82s")
+
+	// TODO: Update governance address to governance contract
+	GovernanceAddress = ParseAddressPanic("z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq")
 )
 
 func IsEmbeddedAddress(addr Address) bool {

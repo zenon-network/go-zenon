@@ -24,7 +24,8 @@ import (
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
-func activateBridge(z mock.MockZenon) {
+func activateBridge(t *testing.T, z mock.MockZenon) {
+	saveSporkState(t)
 	z.InsertSendBlock(&nom.AccountBlock{
 		Address:   g.Spork.Address,
 		ToAddress: types.SporkContract,
@@ -53,10 +54,11 @@ func activateBridge(z mock.MockZenon) {
 
 // Activate spork
 func activateBridgeStep0(t *testing.T, z mock.MockZenon) {
-	activateBridge(z)
+	activateBridge(t, z)
 	z.InsertMomentumsTo(10)
 
 	bridgeAPI := embedded.NewBridgeApi(z)
+	saveBridgeConstants(t)
 	constants.InitialBridgeAdministrator.SetBytes(g.User5.Address.Bytes())
 	constants.MinAdministratorDelay = 20
 	constants.MinSoftDelay = 10
@@ -3252,6 +3254,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	// We have orc info
 	activateBridgeStep1(t, z)
+	constants.MinGuardians = 4
 
 	bridgeAPI := embedded.NewBridgeApi(z)
 	securityInfo, err := bridgeAPI.GetSecurityInfo()

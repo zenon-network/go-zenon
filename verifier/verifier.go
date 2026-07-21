@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"github.com/zenon-network/go-zenon/chain"
+	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/consensus"
 )
@@ -19,9 +20,11 @@ type verifier struct {
 	MomentumVerifier
 }
 
-func NewVerifier(chain chain.Chain, consensus consensus.Consensus) Verifier {
+type CanonicalBasePlasmaFunc func(c chain.Chain, block *nom.AccountBlock) (uint64, error)
+
+func NewVerifier(chain chain.Chain, consensus consensus.Consensus, canonicalBasePlasma CanonicalBasePlasmaFunc) Verifier {
 	return &verifier{
 		AccountBlockVerifier: NewAccountBlockVerifier(chain, consensus),
-		MomentumVerifier:     NewMomentumVerifier(chain, consensus),
+		MomentumVerifier:     NewMomentumVerifier(chain, consensus, canonicalBasePlasma),
 	}
 }

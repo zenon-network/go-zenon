@@ -9,6 +9,39 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
+type fakeStable struct{}
+
+func (fakeStable) GetStableAccountDB(types.Address) db.DB {
+	return db.NewMemDB()
+}
+
+// A never-committed account has no stable frontier, so its uncommitted block
+// count must still be measured against its own frontier height, not skipped.
+func TestAccountPool_checkUncommittedBlocksCount_FreshAccount(t *testing.T) {
+	address := types.Address{1}
+	ap := newAccountPool(fakeStable{})
+	manager := ap.getAccountManager(address)
+
+	previousHash := types.ZeroHash
+	for height := uint64(1); height <= MaxUncommittedBlocksPerAccount+1; height++ {
+		block := &nom.AccountBlock{
+			Address:      address,
+			BlockType:    nom.BlockTypeUserSend,
+			Height:       height,
+			PreviousHash: previousHash,
+		}
+		block.Hash = block.ComputeHash()
+
+		common.FailIfErr(t, manager.Add(&nom.AccountBlockTransaction{
+			Block:   block,
+			Changes: db.NewPatch(),
+		}))
+		previousHash = block.Hash
+	}
+
+	common.ExpectTrue(t, ap.checkUncommittedBlocksCount(address) != nil)
+}
+
 func TestAccountPool_filterBlocksToCommit(t *testing.T) {
 	ap := accountPool{}
 	MaxAccountBlocksInMomentum = 2

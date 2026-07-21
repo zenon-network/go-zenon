@@ -45,6 +45,7 @@ type Momentum interface {
 	GetActivePillars() ([]*definition.PillarInfo, error)
 	IsSporkActive(*types.ImplementedSpork) (bool, error)
 	GetStakeBeneficialAmount(addr types.Address) (*big.Int, error)
+	GetPlasmaVariables() (*definition.PlasmaVariables, error)
 	GetTokenInfoByTs(ts types.ZenonTokenStandard) (*definition.TokenInfo, error)
 	ComputePillarDelegations() ([]*types.PillarDelegationDetail, error)
 

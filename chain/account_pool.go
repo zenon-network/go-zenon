@@ -23,7 +23,12 @@ var (
 	ErrBlockHeightNotFound                = errors.Errorf("block height does not exist in account manager")
 
 	// MaxAccountBlocksInMomentum takes into account batched account-blocks
+	// Not used after Dynamic Plasma spork
 	MaxAccountBlocksInMomentum = 100
+
+	// MaxUncommittedBlocksPerAccount limits the length of the uncommitted
+	// state a user account chain can have to limit node resource consumption.
+	MaxUncommittedBlocksPerAccount uint64 = 500
 )
 
 type Stable interface {
@@ -159,6 +164,13 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 
 	frontier := ap.getFrontierAccountStore(address)
 	frontierIdentifier := frontier.Identifier()
+
+	// check uncommitted plasma amount
+	if !forceAdd && !types.IsEmbeddedAddress(address) {
+		if err := ap.checkUncommittedBlocksCount(address); err != nil {
+			return err
+		}
+	}
 
 	// fast-forward insert on top of chain
 	if previous == frontierIdentifier {
@@ -362,6 +374,41 @@ func (ap *accountPool) getUncommittedAccountBlocksByAddress(address types.Addres
 	}
 
 	return blocks
+}
+
+func (ap *accountPool) CheckUncommittedBlocksCount(address types.Address) error {
+	ap.changes.Lock()
+	defer ap.changes.Unlock()
+
+	return ap.checkUncommittedBlocksCount(address)
+}
+func (ap *accountPool) checkUncommittedBlocksCount(address types.Address) error {
+	frontier, err := ap.getFrontierAccountStore(address).Frontier()
+	if err != nil {
+		ap.log.Info("failed to get frontier block", "reason", err)
+		return fmt.Errorf(`%w reason:%v; address:%v`, ErrFailedToAddAccountBlockTransaction, err, address)
+	}
+	stableFrontier, err := ap.getStableAccountStore(address).Frontier()
+	if err != nil {
+		ap.log.Info("failed to get stable frontier block", "reason", err)
+		return fmt.Errorf(`%w reason:%v; address:%v`, ErrFailedToAddAccountBlockTransaction, err, address)
+	}
+	if frontier == nil {
+		return nil
+	}
+	// A never-committed account has no stable frontier yet; treat it as height 0
+	// so its uncommitted blocks are still counted against the limit.
+	var stableHeight uint64
+	if stableFrontier != nil {
+		stableHeight = stableFrontier.Height
+	}
+	uncommittedBlockCount := frontier.Height - stableHeight
+	if uncommittedBlockCount+1 > MaxUncommittedBlocksPerAccount {
+		ap.log.Info("max uncommitted blocks per account reached")
+		return fmt.Errorf(`%w reason: max uncommitted blocks per account reached; address:%v`,
+			ErrFailedToAddAccountBlockTransaction, address)
+	}
+	return nil
 }
 
 func newAccountPool(stable Stable) *accountPool {

@@ -13,8 +13,10 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
+	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/vm"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/zenon"
 )
@@ -180,14 +182,26 @@ func (a *PlasmaApi) Get(address types.Address) (*PlasmaInfo, error) {
 		return nil, err
 	}
 
-	available, err := vm.AvailablePlasma(context.CacheStore(), context)
-	if err != nil {
-		return nil, err
+	var availablePlasma uint64
+	var maxPlasma uint64
+
+	if context.IsDynamicPlasmaSporkEnforced() {
+		availablePlasma, err = vm.AvailablePlasmaV2(context.CacheStore(), context)
+		if err != nil {
+			return nil, err
+		}
+		maxPlasma = dp.FusedAmountToPlasma(amount)
+	} else {
+		availablePlasma, err = vm.AvailablePlasma(context.CacheStore(), context)
+		if err != nil {
+			return nil, err
+		}
+		maxPlasma = vm.FussedAmountToPlasma(amount)
 	}
 
 	return &PlasmaInfo{
-		CurrentPlasma: available,
-		MaxPlasma:     vm.FussedAmountToPlasma(amount),
+		CurrentPlasma: availablePlasma,
+		MaxPlasma:     maxPlasma,
 		QsrAmount:     amount,
 	}, nil
 }
@@ -236,6 +250,9 @@ type GetRequiredResult struct {
 
 func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetRequiredResult, error) {
 	_, context, err := api.GetFrontierContext(a.chain, param.SelfAddr)
+	if err != nil {
+		return nil, err
+	}
 	frontierMomentum, err := context.GetFrontierMomentum()
 	if err != nil {
 		return nil, err
@@ -255,31 +272,92 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 		return nil, errors.New("toAddress is nil")
 	}
 
-	availablePlasma, err := vm.AvailablePlasma(context.CacheStore(), context)
-	if err != nil {
-		return nil, err
-	}
-
 	basePlasma, err := vm.GetBasePlasmaForAccountBlock(context, block)
 	if err != nil {
 		return nil, err
 	}
 
-	if availablePlasma > basePlasma {
+	var availablePlasma uint64
+	var requiredFusedPlasma uint64
+
+	// NextFusionPrice/NextWorkPrice are only meaningful once the frontier
+	// momentum itself was produced under dynamic plasma; the spork can be
+	// enforced for one momentum before the first v2 momentum lands.
+	dynamicPlasmaActive := context.IsDynamicPlasmaSporkEnforced() && frontierMomentum.Version >= nom.DynamicPlasmaMomentumVersion
+
+	if dynamicPlasmaActive {
+		availablePlasma, err = vm.AvailablePlasmaV2(context.CacheStore(), context)
+		if err != nil {
+			return nil, err
+		}
+		// Round up so the recommended payment always meets the ValidPrice threshold. Uses
+		// big.Int since basePlasma*NextFusionPrice can overflow uint64 at high dynamic prices.
+		requiredFusedPlasmaBig := new(big.Int).Mul(new(big.Int).SetUint64(basePlasma), new(big.Int).SetUint64(frontierMomentum.NextFusionPrice))
+		requiredFusedPlasmaBig.Add(requiredFusedPlasmaBig, new(big.Int).SetUint64(dp.PriceScaleFactor-1))
+		requiredFusedPlasmaBig.Div(requiredFusedPlasmaBig, new(big.Int).SetUint64(dp.PriceScaleFactor))
+		if !requiredFusedPlasmaBig.IsUint64() {
+			return nil, constants.ErrForbiddenParam
+		}
+		requiredFusedPlasma = requiredFusedPlasmaBig.Uint64()
+	} else {
+		availablePlasma, err = vm.AvailablePlasma(context.CacheStore(), context)
+		if err != nil {
+			return nil, err
+		}
+		requiredFusedPlasma = basePlasma
+	}
+
+	if availablePlasma >= requiredFusedPlasma {
 		return &GetRequiredResult{
 			AvailablePlasma:    availablePlasma,
 			BasePlasma:         basePlasma,
 			RequiredDifficulty: 0,
 		}, nil
 	} else {
-		difficulty, err := vm.GetDifficultyForPlasma(basePlasma - availablePlasma)
-		if err != nil {
-			return nil, err
+		var requiredDifficulty uint64
+		if dynamicPlasmaActive {
+			effectivePlasma := availablePlasma * dp.PriceScaleFactor / frontierMomentum.NextFusionPrice
+			requiredWorkPlasma := basePlasma - effectivePlasma
+
+			// Round up the price-scaled work-plasma before converting to difficulty, so the
+			// recommended difficulty always meets the ValidPrice threshold. Uses big.Int since
+			// requiredWorkPlasma*NextWorkPrice can overflow uint64 at high dynamic prices.
+			priceScaledWorkPlasma := new(big.Int).Mul(new(big.Int).SetUint64(requiredWorkPlasma), new(big.Int).SetUint64(frontierMomentum.NextWorkPrice))
+			priceScaledWorkPlasma.Add(priceScaledWorkPlasma, new(big.Int).SetUint64(dp.PriceScaleFactor-1))
+			priceScaledWorkPlasma.Div(priceScaledWorkPlasma, new(big.Int).SetUint64(dp.PriceScaleFactor))
+
+			if !priceScaledWorkPlasma.IsUint64() {
+				return nil, constants.ErrForbiddenParam
+			}
+
+			requiredDifficulty, err = dp.GetDifficultyForPlasma(priceScaledWorkPlasma.Uint64())
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			requiredDifficulty, err = vm.GetDifficultyForPlasma(basePlasma - availablePlasma)
+			if err != nil {
+				return nil, err
+			}
 		}
 		return &GetRequiredResult{
 			AvailablePlasma:    availablePlasma,
 			BasePlasma:         basePlasma,
-			RequiredDifficulty: difficulty,
+			RequiredDifficulty: requiredDifficulty,
 		}, nil
 	}
+}
+
+func (a *PlasmaApi) GetVariables() (*definition.PlasmaVariables, error) {
+	_, context, err := api.GetFrontierContext(a.chain, types.PlasmaContract)
+	if err != nil {
+		return nil, err
+	}
+
+	variables, err := definition.GetPlasmaVariables(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+
+	return variables, nil
 }

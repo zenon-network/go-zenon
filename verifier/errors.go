@@ -82,4 +82,5 @@ var (
 	ErrMNotGenesis              = errors.New("momentum is not genesis-momentum")
 	ErrMProducerInvalid         = errors.New("momentum producer is invalid")
 	ErrMPreviousMissing         = errors.New("momentum previous momentum is missing")
+	ErrMMinimumValueInvalid     = errors.New("momentum minimum value is invalid")
 )
