@@ -44,5 +44,5 @@ func newMemDBInternal() db {
 }
 
 func NewMemDB() DB {
-	return enableDelete(newMemDBInternal())
+	return enableDelete(newMemDBInternal(), false)
 }

@@ -149,7 +149,7 @@ func (p *Project) UnmarshalJSON(data []byte) error {
 		p.PhaseIds[idx] = phaseId
 	}
 	p.Votes = aux.Votes
-	p.Phases = make([]*Phase, len(p.Phases))
+	p.Phases = make([]*Phase, len(aux.Phases))
 	for idx, phase := range aux.Phases {
 		p.Phases[idx] = phase
 	}

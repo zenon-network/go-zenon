@@ -1,0 +1,149 @@
+services:
+  pillar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: go-zenon-devnet:latest
+    container_name: znnd-devnet-pillar
+    restart: unless-stopped
+    environment:
+      ZNND_ROLE: pillar
+    expose:
+      - "35995"
+    ports:
+      - "35991:35997" # HTTP RPC write endpoint for local integration tests
+    volumes:
+      - pillar-data:/root/.znn
+    networks:
+      devnet:
+        ipv4_address: 172.30.0.10
+
+  pillar2:
+    image: go-zenon-devnet:latest
+    container_name: znnd-devnet-pillar2
+    restart: unless-stopped
+    depends_on:
+      - pillar
+    environment:
+      ZNND_ROLE: pillar2
+    expose:
+      - "35995"
+    volumes:
+      - pillar2-data:/root/.znn
+    networks:
+      devnet:
+        ipv4_address: 172.30.0.12
+
+  pillar3:
+    image: go-zenon-devnet:latest
+    container_name: znnd-devnet-pillar3
+    restart: unless-stopped
+    depends_on:
+      - pillar
+    environment:
+      ZNND_ROLE: pillar3
+    expose:
+      - "35995"
+    volumes:
+      - pillar3-data:/root/.znn
+    networks:
+      devnet:
+        ipv4_address: 172.30.0.13
+
+  rpc:
+    image: go-zenon-devnet:latest
+    container_name: znnd-devnet-rpc
+    restart: unless-stopped
+    depends_on:
+      - pillar
+      - observer
+    environment:
+      ZNND_ROLE: rpc
+    ports:
+      - "35997:35997" # HTTP RPC
+      - "35998:35998" # WS RPC
+    volumes:
+      - rpc-data:/root/.znn
+    networks:
+      devnet:
+        ipv4_address: 172.30.0.11
+
+  observer:
+    image: go-zenon-devnet:latest
+    container_name: znnd-devnet-observer
+    restart: unless-stopped
+    depends_on:
+      - pillar
+    environment:
+      ZNND_ROLE: observer
+    expose:
+      - "35995"
+    volumes:
+      - observer-data:/root/.znn
+    networks:
+      devnet:
+        ipv4_address: 172.30.0.14
+
+  # Cold late joiner used to watch a brand-new node catch up to the chain
+  # frontier. Excluded from `make devnet-up` by the "sync" profile and started
+  # on demand (`make devnet-sync-up`). It seeds from the bootstrap pillar only
+  # and discovers the rest of the network through the discovery DHT, exactly
+  # like a new node joining. No named volume: its chain state lives in the
+  # container's writable layer, so removing the container (`make
+  # devnet-sync-reset`) forces a clean re-sync from genesis, while a plain
+  # stop/start resumes where it left off.
+  syncnode:
+    image: go-zenon-devnet:latest
+    container_name: znnd-devnet-syncnode
+    profiles:
+      - sync
+    restart: "no"
+    depends_on:
+      - pillar
+    environment:
+      ZNND_ROLE: syncnode
+    expose:
+      - "35995"
+    ports:
+      - "35999:35997" # HTTP RPC — watch catch-up via stats.syncInfo
+      - "36001:35998" # WS RPC
+    networks:
+      devnet:
+        ipv4_address: 172.30.0.15
+
+  explorer:
+    build:
+      context: .
+      dockerfile: docker/explorer/Dockerfile
+    image: go-zenon-devnet-explorer:latest
+    container_name: znnd-devnet-explorer
+    restart: unless-stopped
+    depends_on:
+      - rpc
+    environment:
+      EXPLORER_DEFAULT_ENDPOINT: ${EXPLORER_DEFAULT_ENDPOINT:-http://localhost:35997}
+    ports:
+      - "36000:80" # Zenon explorer
+    networks:
+      - devnet
+
+networks:
+  devnet:
+    name: znnd-devnet
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  pillar-data:
+    driver: local
+  pillar2-data:
+    driver: local
+  pillar3-data:
+    driver: local
+  rpc-data:
+    driver: local
+  observer-data:
+    driver: local

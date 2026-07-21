@@ -34,6 +34,9 @@ func (u *subDB) Has(key []byte) (bool, error) {
 func (u *subDB) Put(key, value []byte) error {
 	return u.db.Put(common.JoinBytes(u.prefix, key), value)
 }
+func (u *subDB) Delete(key []byte) error {
+	return u.db.Delete(common.JoinBytes(u.prefix, key))
+}
 func (u *subDB) NewIterator(prefix []byte) StorageIterator {
 	return newSubIterator(len(u.prefix), u.db.NewIterator(common.JoinBytes(u.prefix, prefix)))
 }

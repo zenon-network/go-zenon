@@ -54,13 +54,13 @@ func FussedAmountToPlasma(amount *big.Int) uint64 {
 // *Takes* into consideration used plasma by unconfirmed blocks.
 //
 // Plasma equals to fusedPlasma - plasmaUsedByUnconfirmedBlocks
-func AvailablePlasma(momentum store.Momentum, account store.Account) (uint64, error) {
+func AvailablePlasma(cache store.Cache, account store.Account) (uint64, error) {
 	address := *account.Address()
-	committed, err := momentum.GetAccountStore(address).GetChainPlasma()
+	committed, err := cache.GetChainPlasma(address)
 	if err != nil {
 		return 0, err
 	}
-	fused, err := momentum.GetStakeBeneficialAmount(address)
+	fused, err := cache.GetStakeBeneficialAmount(address)
 	if err != nil {
 		return 0, err
 	}

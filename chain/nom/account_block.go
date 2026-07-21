@@ -158,6 +158,10 @@ func (ab *AccountBlock) Copy() *AccountBlock {
 		cBlock.Signature = make([]byte, len(ab.Signature))
 		copy(cBlock.Signature, ab.Signature)
 	}
+	if len(ab.PublicKey) > 0 {
+		cBlock.PublicKey = make([]byte, len(ab.PublicKey))
+		copy(cBlock.PublicKey, ab.PublicKey)
+	}
 
 	cBlock.DescendantBlocks = make([]*AccountBlock, 0, len(ab.DescendantBlocks))
 	for _, dBlock := range ab.DescendantBlocks {

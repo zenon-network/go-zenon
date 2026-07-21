@@ -3,6 +3,7 @@ package tests
 import (
 	"crypto/ecdsa"
 	"encoding/base64"
+	"fmt"
 	eabi "github.com/ethereum/go-ethereum/accounts/abi"
 	ecommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -16,6 +17,7 @@ import (
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/rpc/api/embedded"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
@@ -1978,6 +1980,179 @@ t=2001-09-09T02:05:00+0000 lvl=eror msg=Unwrap-ErrInvalidSignature module=embedd
 		}
 	]
 }`)
+}
+
+// TestBridge_GetAllUnwrapTokenRequests_SortStability verifies that
+// GetAllUnwrapTokenRequests sorts strictly by RegistrationMomentumHeight
+// descending, deterministically tie-breaks equal-height requests, and
+// returns consistent results across page boundaries.
+//
+// The underlying GetUnwrapTokenRequests iterates LevelDB by
+// (TransactionHash, LogIndex), so the input slice arrives in an order
+// that is *unrelated* to height. The API uses sort.SliceStable, which
+// preserves the deterministic upstream order as an implicit tie-breaker
+// for equal-height entries.
+//
+// The stability assertion is contract-based: we capture the raw
+// upstream order via definition.GetUnwrapTokenRequests and require the
+// API to preserve the relative order of tied entries. This avoids
+// coupling the test to Go's sort implementation details (pdqsort
+// cutoffs, insertion-sort thresholds, etc.).
+//
+// The 12-tie fixture is sized to force the unstable path — at this size
+// Go's current sort.Slice reorders ties via pdqsort, while SliceStable
+// preserves them. If a future Go version changes the cutoff, the
+// fixture may need to grow; the assertion itself remains valid.
+//
+// Tx-hash prefixes are also chosen so that lexicographic tx-hash order
+// disagrees with height-descending order — proving the sort is doing
+// real work and not accidentally relying on LevelDB iteration.
+func TestBridge_GetAllUnwrapTokenRequests_SortStability(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+
+	activateBridgeStep6(t, z)
+
+	networkClass := uint32(2) // evm
+	chainId := uint32(123)
+	tokenAddress := "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+	amount := big.NewInt(50 * g.Zexp)
+
+	// 12 unwraps submitted back-to-back (no insertMomentums between
+	// them). They all land in the next produced momentum and share a
+	// RegistrationMomentumHeight. Hash prefixes 0x00..0x0b place them in
+	// strict tx-hash-ascending order in LevelDB, which is the order
+	// SliceStable must preserve when the comparator only considers height.
+	const tieCount = 12
+	tieHashes := make([]types.Hash, tieCount)
+	for i := 0; i < tieCount; i++ {
+		hex := fmt.Sprintf("%02x" + "01010101010101010101010101010101010101010101010101010101010101", i)
+		tieHashes[i] = types.HexToHashPanic(hex)
+		signature := getUnwrapTokenSignature(t, networkClass, chainId, tieHashes[i], 200, tokenAddress, amount, networkClass)
+		defer z.CallContract(unwrapToken(networkClass, chainId, tieHashes[i], 200, tokenAddress, amount, signature)).
+			Error(t, nil)
+	}
+	insertMomentums(z, 2)
+
+	// 13th unwrap, registered later at a strictly higher height. Its
+	// hash prefix 0xff is lexicographically larger than every tied hash;
+	// LevelDB therefore returns it last, while the height-descending sort
+	// must place it first. Together with the tied block this proves the
+	// sort is height-driven, not tx-hash-driven.
+	hashNewest := types.HexToHashPanic("ff03030303030303030303030303030303030303030303030303030303030303")
+	sigNewest := getUnwrapTokenSignature(t, networkClass, chainId, hashNewest, 200, tokenAddress, amount, networkClass)
+	defer z.CallContract(unwrapToken(networkClass, chainId, hashNewest, 200, tokenAddress, amount, sigNewest)).
+		Error(t, nil)
+	insertMomentums(z, 2)
+
+	bridgeAPI := embedded.NewBridgeApi(z)
+
+	full, err := bridgeAPI.GetAllUnwrapTokenRequests(0, 100)
+	common.FailIfErr(t, err)
+	expectedCount := tieCount + 1
+	if full.Count != expectedCount || len(full.List) != expectedCount {
+		t.Fatalf("expected %d unwraps, got count=%d len=%d", expectedCount, full.Count, len(full.List))
+	}
+
+	// Confirm the tied entries actually share a single height; otherwise
+	// the stability assertion below would be vacuous.
+	tiedHeight := full.List[1].RegistrationMomentumHeight
+	for i := 2; i < expectedCount; i++ {
+		if full.List[i].RegistrationMomentumHeight != tiedHeight {
+			t.Fatalf("expected indices 1..%d to share height %d; index %d had %d",
+				expectedCount-1, tiedHeight, i, full.List[i].RegistrationMomentumHeight)
+		}
+	}
+	if full.List[0].RegistrationMomentumHeight <= tiedHeight {
+		t.Fatalf("expected index 0 height > tied height; got %d <= %d",
+			full.List[0].RegistrationMomentumHeight, tiedHeight)
+	}
+
+	// Height-descending overall.
+	for i := 1; i < len(full.List); i++ {
+		if full.List[i].RegistrationMomentumHeight > full.List[i-1].RegistrationMomentumHeight {
+			t.Fatalf("not height-descending at index %d: prev=%d cur=%d", i,
+				full.List[i-1].RegistrationMomentumHeight, full.List[i].RegistrationMomentumHeight)
+		}
+	}
+
+	// Capture the raw upstream order so the stability assertion is
+	// algorithm-independent: SliceStable must preserve the upstream
+	// relative order of tied entries, regardless of how LevelDB or Go's
+	// sort happen to arrange them.
+	_, context, err := api.GetFrontierContext(z.Chain(), types.BridgeContract)
+	common.FailIfErr(t, err)
+	upstream, err := definition.GetUnwrapTokenRequests(context.Storage())
+	common.FailIfErr(t, err)
+
+	upstreamTied := make([]*definition.UnwrapTokenRequest, 0, tieCount)
+	for _, r := range upstream {
+		if r.RegistrationMomentumHeight == tiedHeight {
+			upstreamTied = append(upstreamTied, r)
+		}
+	}
+	if len(upstreamTied) != tieCount {
+		t.Fatalf("expected %d tied entries upstream, got %d", tieCount, len(upstreamTied))
+	}
+
+	// Index 0 is the newest unwrap (height > tiedHeight). Indices
+	// 1..tieCount are the tied entries; their relative order in the API
+	// output must match upstream. This is the SliceStable contract that
+	// distinguishes it from sort.Slice (which would reorder ties for
+	// inputs at this size under Go's current pdqsort).
+	if full.List[0].TransactionHash != hashNewest {
+		t.Fatalf("index 0: expected newest %v, got %v", hashNewest, full.List[0].TransactionHash)
+	}
+	for i := 0; i < tieCount; i++ {
+		got := full.List[i+1].TransactionHash
+		want := upstreamTied[i].TransactionHash
+		if got != want {
+			t.Fatalf("index %d (tie-break): expected %v (upstream position %d), got %v — relative order not preserved",
+				i+1, want, i, got)
+		}
+	}
+
+	// Pagination determinism: with pageSize=5 the 13 results land on
+	// three pages. Concatenating them must reproduce the full single-call
+	// result exactly. This catches sort instability that varies across
+	// API invocations as well as off-by-one paging bugs.
+	const pageSize = 5
+	combined := make([]*embedded.UnwrapTokenRequest, 0, expectedCount)
+	for page := uint32(0); ; page++ {
+		p, err := bridgeAPI.GetAllUnwrapTokenRequests(page, pageSize)
+		common.FailIfErr(t, err)
+		if p.Count != expectedCount {
+			t.Fatalf("page %d: expected total Count=%d, got %d", page, expectedCount, p.Count)
+		}
+		combined = append(combined, p.List...)
+		if len(p.List) < pageSize {
+			break
+		}
+	}
+	if len(combined) != len(full.List) {
+		t.Fatalf("combined paginated length %d != full length %d", len(combined), len(full.List))
+	}
+	for i := range full.List {
+		if combined[i].TransactionHash != full.List[i].TransactionHash ||
+			combined[i].LogIndex != full.List[i].LogIndex {
+			t.Fatalf("paginated/full ordering differs at index %d: paged=%v/%d full=%v/%d", i,
+				combined[i].TransactionHash, combined[i].LogIndex,
+				full.List[i].TransactionHash, full.List[i].LogIndex)
+		}
+	}
+
+	// A second full-list call must also be byte-identical to the first.
+	again, err := bridgeAPI.GetAllUnwrapTokenRequests(0, 100)
+	common.FailIfErr(t, err)
+	if len(again.List) != len(full.List) {
+		t.Fatalf("repeated call length differs: %d vs %d", len(again.List), len(full.List))
+	}
+	for i := range full.List {
+		if again.List[i].TransactionHash != full.List[i].TransactionHash ||
+			again.List[i].LogIndex != full.List[i].LogIndex {
+			t.Fatalf("repeated call ordering differs at index %d", i)
+		}
+	}
 }
 
 func TestBridge_Redeem(t *testing.T) {

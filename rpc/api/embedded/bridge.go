@@ -589,6 +589,10 @@ func (a *BridgeApi) GetAllUnwrapTokenRequests(pageIndex, pageSize uint32) (*Unwr
 		return nil, err
 	}
 
+	sort.SliceStable(requests, func(i, j int) bool {
+		return requests[i].RegistrationMomentumHeight > requests[j].RegistrationMomentumHeight
+	})
+
 	result := &UnwrapTokenRequestList{
 		Count: len(requests),
 		List:  make([]*UnwrapTokenRequest, 0),

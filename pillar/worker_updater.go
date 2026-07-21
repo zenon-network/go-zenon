@@ -13,7 +13,7 @@ import (
 
 func canPerformEmbeddedUpdate(momentumStore store.Momentum, pool chain.AccountPool, contract types.Address) error {
 	store := pool.GetFrontierAccountStore(contract)
-	context := vm_context.NewAccountContext(momentumStore, store, nil)
+	context := vm_context.NewAccountContext(momentumStore, store, nil, nil)
 	return implementation.CanPerformUpdate(context)
 }
 

@@ -52,8 +52,10 @@ type blockRetrievalFn func(types.Hash) *nom.DetailedMomentum
 // blockRequesterFn is a callback type for sending a block retrieval request.
 type blockRequesterFn func([]types.Hash) error
 
-// blockValidatorFn is a callback type to verify a block's header for fast propagation.
-type blockValidatorFn func(block *nom.Momentum, parent *nom.Momentum) error
+// blockVerifierFn is a callback type to run structural pre-checks on a detailed
+// momentum before propagation; signature and producer verification happen
+// later during insertion.
+type blockVerifierFn func(detailed *nom.DetailedMomentum) error
 
 // blockBroadcasterFn is a callback type for broadcasting a block to connected peers.
 type blockBroadcasterFn func(block *nom.DetailedMomentum, propagate bool)
@@ -83,13 +85,21 @@ type inject struct {
 	detailed *nom.DetailedMomentum
 }
 
+// filterRequest carries the blocks delivered by peer to the fetcher loop for
+// filtering, identifying the peer that actually sent them so that explicit
+// fetches are attributed to that peer rather than whoever announced the hash.
+type filterRequest struct {
+	peer  string
+	reply chan []*nom.DetailedMomentum
+}
+
 // Fetcher is responsible for accumulating block announcements from various peers
 // and scheduling them for retrieval.
 type Fetcher struct {
 	// Various event channels
 	notify chan *announce
 	inject chan *inject
-	filter chan chan []*nom.DetailedMomentum
+	filter chan *filterRequest
 	done   chan types.Hash
 	quit   chan struct{}
 
@@ -105,7 +115,7 @@ type Fetcher struct {
 
 	// Callbacks
 	getBlock       blockRetrievalFn   // Retrieves a block from the local chain
-	validateBlock  blockValidatorFn   // Checks if a block's headers have a valid proof of work
+	verifyBlock    blockVerifierFn    // Fully verifies a momentum before propagation
 	broadcastBlock blockBroadcasterFn // Broadcasts a block to connected peers
 	chainHeight    chainHeightFn      // Retrieves the current chain's height
 	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
@@ -119,11 +129,11 @@ type Fetcher struct {
 }
 
 // New creates a block fetcher to retrieve blocks based on hash announcements.
-func New(getBlock blockRetrievalFn, validateBlock blockValidatorFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertChain chainInsertFn, dropPeer peerDropFn) *Fetcher {
+func New(getBlock blockRetrievalFn, verifyBlock blockVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertChain chainInsertFn, dropPeer peerDropFn) *Fetcher {
 	return &Fetcher{
 		notify:         make(chan *announce),
 		inject:         make(chan *inject),
-		filter:         make(chan chan []*nom.DetailedMomentum),
+		filter:         make(chan *filterRequest),
 		done:           make(chan types.Hash),
 		quit:           make(chan struct{}),
 		announces:      make(map[string]int),
@@ -133,7 +143,7 @@ func New(getBlock blockRetrievalFn, validateBlock blockValidatorFn, broadcastBlo
 		queues:         make(map[string]int),
 		queued:         make(map[types.Hash]*inject),
 		getBlock:       getBlock,
-		validateBlock:  validateBlock,
+		verifyBlock:    verifyBlock,
 		broadcastBlock: broadcastBlock,
 		chainHeight:    chainHeight,
 		insertChain:    insertChain,
@@ -188,25 +198,28 @@ func (f *Fetcher) Enqueue(peer string, block *nom.DetailedMomentum) error {
 }
 
 // Filter extracts all the blocks that were explicitly requested by the fetcher,
-// returning those that should be handled differently.
-func (f *Fetcher) Filter(blocks []*nom.DetailedMomentum) []*nom.DetailedMomentum {
-	// Send the filter channel to the fetcher
-	filter := make(chan []*nom.DetailedMomentum)
+// returning those that should be handled differently. peer identifies the
+// connection the blocks actually arrived on, so that explicit fetches are
+// attributed - and any misbehaving sender penalized - correctly, regardless
+// of which peer originally announced the hash.
+func (f *Fetcher) Filter(peer string, blocks []*nom.DetailedMomentum) []*nom.DetailedMomentum {
+	// Send the filter request to the fetcher
+	req := &filterRequest{peer: peer, reply: make(chan []*nom.DetailedMomentum)}
 
 	select {
-	case f.filter <- filter:
+	case f.filter <- req:
 	case <-f.quit:
 		return nil
 	}
 	// Request the filtering of the block list
 	select {
-	case filter <- blocks:
+	case req.reply <- blocks:
 	case <-f.quit:
 		return nil
 	}
 	// Retrieve the blocks remaining after filtering
 	select {
-	case blocks := <-filter:
+	case blocks := <-req.reply:
 		return blocks
 	case <-f.quit:
 		return nil
@@ -317,11 +330,11 @@ func (f *Fetcher) loop() {
 			// Schedule the next fetch if blocks are still pending
 			f.reschedule(fetch)
 
-		case filter := <-f.filter:
+		case req := <-f.filter:
 			// Blocks arrived, extract any explicit fetches, return all else
 			var blocks []*nom.DetailedMomentum
 			select {
-			case blocks = <-filter:
+			case blocks = <-req.reply:
 			case <-f.quit:
 				return
 			}
@@ -346,14 +359,16 @@ func (f *Fetcher) loop() {
 			}
 
 			select {
-			case filter <- download:
+			case req.reply <- download:
 			case <-f.quit:
 				return
 			}
-			// Schedule the retrieved blocks for ordered import
+			// Schedule the retrieved blocks for ordered import, attributing
+			// them to the peer that actually delivered them rather than the
+			// peer that announced the hash.
 			for _, block := range explicit {
 				if announce := f.fetching[block.Momentum.Hash]; announce != nil {
-					f.enqueue(announce.origin, block)
+					f.enqueue(req.peer, block)
 				}
 			}
 		}
@@ -423,16 +438,8 @@ func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 		if parent == nil {
 			return
 		}
-		// Quickly validate the header and propagate the momentum if it passes
-		switch err := f.validateBlock(momentum, parent.Momentum); err {
-		case nil:
-			// All ok, quickly propagate to our peers
-			go func() {
-				f.broadcastBlock(detailed, true)
-			}()
-
-		default:
-			// Something went very wrong, drop the peer
+		// Run structural pre-checks before propagation
+		if err := f.verifyBlock(detailed); err != nil {
 			log.Info("momentum verification failed", "peer", peer, "momentum", momentum.Height, "hash", hash[:4], "reason", err)
 			f.dropPeer(peer)
 			return
@@ -448,7 +455,7 @@ func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 		}
 		// If import succeeded, broadcast the momentum
 		go func() {
-			f.broadcastBlock(detailed, false)
+			f.broadcastBlock(detailed, true)
 		}()
 
 		// Invoke the testing hook if needed

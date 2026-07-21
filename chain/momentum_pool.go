@@ -25,6 +25,34 @@ type momentumPool struct {
 	changes      sync.Mutex
 }
 
+// ErrCanonicalStateUncertain is returned when a failed insertion cannot be
+// compensated or when a multi-step rollback stops after mutating the canonical
+// chain. Callers must not attempt ordinary recovery and must treat processing as
+// unrecoverable.
+type ErrCanonicalStateUncertain struct {
+	Cause       error
+	RollbackErr error
+}
+
+func (e *ErrCanonicalStateUncertain) Error() string {
+	return fmt.Sprintf("canonical chain state uncertain: operation failed (%v); recovery failed (%v)", e.Cause, e.RollbackErr)
+}
+
+func (e *ErrCanonicalStateUncertain) Unwrap() error {
+	return e.Cause
+}
+
+// rollbackFailedInsert undoes a canonical Add() after a later validation step failed.
+// If the rollback itself fails, the canonical frontier is in an unknown position
+// relative to the cache and cause is wrapped in ErrCanonicalStateUncertain.
+func (c *momentumPool) rollbackFailedInsert(cause error, identifier types.HashHeight) error {
+	if popErr := c.chainManager.Pop(); popErr != nil {
+		c.log.Error("failed to roll back canonical chain after failed momentum insertion", "reason", popErr, "cause", cause, "identifier", identifier)
+		return &ErrCanonicalStateUncertain{Cause: cause, RollbackErr: popErr}
+	}
+	return cause
+}
+
 func (c *momentumPool) AddMomentumTransaction(insertLocker sync.Locker, transaction *nom.MomentumTransaction) error {
 	c.log.Info("inserting new momentum", "identifier", transaction.Momentum.Identifier())
 	if insertLocker == nil {
@@ -42,17 +70,15 @@ func (c *momentumPool) AddMomentumTransaction(insertLocker sync.Locker, transact
 	store := c.getFrontierStore()
 	detailed, err := store.PrefetchMomentum(momentum)
 	if err != nil {
-		return err
+		return c.rollbackFailedInsert(err, momentum.Identifier())
 	}
 
-	c.changes.Unlock()
-	c.broadcastInsertMomentum(detailed)
-	c.changes.Lock()
-
 	frontier := c.getFrontierStore()
-	if justNow, unimplemented, err := GotAllActiveSporksImplemented(frontier); err != nil {
-		return err
-	} else if unimplemented != nil {
+	justNow, unimplemented, err := GotAllActiveSporksImplemented(frontier)
+	if err != nil {
+		return c.rollbackFailedInsert(err, momentum.Identifier())
+	}
+	if unimplemented != nil {
 		c.log.Crit("can't insert momentum because don't have all sporks implemented",
 			"hash", momentum.Hash, "height", momentum.Height, "unimplemented", unimplemented)
 
@@ -66,7 +92,14 @@ func (c *momentumPool) AddMomentumTransaction(insertLocker sync.Locker, transact
 		fmt.Printf("Please upgrade your znnd binary\n")
 		fmt.Printf("znnd is terminating\n")
 		os.Exit(2)
-	} else if justNow != nil {
+	}
+
+	// All post-insert validation succeeded: listeners can now be notified.
+	c.changes.Unlock()
+	c.broadcastInsertMomentum(detailed)
+	c.changes.Lock()
+
+	if justNow != nil {
 		fmt.Printf("\n")
 		fmt.Printf("===== Congratulations! =====\n")
 		fmt.Printf("Just activated spork '%v'\n", justNow.Name)
@@ -92,11 +125,22 @@ func (c *momentumPool) RollbackTo(insertLocker sync.Locker, identifier types.Has
 		return errors.Errorf("can't rollback momentums. Expected %v but got %v instead", momentum.Identifier(), identifier)
 	}
 
+	popped := 0
+	rollbackError := func(err error) error {
+		if popped == 0 {
+			return err
+		}
+		return &ErrCanonicalStateUncertain{
+			Cause:       errors.Errorf("canonical rollback to %v stopped after %v successful pop(s)", identifier, popped),
+			RollbackErr: err,
+		}
+	}
+
 	for {
 		store := c.getFrontierStore()
 		frontier, err := store.GetFrontierMomentum()
 		if err != nil {
-			return err
+			return rollbackError(err)
 		}
 
 		if frontier.Height == identifier.Height {
@@ -105,11 +149,12 @@ func (c *momentumPool) RollbackTo(insertLocker sync.Locker, identifier types.Has
 		c.log.Info("rollbacking", "momentum-identifier", frontier.Identifier())
 		detailed, err := store.PrefetchMomentum(frontier)
 		if err != nil {
-			return err
+			return rollbackError(err)
 		}
 		if err := c.chainManager.Pop(); err != nil {
-			return err
+			return rollbackError(err)
 		}
+		popped++
 
 		c.changes.Unlock()
 		c.broadcastDeleteMomentum(detailed)

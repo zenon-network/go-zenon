@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"fmt"
+	"os"
+	"sync"
 
 	"github.com/pkg/errors"
 
@@ -19,6 +21,19 @@ type chainBridge struct {
 	consensus  consensus.Consensus
 	verifier   verifier.Verifier
 	supervisor *vm.Supervisor
+}
+
+func (c chainBridge) rollbackSideChain(insert sync.Locker, identifier types.HashHeight) error {
+	if err := c.chain.RollbackTo(insert, identifier); err != nil {
+		return err
+	}
+	if err := c.chain.RollbackCacheTo(insert, identifier); err != nil {
+		return &chain.ErrCanonicalStateUncertain{
+			Cause:       errors.Errorf("canonical chain rolled back to %v but cache rollback failed", identifier),
+			RollbackErr: err,
+		}
+	}
+	return nil
 }
 
 func NewChainBridge(chain chain.Chain, consensus consensus.Consensus, verifier verifier.Verifier, supervisor *vm.Supervisor) ChainBridge {
@@ -110,6 +125,10 @@ func (c chainBridge) Status() (td uint64, currentBlock types.Hash, genesisBlock 
 	return frontier.Height, frontier.Hash, c.chain.GetGenesisMomentum().Hash
 }
 
+func (c chainBridge) VerifyMomentum(detailed *nom.DetailedMomentum) error {
+	return c.verifier.Momentum(detailed)
+}
+
 func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error) {
 	a := momentums[0]
 	b := momentums[len(momentums)-1]
@@ -172,8 +191,12 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 			return 0, errors.Errorf("won't insert side-chain which is not longer")
 		}
 
-		err = c.chain.RollbackTo(insert, target.Identifier())
-		if err != nil {
+		if err := c.rollbackSideChain(insert, target.Identifier()); err != nil {
+			var uncertain *chain.ErrCanonicalStateUncertain
+			if errors.As(err, &uncertain) {
+				log.Crit("chain state uncertain after failed side-chain rollback, can't continue", "reason", err, "target", target.Identifier())
+				os.Exit(2)
+			}
 			return 0, errors.Errorf("unable to rollback to %v. Reason:%v", target.Identifier(), err)
 		}
 	}
@@ -203,8 +226,21 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		if err != nil {
 			return index + start, err
 		}
+		if err := c.chain.UpdateCache(insert, detailed, transaction.Changes); err != nil {
+			log.Error("error while inserting cache", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+			return index + start, err
+		}
 		if err := c.chain.AddMomentumTransaction(insert, transaction); err != nil {
 			log.Error("error while inserting momentum", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+			var uncertain *chain.ErrCanonicalStateUncertain
+			if errors.As(err, &uncertain) {
+				log.Crit("canonical chain state uncertain after failed momentum insertion, can't continue", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+				os.Exit(2)
+			}
+			if rollbackErr := c.chain.RollbackCacheTo(insert, detailed.Momentum.Previous()); rollbackErr != nil {
+				log.Crit("cache rollback failed after failed momentum insertion, can't continue", "reason", rollbackErr, "cause", err, "momentum-identifier", detailed.Momentum.Identifier())
+				os.Exit(2)
+			}
 			return index + start, err
 		}
 	}

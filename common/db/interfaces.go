@@ -26,8 +26,14 @@ type Transaction interface {
 	StealChanges() Patch
 }
 
+// StorageIterator is not guaranteed to support reverse iteration on every
+// backend: the merged backend (mergedIterator, common/db/merged.go) reports
+// an error and returns false from Prev() and Last(). Reverse iteration must
+// only be used on single-backend iterators.
 type StorageIterator interface {
 	Next() bool
+	Prev() bool
+	Last() bool
 
 	Key() []byte
 	Value() []byte
@@ -53,6 +59,7 @@ type db interface {
 	Get([]byte) ([]byte, error)
 	Has([]byte) (bool, error)
 	Put(key, value []byte) error
+	Delete(key []byte) error
 
 	NewIterator(prefix []byte) StorageIterator
 

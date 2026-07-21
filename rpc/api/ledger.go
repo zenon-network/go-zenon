@@ -198,6 +198,10 @@ func (l *LedgerApi) GetAccountBlocksByPage(address types.Address, pageIndex, pag
 	for i, j := 0, len(ans.List)-1; i < j; i, j = i+1, j-1 {
 		ans.List[i], ans.List[j] = ans.List[j], ans.List[i]
 	}
+
+	// Set More to true if there are more pages available (startHeight > 1 means we haven't reached the first block)
+	ans.More = startHeight > 1
+
 	return ans, nil
 }
 func (l *LedgerApi) GetAccountInfoByAddress(address types.Address) (*AccountInfo, error) {

@@ -189,6 +189,7 @@ type ldbManager struct {
 	l1Cache  *lru.Cache
 	l2Cache  *lru.Cache
 	ldb      *leveldb.DB
+	write    func(*leveldb.Batch) error
 	changes  sync.Mutex
 	stopped  bool
 }
@@ -206,6 +207,9 @@ func NewLevelDBManager(dir string) Manager {
 		l1Cache:  l1Cache,
 		l2Cache:  l2Cache,
 		ldb:      ldb,
+		write: func(batch *leveldb.Batch) error {
+			return ldb.Write(batch, nil)
+		},
 	}
 }
 
@@ -286,7 +290,7 @@ func (m *ldbManager) Get(identifier types.HashHeight) DB {
 				newSubDB(frontierByte, newLevelDBSnapshotWrapper(snapshot)),
 			})),
 	})
-	return enableDelete(u)
+	return enableDelete(u, false)
 }
 func (m *ldbManager) GetPatch(identifier types.HashHeight) Patch {
 	m.changes.Lock()
@@ -354,40 +358,49 @@ func (m *ldbManager) Add(transaction Transaction) error {
 	}
 
 	rollbackPatch := RollbackPatch(db, patch)
+	batch := new(leveldb.Batch)
+	batch.Put(common.JoinBytes(patchByte, common.Uint64ToBytes(identifier.Height)), patch.Dump())
+	batch.Put(common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height)), rollbackPatch.Dump())
+	if err := AppendPatchToLevelDBBatch(batch, frontierByte, patch, false); err != nil {
+		return err
+	}
 
 	m.changes.Lock()
 	defer m.changes.Unlock()
+	if m.stopped {
+		return errors.Errorf("can't add transaction to stopped db")
+	}
 
 	frontierIdentifier := GetFrontierIdentifier(db)
-
-	if previous == frontierIdentifier {
-		if err := m.ldb.Put(common.JoinBytes(patchByte, common.Uint64ToBytes(identifier.Height)), patch.Dump(), nil); err != nil {
-			return err
-		}
-		if err := m.ldb.Put(common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height)), rollbackPatch.Dump(), nil); err != nil {
-			return err
-		}
-		if err := ApplyPatch(NewLevelDBWrapper(m.ldb).Subset(frontierByte), patch); err != nil {
-			return err
-		}
+	if previous != frontierIdentifier {
+		return nil
 	}
-	return nil
+	return m.write(batch)
 }
 func (m *ldbManager) Pop() error {
-	frontierIdentifier := GetFrontierIdentifier(m.Frontier())
-	rollbackPatch := m.getRollback(frontierIdentifier.Height)
-
-	if err := ApplyPatch(NewLevelDBWrapper(m.ldb).Subset(frontierByte), rollbackPatch); err != nil {
-		return err
-	}
-	if err := m.ldb.Delete(common.JoinBytes(patchByte, common.Uint64ToBytes(frontierIdentifier.Height)), nil); err != nil {
-		return err
-	}
-	if err := m.ldb.Delete(common.JoinBytes(rollbackByte, common.Uint64ToBytes(frontierIdentifier.Height)), nil); err != nil {
-		return err
+	m.changes.Lock()
+	defer m.changes.Unlock()
+	if m.stopped {
+		return errors.Errorf("can't pop stopped db")
 	}
 
-	return nil
+	frontierIdentifier := GetFrontierIdentifier(NewLevelDBWrapper(m.ldb).Subset(frontierByte))
+	rollbackData, err := m.ldb.Get(common.JoinBytes(rollbackByte, common.Uint64ToBytes(frontierIdentifier.Height)), nil)
+	if err != nil {
+		return err
+	}
+	rollbackPatch, err := NewPatchFromDump(rollbackData)
+	if err != nil {
+		return err
+	}
+
+	batch := new(leveldb.Batch)
+	if err := AppendPatchToLevelDBBatch(batch, frontierByte, rollbackPatch, false); err != nil {
+		return err
+	}
+	batch.Delete(common.JoinBytes(patchByte, common.Uint64ToBytes(frontierIdentifier.Height)))
+	batch.Delete(common.JoinBytes(rollbackByte, common.Uint64ToBytes(frontierIdentifier.Height)))
+	return m.write(batch)
 }
 func (m *ldbManager) Stop() error {
 	m.changes.Lock()

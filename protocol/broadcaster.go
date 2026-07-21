@@ -2,6 +2,9 @@ package protocol
 
 import (
 	"fmt"
+	"os"
+
+	"github.com/pkg/errors"
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
@@ -28,18 +31,36 @@ func (b *broadcaster) SyncInfo() *SyncInfo {
 
 // CreateMomentum is called when our node created a momentum.
 // The momentum will be inserted in the chain and broadcasted.
-func (b *broadcaster) CreateMomentum(momentumTransaction *nom.MomentumTransaction) {
+func (b *broadcaster) CreateMomentum(momentumTransaction *nom.MomentumTransaction, detailed *nom.DetailedMomentum) {
 	b.log.Info("creating own momentum", "identifier", momentumTransaction.Momentum.Identifier())
 	insert := b.chain.AcquireInsert(fmt.Sprintf("zenon - create momentum %v", momentumTransaction.Momentum.Identifier()))
-	err := b.chain.AddMomentumTransaction(insert, momentumTransaction)
-	insert.Unlock()
+	err := b.chain.UpdateCache(insert, detailed, momentumTransaction.Changes)
 	if err != nil {
+		insert.Unlock()
+		b.log.Error("failed to insert own momentum to chain cache", "reason", err)
+		return
+	}
+	err = b.chain.AddMomentumTransaction(insert, momentumTransaction)
+	if err != nil {
+		var uncertain *chain.ErrCanonicalStateUncertain
+		if errors.As(err, &uncertain) {
+			insert.Unlock()
+			b.log.Crit("canonical chain state uncertain after failed momentum insertion, can't continue", "reason", err)
+			os.Exit(2)
+		}
+		if rollbackErr := b.chain.RollbackCacheTo(insert, momentumTransaction.Momentum.Previous()); rollbackErr != nil {
+			insert.Unlock()
+			b.log.Crit("cache rollback failed after failed momentum insertion, can't continue", "reason", rollbackErr, "cause", err)
+			os.Exit(2)
+		}
+		insert.Unlock()
 		b.log.Error("failed to insert own momentum", "reason", err)
 		return
 	}
+	insert.Unlock()
 
 	store := b.chain.GetFrontierMomentumStore()
-	detailed, err := store.PrefetchMomentum(momentumTransaction.Momentum)
+	detailed, err = store.PrefetchMomentum(momentumTransaction.Momentum)
 	if err != nil {
 		b.log.Error("failed to insert own momentum", "reason", err)
 		return
