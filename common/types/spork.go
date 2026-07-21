@@ -40,6 +40,7 @@ var (
 		AcceleratorSpork.SporkId:        true,
 		HtlcSpork.SporkId:               true,
 		BridgeAndLiquiditySpork.SporkId: true,
+		Libp2pSpork.SporkId:             true,
 		DynamicPlasmaSpork.SporkId:      true,
 	}
 )
