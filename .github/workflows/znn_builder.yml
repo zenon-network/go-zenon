@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - master
+      - dev
+      - testnet
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
@@ -13,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Ensure SHA pinned actions
         uses: zgosalvez/github-actions-ensure-sha-pinned-actions@2d6823da4039243036c86d76f503c84e2ded2517
   xgo:
@@ -21,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Install zip utility
         run: |
           sudo apt update
@@ -115,15 +117,33 @@ jobs:
         run: |
           GOZENON=$(cat metadata/version.go | grep Version | awk -F '"' '{print $2}')
           echo "GOZENON_VERSION=$GOZENON" >> $GITHUB_ENV
+          case "${{ github.ref_name }}" in
+            dev)
+              echo "RELEASE_NAME=$GOZENON-dev" >> $GITHUB_ENV
+              echo "RELEASE_TAG=$GOZENON-dev" >> $GITHUB_ENV
+              echo "RELEASE_PRERELEASE=true" >> $GITHUB_ENV
+              ;;
+            testnet)
+              echo "RELEASE_NAME=$GOZENON-testnet" >> $GITHUB_ENV
+              echo "RELEASE_TAG=$GOZENON-testnet" >> $GITHUB_ENV
+              echo "RELEASE_PRERELEASE=true" >> $GITHUB_ENV
+              ;;
+            *)
+              echo "RELEASE_NAME=$GOZENON" >> $GITHUB_ENV
+              echo "RELEASE_TAG=$GOZENON-alphanet" >> $GITHUB_ENV
+              echo "RELEASE_PRERELEASE=false" >> $GITHUB_ENV
+              ;;
+          esac
       - name: Upload files to a GitHub release
         uses: svenstaro/upload-release-action@04733e069f2d7f7f0b4aebc4fbdbce8613b03ccd
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: build/*
-          release_name: ${{ env.GOZENON_VERSION }}
-          tag: ${{ env.GOZENON_VERSION }}-alphanet
+          release_name: ${{ env.RELEASE_NAME }}
+          tag: ${{ env.RELEASE_TAG }}
           file_glob: true
           overwrite: true
+          prerelease: ${{ env.RELEASE_PRERELEASE }}
           body: ""
   makefat:
     name: Create universal Darwin binaries
@@ -131,7 +151,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout repo
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Download Darwin slices
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -178,13 +198,31 @@ jobs:
           GOZENON=$(grep Version metadata/version.go \
                      | awk -F '"' '{print $2}')
           echo "GOZENON_VERSION=$GOZENON" >> $GITHUB_ENV
+          case "${{ github.ref_name }}" in
+            dev)
+              echo "RELEASE_NAME=$GOZENON-dev" >> $GITHUB_ENV
+              echo "RELEASE_TAG=$GOZENON-dev" >> $GITHUB_ENV
+              echo "RELEASE_PRERELEASE=true" >> $GITHUB_ENV
+              ;;
+            testnet)
+              echo "RELEASE_NAME=$GOZENON-testnet" >> $GITHUB_ENV
+              echo "RELEASE_TAG=$GOZENON-testnet" >> $GITHUB_ENV
+              echo "RELEASE_PRERELEASE=true" >> $GITHUB_ENV
+              ;;
+            *)
+              echo "RELEASE_NAME=$GOZENON" >> $GITHUB_ENV
+              echo "RELEASE_TAG=$GOZENON-alphanet" >> $GITHUB_ENV
+              echo "RELEASE_PRERELEASE=false" >> $GITHUB_ENV
+              ;;
+          esac
       - name: Upload universal Darwin binaries
         uses: svenstaro/upload-release-action@04733e069f2d7f7f0b4aebc4fbdbce8613b03ccd
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: universal/*
-          release_name: ${{ env.GOZENON_VERSION }}
-          tag: ${{ env.GOZENON_VERSION }}-alphanet
+          release_name: ${{ env.RELEASE_NAME }}
+          tag: ${{ env.RELEASE_TAG }}
           overwrite: true
           file_glob: true
+          prerelease: ${{ env.RELEASE_PRERELEASE }}
           body: ""
