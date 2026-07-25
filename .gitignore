@@ -13,4 +13,5 @@ build/
 # IDE
 .vscode
 .idea/
+.pipeline
 .research/

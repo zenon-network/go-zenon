@@ -58,6 +58,7 @@ func (ctx *testLiquidityContext) IsHtlcSporkEnforced() bool               { retu
 func (ctx *testLiquidityContext) IsBridgeAndLiquiditySporkEnforced() bool { return true }
 func (ctx *testLiquidityContext) IsDynamicPlasmaSporkEnforced() bool      { return true }
 func (ctx *testLiquidityContext) IsPtlcSporkEnforced() bool               { return false }
+func (ctx *testLiquidityContext) IsMultisigSporkEnforced() bool           { return false }
 
 func (ctx *testLiquidityContext) GetPillarWeights() (map[string]*big.Int, error) {
 	return nil, nil

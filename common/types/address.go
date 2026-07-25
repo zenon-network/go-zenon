@@ -17,6 +17,8 @@ package types
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/btcsuite/btcd/btcutil/bech32"
@@ -44,6 +46,7 @@ const (
 	// ContractAddrByte is the class byte of embedded-contract
 	// addresses.
 	ContractAddrByte = byte(1)
+	MultisigAddrByte = byte(2)
 )
 
 var (
@@ -84,11 +87,14 @@ var (
 	// BridgeContract is the address of the embedded contract that
 	// wraps and unwraps assets across the multichain bridge.
 	BridgeContract = parseEmbedded("z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d")
+	// MultisigContract is the address of the embedded contract that
+	// registers multisig accounts and stages their policy changes.
+	MultisigContract = parseEmbedded("z1qxemdeddedxmultysygxxxxxxxxxxxxx42zwd4")
 
 	// EmbeddedContracts lists the addresses of all embedded contracts.
 	// The pillar worker walks this list to auto-generate the receive
 	// blocks for transactions sent to the contracts.
-	EmbeddedContracts = []Address{PlasmaContract, PillarContract, TokenContract, SentinelContract, SwapContract, StakeContract, SporkContract, LiquidityContract, AcceleratorContract, HtlcContract, PtlcContract, BridgeContract}
+	EmbeddedContracts = []Address{PlasmaContract, PillarContract, TokenContract, SentinelContract, SwapContract, StakeContract, SporkContract, LiquidityContract, AcceleratorContract, HtlcContract, PtlcContract, BridgeContract, MultisigContract}
 	// EmbeddedWUpdate lists the embedded contracts that expose a
 	// periodic Update method; pillars send Update transactions to
 	// these addresses when enough time has passed since the last
@@ -117,10 +123,18 @@ func IsEmbeddedAddress(addr Address) bool {
 	return addr[0] == ContractAddrByte
 }
 
+// IsMultisigAddress reports whether addr has the multisig class byte.
+func IsMultisigAddress(addr Address) bool {
+	return addr[0] == MultisigAddrByte
+}
+
 // Address is a 20-byte Network of Momentum account address: a class
-// byte (UserAddrByte or ContractAddrByte) followed by a 19-byte core.
+// byte (UserAddrByte, ContractAddrByte or MultisigAddrByte) followed
+// by a 19-byte core.
 // User addresses are derived from an Ed25519 public key via
-// PubKeyToAddress; embedded-contract addresses are fixed constants.
+// PubKeyToAddress, multisig addresses from their creation event via
+// MultisigCreationToAddress; embedded-contract addresses are fixed
+// constants.
 // The textual form is a bech32 string with human-readable part "z",
 // for example "z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg".
 type Address [AddressSize]byte
@@ -212,6 +226,23 @@ func PubKeyToAddress(pubKey []byte) Address {
 	hash := sha3.Sum256(pubKey)
 	var addr Address
 	err := addr.SetBytes(append([]byte{UserAddrByte}, hash[:AddressCoreSize]...))
+	if err != nil {
+		panic(err)
+	}
+	return addr
+}
+
+// MultisigCreationToAddress derives a mutable multisig account address from an immutable
+// creation event. The address is independent of the (mutable) policy, so signer rotation does
+// not change it. The same (creatorPubKey, nonce) always yields the same address, so anyone who
+// is told the pair can recompute and verify the funding address offline.
+func MultisigCreationToAddress(creatorPubKey ed25519.PublicKey, nonce uint64) Address {
+	var n [8]byte
+	binary.BigEndian.PutUint64(n[:], nonce)
+	preimage := append(append([]byte{}, creatorPubKey...), n[:]...)
+	hash := sha3.Sum256(preimage)
+	var addr Address
+	err := addr.SetBytes(append([]byte{MultisigAddrByte}, hash[:AddressCoreSize]...))
 	if err != nil {
 		panic(err)
 	}

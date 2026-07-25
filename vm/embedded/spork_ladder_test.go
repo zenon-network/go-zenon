@@ -13,13 +13,13 @@ import (
 	"github.com/zenon-network/go-zenon/vm/vm_context"
 )
 
-// sporkLadderContext answers only the five spork questions sporkVariantKey
+// sporkLadderContext answers only the six spork questions sporkVariantKey
 // asks. Every other AccountVmContext method panics on the nil embedded
 // interface, which is what these tests want: the method lookup must not
 // read anything else.
 type sporkLadderContext struct {
 	vm_context.AccountVmContext
-	accelerator, bridgeAndLiquidity, htlc, dynamicPlasma, ptlc bool
+	accelerator, bridgeAndLiquidity, htlc, dynamicPlasma, ptlc, multisig bool
 }
 
 func (c *sporkLadderContext) IsAcceleratorSporkEnforced() bool        { return c.accelerator }
@@ -27,6 +27,7 @@ func (c *sporkLadderContext) IsBridgeAndLiquiditySporkEnforced() bool { return c
 func (c *sporkLadderContext) IsHtlcSporkEnforced() bool               { return c.htlc }
 func (c *sporkLadderContext) IsDynamicPlasmaSporkEnforced() bool      { return c.dynamicPlasma }
 func (c *sporkLadderContext) IsPtlcSporkEnforced() bool               { return c.ptlc }
+func (c *sporkLadderContext) IsMultisigSporkEnforced() bool           { return c.multisig }
 
 // releasedMethodTable names the table the released lookup (v0.0.9,
 // bb39e31) selects for a legacy spork state. That lookup is a ladder,
@@ -62,35 +63,40 @@ func dumpMethodTable(contracts map[types.Address]*embeddedImplementation) []stri
 }
 
 // TestSporkVariantKey_LegacySporksFormTheReleasedLadder checks the
-// contract map selected for every combination of the five sporks
-// against the tables of the released lookup. The Dynamic Plasma and
-// PTLC sporks postdate that lookup and stay independent switches: each
-// adds exactly its own methods on top of the legacy table.
+// contract map selected for every combination of the six sporks
+// against the tables of the released lookup. The Dynamic Plasma, PTLC
+// and multisig sporks postdate that lookup and stay independent
+// switches: each adds exactly its own methods on top of the legacy
+// table.
 func TestSporkVariantKey_LegacySporksFormTheReleasedLadder(t *testing.T) {
 	embeddedVariantsOnce.Do(buildEmbeddedVariants)
 
 	setVariables := fmt.Sprintf("%v %v ", types.PlasmaContract, cabi.SetVariablesMethodName)
 	ptlcContract := fmt.Sprintf("%v ", types.PtlcContract)
+	multisigContract := fmt.Sprintf("%v ", types.MultisigContract)
 
-	for key := 0; key < 32; key++ {
+	for key := 0; key < 64; key++ {
 		context := &sporkLadderContext{
 			accelerator:        key&1 != 0,
 			bridgeAndLiquidity: key&2 != 0,
 			htlc:               key&4 != 0,
 			dynamicPlasma:      key&8 != 0,
 			ptlc:               key&16 != 0,
+			multisig:           key&32 != 0,
 		}
-		name := fmt.Sprintf("accelerator=%v,bridgeAndLiquidity=%v,htlc=%v,dynamicPlasma=%v,ptlc=%v",
-			context.accelerator, context.bridgeAndLiquidity, context.htlc, context.dynamicPlasma, context.ptlc)
+		name := fmt.Sprintf("accelerator=%v,bridgeAndLiquidity=%v,htlc=%v,dynamicPlasma=%v,ptlc=%v,multisig=%v",
+			context.accelerator, context.bridgeAndLiquidity, context.htlc, context.dynamicPlasma, context.ptlc, context.multisig)
 		t.Run(name, func(t *testing.T) {
 			legacy := make([]string, 0)
-			hasSetVariables, ptlcMethods := false, 0
+			hasSetVariables, ptlcMethods, multisigMethods := false, 0, 0
 			for _, line := range dumpMethodTable(embeddedVariants[sporkVariantKey(context)]) {
 				switch {
 				case strings.HasPrefix(line, setVariables):
 					hasSetVariables = true
 				case strings.HasPrefix(line, ptlcContract):
 					ptlcMethods++
+				case strings.HasPrefix(line, multisigContract):
+					multisigMethods++
 				default:
 					legacy = append(legacy, line)
 				}
@@ -110,6 +116,13 @@ func TestSporkVariantKey_LegacySporksFormTheReleasedLadder(t *testing.T) {
 			}
 			if ptlcMethods != wantPtlcMethods {
 				t.Errorf("PTLC contract has %v methods, want %v", ptlcMethods, wantPtlcMethods)
+			}
+			wantMultisigMethods := 0
+			if context.multisig {
+				wantMultisigMethods = 2
+			}
+			if multisigMethods != wantMultisigMethods {
+				t.Errorf("multisig contract has %v methods, want %v", multisigMethods, wantMultisigMethods)
 			}
 		})
 	}

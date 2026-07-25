@@ -63,6 +63,7 @@ func (ctx *testContractContext) IsHtlcSporkEnforced() bool               { retur
 func (ctx *testContractContext) IsBridgeAndLiquiditySporkEnforced() bool { return true }
 func (ctx *testContractContext) IsDynamicPlasmaSporkEnforced() bool      { return ctx.dpSporkEnforced }
 func (ctx *testContractContext) IsPtlcSporkEnforced() bool               { return false }
+func (ctx *testContractContext) IsMultisigSporkEnforced() bool           { return false }
 func (ctx *testContractContext) GetPillarWeights() (map[string]*big.Int, error) {
 	return nil, nil
 }

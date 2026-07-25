@@ -72,6 +72,9 @@ var (
 	ErrABMAMissing                 = errors.New("account-block momentum-acknowledged points to missing momentum")
 	ErrABMAMustNotBeZero           = errors.New("account-block momentum-acknowledged missing")
 	ErrABMAStale                   = errors.New("account-block momentum-acknowledged predates a spork enforced at the frontier momentum")
+	ErrABMATooOld                  = errors.New("account-block momentum-acknowledged is too old (below the multisig recency floor)")
+	ErrABMultisigAuthMissing       = errors.New("account-block multisig-auth is missing")
+	ErrABMultisigAuthMustBeZero    = errors.New("account-block multisig-auth must be zero")
 	ErrABFromBlockHashMissing      = errors.New("account-block from-block-hash is not provided")
 	ErrABFromBlockHashMustBeZero   = errors.New("account-block from-block-hash must be zero")
 	ErrABFromBlockMissing          = errors.New("account-block from-block doesn't exist")
@@ -148,6 +151,9 @@ var validationErrors = []error{
 	ErrABMAMissing,
 	ErrABMAMustNotBeZero,
 	ErrABMAStale,
+	ErrABMATooOld,
+	ErrABMultisigAuthMissing,
+	ErrABMultisigAuthMustBeZero,
 	ErrABFromBlockHashMissing,
 	ErrABFromBlockHashMustBeZero,
 	ErrABFromBlockMissing,

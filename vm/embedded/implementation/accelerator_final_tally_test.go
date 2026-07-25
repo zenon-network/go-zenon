@@ -69,6 +69,7 @@ func (ctx *testFinalTallyContext) IsHtlcSporkEnforced() bool               { ret
 func (ctx *testFinalTallyContext) IsBridgeAndLiquiditySporkEnforced() bool { return true }
 func (ctx *testFinalTallyContext) IsDynamicPlasmaSporkEnforced() bool      { return ctx.dynPlasmaEnforced }
 func (ctx *testFinalTallyContext) IsPtlcSporkEnforced() bool               { return false }
+func (ctx *testFinalTallyContext) IsMultisigSporkEnforced() bool           { return false }
 
 func (ctx *testFinalTallyContext) GetPillarWeights() (map[string]*big.Int, error) {
 	return nil, nil

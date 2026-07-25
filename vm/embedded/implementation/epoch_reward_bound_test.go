@@ -78,6 +78,7 @@ func (ctx *testEpochBoundContext) IsHtlcSporkEnforced() bool               { ret
 func (ctx *testEpochBoundContext) IsBridgeAndLiquiditySporkEnforced() bool { return true }
 func (ctx *testEpochBoundContext) IsDynamicPlasmaSporkEnforced() bool      { return ctx.dynPlasmaEnforced }
 func (ctx *testEpochBoundContext) IsPtlcSporkEnforced() bool               { return false }
+func (ctx *testEpochBoundContext) IsMultisigSporkEnforced() bool           { return false }
 
 func (ctx *testEpochBoundContext) GetPillarWeights() (map[string]*big.Int, error) {
 	return nil, nil
