@@ -42,6 +42,16 @@ func applyDynamicPlasmaDiffs(contracts map[types.Address]*embeddedImplementation
 	}
 }
 
+func applyMultisigDiffs(contracts map[types.Address]*embeddedImplementation) {
+	contracts[types.MultisigContract] = &embeddedImplementation{
+		map[string]Method{
+			cabi.CreateMultisigMethodName: &implementation.CreateMultisigMethod{MethodName: cabi.CreateMultisigMethodName},
+			cabi.ChangePolicyMethodName:   &implementation.ChangePolicyMethod{MethodName: cabi.ChangePolicyMethodName},
+		},
+		cabi.ABIMultisig,
+	}
+}
+
 func applyHtlcDiffs(contracts map[types.Address]*embeddedImplementation) {
 	contracts[types.HtlcContract] = &embeddedImplementation{
 		map[string]Method{
@@ -210,6 +220,7 @@ func getAllEmbedded() map[types.Address]*embeddedImplementation {
 	applyBridgeAndLiquidityDiffs(contractsMap)
 	applyHtlcDiffs(contractsMap)
 	applyDynamicPlasmaDiffs(contractsMap)
+	applyMultisigDiffs(contractsMap)
 	return contractsMap
 }
 
@@ -242,6 +253,9 @@ func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Addres
 	}
 	if context.IsDynamicPlasmaSporkEnforced() {
 		applyDynamicPlasmaDiffs(contractsMap)
+	}
+	if context.IsMultisigSporkEnforced() {
+		applyMultisigDiffs(contractsMap)
 	}
 	// No change for NoPillarRegSpork
 

@@ -8,9 +8,12 @@ import (
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/chain/store"
+	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/pow"
+	"github.com/zenon-network/go-zenon/vm/constants"
+	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/wallet"
 )
 
@@ -51,7 +54,7 @@ func (av *accountVerifier) getContext(block *nom.AccountBlock) (store.Account, s
 	}
 
 	var momentumStore store.Momentum
-	if types.IsEmbeddedAddress(block.Address) {
+	if types.IsEmbeddedAddress(block.Address) || types.IsMultisigAddress(block.Address) {
 		momentumStore = av.chain.GetMomentumStore(block.MomentumAcknowledged)
 		if momentumStore == nil {
 			return nil, nil, ErrABMAMissing
@@ -111,11 +114,20 @@ func (av *accountVerifier) AccountBlockTransaction(transaction *nom.AccountBlock
 		return err
 	}
 
+	isMultisigActive := false
+	if types.IsMultisigAddress(transaction.Block.Address) {
+		isMultisigActive, err = momentumStore.IsSporkActive(types.MultisigSpork)
+		if err != nil {
+			return err
+		}
+	}
+
 	return (&accountBlockTransactionVerifier{
-		transaction:   transaction,
-		accountStore:  accountStore,
-		momentumStore: momentumStore,
-		frontierStore: av.chain.GetFrontierMomentumStore(),
+		transaction:      transaction,
+		accountStore:     accountStore,
+		momentumStore:    momentumStore,
+		frontierStore:    av.chain.GetFrontierMomentumStore(),
+		isMultisigActive: isMultisigActive,
 	}).all()
 }
 
@@ -339,6 +351,23 @@ func (abv *accountBlockVerifier) momentumAcknowledged() error {
 		}
 	}
 
+	// Recency floor (best-effort, node-local pre-filter): a multisig block may not acknowledge a
+	// momentum more than MultisigMaxMaLag below this node's current frontier. This rejects most
+	// stale blocks early and cheaply, but it is NOT consensus-authoritative -- the frontier is
+	// node-local and can differ across sync states, so it serves only as a backlog/hygiene bound.
+	// content() (rawMomentumVerifier.content(), verifier/momentum.go) enforces no MA-recency floor
+	// at all -- it verifies live signatures/policy against the block's actual inclusion height
+	// instead.
+	// Outside the `previous != ZeroHashHeight` guard above so it also gates a multisig account's
+	// very first block (height 1, no previous block). Additive arithmetic only, to avoid uint
+	// underflow at low/genesis frontier height.
+	if types.IsMultisigAddress(abv.block.Address) {
+		frontierH := abv.frontierStore.Identifier().Height
+		if definition.IsMultisigMAStale(abv.block.MomentumAcknowledged.Height, frontierH) {
+			return ErrABMATooOld
+		}
+	}
+
 	return nil
 }
 func (abv *accountBlockVerifier) fromHash() error {
@@ -406,6 +435,11 @@ type accountBlockTransactionVerifier struct {
 	accountStore  store.Account
 	momentumStore store.Momentum
 	frontierStore store.Momentum
+
+	// isMultisigActive is set per-call (not shared/cached) by AccountBlockTransaction, true iff
+	// types.MultisigSpork is active at the block's MomentumAcknowledged. Only meaningful for
+	// multisig blocks.
+	isMultisigActive bool
 }
 
 func (abvt *accountBlockTransactionVerifier) all() error {
@@ -426,12 +460,52 @@ func (abvt *accountBlockTransactionVerifier) all() error {
 }
 func (abvt *accountBlockTransactionVerifier) signature() error {
 	block := abvt.transaction.Block
+	if types.IsMultisigAddress(block.Address) {
+		if !abvt.isMultisigActive {
+			return constants.ErrMultisigNotActivated
+		}
+		if len(block.PublicKey) != 0 {
+			return ErrABPublicKeyMustBeZero
+		}
+		if len(block.Signature) != 0 {
+			return ErrABSignatureMustBeZero
+		}
+		auth := block.MultisigAuth
+		if auth == nil {
+			return ErrABMultisigAuthMissing
+		}
+
+		// Read the active policy from the registry at the local frontier's current height. Uses the
+		// single canonical definition-package codec/Promote() — same as the write path. This is a
+		// best-effort pre-filter, not the authoritative gate: the block's actual momentum-inclusion
+		// height may differ from this node's frontier at admission time, so the authoritative check
+		// is the live re-check in content() against the block's real inclusion height.
+		rec, err := definition.GetMultisigRecord(
+			abvt.frontierStore.GetAccountStore(types.MultisigContract).Storage(), block.Address)
+		common.DealWithErr(err)
+		if rec == nil {
+			return constants.ErrMultisigNoPolicy
+		}
+		policy := definition.ActivePolicyAtHeight(rec, abvt.frontierStore.Identifier().Height)
+
+		if len(auth.Signatures) != int(policy.Threshold) {
+			return constants.ErrMultisigThresholdNotMet
+		}
+
+		if !definition.VerifyThresholdSignatures(policy, block.Hash.Bytes(), auth.Signatures) {
+			return ErrABSignatureInvalid
+		}
+		return nil
+	}
 	if types.IsEmbeddedAddress(block.Address) {
 		if len(block.PublicKey) != 0 {
 			return ErrABPublicKeyMustBeZero
 		}
 		if len(block.Signature) != 0 {
 			return ErrABSignatureMustBeZero
+		}
+		if block.MultisigAuth != nil {
+			return ErrABMultisigAuthMustBeZero
 		}
 		return nil
 	}
@@ -441,6 +515,9 @@ func (abvt *accountBlockTransactionVerifier) signature() error {
 	}
 	if len(block.PublicKey) == 0 {
 		return ErrABPublicKeyMissing
+	}
+	if block.MultisigAuth != nil {
+		return ErrABMultisigAuthMustBeZero
 	}
 	isVerified, err := wallet.VerifySignature(block.PublicKey, block.Hash.Bytes(), block.Signature)
 	if err != nil {
@@ -467,6 +544,13 @@ func (abvt *accountBlockTransactionVerifier) hash() error {
 func (abvt *accountBlockTransactionVerifier) producer() error {
 	block := abvt.transaction.Block
 
+	if types.IsMultisigAddress(block.Address) {
+		// No-op: authority is the in-state policy checked in signature(); the address↔creation
+		// binding was enforced once, at creation, by CreateMultisig. The address does not commit
+		// to the policy (unlike phase-1's fixed policy-derived address), so there is no pubkey to
+		// rederive here.
+		return nil
+	}
 	if types.IsEmbeddedAddress(block.Address) {
 		return nil
 	}

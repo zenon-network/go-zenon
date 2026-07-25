@@ -37,4 +37,5 @@ type AccountVmContext interface {
 	IsHtlcSporkEnforced() bool
 	IsBridgeAndLiquiditySporkEnforced() bool
 	IsDynamicPlasmaSporkEnforced() bool
+	IsMultisigSporkEnforced() bool
 }

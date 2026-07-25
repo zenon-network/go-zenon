@@ -28,3 +28,9 @@ func (ctx *accountVmContext) IsDynamicPlasmaSporkEnforced() bool {
 	common.DealWithErr(err)
 	return active
 }
+
+func (ctx *accountVmContext) IsMultisigSporkEnforced() bool {
+	active, err := ctx.cacheStore.IsSporkActive(types.MultisigSpork)
+	common.DealWithErr(err)
+	return active
+}

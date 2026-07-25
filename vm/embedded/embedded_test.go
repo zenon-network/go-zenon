@@ -7,7 +7,29 @@ import (
 	"testing"
 
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/vm/constants"
+	cabi "github.com/zenon-network/go-zenon/vm/embedded/definition"
+	"github.com/zenon-network/go-zenon/vm/vm_context"
 )
+
+// sporkFlagsContext is a minimal vm_context.AccountVmContext test double. GetEmbeddedMethod only
+// calls the Is*SporkEnforced() accessors, so embedding a nil AccountVmContext and overriding just
+// those is sufficient: any other method call would panic, but none is reached in these tests.
+type sporkFlagsContext struct {
+	vm_context.AccountVmContext
+	accelerator        bool
+	htlc               bool
+	bridgeAndLiquidity bool
+	dynamicPlasma      bool
+	multisig           bool
+}
+
+func (c *sporkFlagsContext) IsAcceleratorSporkEnforced() bool        { return c.accelerator }
+func (c *sporkFlagsContext) IsHtlcSporkEnforced() bool               { return c.htlc }
+func (c *sporkFlagsContext) IsBridgeAndLiquiditySporkEnforced() bool { return c.bridgeAndLiquidity }
+func (c *sporkFlagsContext) IsDynamicPlasmaSporkEnforced() bool      { return c.dynamicPlasma }
+func (c *sporkFlagsContext) IsMultisigSporkEnforced() bool           { return c.multisig }
 
 func TestDumpContractsABIMethods(t *testing.T) {
 	dumps := make([]string, 0)
@@ -77,6 +99,8 @@ func TestDumpContractsABIMethods(t *testing.T) {
 {"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"SetTokenTuple", "id":"f0ad68db", "signature":"SetTokenTuple(string[],uint32[],uint32[],uint256[])"}
 {"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"UnlockLiquidityStakeEntries", "id":"616643ca", "signature":"UnlockLiquidityStakeEntries()"}
 {"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"Update", "id":"20093ea6", "signature":"Update()"}
+{"address":"z1qxemdeddedxmultysygxxxxxxxxxxxxx42zwd4", "name":"ChangePolicy", "id":"9f202100", "signature":"ChangePolicy(uint8,bytes[],bool)"}
+{"address":"z1qxemdeddedxmultysygxxxxxxxxxxxxx42zwd4", "name":"CreateMultisig", "id":"2adf7a33", "signature":"CreateMultisig(uint64,uint8,bytes[])"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"CancelFuse", "id":"f9ca9dc3", "signature":"CancelFuse(hash)"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"Fuse", "id":"5ac942e8", "signature":"Fuse(address)"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"SetVariables", "id":"15db3894", "signature":"SetVariables(uint64,uint64,uint64,uint8,uint8)"}
@@ -108,4 +132,95 @@ func TestDumpContractsABIMethods(t *testing.T) {
 {"address":"z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0", "name":"Mint", "id":"cd70f9bc", "signature":"Mint(tokenStandard,uint256,address)"}
 {"address":"z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0", "name":"UpdateToken", "id":"2a3cf32c", "signature":"UpdateToken(tokenStandard,address,bool,bool)"}
 ]`)
+}
+
+// TestGetEmbeddedMethod_MultisigDormantByDefault: with no spork enforced (the zero-value
+// context), MultisigContract is unresolvable, matching the spork's dormant-on-merge guarantee.
+func TestGetEmbeddedMethod_MultisigDormantByDefault(t *testing.T) {
+	ctx := &sporkFlagsContext{}
+
+	createId := cabi.ABIMultisig.Methods[cabi.CreateMultisigMethodName].Id()
+	_, err := GetEmbeddedMethod(ctx, types.MultisigContract, createId)
+	if err != constants.ErrContractDoesntExist {
+		t.Fatalf("expected ErrContractDoesntExist, got %v", err)
+	}
+
+	changeId := cabi.ABIMultisig.Methods[cabi.ChangePolicyMethodName].Id()
+	_, err = GetEmbeddedMethod(ctx, types.MultisigContract, changeId)
+	if err != constants.ErrContractDoesntExist {
+		t.Fatalf("expected ErrContractDoesntExist, got %v", err)
+	}
+}
+
+// TestGetEmbeddedMethod_MultisigEnforced: once the multisig spork is enforced,
+// CreateMultisig/ChangePolicy resolve to their registered methods.
+func TestGetEmbeddedMethod_MultisigEnforced(t *testing.T) {
+	ctx := &sporkFlagsContext{multisig: true}
+
+	createId := cabi.ABIMultisig.Methods[cabi.CreateMultisigMethodName].Id()
+	method, err := GetEmbeddedMethod(ctx, types.MultisigContract, createId)
+	common.FailIfErr(t, err)
+	if method == nil {
+		t.Fatal("expected CreateMultisig method, got nil")
+	}
+
+	changeId := cabi.ABIMultisig.Methods[cabi.ChangePolicyMethodName].Id()
+	method, err = GetEmbeddedMethod(ctx, types.MultisigContract, changeId)
+	common.FailIfErr(t, err)
+	if method == nil {
+		t.Fatal("expected ChangePolicy method, got nil")
+	}
+}
+
+// TestGetEmbeddedMethod_MultisigIndependentResolution: enforcing the multisig spork must not
+// affect resolution of any other independently-gated contract — each applyXDiffs only ever
+// writes its own contract key.
+func TestGetEmbeddedMethod_MultisigIndependentResolution(t *testing.T) {
+	ctx := &sporkFlagsContext{
+		accelerator:        true,
+		htlc:               true,
+		bridgeAndLiquidity: true,
+		dynamicPlasma:      true,
+		multisig:           true,
+	}
+
+	// htlc (spork-gated)
+	createHtlcId := cabi.ABIHtlc.Methods[cabi.CreateHtlcMethodName].Id()
+	method, err := GetEmbeddedMethod(ctx, types.HtlcContract, createHtlcId)
+	common.FailIfErr(t, err)
+	if method == nil {
+		t.Fatal("expected htlc Create method to still resolve")
+	}
+
+	// bridge (spork-gated)
+	wrapId := cabi.ABIBridge.Methods[cabi.WrapTokenMethodName].Id()
+	method, err = GetEmbeddedMethod(ctx, types.BridgeContract, wrapId)
+	common.FailIfErr(t, err)
+	if method == nil {
+		t.Fatal("expected bridge WrapToken method to still resolve")
+	}
+
+	// accelerator (spork-gated)
+	donateId := cabi.ABIAccelerator.Methods[cabi.DonateMethodName].Id()
+	method, err = GetEmbeddedMethod(ctx, types.AcceleratorContract, donateId)
+	common.FailIfErr(t, err)
+	if method == nil {
+		t.Fatal("expected accelerator Donate method to still resolve")
+	}
+
+	// origin (unconditional, e.g. pillar registration)
+	registerId := cabi.ABIPillars.Methods[cabi.RegisterMethodName].Id()
+	method, err = GetEmbeddedMethod(ctx, types.PillarContract, registerId)
+	common.FailIfErr(t, err)
+	if method == nil {
+		t.Fatal("expected pillar Register method to still resolve")
+	}
+
+	// and multisig itself
+	createMultisigId := cabi.ABIMultisig.Methods[cabi.CreateMultisigMethodName].Id()
+	method, err = GetEmbeddedMethod(ctx, types.MultisigContract, createMultisigId)
+	common.FailIfErr(t, err)
+	if method == nil {
+		t.Fatal("expected CreateMultisig method to resolve")
+	}
 }

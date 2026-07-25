@@ -139,6 +139,13 @@
                 "description": "Activates Dynamic Plasma",
                 "activated": true,
                 "enforcementHeight": 30
+            },
+            {
+                "id": "0000000000000000000000000000000000000000000000000000000000000003",
+                "name": "multisig",
+                "description": "Activates the multisig accounts",
+                "activated": true,
+                "enforcementHeight": 15
             }
         ]
     },

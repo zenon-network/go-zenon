@@ -2,6 +2,8 @@ package types
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/btcsuite/btcd/btcutil/bech32"
@@ -17,6 +19,7 @@ const (
 const (
 	UserAddrByte     = byte(0)
 	ContractAddrByte = byte(1)
+	MultisigAddrByte = byte(2)
 )
 
 var (
@@ -31,8 +34,9 @@ var (
 	AcceleratorContract = parseEmbedded("z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22")
 	HtlcContract        = parseEmbedded("z1qxemdeddedxhtlcxxxxxxxxxxxxxxxxxygecvw")
 	BridgeContract      = parseEmbedded("z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d")
+	MultisigContract    = parseEmbedded("z1qxemdeddedxmultysygxxxxxxxxxxxxx42zwd4")
 
-	EmbeddedContracts = []Address{PlasmaContract, PillarContract, TokenContract, SentinelContract, SwapContract, StakeContract, SporkContract, LiquidityContract, AcceleratorContract, HtlcContract, BridgeContract}
+	EmbeddedContracts = []Address{PlasmaContract, PillarContract, TokenContract, SentinelContract, SwapContract, StakeContract, SporkContract, LiquidityContract, AcceleratorContract, HtlcContract, BridgeContract, MultisigContract}
 	EmbeddedWUpdate   = []Address{PillarContract, StakeContract, SentinelContract, LiquidityContract, AcceleratorContract}
 
 	SporkAddress *Address
@@ -48,6 +52,10 @@ var (
 
 func IsEmbeddedAddress(addr Address) bool {
 	return addr[0] == ContractAddrByte
+}
+
+func IsMultisigAddress(addr Address) bool {
+	return addr[0] == MultisigAddrByte
 }
 
 type Address [AddressSize]byte
@@ -114,6 +122,23 @@ func PubKeyToAddress(pubKey []byte) Address {
 	hash := sha3.Sum256(pubKey)
 	var addr Address
 	err := addr.SetBytes(append([]byte{UserAddrByte}, hash[:AddressCoreSize]...))
+	if err != nil {
+		panic(err)
+	}
+	return addr
+}
+
+// MultisigCreationToAddress derives a mutable multisig account address from an immutable
+// creation event. The address is independent of the (mutable) policy, so signer rotation does
+// not change it. The same (creatorPubKey, nonce) always yields the same address, so anyone who
+// is told the pair can recompute and verify the funding address offline.
+func MultisigCreationToAddress(creatorPubKey ed25519.PublicKey, nonce uint64) Address {
+	var n [8]byte
+	binary.BigEndian.PutUint64(n[:], nonce)
+	preimage := append(append([]byte{}, creatorPubKey...), n[:]...)
+	hash := sha3.Sum256(preimage)
+	var addr Address
+	err := addr.SetBytes(append([]byte{MultisigAddrByte}, hash[:AddressCoreSize]...))
 	if err != nil {
 		panic(err)
 	}

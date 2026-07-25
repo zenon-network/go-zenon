@@ -91,6 +91,33 @@ var (
 	// SwapAssetDecayTickValuePercentage is the percentage that is lost after in each tick, equal to 10% per SwapAssetDecayTickEpochs, after SwapAssetDecayEpochsOffset
 	SwapAssetDecayTickValuePercentage = 10
 
+	/// === Multisig constants ===
+
+	MinSigners = 2  // 1-of-N is a single-sig account; reject
+	MaxSigners = 16 // bounds the verify loop and block/state size
+
+	// MultisigPolicyMaturityDelay is the number of momentums a staged ChangePolicy must wait
+	// before it becomes the active policy. Must be strictly greater than the 30-momentum reorg
+	// bound (protocol/chain_bridge.go:176, `ourFrontier.Height-target.Height > 30` rollback
+	// check): 60 gives a 2x margin (~10 min at 10s momentums) so a matured rotation can never be
+	// reverted by an accepted reorg.
+	MultisigPolicyMaturityDelay = uint64(60)
+
+	// MultisigMaxMaLag is a backlog/hygiene bound on how stale a pooled multisig block's
+	// MomentumAcknowledged may be, NOT a security control — authorization is checked live against
+	// the policy active at each block's actual inclusion height (definition.ActivePolicyAtHeight +
+	// definition.VerifyThresholdSignatures), so an old-set signature can never authorise a block
+	// regardless of this lag. Set to one week of momentums so backlogged blocks have ample time to
+	// land before being dropped as stale. The
+	// sole remaining constraint is MultisigMaxMaLag >= MultisigPolicyMaturityDelay (60480 >= 60
+	// holds), so the window is never narrower than a single maturity cycle.
+	MultisigMaxMaLag = uint64(7 * MomentumsPerEpoch)
+
+	// MultisigCreationBurnAmount is the ZNN burned by CreateMultisig, at parity with the closest
+	// existing analog, token issuance (TokenIssueAmount) — both create a permanent, undeletable
+	// registry record.
+	MultisigCreationBurnAmount = big.NewInt(1 * Decimals)
+
 	/// === Bridge constants ===
 
 	InitialBridgeAdministrator   = types.ParseAddressPanic("z1qr9vtwsfr2n0nsxl2nfh6l5esqjh2wfj85cfq9")

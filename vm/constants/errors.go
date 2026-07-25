@@ -101,4 +101,14 @@ var (
 	// Liquidity
 	ErrInvalidPercentages = errors.New("invalid percentages")
 	ErrInvalidRewards     = errors.New("invalid liquidity stake rewards")
+
+	// Multisig
+	ErrMultisigLocked                 = errors.New("multisig: policy is locked")
+	ErrMultisigAlreadyExists          = errors.New("multisig: account already exists")
+	ErrMultisigNoPolicy               = errors.New("multisig: no policy for this account")
+	ErrMultisigInvalidPolicy          = errors.New("multisig: invalid policy")
+	ErrMultisigNotActivated           = errors.New("multisig: spork not activated")
+	ErrMultisigThresholdNotMet        = errors.New("multisig: signature count does not match policy threshold")
+	ErrMultisigStaleAuthority         = errors.New("multisig: authorization does not satisfy current active policy")
+	ErrMultisigCreatorMustBeSingleSig = errors.New("multisig: creator must be a single-sig account")
 )
