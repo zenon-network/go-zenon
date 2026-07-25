@@ -34,6 +34,12 @@ message AccountBlockProto {
 
   bytes publicKey = 22;
   bytes signature = 23;
+
+  MultisigAuthProto multisigAuth = 24;
+}
+
+message MultisigAuthProto {
+  repeated bytes signatures = 1;
 }
 
 message MomentumProto {
