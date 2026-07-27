@@ -1,13 +1,17 @@
 package verifier
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"testing"
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/chain/store"
+	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/dp"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
@@ -300,5 +304,202 @@ func TestRawMomentumVerifier_Content_EmbeddedAddress_SkipsCanonicalRecompute(t *
 
 	if err := rmv.content(true); err != nil {
 		t.Fatalf("expected no error for an untouched embedded-address block, got %v", err)
+	}
+}
+
+// fakeContentMomentumStore implements GetFrontierAccountBlock (for a fresh, never-before-seen
+// account) and GetAccountStore (serving the multisig registry live-auth now reads); every other
+// method is unused and would panic if reached, per the same pattern as
+// verifier/account_block_multisig_test.go's fakes.
+type fakeContentMomentumStore struct {
+	store.Momentum
+	registryStorage db.DB
+}
+
+func (f *fakeContentMomentumStore) GetFrontierAccountBlock(types.Address) (*nom.AccountBlock, error) {
+	return nil, nil
+}
+
+func (f *fakeContentMomentumStore) GetAccountStore(types.Address) store.Account {
+	return &fakeAccountStore{storage: f.registryStorage}
+}
+
+func multisigTestBlock(t *testing.T, maHeight uint64) *nom.AccountBlock {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := types.MultisigCreationToAddress(pub, 0)
+	b := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      1,
+		BlockType:            nom.BlockTypeUserSend,
+		Height:               1,
+		MomentumAcknowledged: types.HashHeight{Height: maHeight},
+		Address:              addr,
+		ToAddress:            types.ZeroAddress,
+	}
+	b.Hash = b.ComputeHash()
+	return b
+}
+
+// TestMomentumContent_LiveAuth_ActivePolicy_Accepted: a multisig block signed under the policy
+// active at the including momentum's height is accepted by content(), the authoritative live
+// authorization gate.
+func TestMomentumContent_LiveAuth_ActivePolicy_Accepted(t *testing.T) {
+	signers := generateSigners(t, 3)
+	policy := policyFromSigners(t, 2, signers)
+
+	block := multisigTestBlock(t, 1)
+	storage := setupRegistry(t, block.Address, &definition.MultisigRecord{Active: policy})
+	block.MultisigAuth = &nom.MultisigAuth{Signatures: signWithPolicy(t, policy, signers, block.Hash)}
+
+	momentumHeight := constants.MultisigMaxMaLag + 100
+	momentum := &nom.Momentum{Content: nom.NewMomentumContent([]*nom.AccountBlock{block}), Height: momentumHeight}
+
+	rmv := &rawMomentumVerifier{
+		momentum:      momentum,
+		accountBlocks: []*nom.AccountBlock{block},
+		momentumStore: &fakeContentMomentumStore{registryStorage: storage},
+	}
+	if err := rmv.content(false); err != nil {
+		t.Fatalf("expected content() to accept a block signed under the active policy, got %v", err)
+	}
+}
+
+// TestMomentumContent_LiveAuth_MaturedOldPolicy_Rejected: a multisig block signed under a policy
+// that has since matured out of Active is rejected by content(), even though its
+// MomentumAcknowledged is not stale.
+func TestMomentumContent_LiveAuth_MaturedOldPolicy_Rejected(t *testing.T) {
+	oldSigners := generateSigners(t, 3)
+	oldPolicy := policyFromSigners(t, 2, oldSigners)
+	newSigners := generateSigners(t, 3)
+	newPolicy := policyFromSigners(t, 2, newSigners)
+
+	const pendingHeight = uint64(10)
+	block := multisigTestBlock(t, 1)
+	storage := setupRegistry(t, block.Address, &definition.MultisigRecord{
+		Active:        oldPolicy,
+		Pending:       &newPolicy,
+		PendingHeight: pendingHeight,
+	})
+	block.MultisigAuth = &nom.MultisigAuth{Signatures: signWithPolicy(t, oldPolicy, oldSigners, block.Hash)}
+
+	// momentum height is at/after maturity, so the new policy is the active one.
+	momentumHeight := pendingHeight + constants.MultisigPolicyMaturityDelay
+	momentum := &nom.Momentum{Content: nom.NewMomentumContent([]*nom.AccountBlock{block}), Height: momentumHeight}
+
+	rmv := &rawMomentumVerifier{
+		momentum:      momentum,
+		accountBlocks: []*nom.AccountBlock{block},
+		momentumStore: &fakeContentMomentumStore{registryStorage: storage},
+	}
+	if err := rmv.content(false); err == nil {
+		t.Fatal("expected content() to reject a block signed under a since-matured old policy")
+	}
+}
+
+// TestMomentumContent_LiveAuth_StaleMA_StillAccepted: content() does not enforce an MA-lag floor:
+// a validly-signed block whose MomentumAcknowledged lags the including momentum by more than
+// MultisigMaxMaLag still lands, as long as it satisfies the currently active policy.
+func TestMomentumContent_LiveAuth_StaleMA_StillAccepted(t *testing.T) {
+	signers := generateSigners(t, 3)
+	policy := policyFromSigners(t, 2, signers)
+
+	block := multisigTestBlock(t, 1)
+	storage := setupRegistry(t, block.Address, &definition.MultisigRecord{Active: policy})
+	block.MultisigAuth = &nom.MultisigAuth{Signatures: signWithPolicy(t, policy, signers, block.Hash)}
+
+	momentumHeight := constants.MultisigMaxMaLag + 1000
+	momentum := &nom.Momentum{Content: nom.NewMomentumContent([]*nom.AccountBlock{block}), Height: momentumHeight}
+
+	rmv := &rawMomentumVerifier{
+		momentum:      momentum,
+		accountBlocks: []*nom.AccountBlock{block},
+		momentumStore: &fakeContentMomentumStore{registryStorage: storage},
+	}
+	if err := rmv.content(false); err != nil {
+		t.Fatalf("expected content() to accept a validly-signed block despite MA lagging past MultisigMaxMaLag, got %v", err)
+	}
+}
+
+// secondMultisigBlock builds a second, higher-height block for the same multisig address as base,
+// for exercising the per-address policy cache against multiple blocks from one address.
+func secondMultisigBlock(base *nom.AccountBlock) *nom.AccountBlock {
+	b := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      1,
+		BlockType:            nom.BlockTypeUserSend,
+		Height:               2,
+		PreviousHash:         base.Hash,
+		MomentumAcknowledged: base.MomentumAcknowledged,
+		Address:              base.Address,
+		ToAddress:            types.ZeroAddress,
+	}
+	b.Hash = b.ComputeHash()
+	return b
+}
+
+// TestMomentumContent_LiveAuth_MultipleBlocksSameAddress_AllAccepted: a momentum containing
+// multiple blocks from the same multisig address, all validly signed under the one active policy,
+// are all authorised -- proving the per-address policy cache resolves the policy once and applies
+// it identically to every block from that address.
+func TestMomentumContent_LiveAuth_MultipleBlocksSameAddress_AllAccepted(t *testing.T) {
+	signers := generateSigners(t, 3)
+	policy := policyFromSigners(t, 2, signers)
+
+	block1 := multisigTestBlock(t, 1)
+	block2 := secondMultisigBlock(block1)
+	storage := setupRegistry(t, block1.Address, &definition.MultisigRecord{Active: policy})
+	block1.MultisigAuth = &nom.MultisigAuth{Signatures: signWithPolicy(t, policy, signers, block1.Hash)}
+	block2.MultisigAuth = &nom.MultisigAuth{Signatures: signWithPolicy(t, policy, signers, block2.Hash)}
+
+	momentumHeight := constants.MultisigMaxMaLag + 100
+	blocks := []*nom.AccountBlock{block1, block2}
+	momentum := &nom.Momentum{Content: nom.NewMomentumContent(blocks), Height: momentumHeight}
+
+	rmv := &rawMomentumVerifier{
+		momentum:      momentum,
+		accountBlocks: blocks,
+		momentumStore: &fakeContentMomentumStore{registryStorage: storage},
+	}
+	if err := rmv.content(false); err != nil {
+		t.Fatalf("expected content() to accept multiple validly-signed blocks from the same address, got %v", err)
+	}
+}
+
+// TestMomentumContent_LiveAuth_MultipleBlocksSameAddress_AllRejected: a momentum containing
+// multiple blocks from the same multisig address, none satisfying the active policy, are all
+// rejected -- the cached policy applies the same negative outcome to every block from that
+// address.
+func TestMomentumContent_LiveAuth_MultipleBlocksSameAddress_AllRejected(t *testing.T) {
+	signers := generateSigners(t, 3)
+	policy := policyFromSigners(t, 2, signers)
+	unrelatedSigners := generateSigners(t, 2)
+
+	block1 := multisigTestBlock(t, 1)
+	block2 := secondMultisigBlock(block1)
+	storage := setupRegistry(t, block1.Address, &definition.MultisigRecord{Active: policy})
+	block1.MultisigAuth = &nom.MultisigAuth{Signatures: [][]byte{
+		ed25519.Sign(unrelatedSigners[0].priv, block1.Hash.Bytes()),
+		ed25519.Sign(unrelatedSigners[1].priv, block1.Hash.Bytes()),
+	}}
+	block2.MultisigAuth = &nom.MultisigAuth{Signatures: [][]byte{
+		ed25519.Sign(unrelatedSigners[0].priv, block2.Hash.Bytes()),
+		ed25519.Sign(unrelatedSigners[1].priv, block2.Hash.Bytes()),
+	}}
+
+	momentumHeight := constants.MultisigMaxMaLag + 100
+	blocks := []*nom.AccountBlock{block1, block2}
+	momentum := &nom.Momentum{Content: nom.NewMomentumContent(blocks), Height: momentumHeight}
+
+	rmv := &rawMomentumVerifier{
+		momentum:      momentum,
+		accountBlocks: blocks,
+		momentumStore: &fakeContentMomentumStore{registryStorage: storage},
+	}
+	if err := rmv.content(false); err == nil {
+		t.Fatal("expected content() to reject a momentum where no block from the address satisfies the active policy")
 	}
 }
