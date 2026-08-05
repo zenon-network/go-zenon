@@ -86,7 +86,9 @@ var discReasonToString = [...]string{
 }
 
 func (d DiscReason) String() string {
-	if len(discReasonToString) < int(d) {
+	// d indexes discReasonToString, so the bound is >= len, not > len. d is also
+	// decoded from the wire and is not constrained to the declared reasons.
+	if int(d) < 0 || int(d) >= len(discReasonToString) {
 		return fmt.Sprintf("Unknown Reason(%d)", d)
 	}
 	return discReasonToString[d]
