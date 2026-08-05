@@ -342,6 +342,10 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 
 		hashes := make([]types.Hash, len(blocks))
 		for i, block := range blocks {
+			// Decoded from the peer, so do not assume the elements are populated.
+			if block == nil || block.Momentum == nil {
+				return errResp(ErrDecode, "%v: incomplete momentum at index %d", msg, i)
+			}
 			block.Momentum.EnsureCache()
 			hashes[i] = block.Momentum.Hash
 		}
@@ -383,6 +387,10 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		var detailed *nom.DetailedMomentum
 		if err := msg.Decode(&detailed); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
+		}
+		// Decoded from the peer, so do not assume the message is populated.
+		if detailed == nil || detailed.Momentum == nil {
+			return errResp(ErrDecode, "%v: incomplete momentum", msg)
 		}
 
 		detailed.Momentum.EnsureCache()
