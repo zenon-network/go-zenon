@@ -2,6 +2,7 @@ package libp2p
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
@@ -15,7 +16,10 @@ import (
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/inconshreveable/log15"
+	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"github.com/zenon-network/go-zenon/common"
@@ -361,6 +365,105 @@ func TestDHTDiscoveryConnectsIndirectPeer(t *testing.T) {
 	if !found {
 		t.Fatalf("C connected to %d peers but not to B (%s) specifically", srvC.PeerCount(), pidB)
 	}
+}
+
+// TestPendingHandshakeCapPerPeer verifies that a single remote peer
+// opening many concurrent streams that never complete the protocol
+// handshake can occupy at most one pending-handshake slot. Without the
+// per-peer cap, one connection opening MaxPendingPeers stalled streams
+// would consume the entire global pending budget and deny every other
+// inbound handshake for up to the handshake read deadline.
+//
+// Topology: A listens with MaxPendingPeers=2. An "attacker" — a raw
+// libp2p host, not a Zenon Server — connects to A and opens 5 streams
+// on the Zenon protocol without ever writing a handshake, holding them
+// open. A legitimate peer B then dials A concurrently and must still
+// complete its handshake and be adopted: if the attacker's streams had
+// consumed more than one pending slot, B's own handshake attempt would
+// be rejected until the attacker's streams time out.
+func TestPendingHandshakeCapPerPeer(t *testing.T) {
+	keyA, keyB, keyAttacker := mustGenKey(t), mustGenKey(t), mustGenKey(t)
+	portA := freePortTCP(t)
+
+	srvA := &Server{
+		PrivateKey:      keyA,
+		Name:            "pending-cap-target",
+		MaxPeers:        8,
+		MaxPendingPeers: 2,
+		NoDial:          true,
+		ListenAddr:      fmt.Sprintf("127.0.0.1:%d", portA),
+	}
+	if err := srvA.Start(); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+	defer srvA.Stop()
+
+	infoA := peer.AddrInfo{ID: srvA.host.ID(), Addrs: srvA.host.Addrs()}
+
+	attackerPriv, err := ECDSAToLibp2pPrivKey(keyAttacker)
+	if err != nil {
+		t.Fatalf("attacker key: %v", err)
+	}
+	attackerHost, err := libp2p.New(libp2p.Identity(attackerPriv), libp2p.NoListenAddrs)
+	if err != nil {
+		t.Fatalf("attacker host: %v", err)
+	}
+	defer attackerHost.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := attackerHost.Connect(ctx, infoA); err != nil {
+		t.Fatalf("attacker connect: %v", err)
+	}
+
+	const attackerStreams = 5 // > MaxPendingPeers, all stalled indefinitely
+	var streams []network.Stream
+	for i := 0; i < attackerStreams; i++ {
+		s, err := attackerHost.NewStream(ctx, infoA.ID, protocol.ID(protoID))
+		if err != nil {
+			t.Fatalf("attacker stream %d: %v", i, err)
+		}
+		// go-libp2p negotiates the protocol lazily once a "preferred
+		// protocol" is cached for the peer (i.e. every stream after the
+		// first): NewStream returns immediately without writing
+		// anything, so the server never even sees the stream until
+		// something is written. A single byte forces that flush (and
+		// leaves the handshake frame incomplete, so the server's read
+		// still stalls until the handshake deadline).
+		if _, err := s.Write([]byte{0}); err != nil {
+			t.Fatalf("attacker stream %d write: %v", i, err)
+		}
+		streams = append(streams, s)
+	}
+	defer func() {
+		for _, s := range streams {
+			_ = s.Reset()
+		}
+	}()
+
+	// Let A's handleStream goroutines register the attacker's streams as
+	// pending before checking whether a legitimate peer can still get in.
+	time.Sleep(500 * time.Millisecond)
+
+	srvB := &Server{
+		PrivateKey: keyB,
+		Name:       "pending-cap-legit-peer",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: "127.0.0.1:0",
+	}
+	if err := srvB.Start(); err != nil {
+		t.Fatalf("start B: %v", err)
+	}
+	defer srvB.Stop()
+
+	// Budget well under handshakeTimeout: if the attacker's stalled
+	// streams had exhausted the pending budget (no per-peer cap), B's
+	// dial attempts would all be rejected until those streams time out
+	// at handshakeTimeout, so this window only succeeds if the attacker
+	// never occupied more than one pending slot.
+	dialUntilConnected(t, srvB, infoA, 2*time.Second)
+	waitForPeerCount(t, srvA, 1, 2*time.Second)
 }
 
 // TestStopWaitsForInFlightDHTRefreshBeforeClosingDHT pins the lifecycle

@@ -2,6 +2,7 @@ package libp2p
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -37,6 +38,15 @@ const (
 	// peerDBCleanupCycle is how often the server's cleanup loop calls
 	// expire() on a running node; expire also runs once at open.
 	peerDBCleanupCycle = 1 * time.Hour
+
+	// peerDBMaxRecords bounds the total number of stored peer records,
+	// enforced by expire(). Without it, an attacker cheaply cycling
+	// ephemeral peer identities through the handshake could grow the
+	// on-disk database without bound. Enforced during the existing
+	// expire() pass (hourly, plus once at open) rather than per-insert,
+	// so a normal recordConnected call stays a single get+put and the
+	// database can only temporarily exceed the cap for up to one cycle.
+	peerDBMaxRecords = 2000
 )
 
 // peerDB is the Zenon-owned, LevelDB-backed record of peers this node
@@ -132,11 +142,37 @@ func (d *peerDB) recordDialFail(id peer.ID) {
 	d.put(id, rec)
 }
 
-// seeds returns up to n warm-bootstrap candidates, most recently seen
-// first, skipping records that are expired, failed-out, or have no
-// usable addresses. Records that don't parse as ours (e.g. leftovers
-// from the pstoreds schema this database replaced) are deleted on
-// sight, so a pre-existing directory self-cleans.
+// subnetKey buckets addrs by IPv4 /24 or IPv6 /48, the same granularity
+// libp2p's own peerdiversity filter uses, so seeds() can spread
+// candidates across sources rather than let one subnet dominate. Empty
+// for a peer with no parseable IP address.
+func subnetKey(addrs []ma.Multiaddr) string {
+	for _, a := range addrs {
+		ip, _, err := parseMultiaddrIPPort(a)
+		if err != nil || ip == nil {
+			continue
+		}
+		if ip4 := ip.To4(); ip4 != nil {
+			return fmt.Sprintf("4:%d.%d.%d", ip4[0], ip4[1], ip4[2])
+		}
+		if ip16 := ip.To16(); ip16 != nil {
+			return fmt.Sprintf("6:%x", ip16[:6])
+		}
+	}
+	return ""
+}
+
+// seeds returns up to n warm-bootstrap candidates, skipping records
+// that are expired, failed-out, or have no usable addresses. Records
+// that don't parse as ours (e.g. leftovers from the pstoreds schema
+// this database replaced) are deleted on sight, so a pre-existing
+// directory self-cleans.
+//
+// Candidates are grouped by subnet (see subnetKey) and selected
+// round-robin across groups, most-recently-seen group first, rather
+// than taking a pure recency-ranked prefix — so a source that cycles
+// many identities through the handshake can occupy at most one slot per
+// round instead of owning the whole seed list.
 func (d *peerDB) seeds(n int) []peer.AddrInfo {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -173,36 +209,80 @@ func (d *peerDB) seeds(n int) []peer.AddrInfo {
 	}
 
 	sort.Slice(cands, func(i, j int) bool { return cands[i].lastSeen > cands[j].lastSeen })
-	if n > 0 && len(cands) > n {
-		cands = cands[:n]
+
+	// Group by subnet, preserving each group's most-recently-seen-first
+	// order and the recency order of groups themselves (first sighting
+	// in the already-sorted cands slice).
+	groups := make(map[string][]candidate)
+	var groupOrder []string
+	for _, c := range cands {
+		key := subnetKey(c.info.Addrs)
+		if _, ok := groups[key]; !ok {
+			groupOrder = append(groupOrder, key)
+		}
+		groups[key] = append(groups[key], c)
 	}
-	out := make([]peer.AddrInfo, len(cands))
-	for i, c := range cands {
-		out[i] = c.info
+
+	var out []peer.AddrInfo
+	for {
+		if n > 0 && len(out) >= n {
+			break
+		}
+		progressed := false
+		for _, key := range groupOrder {
+			if n > 0 && len(out) >= n {
+				break
+			}
+			remaining := groups[key]
+			if len(remaining) == 0 {
+				continue
+			}
+			out = append(out, remaining[0].info)
+			groups[key] = remaining[1:]
+			progressed = true
+		}
+		if !progressed {
+			break
+		}
 	}
 	return out
 }
 
 // expire deletes records that are older than peerDBMaxAge, failed out,
-// or unparseable. Called once at open and then on the server's
-// peerDBCleanupCycle ticker.
+// or unparseable, then evicts the oldest-lastSeen survivors down to
+// peerDBMaxRecords if the database is still over that cap. Called once
+// at open and then on the server's peerDBCleanupCycle ticker.
 func (d *peerDB) expire() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	type kept struct {
+		key      []byte
+		lastSeen int64
+	}
+	var survivors []kept
+
 	cutoff := d.now().Add(-peerDBMaxAge).Unix()
 	iter := d.db.NewIterator(nil, nil)
-	defer iter.Release()
 	for iter.Next() {
 		var rec peerDBRecord
 		if err := json.Unmarshal(iter.Value(), &rec); err == nil &&
 			rec.Version == peerDBVersion &&
 			rec.LastSeen >= cutoff &&
 			rec.FailCount <= peerDBMaxFailCount {
+			survivors = append(survivors, kept{key: append([]byte(nil), iter.Key()...), lastSeen: rec.LastSeen})
 			continue
 		}
 		key := append([]byte(nil), iter.Key()...)
 		_ = d.db.Delete(key, nil)
+	}
+	iter.Release()
+
+	if len(survivors) > peerDBMaxRecords {
+		sort.Slice(survivors, func(i, j int) bool { return survivors[i].lastSeen < survivors[j].lastSeen })
+		for _, s := range survivors[:len(survivors)-peerDBMaxRecords] {
+			_ = d.db.Delete(s.key, nil)
+		}
 	}
 }
 

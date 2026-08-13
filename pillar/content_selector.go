@@ -21,11 +21,44 @@ func (cs *contentSelector) Content(blocks []*nom.AccountBlock) []*nom.AccountBlo
 	return cs.filterBlocksToCommit(cs.sortBlocksByPriority(blocks))
 }
 
+// sortBlocksByPriority orders blocks by grouping them by address first
+// (each group internally ordered by height, lowest first), then ordering
+// the groups themselves by the price of each group's lowest-height
+// block. Comparing whole groups rather than individual blocks pairwise
+// keeps the comparator a total order: a per-block comparator that mixes
+// a same-address height rule with a cross-address price rule is not
+// transitive (address X's cheap low-height block and expensive
+// high-height block can each individually out- or under-rank a third
+// address' block priced between them), and sort.SliceStable can resolve
+// that into an order that separates a block from its own ancestor —
+// leaving a gap in that address's chain that the producer's own
+// chain-order check then rejects the whole momentum for.
 func (cs *contentSelector) sortBlocksByPriority(blocks []*nom.AccountBlock) []*nom.AccountBlock {
-	sort.SliceStable(blocks, func(i, j int) bool {
-		return cs.higherPriority(blocks[i], blocks[j])
+	groups := make(map[types.Address][]*nom.AccountBlock, len(blocks))
+	order := make([]types.Address, 0, len(blocks))
+	for _, block := range blocks {
+		if _, ok := groups[block.Address]; !ok {
+			order = append(order, block.Address)
+		}
+		groups[block.Address] = append(groups[block.Address], block)
+	}
+
+	for _, address := range order {
+		group := groups[address]
+		sort.SliceStable(group, func(i, j int) bool {
+			return group[i].Height < group[j].Height
+		})
+	}
+
+	sort.SliceStable(order, func(i, j int) bool {
+		return cs.higherGroupPriority(groups[order[i]][0], groups[order[j]][0])
 	})
-	return blocks
+
+	result := make([]*nom.AccountBlock, 0, len(blocks))
+	for _, address := range order {
+		result = append(result, groups[address]...)
+	}
+	return result
 }
 
 func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*nom.AccountBlock {
@@ -78,24 +111,20 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 	return toCommit
 }
 
-// Determines the higher priority between two account blocks. Anwsers the question:
-// "Does account block A have a higher priority than account block B?"
+// higherGroupPriority determines whether the address group led by block
+// a should be ordered before the address group led by block b (a and b
+// are always each group's lowest-height block, per sortBlocksByPriority).
 // The following rules are applied:
-// 1. Contract blocks always have the higher priority.
-// 2. When comparing two user blocks from the same address, the block with a lower height has higher priority.
-// 3. When comparing two user blocks from different addresses, the block with a higher block price has higher priority.
-// 4. If blocks are of equal priority price-wise then a block hash comparison will determine which block gets higher priority.
-func (cs *contentSelector) higherPriority(a, b *nom.AccountBlock) bool {
+// 1. Contract-address groups always have the higher priority.
+// 2. Otherwise, the group whose leading block has a higher block price has higher priority.
+// 3. If leading blocks are of equal price then a block hash comparison determines priority.
+func (cs *contentSelector) higherGroupPriority(a, b *nom.AccountBlock) bool {
 	if types.IsEmbeddedAddress(b.Address) {
 		return false
 	}
 
 	if types.IsEmbeddedAddress(a.Address) {
 		return true
-	}
-
-	if a.Address == b.Address {
-		return a.Height < b.Height
 	}
 
 	err := cs.plasma.HigherPrice(a, b)

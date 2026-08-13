@@ -1,6 +1,7 @@
 package dp
 
 import (
+	"math"
 	"math/big"
 
 	"github.com/pkg/errors"
@@ -148,8 +149,26 @@ func (dp *dynamicPlasma) ValidPrice(block *nom.AccountBlock) bool {
 	if types.IsEmbeddedAddress(block.Address) {
 		return true
 	}
+
+	// Computed via big.Int and saturated at MaxUint64 rather than in raw
+	// uint64: AccountBlockBasePlasma * fusionPrice can exceed MaxUint64
+	// when fusionPrice is large, and a silent uint64 overflow here would
+	// wrap the minimum-price floor down to a small value, defeating the
+	// check exactly when it matters most. Saturating instead makes an
+	// overflowed floor reject virtually everything (fail closed) rather
+	// than admit anything (fail open).
+	minFusedPlasmaBig := new(big.Int).Mul(
+		new(big.Int).SetUint64(constants.AccountBlockBasePlasma),
+		new(big.Int).SetUint64(dp.fusionPrice),
+	)
+	minFusedPlasmaBig.Div(minFusedPlasmaBig, new(big.Int).SetUint64(PriceScaleFactor))
+	minFusedPlasma := uint64(math.MaxUint64)
+	if minFusedPlasmaBig.IsUint64() {
+		minFusedPlasma = minFusedPlasmaBig.Uint64()
+	}
+
 	minimumPricedBlock := &nom.AccountBlock{
-		FusedPlasma: constants.AccountBlockBasePlasma * dp.fusionPrice / PriceScaleFactor,
+		FusedPlasma: minFusedPlasma,
 		Difficulty:  0,
 		BasePlasma:  constants.AccountBlockBasePlasma,
 	}

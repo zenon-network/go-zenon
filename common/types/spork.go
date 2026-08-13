@@ -25,15 +25,15 @@ var (
 	// for the existing pattern).
 
 	// Libp2pSpork gates the activation of the libp2p networking stack.
-    // Until this spork's EnforcementHeight is reached on a node's local
-    // chain, the legacy (devp2p/RLPX) backend is in use; at activation,
-    // every node atomically switches to the libp2p backend.
+	// Until this spork's EnforcementHeight is reached on a node's local
+	// chain, the legacy (devp2p/RLPX) backend is in use; at activation,
+	// every node atomically switches to the libp2p backend.
 	Libp2pSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000001")
 
 	// DynamicPlasmaSpork gates the activation of the dynamic plasma pricing
-    // model. Until this spork's EnforcementHeight is reached, the legacy
-    // fixed-price plasma model is in use; at activation, momentums switch
-    // to version 2 with adaptive fusion/work prices.
+	// model. Until this spork's EnforcementHeight is reached, the legacy
+	// fixed-price plasma model is in use; at activation, momentums switch
+	// to version 2 with adaptive fusion/work prices.
 	DynamicPlasmaSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000002")
 
 	ImplementedSporksMap = map[Hash]bool{

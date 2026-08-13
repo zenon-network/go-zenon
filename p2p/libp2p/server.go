@@ -43,6 +43,7 @@ import (
 	"github.com/zenon-network/go-zenon/p2p/discover"
 
 	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	libp2ptcp "github.com/libp2p/go-libp2p/p2p/transport/tcp"
 )
@@ -52,6 +53,20 @@ const (
 	protoID              = "/znn/eth/1"
 	frameReadTimeout     = 30 * time.Second
 	frameWriteTimeout    = 20 * time.Second
+
+	// handshakeTimeout bounds the pre-adoption protocol handshake read,
+	// separately from the steady-state frameReadTimeout. The remote is
+	// unauthenticated at this point, so the deadline is kept short
+	// (matching the legacy backend's handshakeTimeout) to limit how long
+	// a stalled peer can occupy a pending-handshake slot.
+	handshakeTimeout = 5 * time.Second
+
+	// zenonPeerProtectTag marks an adopted Zenon peer's connection as
+	// protected in the libp2p connection manager, so libp2p's trimmer
+	// never closes it to make room for unrelated (e.g. DHT-only or
+	// never-adopted) connections. Applied on adoption, removed when the
+	// peer disconnects.
+	zenonPeerProtectTag = "zenon-peer"
 
 	// Exponential-backoff parameters for the peerMaintenanceLoop's
 	// bootstrap-redial path. The schedule (in seconds, before jitter) is
@@ -172,6 +187,13 @@ type Server struct {
 	delpeer      chan *Peer
 	loopWG       sync.WaitGroup
 	pendingCount int32 // atomic; tracks peers in handshake phase
+
+	// pendingPeers tracks, by remote peer.ID string, which peers
+	// currently have an in-flight inbound handshake. Guarded by peerMu.
+	// Caps each remote peer.ID at one concurrent pending handshake so a
+	// single connection can't open many streams to monopolize the
+	// global pendingCount budget (see handleStream).
+	pendingPeers map[string]struct{}
 
 	// discoveryWG tracks dhtDiscoveryLoop and the refresh goroutines it
 	// spawns via triggerDHTRefresh, separately from loopWG. Stop() must
@@ -432,6 +454,7 @@ func (srv *Server) Start() (err error) {
 	srv.ctx, srv.cancel = context.WithCancel(context.Background())
 	srv.peerMap = make(map[string]*Peer)
 	srv.dialing = make(map[string]struct{})
+	srv.pendingPeers = make(map[string]struct{})
 	srv.backoffs = make(map[string]*dialBackoff)
 	srv.delpeer = make(chan *Peer, 16)
 	srv.peerMu.Lock()
@@ -479,6 +502,31 @@ func (srv *Server) Start() (err error) {
 	if srv.NATPortMap {
 		opts = append(opts, libp2p.NATPortMap())
 	}
+
+	// Bound raw libp2p connections by the same limits MaxPeers/
+	// MaxPendingPeers apply to adopted Zenon peers. Without this,
+	// libp2p's own defaults (160/192 connections, 1-minute grace period)
+	// are the only cap, which lets connections that never open the
+	// Zenon stream consume the connection budget uncontested, and lets
+	// libp2p's trimmer evict adopted Zenon peers (untagged) before
+	// short-lived attacker connections (still inside the grace period).
+	// Grace is kept equal to handshakeTimeout: adopted peers are
+	// Protect()-tagged well before that on any healthy handshake, so
+	// once it elapses an un-adopted connection is a legitimate trim
+	// candidate.
+	maxPeers := srv.MaxPeers
+	if maxPeers <= 0 {
+		maxPeers = p2p.DefaultMaxPeers
+	}
+	pendingLimit := srv.MaxPendingPeers
+	if pendingLimit <= 0 {
+		pendingLimit = p2p.DefaultMaxPendingPeers
+	}
+	connMgr, err := connmgr.NewConnManager(maxPeers, maxPeers+pendingLimit, connmgr.WithGracePeriod(handshakeTimeout))
+	if err != nil {
+		return fmt.Errorf("create connection manager: %w", err)
+	}
+	opts = append(opts, libp2p.ConnectionManager(connMgr))
 
 	// Peer database (optional).
 	//
@@ -690,6 +738,34 @@ func (srv *Server) peerdbCleanupLoop() {
 
 // handleStream is called when a remote peer opens a stream to us.
 func (srv *Server) handleStream(s network.Stream) {
+	remotePeer := s.Conn().RemotePeer()
+	peerKey := remotePeer.String()
+
+	// Cap concurrent pending handshakes per remote peer.ID at one. The
+	// global MaxPendingPeers counter below is process-wide, so without
+	// this a single connection could open many streams that never
+	// complete the handshake and hold every global pending slot by
+	// itself; capping per-peer forces an attacker to spend a distinct
+	// peer identity (and, combined with the connection manager, a
+	// distinct connection) per held slot.
+	//
+	// Reset only the duplicate stream, not the underlying connection —
+	// the first stream's handshake may be legitimately in flight on the
+	// same connection, and ClosePeer would kill it too.
+	srv.peerMu.Lock()
+	if _, exists := srv.pendingPeers[peerKey]; exists {
+		srv.peerMu.Unlock()
+		s.Reset()
+		return
+	}
+	srv.pendingPeers[peerKey] = struct{}{}
+	srv.peerMu.Unlock()
+	defer func() {
+		srv.peerMu.Lock()
+		delete(srv.pendingPeers, peerKey)
+		srv.peerMu.Unlock()
+	}()
+
 	// Enforce MaxPendingPeers. Zero or negative falls back to
 	// p2p.DefaultMaxPendingPeers, the same preset node/defaults.go
 	// applies when an operator's config.json omits the field, per the
@@ -715,13 +791,19 @@ func (srv *Server) handleStream(s network.Stream) {
 	// calls re-arm the deadline.
 
 	rw := NewStreamRW(s)
-	remotePeer := s.Conn().RemotePeer()
 
 	// Run protocol handshake
 	phs, err := srv.doProtoHandshake(rw)
 	if err != nil {
 		common.P2PLogger.Debug(fmt.Sprintf("proto handshake failed with %s: %v", remotePeer, err))
 		s.Reset()
+		// This connection's only stream just failed to complete the
+		// handshake (the per-peer pending guard above rules out a
+		// concurrent legitimate stream on the same connection), so
+		// closing it is safe. Forces a fresh connection — and therefore
+		// a fresh pending-handshake slot — for the next attempt, rather
+		// than letting the same connection retry indefinitely.
+		_ = srv.host.Network().ClosePeer(remotePeer)
 		return
 	}
 
@@ -815,6 +897,11 @@ func (srv *Server) handleStream(s network.Stream) {
 	srv.loopWG.Add(1)
 	srv.peerMu.Unlock()
 
+	// Protect the connection so libp2p's connection-manager trimmer
+	// never closes it to make room for unrelated connections; unset in
+	// runPeer when the peer disconnects.
+	srv.host.ConnManager().Protect(remotePeer, zenonPeerProtectTag)
+
 	// Inbound adoption: identify may not have learned the peer's
 	// listen addresses yet, in which case this records lastSeen only
 	// and the disconnect-time refresh in runPeer fills the addresses.
@@ -834,10 +921,13 @@ func (srv *Server) doProtoHandshake(rw *StreamRW) (*protoHandshake, error) {
 		errc <- p2p.Send(rw, handshakeMsg, srv.ourHandshake)
 	}()
 
-	// Read remote handshake. ReadMsgLimited enforces baseProtocolMaxMsgSize
-	// before allocating a payload buffer, so an unauthenticated peer can't
-	// force a large allocation by declaring an oversized frame.
-	msg, err := rw.ReadMsgLimited(baseProtocolMaxMsgSize)
+	// Read remote handshake. ReadMsgLimitedTimeout enforces
+	// baseProtocolMaxMsgSize before allocating a payload buffer, so an
+	// unauthenticated peer can't force a large allocation by declaring
+	// an oversized frame, and bounds the wait at handshakeTimeout rather
+	// than the steady-state frameReadTimeout so a stalled remote can't
+	// hold a pending-handshake slot for the full 30s.
+	msg, err := rw.ReadMsgLimitedTimeout(baseProtocolMaxMsgSize, handshakeTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("read handshake: %w", err)
 	}
@@ -1001,6 +1091,11 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 	// loopWG.Wait() (see the shuttingDown field doc).
 	srv.loopWG.Add(1)
 	srv.peerMu.Unlock()
+
+	// Protect the connection so libp2p's connection-manager trimmer
+	// never closes it to make room for unrelated connections; unset in
+	// runPeer when the peer disconnects.
+	srv.host.ConnManager().Protect(info.ID, zenonPeerProtectTag)
 
 	// Outbound adoption: the dialed addresses are known-dialable, so
 	// pass them along in case identify hasn't populated the peerstore
@@ -1358,6 +1453,10 @@ func (srv *Server) runPeer(p *Peer) {
 	// addresses.
 	if pid := p.remotePeer(); pid != "" {
 		srv.recordPeerConnected(pid)
+		// Remove the connection-manager protection granted on adoption;
+		// the connection is being torn down either way, but this avoids
+		// leaving a stale tag if the underlying connection is reused.
+		srv.host.ConnManager().Unprotect(pid, zenonPeerProtectTag)
 	}
 
 	// Notify the cleanup loop. If the context is already done (server is

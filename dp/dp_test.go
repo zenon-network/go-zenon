@@ -5,6 +5,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
@@ -139,6 +140,42 @@ func TestWorseBlockPrice(t *testing.T) {
 		BasePlasma:  42000,
 	}
 	common.ExpectError(t, dp.HigherPrice(a, b), ErrBlockPriceWorse)
+}
+
+func TestValidPrice(t *testing.T) {
+	dp := &dynamicPlasma{fusionPrice: 1000, workPrice: 1000}
+
+	atMinimum := &nom.AccountBlock{
+		FusedPlasma: constants.AccountBlockBasePlasma * dp.fusionPrice / PriceScaleFactor,
+		Difficulty:  0,
+		BasePlasma:  constants.AccountBlockBasePlasma,
+	}
+	common.ExpectTrue(t, dp.ValidPrice(atMinimum))
+
+	belowMinimum := &nom.AccountBlock{
+		FusedPlasma: atMinimum.FusedPlasma - 1,
+		Difficulty:  0,
+		BasePlasma:  constants.AccountBlockBasePlasma,
+	}
+	common.ExpectTrue(t, !dp.ValidPrice(belowMinimum))
+}
+
+// fusionPrice is chosen so the naive uint64 computation
+// AccountBlockBasePlasma * fusionPrice / PriceScaleFactor overflows and
+// wraps to exactly zero (21000 * 2^61 is an exact multiple of 2^64),
+// which would silently drop the minimum-price floor to zero and let a
+// completely free block through. The big.Int + saturation fix must
+// instead treat the floor as effectively unreachable and reject it.
+func TestValidPrice_OverflowSaturatesInsteadOfWrappingToZero(t *testing.T) {
+	const extremeFusionPrice = uint64(1) << 61
+	dp := &dynamicPlasma{fusionPrice: extremeFusionPrice, workPrice: 1000}
+
+	freeBlock := &nom.AccountBlock{
+		FusedPlasma: 0,
+		Difficulty:  0,
+		BasePlasma:  constants.AccountBlockBasePlasma,
+	}
+	common.ExpectTrue(t, !dp.ValidPrice(freeBlock))
 }
 
 func TestComputeBasePlasma_WeightsByOppositeResourcePrice(t *testing.T) {

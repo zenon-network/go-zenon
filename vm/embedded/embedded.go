@@ -1,6 +1,8 @@
 package embedded
 
 import (
+	"sync"
+
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/abi"
@@ -202,15 +204,41 @@ func getOrigin() map[types.Address]*embeddedImplementation {
 	}
 }
 
-// getAllEmbedded returns the fully merged contract map with all spork diffs applied.
-// Used by tests to introspect the complete set of contract methods.
-func getAllEmbedded() map[types.Address]*embeddedImplementation {
-	contractsMap := getOrigin()
-	applyAcceleratorDiffs(contractsMap)
-	applyBridgeAndLiquidityDiffs(contractsMap)
-	applyHtlcDiffs(contractsMap)
-	applyDynamicPlasmaDiffs(contractsMap)
-	return contractsMap
+const (
+	acceleratorSporkBit         = 1 << 0
+	bridgeAndLiquiditySporkBit  = 1 << 1
+	htlcSporkBit                = 1 << 2
+	dynamicPlasmaSporkBit       = 1 << 3
+	embeddedVariantCombinations = 16 // one map per combination of the 4 spork bits above
+)
+
+var (
+	embeddedVariantsOnce sync.Once
+	embeddedVariants     [embeddedVariantCombinations]map[types.Address]*embeddedImplementation
+)
+
+// buildEmbeddedVariants precomputes the merged contract map for every
+// combination of the 4 sporks GetEmbeddedMethod consults, so a call
+// only ever does an array lookup rather than rebuilding the map (10
+// contracts, ~60 method structs) from scratch every time. Runs once,
+// lazily, guarded by embeddedVariantsOnce.
+func buildEmbeddedVariants() {
+	for key := 0; key < embeddedVariantCombinations; key++ {
+		contractsMap := getOrigin()
+		if key&acceleratorSporkBit != 0 {
+			applyAcceleratorDiffs(contractsMap)
+		}
+		if key&bridgeAndLiquiditySporkBit != 0 {
+			applyBridgeAndLiquidityDiffs(contractsMap)
+		}
+		if key&htlcSporkBit != 0 {
+			applyHtlcDiffs(contractsMap)
+		}
+		if key&dynamicPlasmaSporkBit != 0 {
+			applyDynamicPlasmaDiffs(contractsMap)
+		}
+		embeddedVariants[key] = contractsMap
+	}
 }
 
 // GetEmbeddedMethod finds method instance of embedded contract by address and abiSelector
@@ -222,28 +250,23 @@ func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Addres
 		return nil, constants.ErrNotContractAddress
 	}
 
-	// changing from fast assignment to doing merges
-	// how often is this called? better to only do once/as needed?
+	embeddedVariantsOnce.Do(buildEmbeddedVariants)
 
-	// the code before assumed a linear activation of sporks
-	// accelerator, bridge-liq, then htlc
-	// this will allow us to activate them independently on hyperqubes
-	// although other implicit dependencies may exist
-
-	contractsMap := getOrigin()
+	key := 0
 	if context.IsAcceleratorSporkEnforced() {
-		applyAcceleratorDiffs(contractsMap)
+		key |= acceleratorSporkBit
 	}
 	if context.IsBridgeAndLiquiditySporkEnforced() {
-		applyBridgeAndLiquidityDiffs(contractsMap)
+		key |= bridgeAndLiquiditySporkBit
 	}
 	if context.IsHtlcSporkEnforced() {
-		applyHtlcDiffs(contractsMap)
+		key |= htlcSporkBit
 	}
 	if context.IsDynamicPlasmaSporkEnforced() {
-		applyDynamicPlasmaDiffs(contractsMap)
+		key |= dynamicPlasmaSporkBit
 	}
 	// No change for NoPillarRegSpork
+	contractsMap := embeddedVariants[key]
 
 	// contract address must exist in map
 	if p, found := contractsMap[address]; found {

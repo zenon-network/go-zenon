@@ -2028,7 +2028,7 @@ func TestBridge_GetAllUnwrapTokenRequests_SortStability(t *testing.T) {
 	const tieCount = 12
 	tieHashes := make([]types.Hash, tieCount)
 	for i := 0; i < tieCount; i++ {
-		hex := fmt.Sprintf("%02x" + "01010101010101010101010101010101010101010101010101010101010101", i)
+		hex := fmt.Sprintf("%02x"+"01010101010101010101010101010101010101010101010101010101010101", i)
 		tieHashes[i] = types.HexToHashPanic(hex)
 		signature := getUnwrapTokenSignature(t, networkClass, chainId, tieHashes[i], 200, tokenAddress, amount, networkClass)
 		defer z.CallContract(unwrapToken(networkClass, chainId, tieHashes[i], 200, tokenAddress, amount, signature)).

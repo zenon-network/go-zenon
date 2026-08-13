@@ -14,6 +14,7 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/dp"
 )
 
 var (
@@ -33,6 +34,7 @@ var (
 
 type Stable interface {
 	GetStableAccountDB(address types.Address) db.DB
+	GetFrontierMomentumStore() store.Momentum
 }
 
 type accountManager struct {
@@ -128,7 +130,27 @@ func (ap *accountPool) canRollback(block *nom.AccountBlock) error {
 	return nil
 }
 
-func higherPriority(a, b *nom.AccountBlock) error {
+// higherPriority reports whether a should replace b as the pool's block
+// at their shared height. Once dynamic plasma is active, momentum
+// content selection ranks blocks by dp.DynamicPlasma.HigherPrice (see
+// pillar/content_selector.go), so replacement must use the same rule —
+// otherwise the pool can accept a replacement that content selection
+// would then rank below the block it just evicted, or reject one it
+// would have preferred. Pre-activation (or if the frontier momentum
+// store can't answer, e.g. in genesis construction), momentum content
+// selection still uses the legacy TotalPlasma/BasePlasma ratio, so that
+// remains the fallback.
+func (ap *accountPool) higherPriority(a, b *nom.AccountBlock) error {
+	if store := ap.stable.GetFrontierMomentumStore(); store != nil {
+		if active, err := store.IsSporkActive(types.DynamicPlasmaSpork); err == nil && active {
+			if previous, err := store.GetFrontierMomentum(); err == nil {
+				if config, err := store.GetPlasmaVariables(); err == nil {
+					return dp.NewDynamicPlasma(previous, config).HigherPrice(a, b)
+				}
+			}
+		}
+	}
+
 	if a.TotalPlasma*b.BasePlasma < b.TotalPlasma*a.BasePlasma {
 		return ErrPlasmaRatioIsWorse
 	} else if a.TotalPlasma*b.BasePlasma == b.TotalPlasma*a.BasePlasma && bytes.Compare(a.Hash.Bytes()[:], b.Hash.Bytes()[:]) > -1 {
@@ -165,15 +187,17 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	frontier := ap.getFrontierAccountStore(address)
 	frontierIdentifier := frontier.Identifier()
 
-	// check uncommitted plasma amount
-	if !forceAdd && !types.IsEmbeddedAddress(address) {
-		if err := ap.checkUncommittedBlocksCount(address); err != nil {
-			return err
-		}
-	}
-
 	// fast-forward insert on top of chain
 	if previous == frontierIdentifier {
+		// check uncommitted plasma amount. Only applies to fast-forward
+		// inserts: a rollback/replacement doesn't lengthen the pending
+		// chain, and an already-inserted duplicate is idempotent —
+		// neither should be rejected just because the account is at cap.
+		if !forceAdd && !types.IsEmbeddedAddress(address) {
+			if err := ap.checkUncommittedBlocksCount(address); err != nil {
+				return err
+			}
+		}
 		log.Info("fast-forward inserting account-block")
 		return ap.getAccountManager(address).Add(transaction)
 	}
@@ -192,7 +216,7 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	if err := ap.canRollback(block); err != nil {
 		return err
 	}
-	if err := higherPriority(block, trueBlock); !forceAdd && err != nil {
+	if err := ap.higherPriority(block, trueBlock); !forceAdd && err != nil {
 		log.Info("failed to insert account-block-transaction", "reason", err, "frontier-identifier", frontierIdentifier)
 		return err
 	}
@@ -376,12 +400,6 @@ func (ap *accountPool) getUncommittedAccountBlocksByAddress(address types.Addres
 	return blocks
 }
 
-func (ap *accountPool) CheckUncommittedBlocksCount(address types.Address) error {
-	ap.changes.Lock()
-	defer ap.changes.Unlock()
-
-	return ap.checkUncommittedBlocksCount(address)
-}
 func (ap *accountPool) checkUncommittedBlocksCount(address types.Address) error {
 	frontier, err := ap.getFrontierAccountStore(address).Frontier()
 	if err != nil {
