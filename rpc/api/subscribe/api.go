@@ -55,8 +55,15 @@ func newAccountBlock(block *nom.AccountBlock) []*AccountBlock {
 }
 
 type Api struct {
-	chain     chain.Chain
-	log       log15.Logger
+	chain chain.Chain
+	log   log15.Logger
+
+	// stopLock orders subscribe against Stop: Stop sets isStopped under the
+	// lock before closing stopped, so a subscriber that observed
+	// isStopped == false holds the lock and keeps the worker alive until its
+	// subscription is enqueued.
+	stopLock  sync.Mutex
+	isStopped bool
 	installCh chan *Subscription // add subscription
 	stopped   chan struct{}
 }
@@ -128,6 +135,9 @@ func (s *Server) Stop() error {
 	defer s.log.Info("finish stop")
 	s.started = false
 	s.chain.UnRegister(s)
+	s.stopLock.Lock()
+	s.isStopped = true
+	s.stopLock.Unlock()
 	close(s.stopped)
 	singleton = nil
 	s.log.Debug("wg.Wait() api Server.Stop()")
@@ -260,13 +270,21 @@ func (s *Api) subscribe(ctx context.Context, options *subscriptionOptions) (*rpc
 	if !supported {
 		return nil, rpc.ErrNotificationsUnsupported
 	}
-	subscription := NewSubscription(notifier, options)
-	select {
-	case s.installCh <- subscription:
-		return subscription.rpc, nil
-	case <-s.stopped:
+	s.stopLock.Lock()
+	defer s.stopLock.Unlock()
+	// Checked under stopLock, and the notifier subscription is created only on
+	// the accepting path: creating it before deciding would leave a
+	// subscription registered on the RPC connection that no worker serves,
+	// because the handler registers whatever the notifier holds even when this
+	// method returns an error.
+	if s.isStopped {
 		return nil, errors.New("subscribe server is stopped")
 	}
+	subscription := NewSubscription(notifier, options)
+	// Stop cannot take stopLock while we hold it, so the worker is still
+	// draining installCh and this send completes.
+	s.installCh <- subscription
+	return subscription.rpc, nil
 }
 
 func (s *Api) Momentums(ctx context.Context) (*rpc.Subscription, error) {
