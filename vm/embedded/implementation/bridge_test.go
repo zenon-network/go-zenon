@@ -75,7 +75,10 @@ func TestChangeTssECDSAPubKey_OffCurveKeyDoesNotPanic(t *testing.T) {
 		}
 	}()
 
-	if err := method.ValidateSendBlock(changeTssPubKeyBlock(offCurve)); err != constants.ErrInvalidCompressedECDSAPubKey {
+	// Validation must fail before ReceiveBlock touches its context. Passing nil
+	// here exercises the receive entry point that originally dereferenced the
+	// invalid coordinates, while making any premature context access fail loudly.
+	if _, err := method.ReceiveBlock(nil, changeTssPubKeyBlock(offCurve)); err != constants.ErrInvalidCompressedECDSAPubKey {
 		t.Fatalf("expected %v, got %v", constants.ErrInvalidCompressedECDSAPubKey, err)
 	}
 }
