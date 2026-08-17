@@ -44,20 +44,13 @@ func (rw *StreamRW) ReadMsg() (p2p.Msg, error) {
 	return rw.readMsg(maxMessageSize, frameReadTimeout)
 }
 
-// ReadMsgLimited reads a message from the stream like ReadMsg, but
-// rejects a frame whose declared size exceeds maxSize before allocating
-// a payload buffer for it. Used on the pre-adoption handshake path,
-// where the remote hasn't been authenticated yet, so the cap can be
-// tighter than the post-handshake maxMessageSize.
-func (rw *StreamRW) ReadMsgLimited(maxSize uint32) (p2p.Msg, error) {
-	return rw.readMsg(maxSize, frameReadTimeout)
-}
-
-// ReadMsgLimitedTimeout is ReadMsgLimited with an explicit read
-// deadline, rather than the steady-state frameReadTimeout. Used for the
-// pre-adoption handshake read, which should time out much sooner than a
-// live peer's frame reads so a stalled, unauthenticated remote can't
-// hold a pending-handshake slot for the full steady-state timeout.
+// ReadMsgLimitedTimeout reads a message from the stream, rejecting a
+// frame whose declared size exceeds maxSize before allocating a payload
+// buffer for it, under an explicit read deadline rather than the
+// steady-state frameReadTimeout. Used for the pre-adoption handshake
+// read, which should time out much sooner than a live peer's frame reads
+// so a stalled, unauthenticated remote can't hold a pending-handshake
+// slot for the full steady-state timeout.
 func (rw *StreamRW) ReadMsgLimitedTimeout(maxSize uint32, timeout time.Duration) (p2p.Msg, error) {
 	return rw.readMsg(maxSize, timeout)
 }

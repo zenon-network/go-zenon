@@ -95,6 +95,7 @@ type Server struct {
 	PrivateKey *ecdsa.PrivateKey
 
 	// MaxPeers is the maximum number of peers that can be connected.
+	// Zero or negative defaults to p2p.DefaultMaxPeers.
 	MaxPeers int
 
 	// MinConnectedPeers is the minimum number of peers that can be connected.
@@ -186,13 +187,13 @@ type Server struct {
 	ourHandshake *protoHandshake
 	delpeer      chan *Peer
 	loopWG       sync.WaitGroup
-	pendingCount int32 // atomic; tracks peers in handshake phase
 
 	// pendingPeers tracks, by remote peer.ID string, which peers
 	// currently have an in-flight inbound handshake. Guarded by peerMu.
-	// Caps each remote peer.ID at one concurrent pending handshake so a
-	// single connection can't open many streams to monopolize the
-	// global pendingCount budget (see handleStream).
+	// Caps each remote peer.ID at one concurrent pending handshake (via
+	// the map key) and the pool as a whole at MaxPendingPeers (via
+	// len(pendingPeers)), so a single connection can't open many streams
+	// to monopolize the global budget (see handleStream).
 	pendingPeers map[string]struct{}
 
 	// discoveryWG tracks dhtDiscoveryLoop and the refresh goroutines it
@@ -451,6 +452,22 @@ func (srv *Server) Start() (err error) {
 		return fmt.Errorf("Server.PrivateKey must be set to a non-nil key")
 	}
 
+	// Zero or negative means "use the preset", matching the semantics
+	// node/defaults.go applies when the field is absent from
+	// config.json. p2p/config.go documents the zero-default for
+	// MaxPendingPeers only, while MaxPeers is specified as "must be
+	// greater than zero" — but an unnormalized MaxPeers of zero makes
+	// every len(srv.peerMap) >= srv.MaxPeers check true, so the server
+	// would accept no peers at all. Normalizing here applies the preset
+	// to that field too; this is a behaviour change for MaxPeers, not
+	// only a defensive guard.
+	if srv.MaxPeers <= 0 {
+		srv.MaxPeers = p2p.DefaultMaxPeers
+	}
+	if srv.MaxPendingPeers <= 0 {
+		srv.MaxPendingPeers = p2p.DefaultMaxPendingPeers
+	}
+
 	srv.ctx, srv.cancel = context.WithCancel(context.Background())
 	srv.peerMap = make(map[string]*Peer)
 	srv.dialing = make(map[string]struct{})
@@ -503,26 +520,16 @@ func (srv *Server) Start() (err error) {
 		opts = append(opts, libp2p.NATPortMap())
 	}
 
-	// Bound raw libp2p connections by the same limits MaxPeers/
-	// MaxPendingPeers apply to adopted Zenon peers. Without this,
-	// libp2p's own defaults (160/192 connections, 1-minute grace period)
-	// are the only cap, which lets connections that never open the
-	// Zenon stream consume the connection budget uncontested, and lets
-	// libp2p's trimmer evict adopted Zenon peers (untagged) before
-	// short-lived attacker connections (still inside the grace period).
-	// Grace is kept equal to handshakeTimeout: adopted peers are
-	// Protect()-tagged well before that on any healthy handshake, so
-	// once it elapses an un-adopted connection is a legitimate trim
-	// candidate.
-	maxPeers := srv.MaxPeers
-	if maxPeers <= 0 {
-		maxPeers = p2p.DefaultMaxPeers
-	}
-	pendingLimit := srv.MaxPendingPeers
-	if pendingLimit <= 0 {
-		pendingLimit = p2p.DefaultMaxPendingPeers
-	}
-	connMgr, err := connmgr.NewConnManager(maxPeers, maxPeers+pendingLimit, connmgr.WithGracePeriod(handshakeTimeout))
+	// BasicConnMgr trims connections down toward the low watermark once
+	// the grace period has elapsed; it never refuses an incoming
+	// connection, so the watermarks below are a trim target rather than
+	// a hard cap. Peers Protect()-tagged at adoption are exempt from
+	// trimming, so the live connection count can exceed the high
+	// watermark. Low is MaxPeers, high is MaxPeers + MaxPendingPeers,
+	// and grace is handshakeTimeout, so that once the grace period
+	// elapses an un-adopted connection is a legitimate trim candidate
+	// while adopted peers (already protected) are not.
+	connMgr, err := connmgr.NewConnManager(srv.MaxPeers, srv.MaxPeers+srv.MaxPendingPeers, connmgr.WithGracePeriod(handshakeTimeout))
 	if err != nil {
 		return fmt.Errorf("create connection manager: %w", err)
 	}
@@ -741,19 +748,24 @@ func (srv *Server) handleStream(s network.Stream) {
 	remotePeer := s.Conn().RemotePeer()
 	peerKey := remotePeer.String()
 
-	// Cap concurrent pending handshakes per remote peer.ID at one. The
-	// global MaxPendingPeers counter below is process-wide, so without
-	// this a single connection could open many streams that never
-	// complete the handshake and hold every global pending slot by
+	// Cap concurrent pending handshakes two ways, in one atomic step: at
+	// most one per remote peer.ID (so a single connection can't open many
+	// streams that never complete the handshake and hold many slots by
 	// itself; capping per-peer forces an attacker to spend a distinct
-	// peer identity (and, combined with the connection manager, a
-	// distinct connection) per held slot.
+	// peer identity — and, combined with the connection manager, a
+	// distinct connection — per held slot), and at most MaxPendingPeers
+	// across the whole pool.
 	//
 	// Reset only the duplicate stream, not the underlying connection —
 	// the first stream's handshake may be legitimately in flight on the
 	// same connection, and ClosePeer would kill it too.
 	srv.peerMu.Lock()
 	if _, exists := srv.pendingPeers[peerKey]; exists {
+		srv.peerMu.Unlock()
+		s.Reset()
+		return
+	}
+	if len(srv.pendingPeers) >= srv.MaxPendingPeers {
 		srv.peerMu.Unlock()
 		s.Reset()
 		return
@@ -765,23 +777,6 @@ func (srv *Server) handleStream(s network.Stream) {
 		delete(srv.pendingPeers, peerKey)
 		srv.peerMu.Unlock()
 	}()
-
-	// Enforce MaxPendingPeers. Zero or negative falls back to
-	// p2p.DefaultMaxPendingPeers, the same preset node/defaults.go
-	// applies when an operator's config.json omits the field, per the
-	// documented "zero defaults to preset" semantics in p2p/config.go —
-	// rather than disabling the pending-handshake throttle.
-	limit := srv.MaxPendingPeers
-	if limit <= 0 {
-		limit = p2p.DefaultMaxPendingPeers
-	}
-	pending := atomic.AddInt32(&srv.pendingCount, 1)
-	if int(pending) > limit {
-		atomic.AddInt32(&srv.pendingCount, -1)
-		s.Reset()
-		return
-	}
-	defer atomic.AddInt32(&srv.pendingCount, -1)
 
 	// Slowloris protection lives entirely in StreamRW: every ReadMsg /
 	// WriteMsg call sets its own per-message deadline. There used to be
@@ -797,13 +792,21 @@ func (srv *Server) handleStream(s network.Stream) {
 	if err != nil {
 		common.P2PLogger.Debug(fmt.Sprintf("proto handshake failed with %s: %v", remotePeer, err))
 		s.Reset()
-		// This connection's only stream just failed to complete the
-		// handshake (the per-peer pending guard above rules out a
-		// concurrent legitimate stream on the same connection), so
-		// closing it is safe. Forces a fresh connection — and therefore
-		// a fresh pending-handshake slot — for the next attempt, rather
-		// than letting the same connection retry indefinitely.
-		_ = srv.host.Network().ClosePeer(remotePeer)
+		// Network().ClosePeer(id) is peer-scoped: it tears down every
+		// connection to that peer. It is therefore only safe when this
+		// peer has no adopted session and no dial in flight — otherwise
+		// resetting the failed stream is the whole remedy, since closing
+		// would also tear down the connection carrying the adopted
+		// session or our own outbound handshake. When neither holds,
+		// closing forces a fresh connection (and a fresh
+		// pending-handshake slot) on the next attempt.
+		srv.peerMu.RLock()
+		_, adopted := srv.peerMap[peerKey]
+		_, dialing := srv.dialing[peerKey]
+		srv.peerMu.RUnlock()
+		if !adopted && !dialing {
+			_ = srv.host.Network().ClosePeer(remotePeer)
+		}
 		return
 	}
 
@@ -816,7 +819,12 @@ func (srv *Server) handleStream(s network.Stream) {
 	// alive, which lets an unrelated libp2p peer (e.g. a stray IPFS node
 	// that resolved one of our bootstrap entries) sit on a connection
 	// slot without ever speaking Zenon protocol. ClosePeer() forces the
-	// host to tear that down so the FD / yamux session is reclaimed.
+	// host to tear that down so the FD / yamux session is reclaimed. An
+	// adopted peer has already passed all of these checks, so ClosePeer
+	// here can't fire for one; and if this connection is also our own
+	// outbound dial in flight, closing it costs at most a retry, since a
+	// peer that fails these checks on our inbound stream would fail them
+	// identically on the dialer's own side.
 	remoteID := phs.ID
 	expectedID, err := nodeIDFromPeerID(remotePeer)
 	if err != nil {
@@ -859,24 +867,17 @@ func (srv *Server) handleStream(s network.Stream) {
 		return
 	}
 
-	// Atomically check max peers, duplicate, and insert to eliminate the
-	// TOCTOU race that two concurrent handleStream calls would otherwise create.
+	// Atomically check shutdown, duplicate, max peers, and insert to
+	// eliminate the TOCTOU race that two concurrent handleStream calls
+	// would otherwise create. Duplicate is checked before max peers so an
+	// already-adopted peer's extra stream is always Reset rather than
+	// closed, even when the server is at capacity.
 	p := newPeerFromStream(rw, s, remoteID, phs.Caps, phs.Name, srv.Protocols)
 	srv.peerMu.Lock()
 	if srv.shuttingDown {
 		srv.peerMu.Unlock()
 		common.P2PLogger.Debug("server shutting down, rejecting connection")
 		s.Reset()
-		_ = srv.host.Network().ClosePeer(remotePeer)
-		return
-	}
-	if len(srv.peerMap) >= srv.MaxPeers {
-		srv.peerMu.Unlock()
-		common.P2PLogger.Debug("max peers reached, rejecting connection")
-		s.Reset()
-		// Same as above: drop the host-level connection so MaxPeers is
-		// actually a bound on libp2p resources, not just on adopted
-		// Zenon streams.
 		_ = srv.host.Network().ClosePeer(remotePeer)
 		return
 	}
@@ -888,6 +889,17 @@ func (srv *Server) handleStream(s network.Stream) {
 		// already-adopted stream from the first concurrent handler,
 		// and closing it would terminate that healthy peer.
 		s.Reset()
+		return
+	}
+	if len(srv.peerMap) >= srv.MaxPeers {
+		srv.peerMu.Unlock()
+		common.P2PLogger.Debug("max peers reached, rejecting connection")
+		s.Reset()
+		// The duplicate check above already ruled out an adopted peer,
+		// so dropping the host-level connection here is safe: it makes
+		// MaxPeers a bound on libp2p resources, not just on adopted
+		// Zenon streams.
+		_ = srv.host.Network().ClosePeer(remotePeer)
 		return
 	}
 	srv.peerMap[remotePeer.String()] = p
@@ -1059,23 +1071,17 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 		srv.testDialAdoptHook()
 	}
 
-	// Final atomic check-and-insert under lock to prevent races with concurrent
-	// inbound connections or other dialPeer calls for the same peer.
+	// Final atomic check-and-insert under lock to prevent races with
+	// concurrent inbound connections or other dialPeer calls for the same
+	// peer. Duplicate is checked before max peers so an already-adopted
+	// peer (adopted inbound mid-dial) never has its connection closed by
+	// the MaxPeers branch.
 	srv.peerMu.Lock()
 	if srv.shuttingDown {
 		srv.peerMu.Unlock()
 		s.Reset()
 		_ = srv.host.Network().ClosePeer(info.ID)
 		return errServerStopped
-	}
-	if len(srv.peerMap) >= srv.MaxPeers {
-		srv.peerMu.Unlock()
-		s.Reset()
-		// We never adopted a stream to this peer, so closing the host
-		// connection is safe and keeps MaxPeers bounding actual libp2p
-		// resources rather than just adopted streams.
-		_ = srv.host.Network().ClosePeer(info.ID)
-		return fmt.Errorf("max peers reached")
 	}
 	if _, exists := srv.peerMap[info.ID.String()]; exists {
 		srv.peerMu.Unlock()
@@ -1084,6 +1090,16 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 		// with the already-adopted stream for this peer, and closing
 		// it would terminate that legitimate connection.
 		return fmt.Errorf("duplicate peer %s", info.ID)
+	}
+	if len(srv.peerMap) >= srv.MaxPeers {
+		srv.peerMu.Unlock()
+		s.Reset()
+		// The duplicate check above already ruled out an adopted peer,
+		// so closing the host connection here is safe and keeps MaxPeers
+		// bounding actual libp2p resources rather than just adopted
+		// streams.
+		_ = srv.host.Network().ClosePeer(info.ID)
+		return fmt.Errorf("max peers reached")
 	}
 	srv.peerMap[info.ID.String()] = p
 	// loopWG.Add happens inside the same peerMu critical section as the
