@@ -130,23 +130,46 @@ func (ap *accountPool) canRollback(block *nom.AccountBlock) error {
 	return nil
 }
 
+// higherPricedBlock reports whether a should replace b under dynamic-plasma
+// pricing. An exact price tie is resolved by smallest hash so that nodes
+// seeing the two blocks in different orders converge on the same one, the
+// rule documented on the AccountPool interface.
+func higherPricedBlock(plasma dp.DynamicPlasma, a, b *nom.AccountBlock) error {
+	err := plasma.HigherPrice(a, b)
+	if err == dp.ErrBlockPriceSame {
+		if bytes.Compare(a.Hash.Bytes()[:], b.Hash.Bytes()[:]) > -1 {
+			return ErrHashTieBreak
+		}
+		return nil
+	}
+	return err
+}
+
 // higherPriority reports whether a should replace b as the pool's block
 // at their shared height. Once dynamic plasma is active, momentum
-// content selection ranks blocks by dp.DynamicPlasma.HigherPrice (see
-// pillar/content_selector.go), so replacement must use the same rule —
-// otherwise the pool can accept a replacement that content selection
-// would then rank below the block it just evicted, or reject one it
-// would have preferred. Pre-activation (or if the frontier momentum
-// store can't answer, e.g. in genesis construction), momentum content
-// selection still uses the legacy TotalPlasma/BasePlasma ratio, so that
-// remains the fallback.
+// content selection ranks blocks by the same price rule,
+// dp.DynamicPlasma.HigherPrice (see pillar/content_selector.go), so
+// replacement must use it too — otherwise the pool can accept a
+// replacement that content selection would then rank below the block it
+// just evicted. An exact price tie is resolved here by smallest hash, the
+// fork-resolution rule documented on the AccountPool interface
+// (chain/interface.go:53-55), deliberately independent of the content
+// selector's larger-hash tie-break: the two answer different questions —
+// which block survives a fork vs. which block is emitted first. Pre-
+// activation (or if the frontier momentum store can't answer, e.g. in
+// genesis construction), momentum content selection still uses the legacy
+// TotalPlasma/BasePlasma ratio, so that remains the fallback.
 func (ap *accountPool) higherPriority(a, b *nom.AccountBlock) error {
 	if store := ap.stable.GetFrontierMomentumStore(); store != nil {
-		if active, err := store.IsSporkActive(types.DynamicPlasmaSpork); err == nil && active {
-			if previous, err := store.GetFrontierMomentum(); err == nil {
-				if config, err := store.GetPlasmaVariables(); err == nil {
-					return dp.NewDynamicPlasma(previous, config).HigherPrice(a, b)
-				}
+		if active, err := store.IsSporkActive(types.DynamicPlasmaSpork); err != nil {
+			ap.log.Debug("using legacy plasma-ratio comparator", "reason", err)
+		} else if active {
+			if previous, err := store.GetFrontierMomentum(); err != nil {
+				ap.log.Debug("using legacy plasma-ratio comparator", "reason", err)
+			} else if config, err := store.GetPlasmaVariables(); err != nil {
+				ap.log.Debug("using legacy plasma-ratio comparator", "reason", err)
+			} else {
+				return higherPricedBlock(dp.NewDynamicPlasma(previous, config), a, b)
 			}
 		}
 	}

@@ -1,7 +1,6 @@
 package dp
 
 import (
-	"math"
 	"math/big"
 
 	"github.com/pkg/errors"
@@ -150,30 +149,28 @@ func (dp *dynamicPlasma) ValidPrice(block *nom.AccountBlock) bool {
 		return true
 	}
 
-	// Computed via big.Int and saturated at MaxUint64 rather than in raw
-	// uint64: AccountBlockBasePlasma * fusionPrice can exceed MaxUint64
-	// when fusionPrice is large, and a silent uint64 overflow here would
-	// wrap the minimum-price floor down to a small value, defeating the
-	// check exactly when it matters most. Saturating instead makes an
-	// overflowed floor reject virtually everything (fail closed) rather
-	// than admit anything (fail open).
-	minFusedPlasmaBig := new(big.Int).Mul(
+	// The block's price is compared against the floor set by a
+	// minimum-priced block. The minimum fused plasma is itself an integer
+	// quantity, AccountBlockBasePlasma * fusionPrice / PriceScaleFactor, so
+	// the PriceScaleFactor division is applied before the multiplications --
+	// that integer is the floor consensus is defined against. The
+	// comparison is done in big.Int because AccountBlockBasePlasma *
+	// fusionPrice can exceed MaxUint64 at large fusionPrice.
+	floor := new(big.Int).Mul(
 		new(big.Int).SetUint64(constants.AccountBlockBasePlasma),
 		new(big.Int).SetUint64(dp.fusionPrice),
 	)
-	minFusedPlasmaBig.Div(minFusedPlasmaBig, new(big.Int).SetUint64(PriceScaleFactor))
-	minFusedPlasma := uint64(math.MaxUint64)
-	if minFusedPlasmaBig.IsUint64() {
-		minFusedPlasma = minFusedPlasmaBig.Uint64()
-	}
+	floor.Div(floor, new(big.Int).SetUint64(PriceScaleFactor))
+	floor.Mul(floor, new(big.Int).SetUint64(dp.workPrice))
+	floor.Mul(floor, new(big.Int).SetUint64(block.BasePlasma))
 
-	minimumPricedBlock := &nom.AccountBlock{
-		FusedPlasma: minFusedPlasma,
-		Difficulty:  0,
-		BasePlasma:  constants.AccountBlockBasePlasma,
-	}
-	err := dp.HigherPrice(block, minimumPricedBlock)
-	return err == nil || err == ErrBlockPriceSame
+	value := new(big.Int).Add(
+		new(big.Int).Mul(new(big.Int).SetUint64(block.FusedPlasma), new(big.Int).SetUint64(dp.workPrice)),
+		new(big.Int).Mul(new(big.Int).SetUint64(DifficultyToPlasma(block.Difficulty)), new(big.Int).SetUint64(dp.fusionPrice)),
+	)
+	value.Mul(value, new(big.Int).SetUint64(constants.AccountBlockBasePlasma))
+
+	return value.Cmp(floor) >= 0
 }
 
 func (dp *dynamicPlasma) HigherPrice(a, b *nom.AccountBlock) error {

@@ -161,12 +161,12 @@ func TestValidPrice(t *testing.T) {
 }
 
 // fusionPrice is chosen so the naive uint64 computation
-// AccountBlockBasePlasma * fusionPrice / PriceScaleFactor overflows and
-// wraps to exactly zero (21000 * 2^61 is an exact multiple of 2^64),
-// which would silently drop the minimum-price floor to zero and let a
-// completely free block through. The big.Int + saturation fix must
-// instead treat the floor as effectively unreachable and reject it.
-func TestValidPrice_OverflowSaturatesInsteadOfWrappingToZero(t *testing.T) {
+// AccountBlockBasePlasma * fusionPrice / PriceScaleFactor overflows
+// (21000 * 2^61 exceeds MaxUint64), which is exactly why the floor is
+// computed in big.Int: the exact floor at this fusionPrice is 21,000 PoW
+// plasma, and the comparison holds that floor precisely rather than
+// clamping it down to a saturated (and here, unreachable) value.
+func TestValidPrice_ExtremeFusionPriceHoldsTheFloor(t *testing.T) {
 	const extremeFusionPrice = uint64(1) << 61
 	dp := &dynamicPlasma{fusionPrice: extremeFusionPrice, workPrice: 1000}
 
@@ -176,6 +176,22 @@ func TestValidPrice_OverflowSaturatesInsteadOfWrappingToZero(t *testing.T) {
 		BasePlasma:  constants.AccountBlockBasePlasma,
 	}
 	common.ExpectTrue(t, !dp.ValidPrice(freeBlock))
+
+	belowFloor, _ := GetDifficultyForPlasma(10000)
+	belowFloorBlock := &nom.AccountBlock{
+		FusedPlasma: 0,
+		Difficulty:  belowFloor,
+		BasePlasma:  constants.AccountBlockBasePlasma,
+	}
+	common.ExpectTrue(t, !dp.ValidPrice(belowFloorBlock))
+
+	atFloor, _ := GetDifficultyForPlasma(21000)
+	atFloorBlock := &nom.AccountBlock{
+		FusedPlasma: 0,
+		Difficulty:  atFloor,
+		BasePlasma:  constants.AccountBlockBasePlasma,
+	}
+	common.ExpectTrue(t, dp.ValidPrice(atFloorBlock))
 }
 
 func TestComputeBasePlasma_WeightsByOppositeResourcePrice(t *testing.T) {

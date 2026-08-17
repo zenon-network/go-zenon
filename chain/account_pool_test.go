@@ -8,6 +8,8 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/dp"
+	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
 type fakeStable struct{}
@@ -201,4 +203,24 @@ func testHashHeight(height uint64) types.HashHeight {
 		Hash:   types.NewHash(common.Uint64ToBytes(height)),
 		Height: height,
 	}
+}
+
+func TestHigherPricedBlock_TieBreaksOnSmallestHash(t *testing.T) {
+	plasma := dp.NewDynamicPlasma(&nom.Momentum{Version: 2, NextFusionPrice: 1000, NextWorkPrice: 1000}, &definition.PlasmaVariables{})
+
+	smallerHash := &nom.AccountBlock{BasePlasma: 21000, FusedPlasma: 21000}
+	smallerHash.Hash = types.Hash{0}
+	largerHash := &nom.AccountBlock{BasePlasma: 21000, FusedPlasma: 21000}
+	largerHash.Hash = types.Hash{1}
+
+	// Smaller hash wins the tie: a replaces b.
+	common.FailIfErr(t, higherPricedBlock(plasma, smallerHash, largerHash))
+
+	// Larger hash loses the tie: a does not replace b.
+	common.ExpectError(t, higherPricedBlock(plasma, largerHash, smallerHash), ErrHashTieBreak)
+
+	// An unambiguously cheaper block passes the price result through
+	// unchanged; the tie-break never fires.
+	cheaper := &nom.AccountBlock{BasePlasma: 21000, FusedPlasma: 100}
+	common.ExpectError(t, higherPricedBlock(plasma, cheaper, largerHash), dp.ErrBlockPriceWorse)
 }
