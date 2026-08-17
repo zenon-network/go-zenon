@@ -153,7 +153,7 @@ func higherPricedBlock(plasma dp.DynamicPlasma, a, b *nom.AccountBlock) error {
 // replacement that content selection would then rank below the block it
 // just evicted. An exact price tie is resolved here by smallest hash, the
 // fork-resolution rule documented on the AccountPool interface
-// (chain/interface.go:53-55), deliberately independent of the content
+// (chain/interface.go), deliberately independent of the content
 // selector's larger-hash tie-break: the two answer different questions —
 // which block survives a fork vs. which block is emitted first. Pre-
 // activation (or if the frontier momentum store can't answer, e.g. in

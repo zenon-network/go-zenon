@@ -459,8 +459,7 @@ func (srv *Server) Start() (err error) {
 	// greater than zero" — but an unnormalized MaxPeers of zero makes
 	// every len(srv.peerMap) >= srv.MaxPeers check true, so the server
 	// would accept no peers at all. Normalizing here applies the preset
-	// to that field too; this is a behaviour change for MaxPeers, not
-	// only a defensive guard.
+	// to that field too.
 	if srv.MaxPeers <= 0 {
 		srv.MaxPeers = p2p.DefaultMaxPeers
 	}
