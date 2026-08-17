@@ -2,6 +2,7 @@ package pillar
 
 import (
 	"bytes"
+	"container/heap"
 	"sort"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
@@ -22,17 +23,18 @@ func (cs *contentSelector) Content(blocks []*nom.AccountBlock) []*nom.AccountBlo
 }
 
 // sortBlocksByPriority orders blocks by grouping them by address first
-// (each group internally ordered by height, lowest first), then ordering
-// the groups themselves by the price of each group's lowest-height
-// block. Comparing whole groups rather than individual blocks pairwise
-// keeps the comparator a total order: a per-block comparator that mixes
-// a same-address height rule with a cross-address price rule is not
-// transitive (address X's cheap low-height block and expensive
-// high-height block can each individually out- or under-rank a third
-// address' block priced between them), and sort.SliceStable can resolve
-// that into an order that separates a block from its own ancestor —
-// leaving a gap in that address's chain that the producer's own
-// chain-order check then rejects the whole momentum for.
+// (each group internally ordered by height, lowest first, so a block
+// never precedes its own ancestor — a gap would make the producer's own
+// chain-order check reject the whole momentum). Embedded-address groups
+// are emitted first, whole and contiguous, in first-seen order, which is
+// what filterBlocksToCommit's contractBatch accumulation requires: it
+// would mix addresses into a single batch if contract groups
+// interleaved. The remaining (user) groups are merged by price across
+// addresses via a k-way merge over each group's current head, so a
+// block's price is compared only against other addresses' current heads
+// — never against a lower-priority block from its own chain — while the
+// per-address ancestor-before-descendant order is preserved by
+// construction.
 func (cs *contentSelector) sortBlocksByPriority(blocks []*nom.AccountBlock) []*nom.AccountBlock {
 	groups := make(map[types.Address][]*nom.AccountBlock, len(blocks))
 	order := make([]types.Address, 0, len(blocks))
@@ -50,15 +52,67 @@ func (cs *contentSelector) sortBlocksByPriority(blocks []*nom.AccountBlock) []*n
 		})
 	}
 
-	sort.SliceStable(order, func(i, j int) bool {
-		return cs.higherGroupPriority(groups[order[i]][0], groups[order[j]][0])
-	})
-
 	result := make([]*nom.AccountBlock, 0, len(blocks))
+
+	var userGroups []*addressGroup
 	for _, address := range order {
-		result = append(result, groups[address]...)
+		group := groups[address]
+		if types.IsEmbeddedAddress(address) {
+			result = append(result, group...)
+			continue
+		}
+		userGroups = append(userGroups, &addressGroup{blocks: group, order: len(userGroups)})
 	}
+
+	gh := &groupHeap{cs: cs, groups: userGroups}
+	heap.Init(gh)
+	for gh.Len() > 0 {
+		group := gh.groups[0]
+		result = append(result, group.blocks[group.pos])
+		group.pos++
+		if group.pos == len(group.blocks) {
+			heap.Pop(gh)
+		} else {
+			heap.Fix(gh, 0)
+		}
+	}
+
 	return result
+}
+
+// addressGroup is a single address' height-ordered blocks, tracked by the
+// k-way merge in sortBlocksByPriority.
+type addressGroup struct {
+	blocks []*nom.AccountBlock
+	pos    int
+	order  int // first-seen index; the stable tie-break
+}
+
+// groupHeap is a min-heap keyed by each group's current head price (via
+// compareBlockPriority), so the highest-priced head is always at the root.
+type groupHeap struct {
+	cs     *contentSelector
+	groups []*addressGroup
+}
+
+func (h *groupHeap) Len() int { return len(h.groups) }
+func (h *groupHeap) Less(i, j int) bool {
+	a, b := h.groups[i], h.groups[j]
+	if c := h.cs.compareBlockPriority(a.blocks[a.pos], b.blocks[b.pos]); c != 0 {
+		return c > 0
+	}
+	return a.order < b.order
+}
+func (h *groupHeap) Swap(i, j int) { h.groups[i], h.groups[j] = h.groups[j], h.groups[i] }
+func (h *groupHeap) Push(x interface{}) {
+	h.groups = append(h.groups, x.(*addressGroup))
+}
+func (h *groupHeap) Pop() interface{} {
+	old := h.groups
+	n := len(old)
+	item := old[n-1]
+	h.groups = old[:n-1]
+	return item
 }
 
 func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*nom.AccountBlock {
@@ -111,27 +165,19 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 	return toCommit
 }
 
-// higherGroupPriority determines whether the address group led by block
-// a should be ordered before the address group led by block b (a and b
-// are always each group's lowest-height block, per sortBlocksByPriority).
-// The following rules are applied:
-// 1. Contract-address groups always have the higher priority.
-// 2. Otherwise, the group whose leading block has a higher block price has higher priority.
-// 3. If leading blocks are of equal price then a block hash comparison determines priority.
-func (cs *contentSelector) higherGroupPriority(a, b *nom.AccountBlock) bool {
-	if types.IsEmbeddedAddress(b.Address) {
-		return false
+// compareBlockPriority returns a positive value when a should be emitted
+// before b, negative when after, and zero when the two are
+// indistinguishable. Higher-priced blocks come first; an exact price tie is
+// broken by the larger block hash.
+func (cs *contentSelector) compareBlockPriority(a, b *nom.AccountBlock) int {
+	switch err := cs.plasma.HigherPrice(a, b); err {
+	case nil:
+		return 1
+	case dp.ErrBlockPriceSame:
+		return bytes.Compare(a.Hash.Bytes()[:], b.Hash.Bytes()[:])
+	default:
+		return -1
 	}
-
-	if types.IsEmbeddedAddress(a.Address) {
-		return true
-	}
-
-	err := cs.plasma.HigherPrice(a, b)
-	if err == dp.ErrBlockPriceSame && bytes.Compare(a.Hash.Bytes()[:], b.Hash.Bytes()[:]) > 0 {
-		return true
-	}
-	return err == nil
 }
 
 func NewMomentumContentSelector(plasma dp.DynamicPlasma) ContentSelector {

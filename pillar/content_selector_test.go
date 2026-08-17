@@ -199,3 +199,22 @@ func TestContent_sortBlocksByPriority_NoGapAcrossThirdAddress(t *testing.T) {
 	}
 	common.ExpectTrue(t, indexOf(x1) < indexOf(x2))
 }
+
+// A block outranks another address' block on its own price, while its own
+// ancestors still precede it.
+func TestContent_sortBlocksByPriority_PremiumHeadDoesNotEscortFloorPricedTail(t *testing.T) {
+	addressX := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	addressY := types.ParseAddressPanic("z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj")
+
+	previousMomentum := &nom.Momentum{NextFusionPrice: 1000, NextWorkPrice: 1000, Version: 2}
+	cs := &contentSelector{
+		plasma: dp.NewDynamicPlasma(previousMomentum, nil),
+	}
+
+	x1 := &nom.AccountBlock{Height: 1, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 42000, Address: addressX}
+	x2 := &nom.AccountBlock{Height: 2, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21000, Address: addressX}
+	x3 := &nom.AccountBlock{Height: 3, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21000, Address: addressX}
+	y := &nom.AccountBlock{Height: 1, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 31500, Address: addressY}
+
+	common.ExpectTrue(t, reflect.DeepEqual(cs.sortBlocksByPriority([]*nom.AccountBlock{x1, x2, x3, y}), []*nom.AccountBlock{x1, y, x2, x3}))
+}
