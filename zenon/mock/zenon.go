@@ -157,7 +157,7 @@ func (zenon *mockZenon) CreateMomentum(momentumTransaction *nom.MomentumTransact
 		zenon.log.Info("added block to momentum", "momentum-height", momentumTransaction.Momentum.Height, "identifier", block)
 	}
 }
-func (zenon *mockZenon) CreateAccountBlock(accountBlockTransaction *nom.AccountBlockTransaction) {
+func (zenon *mockZenon) CreateAccountBlock(accountBlockTransaction *nom.AccountBlockTransaction) error {
 	insert := zenon.chain.AcquireInsert("mock-zenon create-account-block")
 	defer insert.Unlock()
 	err := zenon.chain.AddAccountBlockTransaction(insert, accountBlockTransaction)
@@ -169,6 +169,7 @@ func (zenon *mockZenon) CreateAccountBlock(accountBlockTransaction *nom.AccountB
 	if err != nil {
 		zenon.log.Error("failed to insert own account-block.", "reason", err)
 	}
+	return err
 }
 
 func (zenon *mockZenon) InsertNewMomentum() {
