@@ -769,6 +769,25 @@ func TestLegacyStartFails(t *testing.T) {
 	srv.Stop()
 }
 
+// TestStartRejectsNonPositiveMaxPeers verifies that Start() rejects a
+// non-positive MaxPeers before either backend starts.
+func TestStartRejectsNonPositiveMaxPeers(t *testing.T) {
+	oracle := &fakeOracle{active: false}
+	srv, legacyMock, libp2pMock := newMockServer(t, oracle)
+	srv.MaxPeers = 0
+
+	if err := srv.Start(); err == nil {
+		t.Fatal("Start() should return error when MaxPeers <= 0, got nil")
+	}
+
+	if legacyMock.isStarted() {
+		t.Fatal("legacy backend should not be started when MaxPeers is rejected")
+	}
+	if libp2pMock.isStarted() {
+		t.Fatal("libp2p backend should not be started when MaxPeers is rejected")
+	}
+}
+
 // TestSporkAlreadyActive_Mock verifies that when the oracle reports
 // the spork as already active at startup, the libp2p backend is
 // started directly (legacy is never touched).

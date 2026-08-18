@@ -771,3 +771,191 @@ func TestStopRejectsInFlightDialAdoption(t *testing.T) {
 		t.Fatalf("PeerCount = %d after Stop() rejected the in-flight adoption, want 0", n)
 	}
 }
+
+// TestFailedHandshakeClosesUnadoptedPeerUnderLock pins that an inbound
+// handshake failure from a peer with no adopted session and no dial in
+// flight closes the underlying connection, and that the close decision
+// is made with peerMu held — the atomicity fix 1 relies on to prevent a
+// concurrent adoption from being killed by ClosePeer.
+func TestFailedHandshakeClosesUnadoptedPeerUnderLock(t *testing.T) {
+	keyA, keyB := mustGenKey(t), mustGenKey(t)
+	portA := freePortTCP(t)
+
+	srvA := &Server{
+		PrivateKey: keyA,
+		Name:       "close-decision-target",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: fmt.Sprintf("127.0.0.1:%d", portA),
+	}
+
+	type decision struct{ closed, lockHeld bool }
+	decisions := make(chan decision, 4)
+	srvA.testCloseDecisionHook = func(closed bool) {
+		// peerMu must be held here — that is what makes the decision and
+		// the close atomic against a concurrent adoption.
+		held := !srvA.peerMu.TryLock()
+		if !held {
+			srvA.peerMu.Unlock()
+		}
+		decisions <- decision{closed: closed, lockHeld: held}
+	}
+
+	if err := srvA.Start(); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+	defer srvA.Stop()
+
+	srvB := &Server{
+		PrivateKey: keyB,
+		Name:       "close-decision-attacker",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: "127.0.0.1:0",
+	}
+	if err := srvB.Start(); err != nil {
+		t.Fatalf("start B: %v", err)
+	}
+	defer srvB.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	infoA := peer.AddrInfo{ID: srvA.host.ID(), Addrs: srvA.host.Addrs()}
+	if err := srvB.host.Connect(ctx, infoA); err != nil {
+		t.Fatalf("B connect to A: %v", err)
+	}
+
+	s, err := srvB.host.NewStream(ctx, srvA.host.ID(), protocol.ID(protoID))
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer s.Reset()
+	if err := p2p.Send(NewStreamRW(s), pingMsg, struct{}{}); err != nil {
+		t.Fatalf("send ping: %v", err)
+	}
+
+	select {
+	case d := <-decisions:
+		if !d.closed {
+			t.Fatal("close decision = false, want true")
+		}
+		if !d.lockHeld {
+			t.Fatal("close decision made without peerMu held")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for close decision")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got := srvA.host.Network().Connectedness(srvB.host.ID()); got != network.Connected {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Connectedness(B) still Connected after %s", 5*time.Second)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// TestFailedHandshakeSkipsCloseWhileDialInFlight pins that a dial in
+// flight for the same peer.ID vetoes the close decision, and that the
+// session that dial goes on to adopt survives.
+func TestFailedHandshakeSkipsCloseWhileDialInFlight(t *testing.T) {
+	keyA, keyB := mustGenKey(t), mustGenKey(t)
+	portA := freePortTCP(t)
+
+	srvA := &Server{
+		PrivateKey: keyA,
+		Name:       "dial-in-flight-target",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: fmt.Sprintf("127.0.0.1:%d", portA),
+	}
+
+	inAdopt := make(chan struct{})
+	release := make(chan struct{})
+	srvA.testDialAdoptHook = func() {
+		close(inAdopt)
+		<-release
+	}
+	decisions := make(chan bool, 4)
+	srvA.testCloseDecisionHook = func(closed bool) {
+		decisions <- closed
+	}
+
+	srvB := &Server{
+		PrivateKey: keyB,
+		Name:       "dial-in-flight-dialer",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: "127.0.0.1:0",
+	}
+	if err := srvB.Start(); err != nil {
+		t.Fatalf("start B: %v", err)
+	}
+	defer srvB.Stop()
+
+	if err := srvA.Start(); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+	defer srvA.Stop()
+
+	infoB := peer.AddrInfo{ID: srvB.host.ID(), Addrs: srvB.host.Addrs()}
+	dialErrCh := make(chan error, 1)
+	go func() {
+		dialErrCh <- srvA.dialPeer(infoB)
+	}()
+
+	select {
+	case <-inAdopt:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for dial goroutine to reach the adoption hook")
+	}
+
+	// A's dial already established the host-level connection, so no
+	// Connect is needed here.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s, err := srvB.host.NewStream(ctx, srvA.host.ID(), protocol.ID(protoID))
+	if err != nil {
+		t.Fatalf("open stream from B to A: %v", err)
+	}
+	defer s.Reset()
+	if err := p2p.Send(NewStreamRW(s), pingMsg, struct{}{}); err != nil {
+		t.Fatalf("send ping: %v", err)
+	}
+
+	select {
+	case closed := <-decisions:
+		if closed {
+			t.Fatal("close decision = true while a dial was in flight for the same peer, want false")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for close decision")
+	}
+
+	close(release)
+
+	select {
+	case err := <-dialErrCh:
+		if err != nil {
+			t.Fatalf("dialPeer error = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for dialPeer to return")
+	}
+
+	if got := srvA.PeerCount(); got != 1 {
+		t.Fatalf("PeerCount = %d, want 1", got)
+	}
+	srvA.peerMu.RLock()
+	_, adopted := srvA.peerMap[srvB.host.ID().String()]
+	srvA.peerMu.RUnlock()
+	if !adopted {
+		t.Fatal("B is not in A's peerMap")
+	}
+	if got := srvA.host.Network().Connectedness(srvB.host.ID()); got != network.Connected {
+		t.Fatalf("Connectedness(B) = %v, want Connected", got)
+	}
+}

@@ -100,3 +100,35 @@ t=2001-09-09T01:48:10+0000 lvl=eror msg="failed to update contracts" module=pill
 
 	z.InsertMomentumsTo(10)
 }
+
+func TestProducerContinuesAfterFailedContractInsert(t *testing.T) {
+	time.Local = time.UTC
+	z := NewMockZenon(t)
+	defer z.StopPanic()
+	constants.UpdateMinNumMomentums = 5
+	z.InsertMomentumsTo(5) // warm-up: reaches the round that autoreceives
+
+	addr := types.PillarContract
+	z.(*mockZenon).failInsertFor = &addr
+
+	defer z.SaveLogs(common.PillarLogger).HideHashes().Equals(t, `
+t=2001-09-09T01:47:20+0000 lvl=info msg="producing momentum" module=pillar submodule=worker event="{StartTime:2001-09-09 01:47:30 +0000 UTC EndTime:2001-09-09 01:47:40 +0000 UTC Producer:z1qqq43dyrswfehx9w9td43exflqzcxrt7g6alah Name:}"
+t=2001-09-09T01:47:20+0000 lvl=info msg="broadcasting own momentum" module=pillar submodule=worker identifier="{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:6}"
+t=2001-09-09T01:47:30+0000 lvl=info msg="start creating autoreceive blocks" module=pillar submodule=worker
+t=2001-09-09T01:47:30+0000 lvl=info msg="generated embedded-block" module=pillar submodule=worker send-block-header="{Address:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:2}}" identifier="{Address:z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:2}}" send-block-hash=XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX returned-error=nil
+t=2001-09-09T01:47:30+0000 lvl=eror msg="unable to insert autoreceive block for contract" module=pillar submodule=worker contract-address=z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg reason="injected insert failure for z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg"
+t=2001-09-09T01:47:30+0000 lvl=info msg="generated embedded-block" module=pillar submodule=worker send-block-header="{Address:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:4}}" identifier="{Address:z1qxemdeddedxsentynelxxxxxxxxxxxxxwy0r2r HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}" send-block-hash=XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX returned-error=nil
+t=2001-09-09T01:47:30+0000 lvl=info msg="created autoreceive-block" module=pillar submodule=worker identifier="{Address:z1qxemdeddedxsentynelxxxxxxxxxxxxxwy0r2r HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}"
+t=2001-09-09T01:47:30+0000 lvl=info msg="generated embedded-block" module=pillar submodule=worker send-block-header="{Address:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:3}}" identifier="{Address:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}" send-block-hash=XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX returned-error=nil
+t=2001-09-09T01:47:30+0000 lvl=info msg="created autoreceive-block" module=pillar submodule=worker identifier="{Address:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}"
+t=2001-09-09T01:47:30+0000 lvl=info msg="generated embedded-block" module=pillar submodule=worker send-block-header="{Address:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:5}}" identifier="{Address:z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}" send-block-hash=XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX returned-error=nil
+t=2001-09-09T01:47:30+0000 lvl=info msg="created autoreceive-block" module=pillar submodule=worker identifier="{Address:z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}"
+t=2001-09-09T01:47:30+0000 lvl=info msg="generated embedded-block" module=pillar submodule=worker send-block-header="{Address:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:2}}" identifier="{Address:z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:2}}" send-block-hash=XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX returned-error=nil
+t=2001-09-09T01:47:30+0000 lvl=eror msg="unable to insert autoreceive block for contract" module=pillar submodule=worker contract-address=z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg reason="injected insert failure for z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg"
+t=2001-09-09T01:47:30+0000 lvl=info msg="checking if can update contracts" module=pillar submodule=worker
+t=2001-09-09T01:47:30+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg
+t=2001-09-09T01:47:30+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22
+t=2001-09-09T01:47:30+0000 lvl=eror msg="failed to update contracts" module=pillar submodule=worker reason="method not found in the abi"
+`)
+	z.InsertNewMomentum()
+}

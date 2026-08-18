@@ -95,7 +95,7 @@ type Server struct {
 	PrivateKey *ecdsa.PrivateKey
 
 	// MaxPeers is the maximum number of peers that can be connected.
-	// Zero or negative defaults to p2p.DefaultMaxPeers.
+	// Must be greater than zero; Start() returns an error otherwise.
 	MaxPeers int
 
 	// MinConnectedPeers is the minimum number of peers that can be connected.
@@ -234,6 +234,14 @@ type Server struct {
 	// dial. Test-only; always nil in production (same pattern as
 	// testStartHook).
 	testDialAdoptHook func()
+
+	// testCloseDecisionHook, when non-nil, is invoked by handleStream's
+	// handshake-failure path once it has decided whether to close the
+	// peer, with closed reporting whether ClosePeer was called. It runs
+	// with peerMu held, so it must not block or take peerMu (TryLock is
+	// fine, it never blocks). Test-only; always nil in production (same
+	// pattern as testStartHook).
+	testCloseDecisionHook func(closed bool)
 }
 
 // dialBackoff carries per-peer state for exponential-backoff redialing.
@@ -452,16 +460,15 @@ func (srv *Server) Start() (err error) {
 		return fmt.Errorf("Server.PrivateKey must be set to a non-nil key")
 	}
 
-	// Zero or negative means "use the preset", matching the semantics
-	// node/defaults.go applies when the field is absent from
-	// config.json. p2p/config.go documents the zero-default for
-	// MaxPendingPeers only, while MaxPeers is specified as "must be
-	// greater than zero" — but an unnormalized MaxPeers of zero makes
-	// every len(srv.peerMap) >= srv.MaxPeers check true, so the server
-	// would accept no peers at all. Normalizing here applies the preset
-	// to that field too.
+	// Every capacity check is len(srv.peerMap) >= srv.MaxPeers, so a
+	// non-positive value would accept no peers at all. The legacy backend
+	// reads zero as "accept only trusted/static peers"; this backend has
+	// no equivalent mode, so a non-positive value is a configuration
+	// error rather than something to reinterpret. The switcher rejects it
+	// before either backend starts; this check keeps a directly-embedded
+	// Server from silently running on the 60-peer preset instead.
 	if srv.MaxPeers <= 0 {
-		srv.MaxPeers = p2p.DefaultMaxPeers
+		return fmt.Errorf("Server.MaxPeers must be > 0 (got %d)", srv.MaxPeers)
 	}
 	if srv.MaxPendingPeers <= 0 {
 		srv.MaxPendingPeers = p2p.DefaultMaxPendingPeers
@@ -799,13 +806,23 @@ func (srv *Server) handleStream(s network.Stream) {
 		// session or our own outbound handshake. When neither holds,
 		// closing forces a fresh connection (and a fresh
 		// pending-handshake slot) on the next attempt.
-		srv.peerMu.RLock()
+		//
+		// The close runs in the same peerMu critical section as the
+		// check: adoption (both paths) and dial reservation happen under
+		// peerMu, so nothing for this peer.ID can appear between the
+		// decision and the teardown.
+		srv.peerMu.Lock()
 		_, adopted := srv.peerMap[peerKey]
 		_, dialing := srv.dialing[peerKey]
-		srv.peerMu.RUnlock()
+		closed := false
 		if !adopted && !dialing {
 			_ = srv.host.Network().ClosePeer(remotePeer)
+			closed = true
 		}
+		if srv.testCloseDecisionHook != nil {
+			srv.testCloseDecisionHook(closed)
+		}
+		srv.peerMu.Unlock()
 		return
 	}
 
@@ -891,14 +908,15 @@ func (srv *Server) handleStream(s network.Stream) {
 		return
 	}
 	if len(srv.peerMap) >= srv.MaxPeers {
-		srv.peerMu.Unlock()
-		common.P2PLogger.Debug("max peers reached, rejecting connection")
-		s.Reset()
 		// The duplicate check above already ruled out an adopted peer,
 		// so dropping the host-level connection here is safe: it makes
 		// MaxPeers a bound on libp2p resources, not just on adopted
-		// Zenon streams.
+		// Zenon streams. Closing under peerMu keeps the check and the
+		// teardown atomic against a concurrent adoption.
 		_ = srv.host.Network().ClosePeer(remotePeer)
+		srv.peerMu.Unlock()
+		common.P2PLogger.Debug("max peers reached, rejecting connection")
+		s.Reset()
 		return
 	}
 	srv.peerMap[remotePeer.String()] = p
@@ -1091,13 +1109,14 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 		return fmt.Errorf("duplicate peer %s", info.ID)
 	}
 	if len(srv.peerMap) >= srv.MaxPeers {
-		srv.peerMu.Unlock()
-		s.Reset()
 		// The duplicate check above already ruled out an adopted peer,
 		// so closing the host connection here is safe and keeps MaxPeers
 		// bounding actual libp2p resources rather than just adopted
-		// streams.
+		// streams. Closing under peerMu keeps the check and the teardown
+		// atomic against a concurrent adoption.
 		_ = srv.host.Network().ClosePeer(info.ID)
+		srv.peerMu.Unlock()
+		s.Reset()
 		return fmt.Errorf("max peers reached")
 	}
 	srv.peerMap[info.ID.String()] = p

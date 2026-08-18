@@ -29,7 +29,7 @@ func (w *worker) updateContracts(momentumStore store.Momentum) error {
 			}, w.coinbase.Signer); err != nil {
 				return err
 			} else if err := w.broadcaster.CreateAccountBlock(block); err != nil {
-				return err
+				w.log.Error("unable to insert update block for embedded-contract", "contract-address", address, "reason", err)
 			}
 		} else if err == constants.ErrUpdateTooRecent || err == constants.ErrContractMethodNotFound {
 		} else {

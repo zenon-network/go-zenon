@@ -130,6 +130,15 @@ type mockZenon struct {
 	loggers              []log15.Logger
 	handlers             []log15.Handler
 	initialEpochDuration time.Duration
+
+	// failInsertFor, when non-nil, makes CreateAccountBlock reject every
+	// block for that account address with an injected error instead of
+	// inserting it. Test-only fault injection for the pillar worker's
+	// insert-failure handling. Set it before the momentum round that
+	// should observe the failure: InsertNewMomentum runs the worker on
+	// its own goroutine and waits for it, so a write from the test
+	// goroutine before that call is ordered ahead of every read.
+	failInsertFor *types.Address
 }
 
 func (zenon *mockZenon) SyncInfo() *protocol.SyncInfo {
@@ -158,6 +167,9 @@ func (zenon *mockZenon) CreateMomentum(momentumTransaction *nom.MomentumTransact
 	}
 }
 func (zenon *mockZenon) CreateAccountBlock(accountBlockTransaction *nom.AccountBlockTransaction) error {
+	if zenon.failInsertFor != nil && accountBlockTransaction.Block.Address == *zenon.failInsertFor {
+		return fmt.Errorf("injected insert failure for %v", *zenon.failInsertFor)
+	}
 	insert := zenon.chain.AcquireInsert("mock-zenon create-account-block")
 	defer insert.Unlock()
 	err := zenon.chain.AddAccountBlockTransaction(insert, accountBlockTransaction)
