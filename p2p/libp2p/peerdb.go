@@ -142,10 +142,12 @@ func (d *peerDB) recordDialFail(id peer.ID) {
 	d.put(id, rec)
 }
 
-// subnetKey buckets addrs by IPv4 /24 or IPv6 /48, the same granularity
-// libp2p's own peerdiversity filter uses, so seeds() can spread
-// candidates across sources rather than let one subnet dominate. Empty
-// for a peer with no parseable IP address.
+// subnetKey buckets a peer's addresses into a group so seeds() can spread
+// candidates across sources rather than let one source dominate a round:
+// IPv4 by /16 prefix (the granularity libp2p's own peerdiversity filter
+// uses), IPv6 by /48 prefix, and every peer whose addresses carry no
+// literal IP into one shared DNS group. Peers with no address information
+// at all share the empty key and form a group of their own.
 func subnetKey(addrs []ma.Multiaddr) string {
 	for _, a := range addrs {
 		ip, _, err := parseMultiaddrIPPort(a)
@@ -153,10 +155,24 @@ func subnetKey(addrs []ma.Multiaddr) string {
 			continue
 		}
 		if ip4 := ip.To4(); ip4 != nil {
-			return fmt.Sprintf("4:%d.%d.%d", ip4[0], ip4[1], ip4[2])
+			return fmt.Sprintf("4:%d.%d", ip4[0], ip4[1])
 		}
 		if ip16 := ip.To16(); ip16 != nil {
 			return fmt.Sprintf("6:%x", ip16[:6])
+		}
+	}
+	// DNS-only peers all share one key rather than being keyed by their
+	// hostname: the stored addresses are self-advertised (identify), so a
+	// hostname-derived key would let one source mint a fresh group — and
+	// therefore a fresh slot per round — for every identity it cycles
+	// through the handshake. One shared key caps all of them at one slot
+	// per round, while still keeping them out of the "no address
+	// information at all" group.
+	for _, a := range addrs {
+		for _, proto := range []int{ma.P_DNS, ma.P_DNS4, ma.P_DNS6, ma.P_DNSADDR} {
+			if _, err := a.ValueForProtocol(proto); err == nil {
+				return "dns"
+			}
 		}
 	}
 	return ""

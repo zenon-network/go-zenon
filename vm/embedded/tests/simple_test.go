@@ -512,7 +512,7 @@ t=2001-09-09T01:46:40+0000 lvl=eror msg="failed to insert own account-block." mo
 
 	// MaxUncommittedBlocksPerAccount pending blocks are allowed; the one that
 	// would push the count past it is rejected.
-	for i := 0; i < int(chain.MaxUncommittedBlocksPerAccount)+1; i += 1 {
+	for i := 0; i < int(chain.MaxUncommittedBlocksPerAccount); i += 1 {
 		z.InsertSendBlock(&nom.AccountBlock{
 			Address:       g.User1.Address,
 			ToAddress:     g.User2.Address,
@@ -520,6 +520,12 @@ t=2001-09-09T01:46:40+0000 lvl=eror msg="failed to insert own account-block." mo
 			Amount:        big.NewInt(1500 * g.Zexp),
 		}, nil, mock.SkipVmChanges)
 	}
+	z.InsertSendBlockRejected(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(1500 * g.Zexp),
+	}, chain.ErrFailedToAddAccountBlockTransaction)
 
 	frontierAccBlock, err := ledgerApi.GetFrontierAccountBlock(g.User1.Address)
 	common.FailIfErr(t, err)

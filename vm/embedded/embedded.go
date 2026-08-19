@@ -205,11 +205,16 @@ func getOrigin() map[types.Address]*embeddedImplementation {
 }
 
 const (
-	acceleratorSporkBit         = 1 << 0
-	bridgeAndLiquiditySporkBit  = 1 << 1
-	htlcSporkBit                = 1 << 2
-	dynamicPlasmaSporkBit       = 1 << 3
-	embeddedVariantCombinations = 16 // one map per combination of the 4 spork bits above
+	// One bit per spork GetEmbeddedMethod consults, followed by
+	// embeddedVariantCombinations, which iota makes 1 << (number of bits
+	// above) — the size of the precomputed variant table. Add a new spork
+	// bit anywhere above that last line and the table grows with it.
+	acceleratorSporkBit = 1 << iota
+	bridgeAndLiquiditySporkBit
+	htlcSporkBit
+	dynamicPlasmaSporkBit
+
+	embeddedVariantCombinations
 )
 
 var (

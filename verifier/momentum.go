@@ -209,7 +209,7 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 		if err != nil {
 			return err
 		}
-		maxContent := config.MaxBasePlasmaInMomentum/constants.AccountBlockBasePlasma + config.MaxBasePlasmaInMomentum/constants.EmbeddedSimplePlasma
+		maxContent := config.MaxBasePlasmaInMomentum/constants.AccountBlockBasePlasma + dp.MaxContractBlocks(config)
 		if uint64(len(rmv.momentum.Content)) > maxContent {
 			return ErrMContentTooBig
 		}

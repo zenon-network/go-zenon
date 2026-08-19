@@ -239,10 +239,24 @@ func (zenon *mockZenon) InsertSendBlock(template *nom.AccountBlock, expectedErro
 		if expectedVmChanges != SkipVmChanges {
 			common.ExpectString(zenon.t, db.DebugPatch(transaction.Changes), expectedVmChanges)
 		}
-		zenon.CreateAccountBlock(transaction)
+		common.FailIfErr(zenon.t, zenon.CreateAccountBlock(transaction))
 		return transaction.Block
 	}
 	return nil
+}
+
+// InsertSendBlockRejected generates a send block from template and
+// requires the account pool to reject it with expectedError. Its
+// counterpart InsertSendBlock requires the insert to succeed.
+func (zenon *mockZenon) InsertSendBlockRejected(template *nom.AccountBlock, expectedError error) {
+	template.BlockType = nom.BlockTypeUserSend
+	transaction, err := zenon.supervisor.GenerateFromTemplate(template, getSignFunc(template.Address))
+	common.FailIfErr(zenon.t, err)
+	// errors.Is, not common.ExpectError: the pool returns some rejections
+	// as-is and others wrapped with %w around a sentinel.
+	if err := zenon.CreateAccountBlock(transaction); !errors.Is(err, expectedError) {
+		zenon.t.Fatalf("expected block %v to be rejected with '%v' but got '%v'", transaction.Block.Header(), expectedError, err)
+	}
 }
 func (zenon *mockZenon) InsertReceiveBlock(fromHeader types.AccountHeader, template *nom.AccountBlock, expectedError error, expectedVmChanges string) *nom.AccountBlock {
 	store := zenon.chain.GetFrontierAccountStore(fromHeader.Address)
@@ -276,7 +290,7 @@ func (zenon *mockZenon) InsertReceiveBlock(fromHeader types.AccountHeader, templ
 		if expectedVmChanges != SkipVmChanges {
 			common.ExpectString(zenon.t, db.DebugPatch(transaction.Changes), expectedVmChanges)
 		}
-		zenon.CreateAccountBlock(transaction)
+		common.FailIfErr(zenon.t, zenon.CreateAccountBlock(transaction))
 		return transaction.Block
 	}
 	return nil

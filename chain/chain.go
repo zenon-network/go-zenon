@@ -59,6 +59,11 @@ func (c *chain) Init() error {
 	}
 	types.SporkAddress = c.genesis.GetSporkAddress()
 	c.Register(c.accountPool)
+	// Prime the pool's pricing context from the committed frontier so the
+	// first contested insert after start-up is priced the same way as one
+	// arriving after the next momentum, rather than falling back to the
+	// legacy comparator until then.
+	c.accountPool.refreshDynamicPlasma()
 
 	frontierStore := c.GetFrontierMomentumStore()
 	frontier, err := frontierStore.GetFrontierMomentum()

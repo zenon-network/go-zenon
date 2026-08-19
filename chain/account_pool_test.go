@@ -18,9 +18,9 @@ func (fakeStable) GetStableAccountDB(types.Address) db.DB {
 	return db.NewMemDB()
 }
 
-// GetFrontierMomentumStore returns nil so higherPriority falls back to
-// the legacy ratio comparator; these tests don't exercise dynamic
-// plasma activation.
+// GetFrontierMomentumStore returns nil so the pool's pricing context stays
+// empty and higherPriority falls back to the legacy ratio comparator;
+// these tests don't exercise dynamic plasma activation.
 func (fakeStable) GetFrontierMomentumStore() store.Momentum {
 	return nil
 }
@@ -223,4 +223,32 @@ func TestHigherPricedBlock_TieBreaksOnSmallestHash(t *testing.T) {
 	// unchanged; the tie-break never fires.
 	cheaper := &nom.AccountBlock{BasePlasma: 21000, FusedPlasma: 100}
 	common.ExpectError(t, higherPricedBlock(plasma, cheaper, largerHash), dp.ErrBlockPriceWorse)
+}
+
+// TestAccountPool_higherPriorityUsesCachedDynamicPlasma verifies that
+// higherPriority is driven by the pool's cached pricing context, not by a
+// fresh store read: fakeStable's store is nil, yet the price comparator
+// still runs while the cache is set, and stops running once it is cleared.
+func TestAccountPool_higherPriorityUsesCachedDynamicPlasma(t *testing.T) {
+	ap := newAccountPool(fakeStable{}) // its store is nil: no store answer available
+	ap.plasma = dp.NewDynamicPlasma(
+		&nom.Momentum{Version: 2, NextFusionPrice: 1000, NextWorkPrice: 1000},
+		&definition.PlasmaVariables{},
+	)
+
+	cheap := &nom.AccountBlock{BasePlasma: 21000, FusedPlasma: 100}
+	cheap.Hash = types.Hash{1}
+	rich := &nom.AccountBlock{BasePlasma: 21000, FusedPlasma: 21000}
+	rich.Hash = types.Hash{0}
+
+	// With the cache set, the price comparator ran even though fakeStable
+	// has no store.
+	common.ExpectError(t, ap.higherPriority(cheap, rich), dp.ErrBlockPriceWorse)
+
+	// With the cache cleared, both blocks have TotalPlasma == 0, so the
+	// legacy branch's ratio comparison is an equality and resolves on the
+	// hash tie-break, which cheap.Hash{1} > rich.Hash{0} makes
+	// deterministic.
+	ap.plasma = nil
+	common.ExpectError(t, ap.higherPriority(cheap, rich), ErrHashTieBreak)
 }

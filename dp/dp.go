@@ -164,26 +164,28 @@ func (dp *dynamicPlasma) ValidPrice(block *nom.AccountBlock) bool {
 	floor.Mul(floor, new(big.Int).SetUint64(dp.workPrice))
 	floor.Mul(floor, new(big.Int).SetUint64(block.BasePlasma))
 
-	value := new(big.Int).Add(
-		new(big.Int).Mul(new(big.Int).SetUint64(block.FusedPlasma), new(big.Int).SetUint64(dp.workPrice)),
-		new(big.Int).Mul(new(big.Int).SetUint64(DifficultyToPlasma(block.Difficulty)), new(big.Int).SetUint64(dp.fusionPrice)),
-	)
+	value := dp.priceValue(block)
 	value.Mul(value, new(big.Int).SetUint64(constants.AccountBlockBasePlasma))
 
 	return value.Cmp(floor) >= 0
 }
 
-func (dp *dynamicPlasma) HigherPrice(a, b *nom.AccountBlock) error {
-	aValue := new(big.Int).Add(
-		new(big.Int).Mul(new(big.Int).SetUint64(a.FusedPlasma), new(big.Int).SetUint64(dp.workPrice)),
-		new(big.Int).Mul(new(big.Int).SetUint64(DifficultyToPlasma(a.Difficulty)), new(big.Int).SetUint64(dp.fusionPrice)),
+// priceValue is a block's plasma priced against the current resource
+// prices: fused plasma valued at the work price, PoW plasma at the fusion
+// price. Computed in big.Int because either product can exceed MaxUint64
+// at large prices. Returns a fresh value the caller may mutate.
+func (dp *dynamicPlasma) priceValue(block *nom.AccountBlock) *big.Int {
+	return new(big.Int).Add(
+		new(big.Int).Mul(new(big.Int).SetUint64(block.FusedPlasma), new(big.Int).SetUint64(dp.workPrice)),
+		new(big.Int).Mul(new(big.Int).SetUint64(DifficultyToPlasma(block.Difficulty)), new(big.Int).SetUint64(dp.fusionPrice)),
 	)
+}
+
+func (dp *dynamicPlasma) HigherPrice(a, b *nom.AccountBlock) error {
+	aValue := dp.priceValue(a)
 	aRatio := aValue.Mul(aValue, new(big.Int).SetUint64(b.BasePlasma))
 
-	bValue := new(big.Int).Add(
-		new(big.Int).Mul(new(big.Int).SetUint64(b.FusedPlasma), new(big.Int).SetUint64(dp.workPrice)),
-		new(big.Int).Mul(new(big.Int).SetUint64(DifficultyToPlasma(b.Difficulty)), new(big.Int).SetUint64(dp.fusionPrice)),
-	)
+	bValue := dp.priceValue(b)
 	bRatio := bValue.Mul(bValue, new(big.Int).SetUint64(a.BasePlasma))
 
 	switch aRatio.Cmp(bRatio) {
@@ -200,8 +202,16 @@ func (dp *dynamicPlasma) Config() *definition.PlasmaVariables {
 	return dp.config
 }
 
+// MaxContractBlocks is the per-momentum contract-block cap implied by a
+// plasma configuration. Package-level because the momentum verifier needs
+// this bound to sanity-check content size before it has a DynamicPlasma
+// instance to ask.
+func MaxContractBlocks(config *definition.PlasmaVariables) uint64 {
+	return config.MaxBasePlasmaInMomentum / constants.EmbeddedSimplePlasma
+}
+
 func (dp *dynamicPlasma) MaxContractBlocksInMomentum() uint64 {
-	return dp.config.MaxBasePlasmaInMomentum / constants.EmbeddedSimplePlasma
+	return MaxContractBlocks(dp.config)
 }
 
 func NewDynamicPlasma(context *nom.Momentum, config *definition.PlasmaVariables) DynamicPlasma {

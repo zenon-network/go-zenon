@@ -80,6 +80,22 @@ type accountPool struct {
 	stable   Stable
 	managers map[types.Address]*accountManager
 	changes  sync.Mutex
+
+	// plasma is the dynamic-plasma pricing context derived from the
+	// committed frontier momentum, or nil while the dynamic-plasma spork
+	// is inactive or the momentum store cannot answer. It only changes
+	// when the frontier momentum does, so it is refreshed once per
+	// committed (or rolled-back) momentum rather than recomputed on every
+	// contested insert.
+	//
+	// plasmaMu guards the field alone: it is never held across a store
+	// read or across ap.changes, so it is a leaf lock. Every production
+	// writer (momentum insert/rollback) and reader (higherPriority) runs
+	// under chain.insert already, so plasmaMu is what keeps that invariant
+	// enforced rather than assumed — including for direct unit-test use of
+	// the pool, and for -race.
+	plasma   dp.DynamicPlasma
+	plasmaMu sync.Mutex
 }
 
 func (ap *accountPool) getAccountManager(address types.Address) *accountManager {
@@ -156,22 +172,17 @@ func higherPricedBlock(plasma dp.DynamicPlasma, a, b *nom.AccountBlock) error {
 // (chain/interface.go), deliberately independent of the content
 // selector's larger-hash tie-break: the two answer different questions —
 // which block survives a fork vs. which block is emitted first. Pre-
-// activation (or if the frontier momentum store can't answer, e.g. in
-// genesis construction), momentum content selection still uses the legacy
+// activation, the comparator uses the pricing context cached from the
+// committed frontier momentum; while that context is empty (dynamic
+// plasma inactive, or the momentum store could not answer — genesis
+// construction, for one) momentum content selection still uses the legacy
 // TotalPlasma/BasePlasma ratio, so that remains the fallback.
 func (ap *accountPool) higherPriority(a, b *nom.AccountBlock) error {
-	if store := ap.stable.GetFrontierMomentumStore(); store != nil {
-		if active, err := store.IsSporkActive(types.DynamicPlasmaSpork); err != nil {
-			ap.log.Debug("using legacy plasma-ratio comparator", "reason", err)
-		} else if active {
-			if previous, err := store.GetFrontierMomentum(); err != nil {
-				ap.log.Debug("using legacy plasma-ratio comparator", "reason", err)
-			} else if config, err := store.GetPlasmaVariables(); err != nil {
-				ap.log.Debug("using legacy plasma-ratio comparator", "reason", err)
-			} else {
-				return higherPricedBlock(dp.NewDynamicPlasma(previous, config), a, b)
-			}
-		}
+	ap.plasmaMu.Lock()
+	plasma := ap.plasma
+	ap.plasmaMu.Unlock()
+	if plasma != nil {
+		return higherPricedBlock(plasma, a, b)
 	}
 
 	if a.TotalPlasma*b.BasePlasma < b.TotalPlasma*a.BasePlasma {
@@ -305,7 +316,52 @@ func (ap *accountPool) getFrontierAccountStore(address types.Address) store.Acco
 	return account.NewAccountStore(address, ap.getAccountManager(address).db.Frontier())
 }
 
+// refreshDynamicPlasma recomputes the pricing context from the committed
+// frontier momentum. Called on every momentum insert and rollback, and
+// once at chain start-up.
+func (ap *accountPool) refreshDynamicPlasma() {
+	plasma := ap.computeDynamicPlasma()
+	ap.plasmaMu.Lock()
+	ap.plasma = plasma
+	ap.plasmaMu.Unlock()
+}
+
+// computeDynamicPlasma returns the pricing context for the committed
+// frontier momentum, or nil when dynamic plasma is inactive or the
+// momentum store cannot answer. A store that cannot answer is logged at
+// Warn: it means pool replacement falls back to the legacy plasma-ratio
+// comparator while momentum content selection keeps ranking by price, so
+// the pool can keep a block content selection would rank below the one it
+// evicted.
+func (ap *accountPool) computeDynamicPlasma() dp.DynamicPlasma {
+	store := ap.stable.GetFrontierMomentumStore()
+	if store == nil {
+		return nil
+	}
+	active, err := store.IsSporkActive(types.DynamicPlasmaSpork)
+	if err != nil {
+		ap.log.Warn("using legacy plasma-ratio comparator", "reason", err)
+		return nil
+	}
+	if !active {
+		return nil
+	}
+	previous, err := store.GetFrontierMomentum()
+	if err != nil {
+		ap.log.Warn("using legacy plasma-ratio comparator", "reason", err)
+		return nil
+	}
+	config, err := store.GetPlasmaVariables()
+	if err != nil {
+		ap.log.Warn("using legacy plasma-ratio comparator", "reason", err)
+		return nil
+	}
+	return dp.NewDynamicPlasma(previous, config)
+}
+
 func (ap *accountPool) InsertMomentum(detailed *nom.DetailedMomentum) {
+	ap.refreshDynamicPlasma()
+
 	ap.changes.Lock()
 	defer ap.changes.Unlock()
 
@@ -314,6 +370,8 @@ func (ap *accountPool) InsertMomentum(detailed *nom.DetailedMomentum) {
 	}
 }
 func (ap *accountPool) DeleteMomentum(*nom.DetailedMomentum) {
+	ap.refreshDynamicPlasma()
+
 	ap.changes.Lock()
 	defer ap.changes.Unlock()
 

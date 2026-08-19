@@ -766,6 +766,13 @@ func (srv *Server) handleStream(s network.Stream) {
 	// the first stream's handshake may be legitimately in flight on the
 	// same connection, and ClosePeer would kill it too.
 	srv.peerMu.Lock()
+	// The slot is held for as long as the first stream's handshake runs,
+	// bounded by handshakeTimeout, so a peer whose first stream stalls
+	// cannot be re-admitted from a second stream until that deadline
+	// expires. Displacing the older stream instead would mean keying
+	// pendingPeers by (peer.ID, stream) — or tracking the stream so a
+	// newcomer can reset it and take the slot — which is more machinery
+	// than a bounded few-second delay warrants.
 	if _, exists := srv.pendingPeers[peerKey]; exists {
 		srv.peerMu.Unlock()
 		s.Reset()
@@ -924,12 +931,16 @@ func (srv *Server) handleStream(s network.Stream) {
 	// shuttingDown check above so it can never race Stop()'s
 	// loopWG.Wait() (see the shuttingDown field doc).
 	srv.loopWG.Add(1)
-	srv.peerMu.Unlock()
-
-	// Protect the connection so libp2p's connection-manager trimmer
-	// never closes it to make room for unrelated connections; unset in
-	// runPeer when the peer disconnects.
+	// Protect the connection in the same critical section that adopts the
+	// peer, so it is never a trim candidate for the connection manager
+	// between being adopted and being protected — the grace period is
+	// handshakeTimeout, so a peer adopted near the end of it would
+	// otherwise be trimmable in that window. Protect is a tag-map insert
+	// under the connection manager's own lock with no callbacks or
+	// notifiees, so it cannot re-enter anything that takes peerMu.
+	// Unset in runPeer when the peer disconnects.
 	srv.host.ConnManager().Protect(remotePeer, zenonPeerProtectTag)
+	srv.peerMu.Unlock()
 
 	// Inbound adoption: identify may not have learned the peer's
 	// listen addresses yet, in which case this records lastSeen only
@@ -1124,12 +1135,10 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 	// shuttingDown check above so it can never race Stop()'s
 	// loopWG.Wait() (see the shuttingDown field doc).
 	srv.loopWG.Add(1)
-	srv.peerMu.Unlock()
-
-	// Protect the connection so libp2p's connection-manager trimmer
-	// never closes it to make room for unrelated connections; unset in
-	// runPeer when the peer disconnects.
+	// Protect under peerMu for the same reason as in handleStream; unset
+	// in runPeer when the peer disconnects.
 	srv.host.ConnManager().Protect(info.ID, zenonPeerProtectTag)
+	srv.peerMu.Unlock()
 
 	// Outbound adoption: the dialed addresses are known-dialable, so
 	// pass them along in case identify hasn't populated the peerstore

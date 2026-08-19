@@ -257,7 +257,7 @@ func TestPeerDBExpireCapsRecordCount(t *testing.T) {
 
 // TestPeerDBSeedsDiversifyAcrossSubnets verifies seeds() doesn't let a
 // single subnet dominate a limited result: many recently-seen peers
-// from one /24 must not crowd out an older peer from a different
+// from one /16 must not crowd out an older peer from a different
 // subnet entirely.
 func TestPeerDBSeedsDiversifyAcrossSubnets(t *testing.T) {
 	d, err := openPeerDB(filepath.Join(t.TempDir(), "peerdb"))
@@ -294,6 +294,32 @@ func TestPeerDBSeedsDiversifyAcrossSubnets(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("seeds(5) excluded the only peer from a different subnet: %v", limited)
+	}
+}
+
+// TestSubnetKeyGroups verifies the granularity subnetKey buckets
+// addresses at: IPv4 by /16, and DNS-only peers sharing one group
+// regardless of the hostname they advertise.
+func TestSubnetKeyGroups(t *testing.T) {
+	a := subnetKey([]ma.Multiaddr{mustAddr(t, "/ip4/10.0.0.1/tcp/35995")})
+	b := subnetKey([]ma.Multiaddr{mustAddr(t, "/ip4/10.0.5.9/tcp/35995")})
+	if a != b {
+		t.Fatalf("expected same /16 to share a key: %q != %q", a, b)
+	}
+
+	c := subnetKey([]ma.Multiaddr{mustAddr(t, "/ip4/203.0.113.1/tcp/35995")})
+	if a == c {
+		t.Fatalf("expected different /16s to have different keys, both %q", a)
+	}
+
+	dnsA := subnetKey([]ma.Multiaddr{mustAddr(t, "/dns4/seed.example.com/tcp/35995")})
+	dnsB := subnetKey([]ma.Multiaddr{mustAddr(t, "/dns4/other.example.com/tcp/35995")})
+	if dnsA != dnsB {
+		t.Fatalf("expected DNS-only peers to share a key regardless of hostname: %q != %q", dnsA, dnsB)
+	}
+
+	if dnsA == subnetKey(nil) {
+		t.Fatalf("expected the DNS key to differ from the no-address key")
 	}
 }
 
