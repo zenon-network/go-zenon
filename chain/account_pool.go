@@ -171,12 +171,12 @@ func higherPricedBlock(plasma dp.DynamicPlasma, a, b *nom.AccountBlock) error {
 // fork-resolution rule documented on the AccountPool interface
 // (chain/interface.go), deliberately independent of the content
 // selector's larger-hash tie-break: the two answer different questions —
-// which block survives a fork vs. which block is emitted first. Pre-
-// activation, the comparator uses the pricing context cached from the
-// committed frontier momentum; while that context is empty (dynamic
-// plasma inactive, or the momentum store could not answer — genesis
-// construction, for one) momentum content selection still uses the legacy
-// TotalPlasma/BasePlasma ratio, so that remains the fallback.
+// which block survives a fork vs. which block is emitted first. The
+// comparator uses the pricing context cached from the committed frontier
+// momentum; while that context is empty (dynamic plasma inactive, or the
+// momentum store could not answer — genesis construction, for one) momentum
+// content selection still uses the legacy TotalPlasma/BasePlasma ratio, so
+// that remains the fallback.
 func (ap *accountPool) higherPriority(a, b *nom.AccountBlock) error {
 	ap.plasmaMu.Lock()
 	plasma := ap.plasma

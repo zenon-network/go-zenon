@@ -252,3 +252,20 @@ func TestAccountPool_higherPriorityUsesCachedDynamicPlasma(t *testing.T) {
 	ap.plasma = nil
 	common.ExpectError(t, ap.higherPriority(cheap, rich), ErrHashTieBreak)
 }
+
+// TestAccountPool_MomentumEventsRefreshDynamicPlasma verifies that
+// InsertMomentum and DeleteMomentum both refresh the pool's cached pricing
+// context by calling refreshDynamicPlasma, not just that higherPriority
+// consults the cache once it is populated.
+func TestAccountPool_MomentumEventsRefreshDynamicPlasma(t *testing.T) {
+	ap := newAccountPool(fakeStable{}) // nil store: any refresh must clear the cache
+	stale := dp.NewDynamicPlasma(&nom.Momentum{Version: 2, NextFusionPrice: 1000, NextWorkPrice: 1000}, &definition.PlasmaVariables{})
+
+	ap.plasma = stale
+	ap.InsertMomentum(&nom.DetailedMomentum{Momentum: &nom.Momentum{}})
+	common.Expect(t, ap.plasma == nil, true)
+
+	ap.plasma = stale
+	ap.DeleteMomentum(nil)
+	common.Expect(t, ap.plasma == nil, true)
+}
