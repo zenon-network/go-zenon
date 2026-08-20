@@ -1118,12 +1118,10 @@ func (p *ChangeTssECDSAPubKeyMethod) ValidateSendBlock(block *nom.AccountBlock) 
 	if len(pubKey) != constants.CompressedECDSAPubKeyLength {
 		return constants.ErrInvalidCompressedECDSAPubKeyLength
 	}
-	// The correct length does not imply the bytes encode a point on the secp256k1
-	// curve. DecompressPubkey returns nil coordinates for anything off-curve, so
-	// the point has to be resolved here rather than assumed by the consumers below.
-	if X, Y := secp256k1.DecompressPubkey(pubKey); X == nil || Y == nil {
-		return constants.ErrInvalidCompressedECDSAPubKey
-	}
+	// Whether the bytes encode a point on the curve is deliberately not checked
+	// here: this method gates send-block admission, so tightening it changes
+	// which blocks are valid. The point is resolved in ReceiveBlock instead,
+	// where rejecting it fails the call without touching stored state.
 
 	if block.Amount.Sign() != 0 {
 		return constants.ErrInvalidTokenOrAmount
@@ -1159,9 +1157,9 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 	pubKey, _ := base64.StdEncoding.DecodeString(param.PubKey)
 
 	X, Y := secp256k1.DecompressPubkey(pubKey)
-	// ValidateSendBlock rejects off-curve keys, so this is unreachable for blocks
-	// admitted by the current rules. It is kept so that the coordinates are never
-	// consumed unchecked, independent of what the caller validated.
+	// ValidateSendBlock only checks length, so input that does not encode a
+	// point on the curve reaches this line with nil coordinates. They must be
+	// rejected before the encoding below consumes them.
 	if X == nil || Y == nil {
 		return nil, constants.ErrInvalidCompressedECDSAPubKey
 	}
