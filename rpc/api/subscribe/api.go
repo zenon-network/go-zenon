@@ -282,7 +282,12 @@ func (s *Api) subscribe(ctx context.Context, options *subscriptionOptions) (*rpc
 	}
 	subscription := NewSubscription(notifier, options)
 	// Stop cannot take stopLock while we hold it, so the worker is still
-	// draining installCh and this send completes.
+	// draining installCh and this send completes. Installation itself is not
+	// awaited: if Stop lands right after the lock is released, the worker may
+	// exit with this entry still buffered, which is indistinguishable from
+	// installing it and then stopping — either way no events are delivered.
+	// Waiting for the worker here would also stall Stop behind a broadcast in
+	// progress, since Stop needs stopLock.
 	s.installCh <- subscription
 	return subscription.rpc, nil
 }
