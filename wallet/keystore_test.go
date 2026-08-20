@@ -82,3 +82,21 @@ func TestZeroWipesSecretBytes(t *testing.T) {
 		t.Fatal("references not cleared")
 	}
 }
+
+// A zeroed key store must refuse to derive: the HMAC of an empty seed is
+// well-defined, so without a guard every zeroed store would keep deriving
+// valid keys at the same publicly-derivable addresses.
+func TestZeroedKeyStoreCannotDerive(t *testing.T) {
+	ks := testKeyStore(t)
+	ks.Zero()
+
+	if _, _, err := ks.DeriveForIndexPath(0); err != ErrInvalidSeed {
+		t.Fatalf("expected ErrInvalidSeed, got %v", err)
+	}
+	if _, _, err := ks.FindAddress(ks.BaseAddress, 1); err != ErrInvalidSeed {
+		t.Fatalf("expected ErrInvalidSeed, got %v", err)
+	}
+	if _, err := DeriveForPath("m/44'/73404'/0'", nil); err != ErrInvalidSeed {
+		t.Fatalf("expected ErrInvalidSeed, got %v", err)
+	}
+}
