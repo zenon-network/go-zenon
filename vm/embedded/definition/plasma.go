@@ -22,6 +22,13 @@ const (
 		{"type":"function","name":"CancelFuse","inputs":[
 			{"name":"id","type":"hash"}
 		]},
+		{"type":"function","name":"SetVariables", "inputs":[
+			{"name":"maxBasePlasmaInMomentum","type":"uint64"},
+			{"name":"fusedPlasmaTarget","type":"uint64"},
+			{"name":"powPlasmaTarget","type":"uint64"},
+			{"name":"maxPriceChangePercent","type":"uint8"},
+			{"name":"priceChangeDenominator","type":"uint8"}
+		]},
 
 		{"type":"variable","name":"fusionInfo","inputs":[
 			{"name":"amount","type":"uint256"},
@@ -30,22 +37,46 @@ const (
 		]},
 		{"type":"variable","name":"fusedAmount","inputs":[
 			{"name":"amount","type":"uint256"}
+		]},
+		{"type":"variable","name":"plasmaVariables","inputs":[
+			{"name":"maxBasePlasmaInMomentum","type":"uint64"},
+			{"name":"fusedPlasmaTarget","type":"uint64"},
+			{"name":"powPlasmaTarget","type":"uint64"},
+			{"name":"maxPriceChangePercent","type":"uint8"},
+			{"name":"priceChangeDenominator","type":"uint8"}
 		]}
 	]`
 
 	FuseMethodName       = "Fuse"
 	CancelFuseMethodName = "CancelFuse"
 
-	variableNameFusionInfo  = "fusionInfo"
-	variableNameFusedAmount = "fusedAmount"
+	MaxBasePlasmaInMomentumUpperLimit = uint64(210000000000000) // 10,000,000,000 * constants.AccountBlockBasePlasma
+	MaxBasePlasmaInMomentumLowerLimit = uint64(210000)          // 10 * constants.AccountBlockBasePlasma
+	FusedPlasmaTargetLowerLimit       = uint64(1)
+	PowPlasmaTargetLowerLimit         = uint64(1)
+	MaxPriceChangePercentUpperLimit   = uint8(100)
+	MaxPriceChangePercentLowerLimit   = uint8(1)
+	PriceChangeDenominatorUpperLimit  = uint8(100)
+	PriceChangeDenominatorLowerLimit  = uint8(1)
+
+	variableNameFusionInfo      = "fusionInfo"
+	variableNameFusedAmount     = "fusedAmount"
+	variableNamePlasmaVariables = "plasmaVariables"
 )
 
 var (
 	// ABIPlasma is abi definition of the plasma contract
 	ABIPlasma = abi.JSONToABIContract(strings.NewReader(jsonPlasma))
 
+	DefaultMaxBasePlasmaInMomentum = uint64(4200000) // 200 * constants.AccountBlockBasePlasma
+	DefaultFusedPlasmaTarget       = uint64(1050000) // 25% of max base plasma
+	DefaultPowPlasmaTarget         = uint64(1050000) // 25% of max base plasma
+	DefaultMaxPriceChangePercent   = uint8(10)
+	DefaultPriceChangeDenominator  = uint8(20)
+
 	fusionInfoKeyPrefix  = []byte{1}
 	fusedAmountKeyPrefix = []byte{2}
+	variablesKeyPrefix   = []byte{3}
 
 	FusedAmountKeyPrefix = fusedAmountKeyPrefix
 )
@@ -167,6 +198,29 @@ func (entry *FusedAmount) Delete(context db.DB) error {
 	return context.Delete(getFusedAmountKey(entry.Beneficiary))
 }
 
+type PlasmaVariables struct {
+	MaxBasePlasmaInMomentum uint64
+	FusedPlasmaTarget       uint64
+	PowPlasmaTarget         uint64
+	MaxPriceChangePercent   uint8
+	PriceChangeDenominator  uint8
+}
+
+func (entry *PlasmaVariables) Save(context db.DB) error {
+	data, err := ABIPlasma.PackVariable(
+		variableNamePlasmaVariables,
+		entry.MaxBasePlasmaInMomentum,
+		entry.FusedPlasmaTarget,
+		entry.PowPlasmaTarget,
+		entry.MaxPriceChangePercent,
+		entry.PriceChangeDenominator,
+	)
+	if err != nil {
+		return err
+	}
+	return context.Put(variablesKeyPrefix, data)
+}
+
 func getFusedAmountKey(beneficiary types.Address) []byte {
 	return common.JoinBytes(fusedAmountKeyPrefix, beneficiary.Bytes())
 }
@@ -213,5 +267,34 @@ func GetFusedAmount(context db.DB, beneficiary types.Address) (*FusedAmount, err
 			}, nil
 		}
 		return amount, err
+	}
+}
+
+func parsePlasmaVariables(data []byte) (*PlasmaVariables, error) {
+	if len(data) > 0 {
+		variables := new(PlasmaVariables)
+		if err := ABIPlasma.UnpackVariable(variables, variableNamePlasmaVariables, data); err != nil {
+			return nil, err
+		}
+		return variables, nil
+	} else {
+		return nil, constants.ErrDataNonExistent
+	}
+}
+func GetPlasmaVariables(context db.DB) (*PlasmaVariables, error) {
+	if data, err := context.Get(variablesKeyPrefix); err != nil {
+		return nil, err
+	} else {
+		variables, err := parsePlasmaVariables(data)
+		if err == constants.ErrDataNonExistent {
+			return &PlasmaVariables{
+				MaxBasePlasmaInMomentum: DefaultMaxBasePlasmaInMomentum,
+				FusedPlasmaTarget:       DefaultFusedPlasmaTarget,
+				PowPlasmaTarget:         DefaultPowPlasmaTarget,
+				MaxPriceChangePercent:   DefaultMaxPriceChangePercent,
+				PriceChangeDenominator:  DefaultPriceChangeDenominator,
+			}, nil
+		}
+		return variables, err
 	}
 }

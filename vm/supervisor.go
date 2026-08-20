@@ -40,7 +40,7 @@ func NewSupervisor(chain chain.Chain, consensus consensus.Consensus) *Supervisor
 		log:       common.SupervisorLogger,
 		chain:     chain,
 		consensus: consensus,
-		verifier:  verifier.NewVerifier(chain, consensus),
+		verifier:  verifier.NewVerifier(chain, consensus, CanonicalBasePlasma),
 	}
 }
 

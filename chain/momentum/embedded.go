@@ -115,6 +115,18 @@ func (ms *momentumStore) GetStakeBeneficialAmount(addr types.Address) (*big.Int,
 	}
 	return fused.Amount, nil
 }
+func (ms *momentumStore) GetPlasmaVariables() (*definition.PlasmaVariables, error) {
+	sd, err := ms.getEmbeddedStore(types.PlasmaContract)
+	if err != nil {
+		return nil, fmt.Errorf("getEmbeddedStore failed: %w", err)
+	}
+
+	config, err := definition.GetPlasmaVariables(sd.Storage())
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
+}
 func (ms *momentumStore) GetTokenInfoByTs(ts types.ZenonTokenStandard) (*definition.TokenInfo, error) {
 	sd, err := ms.getEmbeddedStore(types.TokenContract)
 	if err != nil {

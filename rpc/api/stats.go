@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net"
 	"runtime"
 	"strings"
 
@@ -18,11 +19,11 @@ import (
 
 type StatsApi struct {
 	z   zenon.Zenon
-	p2p *p2p.Server
+	p2p p2p.Server
 	log log15.Logger
 }
 
-func NewStatsApi(z zenon.Zenon, p2p *p2p.Server) *StatsApi {
+func NewStatsApi(z zenon.Zenon, p2p p2p.Server) *StatsApi {
 	return &StatsApi{
 		z:   z,
 		p2p: p2p,
@@ -87,14 +88,35 @@ type NetworkInfoResponse struct {
 	Self     *Peer   `json:"self"`
 }
 
-func p2pPeerToPeer(peer *p2p.Peer) (*Peer, error) {
-	ip := peer.RemoteAddr().String()
-	splits := strings.Split(ip, ":")
+func p2pPeerToPeer(peer p2p.Peer) (*Peer, error) {
 	return &Peer{
 		PublicKey: peer.ID().String(),
-		IP:        splits[0],
+		IP:        remoteHost(peer.RemoteAddr()),
 		Name:      peer.Name(),
 	}, nil
+}
+
+// remoteHost extracts the host/IP portion of a peer's remote address.
+// Legacy peers report a "host:port" net.Addr; libp2p peers report a
+// multiaddr (e.g. "/ip4/1.2.3.4/tcp/35995"), which doesn't split on ":".
+func remoteHost(addr net.Addr) string {
+	raw := addr.String()
+	if addr.Network() == "libp2p" {
+		parts := strings.Split(raw, "/")
+		for i, p := range parts {
+			switch p {
+			case "ip4", "ip6", "dns", "dns4", "dns6", "dnsaddr":
+				if i+1 < len(parts) {
+					return parts[i+1]
+				}
+			}
+		}
+		return raw
+	}
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		return host
+	}
+	return raw
 }
 func selfToPeer(node *discover.Node) *Peer {
 	return &Peer{

@@ -6,6 +6,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -18,6 +19,14 @@ type mockStable struct {
 
 func (m *mockStable) GetStableAccountDB(address types.Address) db.DB {
 	return db.NewMemDB()
+}
+
+// GetFrontierMomentumStore returns nil: genesis constructs the very
+// first account blocks before any momentum exists, so there is no spork
+// state to consult. accountPool.higherPriority falls back to the legacy
+// ratio comparator whenever this is nil.
+func (m *mockStable) GetFrontierMomentumStore() store.Momentum {
+	return nil
 }
 
 func newGenesisAccountBlocks(cfg *GenesisConfig) chain.AccountPool {

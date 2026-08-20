@@ -2,10 +2,12 @@ package tests
 
 import (
 	"encoding/json"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
 
+	"github.com/zenon-network/go-zenon/chain"
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
@@ -229,6 +231,46 @@ func TestRPCLedger_PublishRawTransaction(t *testing.T) {
   "signature": "130sas2Jlmu5AC5SsvJ3I0m31WtvzTKmB3DfoAROQ7kuvx/Hd/g+eZn5rSW5+o5jxV5BJtq1vITs/3lCieGaAw=="
 }`), a))
 	common.FailIfErr(t, ledgerApi.PublishRawTransaction(a))
+}
+
+// A block the pool rejects is reported to the RPC caller as an error.
+func TestRPCLedger_PublishRawTransactionReportsPoolRejection(t *testing.T) {
+	saveChainGlobals(t)
+	chain.MaxUncommittedBlocksPerAccount = 0
+
+	z := mock.NewMockZenon(t)
+	ledgerApi := api.NewLedgerApi(z)
+	defer z.StopPanic()
+
+	a := &api.AccountBlock{}
+	common.FailIfErr(t, json.Unmarshal([]byte(`
+{
+  "version": 1,
+  "chainIdentifier": 100,
+  "blockType": 2,
+  "hash": "6e9bf5f7512931a4b74d3d1dd20b0f8105a006b1ae059e1535f935e283f2a66c",
+  "previousHash": "598fa623dd308bec7163bb375aa7546ec4aced3b71a1c9278709903e69280dbd",
+  "height": 2,
+  "momentumAcknowledged": {
+    "hash": "0385d849ee33b94c8783288c148e3ae741c2ecec98b08b3f59d6bcc219168fe5",
+    "height": 1
+  },
+  "address": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
+  "toAddress": "z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx",
+  "amount": "10000000000",
+  "tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
+  "fromBlockHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "data": "",
+  "fusedPlasma": 21000,
+  "difficulty": 0,
+  "nonce": "0000000000000000",
+  "publicKey": "GYyn77OXTL31zPbDBCe/eKir+VCF3hv+LxiOUF3XcJY=",
+  "signature": "130sas2Jlmu5AC5SsvJ3I0m31WtvzTKmB3DfoAROQ7kuvx/Hd/g+eZn5rSW5+o5jxV5BJtq1vITs/3lCieGaAw=="
+}`), a))
+
+	err := ledgerApi.PublishRawTransaction(a)
+	common.ExpectTrue(t, err != nil)
+	common.ExpectTrue(t, errors.Is(err, chain.ErrFailedToAddAccountBlockTransaction))
 }
 
 func ExpectGetFrontierAccountBlock(t *testing.T, z mock.MockZenon) {

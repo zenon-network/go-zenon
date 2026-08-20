@@ -69,8 +69,7 @@ func (l *LedgerApi) PublishRawTransaction(block *AccountBlock) error {
 		return err
 	}
 
-	l.z.Broadcaster().CreateAccountBlock(transaction)
-	return nil
+	return l.z.Broadcaster().CreateAccountBlock(transaction)
 }
 
 // Unconfirmed AccountBlocks

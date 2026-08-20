@@ -48,4 +48,6 @@ message MomentumProto {
   types.HashProto changesHash = 9;
   bytes publicKey = 10;
   bytes signature = 11;
+  uint64 nextFusionPrice = 12;
+  uint64 nextWorkPrice = 13;
 }

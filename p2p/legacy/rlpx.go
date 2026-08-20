@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-package p2p
+package legacy
 
 import (
 	"bytes"
@@ -39,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/secp256k1"
 	"github.com/ethereum/go-ethereum/rlp"
 
+	"github.com/zenon-network/go-zenon/p2p"
 	"github.com/zenon-network/go-zenon/p2p/discover"
 )
 
@@ -94,14 +95,14 @@ func newRLPX(fd net.Conn) transport {
 	return &rlpx{fd: fd}
 }
 
-func (t *rlpx) ReadMsg() (Msg, error) {
+func (t *rlpx) ReadMsg() (p2p.Msg, error) {
 	t.rmu.Lock()
 	defer t.rmu.Unlock()
 	t.fd.SetReadDeadline(time.Now().Add(frameReadTimeout))
 	return t.rw.ReadMsg()
 }
 
-func (t *rlpx) WriteMsg(msg Msg) error {
+func (t *rlpx) WriteMsg(msg p2p.Msg) error {
 	t.wmu.Lock()
 	defer t.wmu.Unlock()
 	t.fd.SetWriteDeadline(time.Now().Add(frameWriteTimeout))
@@ -113,9 +114,9 @@ func (t *rlpx) close(err error) {
 	defer t.wmu.Unlock()
 	// Tell the remote end why we're disconnecting if possible.
 	if t.rw != nil {
-		if r, ok := err.(DiscReason); ok && r != DiscNetworkError {
+		if r, ok := err.(p2p.DiscReason); ok && r != p2p.DiscNetworkError {
 			t.fd.SetWriteDeadline(time.Now().Add(discWriteTimeout))
-			SendItems(t.rw, discMsg, r)
+			p2p.SendItems(t.rw, discMsg, r)
 		}
 	}
 	t.fd.Close()
@@ -131,7 +132,7 @@ func (t *rlpx) doProtoHandshake(our *protoHandshake) (their *protoHandshake, err
 	// disconnects us early with a valid reason, we should return it
 	// as the error so it can be tracked elsewhere.
 	werr := make(chan error, 1)
-	go func() { werr <- Send(t.rw, handshakeMsg, our) }()
+	go func() { werr <- p2p.Send(t.rw, handshakeMsg, our) }()
 	if their, err = readProtocolHandshake(t.rw, our); err != nil {
 		<-werr // make sure the write terminates too
 		return nil, err
@@ -142,7 +143,7 @@ func (t *rlpx) doProtoHandshake(our *protoHandshake) (their *protoHandshake, err
 	return their, nil
 }
 
-func readProtocolHandshake(rw MsgReader, our *protoHandshake) (*protoHandshake, error) {
+func readProtocolHandshake(rw p2p.MsgReader, our *protoHandshake) (*protoHandshake, error) {
 	msg, err := rw.ReadMsg()
 	if err != nil {
 		return nil, err
@@ -155,7 +156,7 @@ func readProtocolHandshake(rw MsgReader, our *protoHandshake) (*protoHandshake, 
 		// spec and we send it ourself if the posthanshake checks fail.
 		// We can't return the reason directly, though, because it is echoed
 		// back otherwise. Wrap it in a string instead.
-		var reason [1]DiscReason
+		var reason [1]p2p.DiscReason
 		rlp.Decode(msg.Payload, &reason)
 		return nil, reason[0]
 	}
@@ -168,10 +169,10 @@ func readProtocolHandshake(rw MsgReader, our *protoHandshake) (*protoHandshake, 
 	}
 	// validate handshake info
 	if hs.Version != our.Version {
-		return nil, DiscIncompatibleVersion
+		return nil, p2p.DiscIncompatibleVersion
 	}
 	if (hs.ID == discover.NodeID{}) {
-		return nil, DiscInvalidIdentity
+		return nil, p2p.DiscInvalidIdentity
 	}
 	return &hs, nil
 }
@@ -485,7 +486,7 @@ func xor(one, other []byte) (xor []byte) {
 
 var (
 	// this is used in place of actual frame header data.
-	// TODO: replace this when Msg contains the protocol type code.
+	// TODO: replace this when p2p.Msg contains the protocol type code.
 	zeroHeader = []byte{0xC2, 0x80, 0x80}
 	// sixteen zero bytes
 	zero16 = make([]byte, 16)
@@ -528,7 +529,7 @@ func newRLPXFrameRW(conn io.ReadWriter, s secrets) *rlpxFrameRW {
 	}
 }
 
-func (rw *rlpxFrameRW) WriteMsg(msg Msg) error {
+func (rw *rlpxFrameRW) WriteMsg(msg p2p.Msg) error {
 	ptype, _ := rlp.EncodeToBytes(msg.Code)
 
 	// write header
@@ -570,7 +571,7 @@ func (rw *rlpxFrameRW) WriteMsg(msg Msg) error {
 	return err
 }
 
-func (rw *rlpxFrameRW) ReadMsg() (msg Msg, err error) {
+func (rw *rlpxFrameRW) ReadMsg() (msg p2p.Msg, err error) {
 	// read the header
 	headbuf := make([]byte, 32)
 	if _, err := io.ReadFull(rw.conn, headbuf); err != nil {
