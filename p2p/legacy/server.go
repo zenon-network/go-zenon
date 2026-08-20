@@ -173,7 +173,7 @@ type conn struct {
 	flags connFlag
 	cont  chan error      // The run loop uses cont to signal errors to setupConn.
 	id    discover.NodeID // valid after the encryption handshake
-	caps  []p2p.Cap           // valid after the protocol handshake
+	caps  []p2p.Cap       // valid after the protocol handshake
 	name  string          // valid after the protocol handshake
 }
 

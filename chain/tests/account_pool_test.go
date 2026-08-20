@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/zenon-network/go-zenon/chain"
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
@@ -114,7 +115,7 @@ func TestAccountPool_Priority(t *testing.T) {
 	common.Expect(t, len(uncommitted), 1)
 	common.ExpectString(t, uncommitted[0].Hash.String(), highPriorityBlock.Hash.String())
 
-	z.InsertSendBlock(lowPriorityBlock, nil, mock.SkipVmChanges)
+	z.InsertSendBlockRejected(lowPriorityBlock, chain.ErrPlasmaRatioIsWorse)
 
 	uncommitted = z.Chain().GetAllUncommittedAccountBlocks()
 	common.Expect(t, len(uncommitted), 1)

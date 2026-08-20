@@ -130,6 +130,15 @@ type mockZenon struct {
 	loggers              []log15.Logger
 	handlers             []log15.Handler
 	initialEpochDuration time.Duration
+
+	// failInsertFor, when non-nil, makes CreateAccountBlock reject every
+	// block for that account address with an injected error instead of
+	// inserting it. Test-only fault injection for the pillar worker's
+	// insert-failure handling. Set it before the momentum round that
+	// should observe the failure: InsertNewMomentum runs the worker on
+	// its own goroutine and waits for it, so a write from the test
+	// goroutine before that call is ordered ahead of every read.
+	failInsertFor *types.Address
 }
 
 func (zenon *mockZenon) SyncInfo() *protocol.SyncInfo {
@@ -157,7 +166,10 @@ func (zenon *mockZenon) CreateMomentum(momentumTransaction *nom.MomentumTransact
 		zenon.log.Info("added block to momentum", "momentum-height", momentumTransaction.Momentum.Height, "identifier", block)
 	}
 }
-func (zenon *mockZenon) CreateAccountBlock(accountBlockTransaction *nom.AccountBlockTransaction) {
+func (zenon *mockZenon) CreateAccountBlock(accountBlockTransaction *nom.AccountBlockTransaction) error {
+	if zenon.failInsertFor != nil && accountBlockTransaction.Block.Address == *zenon.failInsertFor {
+		return fmt.Errorf("injected insert failure for %v", *zenon.failInsertFor)
+	}
 	insert := zenon.chain.AcquireInsert("mock-zenon create-account-block")
 	defer insert.Unlock()
 	err := zenon.chain.AddAccountBlockTransaction(insert, accountBlockTransaction)
@@ -169,6 +181,7 @@ func (zenon *mockZenon) CreateAccountBlock(accountBlockTransaction *nom.AccountB
 	if err != nil {
 		zenon.log.Error("failed to insert own account-block.", "reason", err)
 	}
+	return err
 }
 
 func (zenon *mockZenon) InsertNewMomentum() {
@@ -226,10 +239,24 @@ func (zenon *mockZenon) InsertSendBlock(template *nom.AccountBlock, expectedErro
 		if expectedVmChanges != SkipVmChanges {
 			common.ExpectString(zenon.t, db.DebugPatch(transaction.Changes), expectedVmChanges)
 		}
-		zenon.CreateAccountBlock(transaction)
+		common.FailIfErr(zenon.t, zenon.CreateAccountBlock(transaction))
 		return transaction.Block
 	}
 	return nil
+}
+
+// InsertSendBlockRejected generates a send block from template and
+// requires the account pool to reject it with expectedError. Its
+// counterpart InsertSendBlock requires the insert to succeed.
+func (zenon *mockZenon) InsertSendBlockRejected(template *nom.AccountBlock, expectedError error) {
+	template.BlockType = nom.BlockTypeUserSend
+	transaction, err := zenon.supervisor.GenerateFromTemplate(template, getSignFunc(template.Address))
+	common.FailIfErr(zenon.t, err)
+	// errors.Is, not common.ExpectError: the pool returns some rejections
+	// as-is and others wrapped with %w around a sentinel.
+	if err := zenon.CreateAccountBlock(transaction); !errors.Is(err, expectedError) {
+		zenon.t.Fatalf("expected block %v to be rejected with '%v' but got '%v'", transaction.Block.Header(), expectedError, err)
+	}
 }
 func (zenon *mockZenon) InsertReceiveBlock(fromHeader types.AccountHeader, template *nom.AccountBlock, expectedError error, expectedVmChanges string) *nom.AccountBlock {
 	store := zenon.chain.GetFrontierAccountStore(fromHeader.Address)
@@ -263,7 +290,7 @@ func (zenon *mockZenon) InsertReceiveBlock(fromHeader types.AccountHeader, templ
 		if expectedVmChanges != SkipVmChanges {
 			common.ExpectString(zenon.t, db.DebugPatch(transaction.Changes), expectedVmChanges)
 		}
-		zenon.CreateAccountBlock(transaction)
+		common.FailIfErr(zenon.t, zenon.CreateAccountBlock(transaction))
 		return transaction.Block
 	}
 	return nil

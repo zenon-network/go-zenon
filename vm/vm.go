@@ -64,7 +64,9 @@ func enoughPlasma(context vm_context.AccountVmContext, block *nom.AccountBlock) 
 		} else {
 			available, err = AvailablePlasma(context.CacheStore(), context)
 		}
-		common.DealWithErr(err)
+		if err != nil {
+			return err
+		}
 		if available < block.FusedPlasma {
 			return constants.ErrNotEnoughPlasma
 		}

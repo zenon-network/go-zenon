@@ -164,3 +164,57 @@ func TestContent_sortBlocksByPriority(t *testing.T) {
 		{Height: 2, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21000, Address: address2},
 	}))
 }
+
+// A cheap low-height block and an expensive high-height block from the
+// same address must never be separated by a third address' block priced
+// between them: a per-block comparator that mixes a same-address height
+// rule with a cross-address price rule admits exactly this cycle
+// (x1 < x2 by height, x2 < y by price, y < x1 by price), which a stable
+// sort over individual blocks can resolve into an order with x2 before
+// x1 - a gap in address X's chain that the producer's own chain-order
+// check would then reject the whole momentum for.
+func TestContent_sortBlocksByPriority_NoGapAcrossThirdAddress(t *testing.T) {
+	addressX := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	addressY := types.ParseAddressPanic("z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj")
+
+	previousMomentum := &nom.Momentum{NextFusionPrice: 1000, NextWorkPrice: 1000, Version: 2}
+	cs := &contentSelector{
+		plasma: dp.NewDynamicPlasma(previousMomentum, nil),
+	}
+
+	x1 := &nom.AccountBlock{Height: 1, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21000, Address: addressX}
+	x2 := &nom.AccountBlock{Height: 2, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21002, Address: addressX}
+	y := &nom.AccountBlock{Height: 1, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21001, Address: addressY}
+
+	sorted := cs.sortBlocksByPriority([]*nom.AccountBlock{x2, y, x1})
+
+	indexOf := func(target *nom.AccountBlock) int {
+		for i, b := range sorted {
+			if b == target {
+				return i
+			}
+		}
+		t.Fatalf("block at height %d for %v missing from sorted output", target.Height, target.Address)
+		return -1
+	}
+	common.ExpectTrue(t, indexOf(x1) < indexOf(x2))
+}
+
+// A block outranks another address' block on its own price, while its own
+// ancestors still precede it.
+func TestContent_sortBlocksByPriority_PremiumHeadDoesNotEscortFloorPricedTail(t *testing.T) {
+	addressX := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	addressY := types.ParseAddressPanic("z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj")
+
+	previousMomentum := &nom.Momentum{NextFusionPrice: 1000, NextWorkPrice: 1000, Version: 2}
+	cs := &contentSelector{
+		plasma: dp.NewDynamicPlasma(previousMomentum, nil),
+	}
+
+	x1 := &nom.AccountBlock{Height: 1, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 42000, Address: addressX}
+	x2 := &nom.AccountBlock{Height: 2, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21000, Address: addressX}
+	x3 := &nom.AccountBlock{Height: 3, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21000, Address: addressX}
+	y := &nom.AccountBlock{Height: 1, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 31500, Address: addressY}
+
+	common.ExpectTrue(t, reflect.DeepEqual(cs.sortBlocksByPriority([]*nom.AccountBlock{x1, x2, x3, y}), []*nom.AccountBlock{x1, y, x2, x3}))
+}

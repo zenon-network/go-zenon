@@ -214,6 +214,115 @@ func TestPeerDBEmptyAddrsKeepExisting(t *testing.T) {
 	}
 }
 
+// TestPeerDBExpireCapsRecordCount verifies expire() evicts the
+// oldest-lastSeen records once the database holds more than
+// peerDBMaxRecords, rather than letting it grow without bound.
+func TestPeerDBExpireCapsRecordCount(t *testing.T) {
+	d, err := openPeerDB(filepath.Join(t.TempDir(), "peerdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	clock := time.Now()
+	d.now = func() time.Time { return clock }
+
+	const extra = 10
+	var newest []peer.ID
+	for i := 0; i < peerDBMaxRecords+extra; i++ {
+		pid := testPeerID(t)
+		d.recordConnected(pid, []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/10.%d.%d.%d/tcp/35995", (i>>16)&0xff, (i>>8)&0xff, i&0xff))})
+		if i >= extra {
+			newest = append(newest, pid)
+		}
+		clock = clock.Add(time.Second)
+	}
+
+	d.expire()
+
+	seeds := d.seeds(0)
+	if len(seeds) != peerDBMaxRecords {
+		t.Fatalf("len(seeds) after expire = %d, want %d", len(seeds), peerDBMaxRecords)
+	}
+	present := make(map[peer.ID]bool, len(seeds))
+	for _, s := range seeds {
+		present[s.ID] = true
+	}
+	for _, pid := range newest {
+		if !present[pid] {
+			t.Fatalf("expire() evicted a newer record (%s) while over cap", pid)
+		}
+	}
+}
+
+// TestPeerDBSeedsDiversifyAcrossSubnets verifies seeds() doesn't let a
+// single subnet dominate a limited result: many recently-seen peers
+// from one /16 must not crowd out an older peer from a different
+// subnet entirely.
+func TestPeerDBSeedsDiversifyAcrossSubnets(t *testing.T) {
+	d, err := openPeerDB(filepath.Join(t.TempDir(), "peerdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	clock := time.Now()
+	d.now = func() time.Time { return clock }
+
+	// One peer from a distinct subnet, seen first (oldest).
+	outsider := testPeerID(t)
+	d.recordConnected(outsider, []ma.Multiaddr{mustAddr(t, "/ip4/203.0.113.1/tcp/35995")})
+	clock = clock.Add(time.Minute)
+
+	// Many more-recently-seen peers all from the same /24, as an
+	// attacker cycling identities from one source would produce.
+	for i := 0; i < 20; i++ {
+		pid := testPeerID(t)
+		d.recordConnected(pid, []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/10.0.0.%d/tcp/35995", i+1))})
+		clock = clock.Add(time.Minute)
+	}
+
+	limited := d.seeds(5)
+	if len(limited) != 5 {
+		t.Fatalf("len(seeds(5)) = %d, want 5", len(limited))
+	}
+	found := false
+	for _, s := range limited {
+		if s.ID == outsider {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("seeds(5) excluded the only peer from a different subnet: %v", limited)
+	}
+}
+
+// TestSubnetKeyGroups verifies the granularity subnetKey buckets
+// addresses at: IPv4 by /16, and DNS-only peers sharing one group
+// regardless of the hostname they advertise.
+func TestSubnetKeyGroups(t *testing.T) {
+	a := subnetKey([]ma.Multiaddr{mustAddr(t, "/ip4/10.0.0.1/tcp/35995")})
+	b := subnetKey([]ma.Multiaddr{mustAddr(t, "/ip4/10.0.5.9/tcp/35995")})
+	if a != b {
+		t.Fatalf("expected same /16 to share a key: %q != %q", a, b)
+	}
+
+	c := subnetKey([]ma.Multiaddr{mustAddr(t, "/ip4/203.0.113.1/tcp/35995")})
+	if a == c {
+		t.Fatalf("expected different /16s to have different keys, both %q", a)
+	}
+
+	dnsA := subnetKey([]ma.Multiaddr{mustAddr(t, "/dns4/seed.example.com/tcp/35995")})
+	dnsB := subnetKey([]ma.Multiaddr{mustAddr(t, "/dns4/other.example.com/tcp/35995")})
+	if dnsA != dnsB {
+		t.Fatalf("expected DNS-only peers to share a key regardless of hostname: %q != %q", dnsA, dnsB)
+	}
+
+	if dnsA == subnetKey(nil) {
+		t.Fatalf("expected the DNS key to differ from the no-address key")
+	}
+}
+
 // waitForPeers polls until srv has at least n connected peers.
 func waitForPeers(t *testing.T, srv *Server, n int, timeout time.Duration) {
 	t.Helper()

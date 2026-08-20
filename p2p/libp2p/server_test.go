@@ -2,6 +2,7 @@ package libp2p
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
@@ -15,10 +16,14 @@ import (
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/inconshreveable/log15"
+	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/p2p"
 )
 
 // syncBuffer is a concurrency-safe bytes.Buffer for capturing log
@@ -363,6 +368,257 @@ func TestDHTDiscoveryConnectsIndirectPeer(t *testing.T) {
 	}
 }
 
+// TestPendingHandshakeCapPerPeer verifies that a single remote peer
+// opening many concurrent streams that never complete the protocol
+// handshake can occupy at most one pending-handshake slot. Without the
+// per-peer cap, one connection opening MaxPendingPeers stalled streams
+// would consume the entire global pending budget and deny every other
+// inbound handshake for up to the handshake read deadline.
+//
+// Topology: A listens with MaxPendingPeers=2. An "attacker" — a raw
+// libp2p host, not a Zenon Server — connects to A and opens 5 streams
+// on the Zenon protocol without ever writing a handshake, holding them
+// open. A legitimate peer B then dials A concurrently and must still
+// complete its handshake and be adopted: if the attacker's streams had
+// consumed more than one pending slot, B's own handshake attempt would
+// be rejected until the attacker's streams time out.
+func TestPendingHandshakeCapPerPeer(t *testing.T) {
+	keyA, keyB, keyAttacker := mustGenKey(t), mustGenKey(t), mustGenKey(t)
+	portA := freePortTCP(t)
+
+	srvA := &Server{
+		PrivateKey:      keyA,
+		Name:            "pending-cap-target",
+		MaxPeers:        8,
+		MaxPendingPeers: 2,
+		NoDial:          true,
+		ListenAddr:      fmt.Sprintf("127.0.0.1:%d", portA),
+	}
+	if err := srvA.Start(); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+	defer srvA.Stop()
+
+	infoA := peer.AddrInfo{ID: srvA.host.ID(), Addrs: srvA.host.Addrs()}
+
+	attackerPriv, err := ECDSAToLibp2pPrivKey(keyAttacker)
+	if err != nil {
+		t.Fatalf("attacker key: %v", err)
+	}
+	attackerHost, err := libp2p.New(libp2p.Identity(attackerPriv), libp2p.NoListenAddrs)
+	if err != nil {
+		t.Fatalf("attacker host: %v", err)
+	}
+	defer attackerHost.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := attackerHost.Connect(ctx, infoA); err != nil {
+		t.Fatalf("attacker connect: %v", err)
+	}
+
+	const attackerStreams = 5 // > MaxPendingPeers, all stalled indefinitely
+	var streams []network.Stream
+	for i := 0; i < attackerStreams; i++ {
+		s, err := attackerHost.NewStream(ctx, infoA.ID, protocol.ID(protoID))
+		if err != nil {
+			t.Fatalf("attacker stream %d: %v", i, err)
+		}
+		// go-libp2p negotiates the protocol lazily once a "preferred
+		// protocol" is cached for the peer (i.e. every stream after the
+		// first): NewStream returns immediately without writing
+		// anything, so the server never even sees the stream until
+		// something is written. A single byte forces that flush (and
+		// leaves the handshake frame incomplete, so the server's read
+		// still stalls until the handshake deadline).
+		if _, err := s.Write([]byte{0}); err != nil {
+			t.Fatalf("attacker stream %d write: %v", i, err)
+		}
+		streams = append(streams, s)
+	}
+	defer func() {
+		for _, s := range streams {
+			_ = s.Reset()
+		}
+	}()
+
+	// Let A's handleStream goroutines register the attacker's streams as
+	// pending before checking whether a legitimate peer can still get in.
+	time.Sleep(500 * time.Millisecond)
+
+	srvB := &Server{
+		PrivateKey: keyB,
+		Name:       "pending-cap-legit-peer",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: "127.0.0.1:0",
+	}
+	if err := srvB.Start(); err != nil {
+		t.Fatalf("start B: %v", err)
+	}
+	defer srvB.Stop()
+
+	// Budget well under handshakeTimeout: if the attacker's stalled
+	// streams had exhausted the pending budget (no per-peer cap), B's
+	// dial attempts would all be rejected until those streams time out
+	// at handshakeTimeout, so this window only succeeds if the attacker
+	// never occupied more than one pending slot.
+	dialUntilConnected(t, srvB, infoA, 2*time.Second)
+	waitForPeerCount(t, srvA, 1, 2*time.Second)
+}
+
+// TestAdoptedPeerSurvivesFailedSecondHandshake pins that a second stream
+// from an already-adopted peer whose handshake fails is reset on its
+// own; the adopted session and the underlying connection survive.
+func TestAdoptedPeerSurvivesFailedSecondHandshake(t *testing.T) {
+	keyA, keyB := mustGenKey(t), mustGenKey(t)
+	portA := freePortTCP(t)
+
+	srvA := &Server{
+		PrivateKey: keyA,
+		Name:       "second-handshake-target",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: fmt.Sprintf("127.0.0.1:%d", portA),
+	}
+	if err := srvA.Start(); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+	defer srvA.Stop()
+
+	srvB := &Server{
+		PrivateKey: keyB,
+		Name:       "second-handshake-dialer",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: "127.0.0.1:0",
+	}
+	if err := srvB.Start(); err != nil {
+		t.Fatalf("start B: %v", err)
+	}
+	defer srvB.Stop()
+
+	infoA := peer.AddrInfo{ID: srvA.host.ID(), Addrs: srvA.host.Addrs()}
+	dialUntilConnected(t, srvB, infoA, 10*time.Second)
+	waitForPeerCount(t, srvA, 1, 10*time.Second)
+
+	// Open a second stream on the same connection and send a
+	// non-handshake code, so A's doProtoHandshake fails fast.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s, err := srvB.host.NewStream(ctx, srvA.host.ID(), protocol.ID(protoID))
+	if err != nil {
+		t.Fatalf("open second stream: %v", err)
+	}
+	defer s.Reset()
+	if err := p2p.Send(NewStreamRW(s), pingMsg, struct{}{}); err != nil {
+		t.Fatalf("send ping on second stream: %v", err)
+	}
+
+	time.Sleep(time.Second)
+
+	if got := srvA.PeerCount(); got != 1 {
+		t.Fatalf("PeerCount = %d, want 1", got)
+	}
+	srvA.peerMu.RLock()
+	_, adopted := srvA.peerMap[srvB.host.ID().String()]
+	srvA.peerMu.RUnlock()
+	if !adopted {
+		t.Fatal("B is no longer in A's peerMap")
+	}
+	if got := srvA.host.Network().Connectedness(srvB.host.ID()); got != network.Connected {
+		t.Fatalf("Connectedness(B) = %v, want Connected", got)
+	}
+}
+
+// TestDuplicateStreamAtCapacityIsResetNotClosed pins that a duplicate
+// stream from an already-adopted peer is reset while the peer is at
+// capacity; the adopted session and the underlying connection survive.
+func TestDuplicateStreamAtCapacityIsResetNotClosed(t *testing.T) {
+	keyA, keyB := mustGenKey(t), mustGenKey(t)
+	portA := freePortTCP(t)
+
+	srvA := &Server{
+		PrivateKey: keyA,
+		Name:       "dup-stream-target",
+		MaxPeers:   1,
+		NoDial:     true,
+		ListenAddr: fmt.Sprintf("127.0.0.1:%d", portA),
+	}
+	if err := srvA.Start(); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+	defer srvA.Stop()
+
+	srvB := &Server{
+		PrivateKey: keyB,
+		Name:       "dup-stream-dialer",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: "127.0.0.1:0",
+	}
+	if err := srvB.Start(); err != nil {
+		t.Fatalf("start B: %v", err)
+	}
+	defer srvB.Stop()
+
+	infoA := peer.AddrInfo{ID: srvA.host.ID(), Addrs: srvA.host.Addrs()}
+	dialUntilConnected(t, srvB, infoA, 10*time.Second)
+	waitForPeerCount(t, srvA, 1, 10*time.Second)
+
+	// Open a second stream and complete A's handshake on it manually, so
+	// the duplicate is caught only by the final peerMap check.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s, err := srvB.host.NewStream(ctx, srvA.host.ID(), protocol.ID(protoID))
+	if err != nil {
+		t.Fatalf("open second stream: %v", err)
+	}
+	defer s.Reset()
+
+	rw := NewStreamRW(s)
+	if err := p2p.Send(rw, handshakeMsg, &protoHandshake{
+		Version: baseProtocolVersion,
+		Name:    "dup-stream-dialer",
+		ID:      PubkeyToNodeID(&keyB.PublicKey),
+	}); err != nil {
+		t.Fatalf("send handshake on second stream: %v", err)
+	}
+
+	// Some read on the reset stream must error — A's own handshake reply
+	// may or may not be drained first depending on timing.
+	readErr := make(chan error, 1)
+	go func() {
+		if _, err := rw.ReadMsg(); err != nil {
+			readErr <- err
+			return
+		}
+		_, err := rw.ReadMsg()
+		readErr <- err
+	}()
+	select {
+	case err := <-readErr:
+		if err == nil {
+			t.Fatal("expected a read error on the reset duplicate stream")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the duplicate stream to be reset")
+	}
+
+	if got := srvA.PeerCount(); got != 1 {
+		t.Fatalf("PeerCount = %d, want 1", got)
+	}
+	srvA.peerMu.RLock()
+	_, adopted := srvA.peerMap[srvB.host.ID().String()]
+	srvA.peerMu.RUnlock()
+	if !adopted {
+		t.Fatal("B is no longer in A's peerMap")
+	}
+	if got := srvA.host.Network().Connectedness(srvB.host.ID()); got != network.Connected {
+		t.Fatalf("Connectedness(B) = %v, want Connected", got)
+	}
+}
+
 // TestStopWaitsForInFlightDHTRefreshBeforeClosingDHT pins the lifecycle
 // contract Stop() relies on: it must fully drain any in-flight
 // triggerDHTRefresh goroutine before closing the DHT, not merely before
@@ -513,5 +769,193 @@ func TestStopRejectsInFlightDialAdoption(t *testing.T) {
 
 	if n := srvB.PeerCount(); n != 0 {
 		t.Fatalf("PeerCount = %d after Stop() rejected the in-flight adoption, want 0", n)
+	}
+}
+
+// TestFailedHandshakeClosesUnadoptedPeerUnderLock pins that an inbound
+// handshake failure from a peer with no adopted session and no dial in
+// flight closes the underlying connection, and that the close decision
+// is made with peerMu held — the atomicity fix 1 relies on to prevent a
+// concurrent adoption from being killed by ClosePeer.
+func TestFailedHandshakeClosesUnadoptedPeerUnderLock(t *testing.T) {
+	keyA, keyB := mustGenKey(t), mustGenKey(t)
+	portA := freePortTCP(t)
+
+	srvA := &Server{
+		PrivateKey: keyA,
+		Name:       "close-decision-target",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: fmt.Sprintf("127.0.0.1:%d", portA),
+	}
+
+	type decision struct{ closed, lockHeld bool }
+	decisions := make(chan decision, 4)
+	srvA.testCloseDecisionHook = func(closed bool) {
+		// peerMu must be held here — that is what makes the decision and
+		// the close atomic against a concurrent adoption.
+		held := !srvA.peerMu.TryLock()
+		if !held {
+			srvA.peerMu.Unlock()
+		}
+		decisions <- decision{closed: closed, lockHeld: held}
+	}
+
+	if err := srvA.Start(); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+	defer srvA.Stop()
+
+	srvB := &Server{
+		PrivateKey: keyB,
+		Name:       "close-decision-attacker",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: "127.0.0.1:0",
+	}
+	if err := srvB.Start(); err != nil {
+		t.Fatalf("start B: %v", err)
+	}
+	defer srvB.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	infoA := peer.AddrInfo{ID: srvA.host.ID(), Addrs: srvA.host.Addrs()}
+	if err := srvB.host.Connect(ctx, infoA); err != nil {
+		t.Fatalf("B connect to A: %v", err)
+	}
+
+	s, err := srvB.host.NewStream(ctx, srvA.host.ID(), protocol.ID(protoID))
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer s.Reset()
+	if err := p2p.Send(NewStreamRW(s), pingMsg, struct{}{}); err != nil {
+		t.Fatalf("send ping: %v", err)
+	}
+
+	select {
+	case d := <-decisions:
+		if !d.closed {
+			t.Fatal("close decision = false, want true")
+		}
+		if !d.lockHeld {
+			t.Fatal("close decision made without peerMu held")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for close decision")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got := srvA.host.Network().Connectedness(srvB.host.ID()); got != network.Connected {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Connectedness(B) still Connected after %s", 5*time.Second)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// TestFailedHandshakeSkipsCloseWhileDialInFlight pins that a dial in
+// flight for the same peer.ID vetoes the close decision, and that the
+// session that dial goes on to adopt survives.
+func TestFailedHandshakeSkipsCloseWhileDialInFlight(t *testing.T) {
+	keyA, keyB := mustGenKey(t), mustGenKey(t)
+	portA := freePortTCP(t)
+
+	srvA := &Server{
+		PrivateKey: keyA,
+		Name:       "dial-in-flight-target",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: fmt.Sprintf("127.0.0.1:%d", portA),
+	}
+
+	inAdopt := make(chan struct{})
+	release := make(chan struct{})
+	srvA.testDialAdoptHook = func() {
+		close(inAdopt)
+		<-release
+	}
+	decisions := make(chan bool, 4)
+	srvA.testCloseDecisionHook = func(closed bool) {
+		decisions <- closed
+	}
+
+	srvB := &Server{
+		PrivateKey: keyB,
+		Name:       "dial-in-flight-dialer",
+		MaxPeers:   8,
+		NoDial:     true,
+		ListenAddr: "127.0.0.1:0",
+	}
+	if err := srvB.Start(); err != nil {
+		t.Fatalf("start B: %v", err)
+	}
+	defer srvB.Stop()
+
+	if err := srvA.Start(); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+	defer srvA.Stop()
+
+	infoB := peer.AddrInfo{ID: srvB.host.ID(), Addrs: srvB.host.Addrs()}
+	dialErrCh := make(chan error, 1)
+	go func() {
+		dialErrCh <- srvA.dialPeer(infoB)
+	}()
+
+	select {
+	case <-inAdopt:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for dial goroutine to reach the adoption hook")
+	}
+
+	// A's dial already established the host-level connection, so no
+	// Connect is needed here.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s, err := srvB.host.NewStream(ctx, srvA.host.ID(), protocol.ID(protoID))
+	if err != nil {
+		t.Fatalf("open stream from B to A: %v", err)
+	}
+	defer s.Reset()
+	if err := p2p.Send(NewStreamRW(s), pingMsg, struct{}{}); err != nil {
+		t.Fatalf("send ping: %v", err)
+	}
+
+	select {
+	case closed := <-decisions:
+		if closed {
+			t.Fatal("close decision = true while a dial was in flight for the same peer, want false")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for close decision")
+	}
+
+	close(release)
+
+	select {
+	case err := <-dialErrCh:
+		if err != nil {
+			t.Fatalf("dialPeer error = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for dialPeer to return")
+	}
+
+	if got := srvA.PeerCount(); got != 1 {
+		t.Fatalf("PeerCount = %d, want 1", got)
+	}
+	srvA.peerMu.RLock()
+	_, adopted := srvA.peerMap[srvB.host.ID().String()]
+	srvA.peerMu.RUnlock()
+	if !adopted {
+		t.Fatal("B is not in A's peerMap")
+	}
+	if got := srvA.host.Network().Connectedness(srvB.host.ID()); got != network.Connected {
+		t.Fatalf("Connectedness(B) = %v, want Connected", got)
 	}
 }

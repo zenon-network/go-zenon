@@ -208,11 +208,9 @@ func waitForCondition(t *testing.T, timeout time.Duration, desc string, cond fun
 // Original regression tests (real backends)
 // ──────────────────────────────────────────────────────────────────────
 
-// TestStopPreActivation_Bug1 verifies that Stop() does not deadlock
-// when called before the spork activates. This was Bug 1: the watcher
-// read srv.stopCh directly; after Stop() closed and nilled it, the
-// select on a nil channel blocked forever.
-func TestStopPreActivation_Bug1(t *testing.T) {
+// TestStopDoesNotDeadlockBeforeActivation verifies that Stop() does not
+// deadlock when called before the spork activates.
+func TestStopDoesNotDeadlockBeforeActivation(t *testing.T) {
 	oracle := &fakeOracle{active: false}
 	srv := newTestServer(t, oracle)
 
@@ -231,14 +229,13 @@ func TestStopPreActivation_Bug1(t *testing.T) {
 	case <-done:
 		// success
 	case <-time.After(5 * time.Second):
-		t.Fatal("Stop() deadlocked — Bug 1 regression")
+		t.Fatal("Stop() deadlocked before activation")
 	}
 }
 
-// TestStopDuringSwap_Bug2 verifies that if Stop() races with swap(),
-// the libp2p backend is not started after Stop() returns. This was
-// Bug 2: swap() didn't check stopCh before starting libp2p.
-func TestStopDuringSwap_Bug2(t *testing.T) {
+// TestStopDuringSwapDoesNotLeakBackend verifies that if Stop() races
+// with swap(), the libp2p backend is not started after Stop() returns.
+func TestStopDuringSwapDoesNotLeakBackend(t *testing.T) {
 	oracle := &fakeOracle{active: false}
 	srv := newTestServer(t, oracle)
 
@@ -261,7 +258,7 @@ func TestStopDuringSwap_Bug2(t *testing.T) {
 	case <-done:
 		// success
 	case <-time.After(5 * time.Second):
-		t.Fatal("Stop() deadlocked during swap — Bug 2 regression")
+		t.Fatal("Stop() deadlocked during swap")
 	}
 
 	// After Stop, no backend should be active.
@@ -270,10 +267,10 @@ func TestStopDuringSwap_Bug2(t *testing.T) {
 	}
 }
 
-// TestNilOracle_Bug3 verifies that Start() does not launch the
-// activation watcher when Oracle is nil, which would panic on the
-// first tick.
-func TestNilOracle_Bug3(t *testing.T) {
+// TestStartWithNilOracleDoesNotLaunchWatcher verifies that Start() does
+// not launch the activation watcher when Oracle is nil, which would
+// panic on the first tick.
+func TestStartWithNilOracleDoesNotLaunchWatcher(t *testing.T) {
 	srv := &Server{
 		PrivateKey: testKey(t),
 		Name:       "test-node",
@@ -770,6 +767,25 @@ func TestLegacyStartFails(t *testing.T) {
 
 	// Server should not be running — Stop should be a no-op.
 	srv.Stop()
+}
+
+// TestStartRejectsNonPositiveMaxPeers verifies that Start() rejects a
+// non-positive MaxPeers before either backend starts.
+func TestStartRejectsNonPositiveMaxPeers(t *testing.T) {
+	oracle := &fakeOracle{active: false}
+	srv, legacyMock, libp2pMock := newMockServer(t, oracle)
+	srv.MaxPeers = 0
+
+	if err := srv.Start(); err == nil {
+		t.Fatal("Start() should return error when MaxPeers <= 0, got nil")
+	}
+
+	if legacyMock.isStarted() {
+		t.Fatal("legacy backend should not be started when MaxPeers is rejected")
+	}
+	if libp2pMock.isStarted() {
+		t.Fatal("libp2p backend should not be started when MaxPeers is rejected")
+	}
 }
 
 // TestSporkAlreadyActive_Mock verifies that when the oracle reports

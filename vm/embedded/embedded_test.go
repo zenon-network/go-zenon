@@ -7,7 +7,20 @@ import (
 	"testing"
 
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/types"
 )
+
+// getAllEmbedded returns the fully merged contract map with all spork
+// diffs applied, for tests that introspect the complete set of contract
+// methods.
+func getAllEmbedded() map[types.Address]*embeddedImplementation {
+	contractsMap := getOrigin()
+	applyAcceleratorDiffs(contractsMap)
+	applyBridgeAndLiquidityDiffs(contractsMap)
+	applyHtlcDiffs(contractsMap)
+	applyDynamicPlasmaDiffs(contractsMap)
+	return contractsMap
+}
 
 func TestDumpContractsABIMethods(t *testing.T) {
 	dumps := make([]string, 0)

@@ -15,6 +15,8 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/dp"
+	"github.com/zenon-network/go-zenon/vm/constants"
+	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/wallet"
 )
 
@@ -195,6 +197,26 @@ func (rmv *rawMomentumVerifier) nextWorkPrice() error {
 	return nil
 }
 func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
+	// Cheap upper bound on content size before any allocation sized from
+	// attacker-supplied content. On the legacy path this is a fixed
+	// constant; on the dynamic-plasma path it's derived from the
+	// per-momentum plasma cap plus the contract-block count cap, since
+	// there's no fixed block count there.
+	var config *definition.PlasmaVariables
+	if isDynamicPlasmaActive {
+		var err error
+		config, err = rmv.momentumStore.GetPlasmaVariables()
+		if err != nil {
+			return err
+		}
+		maxContent := config.MaxBasePlasmaInMomentum/constants.AccountBlockBasePlasma + dp.MaxContractBlocks(config)
+		if uint64(len(rmv.momentum.Content)) > maxContent {
+			return ErrMContentTooBig
+		}
+	} else if len(rmv.momentum.Content) > chain.MaxAccountBlocksInMomentum {
+		return ErrMContentTooBig
+	}
+
 	blocksLookup := make(map[types.HashHeight]*nom.AccountBlock, len(rmv.accountBlocks))
 
 	// insert all account-blocks in lookup map, rejecting duplicates so a repeated block can't be
@@ -237,11 +259,6 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 			return err
 		}
 
-		config, err := rmv.momentumStore.GetPlasmaVariables()
-		if err != nil {
-			return err
-		}
-
 		plasma := dp.NewDynamicPlasma(previousMomentum, config)
 		contractBlockCount := uint64(0)
 		basePlasma := types.BasePlasma{Fusion: 0, Pow: 0}
@@ -256,11 +273,18 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 				if err != nil {
 					return err
 				}
-				block.BasePlasma = canonical
-				if !plasma.ValidPrice(block) {
+				// Verify using a local copy priced at the canonical
+				// BasePlasma rather than mutating the caller's block: the
+				// caller owns detailed.AccountBlocks, and nothing here
+				// needs the field to persist past this check (the VM
+				// already set it to this same canonical value earlier,
+				// when the block was applied).
+				priced := *block
+				priced.BasePlasma = canonical
+				if !plasma.ValidPrice(&priced) {
 					return errors.Errorf("block price is too small")
 				}
-				basePlasma.Add(plasma.ComputeBasePlasma(block))
+				basePlasma.Add(plasma.ComputeBasePlasma(&priced))
 				if basePlasma.Total() > config.MaxBasePlasmaInMomentum {
 					return ErrMContentTooBig
 				}
@@ -275,10 +299,6 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 		nextWorkPrice := plasma.NextWorkPrice(basePlasma.Pow)
 		if nextWorkPrice != rmv.momentum.NextWorkPrice {
 			return errors.Errorf("mismatch in momentum work price: have %d, want %d", nextWorkPrice, rmv.momentum.NextWorkPrice)
-		}
-	} else {
-		if len(rmv.momentum.Content) > chain.MaxAccountBlocksInMomentum {
-			return ErrMContentTooBig
 		}
 	}
 

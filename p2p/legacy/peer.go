@@ -338,7 +338,7 @@ func (p *Peer) getProto(code uint64) (*protoRW, error) {
 
 type protoRW struct {
 	p2p.Protocol
-	in     chan p2p.Msg        // receices read messages
+	in     chan p2p.Msg    // receices read messages
 	closed <-chan struct{} // receives when peer is shutting down
 	wstart <-chan struct{} // receives when write may start
 	werr   chan<- error    // for write results

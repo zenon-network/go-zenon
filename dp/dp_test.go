@@ -5,6 +5,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
@@ -139,6 +140,58 @@ func TestWorseBlockPrice(t *testing.T) {
 		BasePlasma:  42000,
 	}
 	common.ExpectError(t, dp.HigherPrice(a, b), ErrBlockPriceWorse)
+}
+
+func TestValidPrice(t *testing.T) {
+	dp := &dynamicPlasma{fusionPrice: 1000, workPrice: 1000}
+
+	atMinimum := &nom.AccountBlock{
+		FusedPlasma: constants.AccountBlockBasePlasma * dp.fusionPrice / PriceScaleFactor,
+		Difficulty:  0,
+		BasePlasma:  constants.AccountBlockBasePlasma,
+	}
+	common.ExpectTrue(t, dp.ValidPrice(atMinimum))
+
+	belowMinimum := &nom.AccountBlock{
+		FusedPlasma: atMinimum.FusedPlasma - 1,
+		Difficulty:  0,
+		BasePlasma:  constants.AccountBlockBasePlasma,
+	}
+	common.ExpectTrue(t, !dp.ValidPrice(belowMinimum))
+}
+
+// fusionPrice is chosen so the naive uint64 computation
+// AccountBlockBasePlasma * fusionPrice / PriceScaleFactor overflows
+// (21000 * 2^61 exceeds MaxUint64), which is exactly why the floor is
+// computed in big.Int: the exact floor at this fusionPrice is 21,000 PoW
+// plasma, and the comparison holds that floor precisely rather than
+// clamping it down to a saturated (and here, unreachable) value.
+func TestValidPrice_ExtremeFusionPriceHoldsTheFloor(t *testing.T) {
+	const extremeFusionPrice = uint64(1) << 61
+	dp := &dynamicPlasma{fusionPrice: extremeFusionPrice, workPrice: 1000}
+
+	freeBlock := &nom.AccountBlock{
+		FusedPlasma: 0,
+		Difficulty:  0,
+		BasePlasma:  constants.AccountBlockBasePlasma,
+	}
+	common.ExpectTrue(t, !dp.ValidPrice(freeBlock))
+
+	belowFloor, _ := GetDifficultyForPlasma(10000)
+	belowFloorBlock := &nom.AccountBlock{
+		FusedPlasma: 0,
+		Difficulty:  belowFloor,
+		BasePlasma:  constants.AccountBlockBasePlasma,
+	}
+	common.ExpectTrue(t, !dp.ValidPrice(belowFloorBlock))
+
+	atFloor, _ := GetDifficultyForPlasma(21000)
+	atFloorBlock := &nom.AccountBlock{
+		FusedPlasma: 0,
+		Difficulty:  atFloor,
+		BasePlasma:  constants.AccountBlockBasePlasma,
+	}
+	common.ExpectTrue(t, dp.ValidPrice(atFloorBlock))
 }
 
 func TestComputeBasePlasma_WeightsByOppositeResourcePrice(t *testing.T) {

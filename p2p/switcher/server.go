@@ -48,7 +48,7 @@ type Server struct {
 	// ---- shared config ----
 	PrivateKey        *ecdsa.PrivateKey
 	Name              string
-	MaxPeers          int
+	MaxPeers          int // must be > 0; Start() rejects anything else
 	MinConnectedPeers int
 	MaxPendingPeers   int
 	ListenAddr        string // "host:port"
@@ -122,6 +122,17 @@ func (srv *Server) Start() error {
 	if srv.stopCh != nil {
 		return errors.New("switcher: server already started")
 	}
+
+	// Both backends treat this as a hard capacity bound and the libp2p
+	// backend's every capacity check is len(peerMap) >= MaxPeers, so a
+	// non-positive value means "accept nothing". Reject it here, before
+	// either backend starts, rather than at the spork swap — by then the
+	// legacy backend is already down and a start failure would leave the
+	// node with no listener.
+	if srv.MaxPeers <= 0 {
+		return fmt.Errorf("switcher: MaxPeers must be > 0 (got %d)", srv.MaxPeers)
+	}
+
 	srv.stopCh = make(chan struct{})
 
 	libp2pActive := false

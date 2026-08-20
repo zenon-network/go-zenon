@@ -140,7 +140,10 @@ func (w *worker) work(task common.TaskResolver, e consensus.ProducerEvent) {
 				w.log.Error("unable to generate receive block for contract", "reason", err)
 				return
 			}
-			w.broadcaster.CreateAccountBlock(transaction)
+			if err := w.broadcaster.CreateAccountBlock(transaction); err != nil {
+				w.log.Error("unable to insert autoreceive block for contract", "contract-address", contractAddress, "reason", err)
+				continue
+			}
 			w.log.Info("created autoreceive-block", "identifier", transaction.Block.Header())
 
 			one = true

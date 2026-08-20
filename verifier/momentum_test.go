@@ -35,6 +35,16 @@ func (*stubMomentumStore) GetPlasmaVariables() (*definition.PlasmaVariables, err
 	}, nil
 }
 
+// tinyBudgetMomentumStore caps MaxBasePlasmaInMomentum at exactly one
+// user block's worth of plasma, so the derived content-size bound is 1.
+type tinyBudgetMomentumStore struct {
+	stubMomentumStore
+}
+
+func (*tinyBudgetMomentumStore) GetPlasmaVariables() (*definition.PlasmaVariables, error) {
+	return &definition.PlasmaVariables{MaxBasePlasmaInMomentum: 21000}, nil
+}
+
 // A momentum content header with no matching entry in the prefetched
 // account-blocks must be rejected with an error, not dereference a nil block.
 func TestRawMomentumVerifier_Content_MissingAccountBlock_ReturnsError(t *testing.T) {
@@ -252,6 +262,114 @@ func TestRawMomentumVerifier_Content_ForgedBasePlasma_ReturnsError(t *testing.T)
 	err := rmv.content(true)
 	if err == nil {
 		t.Fatal("expected an error for a momentum whose prices were derived from a forged wire base plasma, got nil")
+	}
+}
+
+// content() must not mutate the caller's account-block: it recomputes
+// canonical base plasma into a local copy for its own price checks, but
+// the BasePlasma field on the block the caller passed in (part of
+// detailed.AccountBlocks) must be left exactly as received.
+func TestRawMomentumVerifier_Content_DoesNotMutateInputBlock(t *testing.T) {
+	const (
+		wireBasePlasma = uint64(999999) // deliberately different from canonical
+		canonical      = uint64(21000)  // matches stubMomentumStore's FusedPlasmaTarget/PowPlasmaTarget
+	)
+
+	address := types.ParseAddressPanic("z1qph8dkja68pg3g6j4spwk9re0kjdkul0amwqnt")
+	blockHash := types.NewHash([]byte("block"))
+
+	block := &nom.AccountBlock{
+		Address:     address,
+		Hash:        blockHash,
+		Height:      1,
+		Difficulty:  0,
+		BasePlasma:  wireBasePlasma,
+		FusedPlasma: canonical,
+	}
+
+	momentum := &nom.Momentum{
+		Version: 2,
+		Content: nom.MomentumContent{
+			{
+				Address: address,
+				HashHeight: types.HashHeight{
+					Hash:   blockHash,
+					Height: 1,
+				},
+			},
+		},
+	}
+
+	config := &definition.PlasmaVariables{
+		MaxBasePlasmaInMomentum: 1_000_000_000,
+		FusedPlasmaTarget:       canonical,
+		PowPlasmaTarget:         canonical,
+		MaxPriceChangePercent:   10,
+		PriceChangeDenominator:  20,
+	}
+
+	// What content() itself computes internally once fixed to use the
+	// canonical value rather than the wire one.
+	honestBlock := &nom.AccountBlock{
+		Address:     address,
+		Hash:        blockHash,
+		Height:      1,
+		Difficulty:  0,
+		BasePlasma:  canonical,
+		FusedPlasma: canonical,
+	}
+	honestPlasma := dp.NewDynamicPlasma(&nom.Momentum{Version: 1}, config)
+	honestBasePlasma := types.BasePlasma{Fusion: 0, Pow: 0}
+	honestBasePlasma.Add(honestPlasma.ComputeBasePlasma(honestBlock))
+	momentum.NextFusionPrice = honestPlasma.NextFusionPrice(honestBasePlasma.Fusion)
+	momentum.NextWorkPrice = honestPlasma.NextWorkPrice(honestBasePlasma.Pow)
+
+	accountBlocks := []*nom.AccountBlock{block}
+
+	rmv := &rawMomentumVerifier{
+		momentum:      momentum,
+		accountBlocks: accountBlocks,
+		momentumStore: &stubMomentumStore{},
+		chain:         nil,
+		canonicalBasePlasma: func(chain.Chain, *nom.AccountBlock) (uint64, error) {
+			return canonical, nil
+		},
+	}
+
+	if err := rmv.content(true); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if block.BasePlasma != wireBasePlasma {
+		t.Fatalf("content() mutated the caller's block: BasePlasma = %d, want unchanged %d", block.BasePlasma, wireBasePlasma)
+	}
+}
+
+// content()'s dynamic-plasma path must reject an oversized content list
+// with ErrMContentTooBig before doing any block-matching work, using a
+// cheap bound derived from the plasma config (there's no fixed
+// block-count constant once dynamic plasma is active, unlike the legacy
+// path). accountBlocks is deliberately left empty: the size-mismatch
+// check further down would also produce *an* error for this input, but
+// a different one - asserting the specific sentinel pins down that
+// rejection happens at the new early bound check, not incidentally
+// later.
+func TestRawMomentumVerifier_Content_DynamicPlasma_OversizedContentRejected(t *testing.T) {
+	momentum := &nom.Momentum{
+		Version: 2,
+		Content: nom.MomentumContent{
+			{Address: types.ZeroAddress, HashHeight: types.HashHeight{Hash: types.NewHash([]byte("a")), Height: 1}},
+			{Address: types.ZeroAddress, HashHeight: types.HashHeight{Hash: types.NewHash([]byte("b")), Height: 1}},
+		},
+	}
+
+	rmv := &rawMomentumVerifier{
+		momentum:      momentum,
+		accountBlocks: nil,
+		momentumStore: &tinyBudgetMomentumStore{},
+	}
+
+	if err := rmv.content(true); err != ErrMContentTooBig {
+		t.Fatalf("expected ErrMContentTooBig for oversized dynamic-plasma content, got %v", err)
 	}
 }
 

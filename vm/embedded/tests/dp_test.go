@@ -22,7 +22,7 @@ func activateDynamicPlasma(t *testing.T, z mock.MockZenon) {
 		Address:   g.Spork.Address,
 		ToAddress: types.SporkContract,
 		Data: definition.ABISpork.PackMethodPanic(definition.SporkCreateMethodName,
-			"dynamic-plasma",              // name
+			"dynamic-plasma",           // name
 			"Activates Dynamic Plasma", // description
 		),
 	}, nil, mock.SkipVmChanges)

@@ -71,15 +71,17 @@ func (b *broadcaster) CreateMomentum(momentumTransaction *nom.MomentumTransactio
 }
 
 // CreateAccountBlock is called when our node created an account block.
-// The account-block will be inserted in the chain and broadcasted.
-func (b *broadcaster) CreateAccountBlock(accountBlockTransaction *nom.AccountBlockTransaction) {
+// The account-block will be inserted in the chain and broadcasted. The
+// insert error is returned to the caller.
+func (b *broadcaster) CreateAccountBlock(accountBlockTransaction *nom.AccountBlockTransaction) error {
 	insert := b.chain.AcquireInsert(fmt.Sprintf("zenon - create account-block %v", accountBlockTransaction.Block.Header()))
 	err := b.chain.AddAccountBlockTransaction(insert, accountBlockTransaction)
 	insert.Unlock()
 	if err != nil {
 		b.log.Error("failed to insert own account-block", "reason", err)
-		return
+		return err
 	}
 
 	b.protocol.BroadcastAccountBlock(accountBlockTransaction.Block)
+	return nil
 }
