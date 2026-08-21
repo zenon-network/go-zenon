@@ -1118,10 +1118,6 @@ func (p *ChangeTssECDSAPubKeyMethod) ValidateSendBlock(block *nom.AccountBlock) 
 	if len(pubKey) != constants.CompressedECDSAPubKeyLength {
 		return constants.ErrInvalidCompressedECDSAPubKeyLength
 	}
-	// Whether the bytes encode a point on the curve is deliberately not checked
-	// here: this method gates send-block admission, so tightening it changes
-	// which blocks are valid. The point is resolved in ReceiveBlock instead,
-	// where rejecting it fails the call without touching stored state.
 
 	if block.Amount.Sign() != 0 {
 		return constants.ErrInvalidTokenOrAmount
@@ -1157,12 +1153,6 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 	pubKey, _ := base64.StdEncoding.DecodeString(param.PubKey)
 
 	X, Y := secp256k1.DecompressPubkey(pubKey)
-	// ValidateSendBlock only checks length, so input that does not encode a
-	// point on the curve reaches this line with nil coordinates. They must be
-	// rejected before the encoding below consumes them.
-	if X == nil || Y == nil {
-		return nil, constants.ErrInvalidCompressedECDSAPubKey
-	}
 	dPubKeyBytes := make([]byte, 1)
 	dPubKeyBytes[0] = 4
 	dPubKeyBytes = append(dPubKeyBytes, X.Bytes()...)

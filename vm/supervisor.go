@@ -143,20 +143,7 @@ func (s *Supervisor) GenerateFromTemplate(template *nom.AccountBlock, signFunc S
 	}
 	return s.applyBlock(template, signFunc)
 }
-func (s *Supervisor) GenerateAutoReceive(sendBlock *nom.AccountBlock) (execution *ContractExecution, internalErr error) {
-	// Matches ApplyMomentum/GenerateMomentum/GenerateGenesisMomentum/applyBlock.
-	// This runs on the producer goroutine, which common.NewTask starts without a
-	// handler of its own and where common.RecoverStack re-panics, so a panic that
-	// escapes here ends the process rather than the block.
-	defer func() {
-		if err := recover(); err != nil {
-			s.log.Error("vm panic when generating autoreceive block", "send-block", sendBlock.Header(), "reason", err, "stack", string(debug.Stack()))
-
-			execution = nil
-			internalErr = constants.ErrVmRunPanic
-		}
-	}()
-
+func (s *Supervisor) GenerateAutoReceive(sendBlock *nom.AccountBlock) (*ContractExecution, error) {
 	template := &nom.AccountBlock{
 		BlockType:     nom.BlockTypeContractReceive,
 		Address:       sendBlock.ToAddress,
