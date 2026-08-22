@@ -4011,3 +4011,32 @@ func insertMomentums(z mock.MockZenon, target int) {
 		z.InsertNewMomentum()
 	}
 }
+
+// A 33-byte key that is not a point on the curve is admitted at send time
+// under the current rules; the receive path resolves the point, rejects it,
+// and leaves the stored key material and nonce untouched.
+func TestBridge_ChangeTssOffCurvePubKey(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+
+	activateBridgeStep3(t, z)
+
+	bridgeAPI := embedded.NewBridgeApi(z)
+	before, err := bridgeAPI.GetBridgeInfo()
+	common.DealWithErr(err)
+
+	offCurve := base64.StdEncoding.EncodeToString(make([]byte, constants.CompressedECDSAPubKeyLength))
+	defer z.CallContract(changeTssWithAdministratorStep(g.User5.Address, offCurve)).
+		Error(t, constants.ErrInvalidCompressedECDSAPubKey)
+	insertMomentums(z, 2)
+
+	after, err := bridgeAPI.GetBridgeInfo()
+	common.DealWithErr(err)
+	if after.CompressedTssECDSAPubKey != before.CompressedTssECDSAPubKey ||
+		after.DecompressedTssECDSAPubKey != before.DecompressedTssECDSAPubKey ||
+		after.TssNonce != before.TssNonce {
+		t.Fatalf("bridge key state changed after rejected rotation: before %v/%v/%v, after %v/%v/%v",
+			before.CompressedTssECDSAPubKey, before.DecompressedTssECDSAPubKey, before.TssNonce,
+			after.CompressedTssECDSAPubKey, after.DecompressedTssECDSAPubKey, after.TssNonce)
+	}
+}
