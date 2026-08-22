@@ -4011,3 +4011,34 @@ func insertMomentums(z mock.MockZenon, target int) {
 		z.InsertNewMomentum()
 	}
 }
+
+// A valid compressed key whose X coordinate has a leading zero byte must be
+// stored as a fixed-width 0x04 || X[32] || Y[32] value. Minimal-width big.Int
+// encoding would store it as 64 bytes, which CheckECDSASignature (requiring
+// exactly 65) then rejects, disabling bridge signature operations after the
+// rotation.
+func TestBridge_ChangeTssShortCoordinateStoredFullWidth(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+
+	activateBridgeStep3(t, z)
+
+	bridgeAPI := embedded.NewBridgeApi(z)
+	securityInfo, err := bridgeAPI.GetSecurityInfo()
+	common.DealWithErr(err)
+
+	// Decompresses to a 31-byte X coordinate.
+	const shortXKey = "AgB3WPsbAbaMAZdHlFw58Q8936u9QISPZ358k3ze48Zm"
+	changeTssWithAdministrator(t, z, g.User5.Address, shortXKey, securityInfo.SoftDelay)
+
+	info, err := bridgeAPI.GetBridgeInfo()
+	common.DealWithErr(err)
+	if info.CompressedTssECDSAPubKey != shortXKey {
+		t.Fatalf("rotation did not take: compressed key is %q", info.CompressedTssECDSAPubKey)
+	}
+	stored, err := base64.StdEncoding.DecodeString(info.DecompressedTssECDSAPubKey)
+	common.DealWithErr(err)
+	if len(stored) != 65 {
+		t.Fatalf("stored decompressed key is %d bytes, want 65", len(stored))
+	}
+}

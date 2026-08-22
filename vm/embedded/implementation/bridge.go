@@ -1165,10 +1165,14 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 	if X == nil || Y == nil {
 		return nil, constants.ErrInvalidCompressedECDSAPubKey
 	}
-	dPubKeyBytes := make([]byte, 1)
+	// X.Bytes()/Y.Bytes() are minimal-width, so a coordinate with a leading
+	// zero byte would serialize short and produce an uncompressed key under 65
+	// bytes. CheckECDSASignature requires exactly 0x04 || X[32] || Y[32], so the
+	// coordinates must be left-padded to a fixed 32 bytes each.
+	dPubKeyBytes := make([]byte, 1, 65)
 	dPubKeyBytes[0] = 4
-	dPubKeyBytes = append(dPubKeyBytes, X.Bytes()...)
-	dPubKeyBytes = append(dPubKeyBytes, Y.Bytes()...)
+	dPubKeyBytes = append(dPubKeyBytes, ecommon.LeftPadBytes(X.Bytes(), 32)...)
+	dPubKeyBytes = append(dPubKeyBytes, ecommon.LeftPadBytes(Y.Bytes(), 32)...)
 	newDecompressedPubKey := base64.StdEncoding.EncodeToString(dPubKeyBytes)
 
 	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
