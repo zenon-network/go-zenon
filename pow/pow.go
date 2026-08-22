@@ -84,7 +84,9 @@ func getTargetByDifficulty(difficulty uint64) [8]byte {
 	}
 	// 2^64 - (2^64 / difficulty)
 	x := new(big.Int).Exp(common.Big2, common.Big64, nil)
-	y := big.NewInt(0).Quo(x, big.NewInt(int64(difficulty)))
+	// difficulty is uint64 and must stay unsigned for the whole range; going
+	// through int64 wraps the upper half and inverts the resulting target.
+	y := big.NewInt(0).Quo(x, new(big.Int).SetUint64(difficulty))
 	x.Sub(x, y)
 	var target [8]byte
 	binary.LittleEndian.PutUint64(target[:], x.Uint64())
