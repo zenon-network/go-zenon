@@ -52,8 +52,8 @@ func TestSubscribeAfterStopFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The install channel has spare capacity here, so before the fix the send
-	// case stayed ready and a fraction of these attempts succeeded.
+	// The install channel has spare capacity here, so only the stopped check
+	// (not backpressure) can reject these attempts.
 	for i := 0; i < 100; i++ {
 		if _, err := client.Subscribe(context.Background(), "ledger", ch, "momentums"); err == nil {
 			t.Fatalf("subscription attempt %d accepted after Stop", i)

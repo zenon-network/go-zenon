@@ -14,6 +14,10 @@ import (
 	rpc "github.com/zenon-network/go-zenon/rpc/server"
 )
 
+// ErrSubscribeBacklogFull is returned when the worker's install backlog is
+// full; the caller should retry.
+var ErrSubscribeBacklogFull = errors.New("subscribe server backlog is full")
+
 const (
 	acChanSize  = 100
 	mChanSize   = 100
@@ -280,14 +284,26 @@ func (s *Api) subscribe(ctx context.Context, options *subscriptionOptions) (*rpc
 	if s.isStopped {
 		return nil, errors.New("subscribe server is stopped")
 	}
+	// The enqueue must not block while stopLock is held: the worker drains
+	// installCh only between broadcasts, and a broadcast stalled on a slow
+	// client would otherwise hold every other subscribe call and Stop behind
+	// this lock. A full backlog is reported to the caller instead.
+	//
+	// Installation itself is not awaited: if Stop lands right after the lock
+	// is released, the worker may exit with this entry still buffered, which
+	// is indistinguishable from installing it and then stopping — either way
+	// no events are delivered.
+	//
+	// Capacity is checked before NewSubscription: creating the notifier
+	// subscription first would leave it registered on the RPC connection
+	// (the handler takes it even when this method errors) with an ID the
+	// client never learns and cannot unsubscribe. stopLock serializes
+	// producers and the worker only drains, so once there is room the send
+	// below cannot block.
+	if len(s.installCh) == cap(s.installCh) {
+		return nil, ErrSubscribeBacklogFull
+	}
 	subscription := NewSubscription(notifier, options)
-	// Stop cannot take stopLock while we hold it, so the worker is still
-	// draining installCh and this send completes. Installation itself is not
-	// awaited: if Stop lands right after the lock is released, the worker may
-	// exit with this entry still buffered, which is indistinguishable from
-	// installing it and then stopping — either way no events are delivered.
-	// Waiting for the worker here would also stall Stop behind a broadcast in
-	// progress, since Stop needs stopLock.
 	s.installCh <- subscription
 	return subscription.rpc, nil
 }
