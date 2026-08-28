@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/zenon-network/go-zenon/common"
-	"github.com/zenon-network/go-zenon/common/types"
 )
 
 const (
@@ -96,16 +95,6 @@ func (m *Manager) GetKeyStore(path string) (*KeyStore, error) {
 	} else {
 		return ks, nil
 	}
-}
-
-// FindAddress searches the keystore at path for the address, bounded by the
-// configured MaxSearchIndex.
-func (m *Manager) FindAddress(path string, address types.Address) (*KeyPair, uint32, error) {
-	ks, err := m.GetKeyStore(path)
-	if err != nil {
-		return nil, 0, err
-	}
-	return ks.FindAddress(address, m.config.MaxSearchIndex)
 }
 
 func (m *Manager) GetKeyFileAndDecrypt(path, password string) (*KeyStore, error) {

@@ -39,8 +39,8 @@ func TestDeriveForFullPathReturnsPath(t *testing.T) {
 	}
 }
 
-// The search must honor the given bound instead of the old package constant.
-func TestFindAddressHonorsMaxIndex(t *testing.T) {
+// FindAddress locates a derived address by its index within the search bound.
+func TestFindAddress(t *testing.T) {
 	ks := testKeyStore(t)
 
 	_, kp, err := ks.DeriveForIndexPath(2)
@@ -48,10 +48,7 @@ func TestFindAddressHonorsMaxIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := ks.FindAddress(kp.Address, 1); err != ErrAddressNotFound {
-		t.Fatalf("maxIndex=1: expected ErrAddressNotFound, got %v", err)
-	}
-	key, index, err := ks.FindAddress(kp.Address, DefaultMaxIndex)
+	key, index, err := ks.FindAddress(kp.Address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +90,7 @@ func TestZeroedKeyStoreCannotDerive(t *testing.T) {
 	if _, _, err := ks.DeriveForIndexPath(0); err != ErrInvalidSeed {
 		t.Fatalf("expected ErrInvalidSeed, got %v", err)
 	}
-	if _, _, err := ks.FindAddress(ks.BaseAddress, 1); err != ErrInvalidSeed {
+	if _, _, err := ks.FindAddress(ks.BaseAddress); err != ErrInvalidSeed {
 		t.Fatalf("expected ErrInvalidSeed, got %v", err)
 	}
 	if _, err := DeriveForPath("m/44'/73404'/0'", nil); err != ErrInvalidSeed {
