@@ -2174,8 +2174,7 @@ func TestBridge_GetAllUnwrapTokenRequests_SortStability(t *testing.T) {
 
 	// GetAllUnwrapTokenRequestsByToAddress must produce the identical
 	// stable, height-descending order - both filtered (every unwrap above
-	// targets g.User2) and with the empty address, whose branch used to
-	// skip sorting entirely.
+	// targets g.User2) and with the empty (unfiltered) address.
 	for _, toAddress := range []string{g.User2.Address.String(), ""} {
 		byAddr, err := bridgeAPI.GetAllUnwrapTokenRequestsByToAddress(toAddress, 0, 100)
 		common.FailIfErr(t, err)

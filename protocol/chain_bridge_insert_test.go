@@ -9,12 +9,12 @@ import (
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
-// TestInsertChain_SideChainAboveFrontierDoesNotPanic reproduces the reorg crash:
-// when the downloader delivers a side-chain whose head is more than one momentum
-// above our frontier, InsertChain looked up the momentum at head.Height-1 (which
-// is not in the store), got (nil, nil) back from GetMomentumByHeight, checked only
-// the error, and dereferenced the nil momentum at chain_bridge.go:160 -> SIGSEGV.
-// The downloader goroutine has no recover, so this crashes the whole node.
+// TestInsertChain_SideChainAboveFrontierDoesNotPanic covers the reorg path where
+// the downloader delivers a side-chain whose head is more than one momentum above
+// our frontier: the momentum at head.Height-1 is not in the store, so
+// GetMomentumByHeight returns (nil, nil) and InsertChain must treat the missing
+// momentum as an error rather than dereference it. The downloader goroutine has
+// no recover, so a panic here would take down the whole node.
 func TestInsertChain_SideChainAboveFrontierDoesNotPanic(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()

@@ -64,7 +64,7 @@ func mockAncestorChains(head, forkAt uint64) (*Downloader, *peer) {
 }
 
 // A fork deeper than the head-scan window must be located by the binary
-// search; the inverted guard used to return 0 (resync from genesis) instead.
+// search rather than falling back to 0 (a resync from genesis).
 func TestFindAncestorLongFork(t *testing.T) {
 	const head, forkAt = uint64(1100), uint64(10)
 	d, p := mockAncestorChains(head, forkAt)

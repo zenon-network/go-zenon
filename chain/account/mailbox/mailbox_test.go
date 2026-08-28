@@ -7,8 +7,8 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
-// atMost == 0 used to underflow to effectively unlimited because the counter
-// was decremented after the first append.
+// atMost == 0 must return no hashes; the counter is checked before the first
+// append so it cannot underflow into an unlimited scan.
 func TestGetUnreceivedAccountBlockHashesAtMost(t *testing.T) {
 	m := NewAccountMailbox(types.PillarContract, db.NewMemDB())
 	for i := byte(1); i <= 3; i++ {
