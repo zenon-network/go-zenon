@@ -210,6 +210,14 @@ func (phase *Phase) ToPhaseMarshal() *PhaseMarshal {
 	return aux
 }
 
+// ToProjectMarshal is the historical name of ToPhaseMarshal, kept so external
+// importers keep compiling.
+//
+// Deprecated: use ToPhaseMarshal.
+func (phase *Phase) ToProjectMarshal() *PhaseMarshal {
+	return phase.ToPhaseMarshal()
+}
+
 func (phase *Phase) MarshalJSON() ([]byte, error) {
 	return json.Marshal(phase.ToPhaseMarshal())
 }
