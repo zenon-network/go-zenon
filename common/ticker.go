@@ -57,10 +57,12 @@ func (t ticker) TickMultiplier(bigger Ticker) (uint64, error) {
 }
 
 func NewTicker(startTime time.Time, interval time.Duration) Ticker {
-	// ToTick divides by whole seconds; a sub-second interval would be a
-	// divide by zero at every conversion
-	if interval < time.Second {
-		panic("ticker interval must be at least one second")
+	// ToTick works in whole seconds, so any interval that is not a whole
+	// number of seconds misbuckets ticks (and a sub-second one divides by
+	// zero). Callers pass compile-time consensus constants, so this is a
+	// programming error rather than a runtime condition.
+	if interval < time.Second || interval%time.Second != 0 {
+		panic("ticker interval must be a whole number of seconds")
 	}
 	return &ticker{startTime: startTime, interval: interval}
 }
