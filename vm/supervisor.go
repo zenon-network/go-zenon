@@ -360,7 +360,7 @@ func (s *Supervisor) setBlockFields(block *nom.AccountBlock) {
 			block.Amount = big.NewInt(0)
 		}
 	case nom.BlockTypeUserReceive, nom.BlockTypeContractReceive:
-		block.Amount = common.Big0
+		block.Amount = big.NewInt(0)
 		block.TokenStandard = types.ZeroTokenStandard
 	}
 }
