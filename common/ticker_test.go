@@ -32,3 +32,12 @@ func TestNewTickerRejectsSubSecondInterval(t *testing.T) {
 	}()
 	NewTicker(time.Unix(1000000000, 0), 100*time.Millisecond)
 }
+
+func TestNewTickerRejectsNonWholeSecondInterval(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected NewTicker to panic on a non-whole-second interval")
+		}
+	}()
+	NewTicker(time.Unix(1000000000, 0), 1500*time.Millisecond)
+}

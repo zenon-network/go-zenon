@@ -48,3 +48,55 @@ func TestSubscribeBacklogFullDoesNotBlock(t *testing.T) {
 	api.stopLock.Lock()
 	api.stopLock.Unlock()
 }
+
+// backlogProbe is a test-only RPC service that, after a rejected subscribe,
+// checks that no subscription was created on the connection's notifier: the
+// RPC handler takes and owns whatever the notifier holds even when the method
+// returns an error, so a subscription created before the rejection would leak
+// under an ID the client never learns.
+type backlogProbe struct {
+	api                    *Api
+	rejectedWithoutSubscri bool
+}
+
+func (p *backlogProbe) Momentums(ctx context.Context) (*rpc.Subscription, error) {
+	sub, err := p.api.subscribe(ctx, NewMomentumsSubscription())
+	if err == ErrSubscribeBacklogFull {
+		notifier, _ := rpc.NotifierFromContext(ctx)
+		// CreateSubscription panics if the notifier already holds one
+		func() {
+			defer func() {
+				if recover() == nil {
+					p.rejectedWithoutSubscri = true
+				}
+			}()
+			notifier.CreateSubscription()
+		}()
+	}
+	return sub, err
+}
+
+func TestRejectedSubscribeLeavesNoHandlerOwnedSubscription(t *testing.T) {
+	api := &Api{
+		log:       common.RPCLogger.New("module", "subscribe_api_test"),
+		installCh: make(chan *Subscription, 1),
+		stopped:   make(chan struct{}),
+	}
+	api.installCh <- &Subscription{}
+	probe := &backlogProbe{api: api}
+
+	rpcServer := rpc.NewServer()
+	if err := rpcServer.RegisterName("ledger", probe); err != nil {
+		t.Fatal(err)
+	}
+	client := rpc.DialInProc(rpcServer)
+	defer client.Close()
+
+	ch := make(chan *Momentum, 1)
+	if _, err := client.Subscribe(context.Background(), "ledger", ch, "momentums"); err == nil {
+		t.Fatal("expected the full backlog to reject the subscription")
+	}
+	if !probe.rejectedWithoutSubscri {
+		t.Fatal("a subscription was created on the notifier before the backlog rejection")
+	}
+}
