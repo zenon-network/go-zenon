@@ -74,11 +74,23 @@ func (ms *momentumStore) PrefetchMomentum(momentum *nom.Momentum) (*nom.Detailed
 }
 
 func (ms *momentumStore) getMomentumsByRange(from, to uint64) ([]*nom.Momentum, error) {
+	// Cap at the frontier so heights beyond it are not reported as entries;
+	// a missing momentum at or below the frontier is a store hole and an error.
+	frontierHeight := db.GetFrontierIdentifier(ms.DB).Height
+	if to > frontierHeight+1 {
+		to = frontierHeight + 1
+	}
+	if from >= to {
+		return []*nom.Momentum{}, nil
+	}
 	list := make([]*nom.Momentum, 0, to-from)
 	for i := from; i < to; i += 1 {
 		momentum, err := ms.GetMomentumByHeight(i)
 		if err != nil {
 			return nil, err
+		}
+		if momentum == nil {
+			return nil, fmt.Errorf("momentum at height %d is missing below frontier %d", i, frontierHeight)
 		}
 		list = append(list, momentum)
 	}
