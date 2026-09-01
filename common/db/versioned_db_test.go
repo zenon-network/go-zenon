@@ -151,7 +151,9 @@ d5104dc76695721d - b80704bb7b4d7c03`)
 	common.ExpectString(t, fmt.Sprintf("%v", frontier0), `{0000000000000000000000000000000000000000000000000000000000000000 0}`)
 
 	t1p := newMockTransaction(11, v01)
-	common.DealWithErr(m.Add(t1p))
+	if err := m.Add(t1p); err == nil {
+		t.Fatalf("expected Add on a stale frontier to fail")
+	}
 	common.ExpectString(t, DebugDB(v01), `
 3d31f9c8d42f02c9 - 27397d8e9ad2a99d
 566258666a0baae0 - 0e99d01979f82ec3
@@ -316,4 +318,27 @@ cea06b688be116ca - f6bd65cefe8c20dc
 d5104dc76695721d - b80704bb7b4d7c03
 dc2864602be7fb85 - d38967f931a50490
 f25f4b21eef64b43 - 9c0a8a2bfc0914df`)
+}
+
+// A transaction whose previous is a known-but-stale version must be rejected
+// instead of overwriting the frontier with stale state.
+func TestLevelDBManagerAddRejectsNonFrontierPrevious(t *testing.T) {
+	m := NewLevelDBManager(t.TempDir())
+
+	t1 := newMockTransaction(1, m.Frontier())
+	id1 := t1.commit.Identifier()
+	common.DealWithErr(m.Add(t1))
+
+	t2 := newMockTransaction(2, m.Frontier())
+	common.DealWithErr(m.Add(t2))
+	frontierBefore := GetFrontierIdentifier(m.Frontier())
+
+	// build a transaction on top of the stale version id1
+	stale := newMockTransaction(3, m.Get(id1))
+	if err := m.Add(stale); err == nil {
+		t.Fatalf("expected Add with stale previous %v to fail", id1)
+	}
+	if got := GetFrontierIdentifier(m.Frontier()); got != frontierBefore {
+		t.Fatalf("frontier changed from %v to %v after rejected Add", frontierBefore, got)
+	}
 }

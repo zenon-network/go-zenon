@@ -16,5 +16,6 @@ func (ctx *accountVmContext) Reset() {
 func (ctx *accountVmContext) Done() {
 	changes, _ := ctx.Account.Changes()
 	ctx.Account = ctx.accountStoreSnapshot
+	ctx.accountStoreSnapshot = nil
 	common.DealWithErr(ctx.Account.Apply(changes))
 }

@@ -143,7 +143,20 @@ func (s *Supervisor) GenerateFromTemplate(template *nom.AccountBlock, signFunc S
 	}
 	return s.applyBlock(template, signFunc)
 }
-func (s *Supervisor) GenerateAutoReceive(sendBlock *nom.AccountBlock) (*ContractExecution, error) {
+func (s *Supervisor) GenerateAutoReceive(sendBlock *nom.AccountBlock) (execution *ContractExecution, internalErr error) {
+	// Matches ApplyMomentum/GenerateMomentum/GenerateGenesisMomentum/applyBlock.
+	// This runs on the producer goroutine, which common.NewTask starts without a
+	// handler of its own and where common.RecoverStack re-panics, so a panic that
+	// escapes here ends the process rather than the block.
+	defer func() {
+		if err := recover(); err != nil {
+			s.log.Error("vm panic when generating autoreceive block", "send-block", sendBlock.Header(), "reason", err, "stack", string(debug.Stack()))
+
+			execution = nil
+			internalErr = constants.ErrVmRunPanic
+		}
+	}()
+
 	template := &nom.AccountBlock{
 		BlockType:     nom.BlockTypeContractReceive,
 		Address:       sendBlock.ToAddress,
@@ -162,11 +175,10 @@ func (s *Supervisor) GenerateAutoReceive(sendBlock *nom.AccountBlock) (*Contract
 	}
 	vm := NewVM(context, s.chain.GetFrontierMomentumStore())
 	block, methodErr, err := vm.generateEmbeddedReceive(template.FromBlockHash)
-	if err := s.verifier.AccountBlock(block); err != nil {
+	if err != nil {
 		return nil, err
 	}
-
-	if err != nil {
+	if err := s.verifier.AccountBlock(block); err != nil {
 		return nil, err
 	}
 	transaction, err := s.packBlock(context, block, nil)
@@ -274,15 +286,6 @@ func (s *Supervisor) packBlock(context vm_context.AccountVmContext, block *nom.A
 	}
 
 	if signFunc != nil {
-		block.Hash = block.ComputeHash()
-		signature, _, publicKey, err := signFunc(block.Hash.Bytes())
-		if err != nil {
-			return nil, err
-		}
-		block.Signature = signature
-		block.PublicKey = publicKey
-	}
-	if signFunc != nil {
 		block.ChangesHash = db.PatchHash(changes)
 		block.Hash = block.ComputeHash()
 		signature, _, publicKey, err := signFunc(block.Hash.Bytes())
@@ -357,7 +360,7 @@ func (s *Supervisor) setBlockFields(block *nom.AccountBlock) {
 			block.Amount = big.NewInt(0)
 		}
 	case nom.BlockTypeUserReceive, nom.BlockTypeContractReceive:
-		block.Amount = common.Big0
+		block.Amount = big.NewInt(0)
 		block.TokenStandard = types.ZeroTokenStandard
 	}
 }

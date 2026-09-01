@@ -160,7 +160,7 @@ func (m *memdbManager) Pop() error {
 
 	previous, ok := m.previous[m.frontierIdentifier]
 	if !ok {
-		return errors.Errorf("can't find previous for ")
+		return errors.Errorf("can't find previous for %v", m.frontierIdentifier)
 	}
 
 	delete(m.previous, m.frontierIdentifier)
@@ -371,9 +371,11 @@ func (m *ldbManager) Add(transaction Transaction) error {
 		return errors.Errorf("can't add transaction to stopped db")
 	}
 
-	frontierIdentifier := GetFrontierIdentifier(db)
+	// Compare against the real disk frontier; `db` is a historical view at
+	// `previous`, so its own frontier identifier always equals `previous`.
+	frontierIdentifier := GetFrontierIdentifier(NewLevelDBWrapper(m.ldb).Subset(frontierByte))
 	if previous != frontierIdentifier {
-		return nil
+		return errors.Errorf("can't insert identifier %v. previous %v doesn't match with current frontier %v", identifier, previous, frontierIdentifier)
 	}
 	return m.write(batch)
 }

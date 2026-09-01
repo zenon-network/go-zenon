@@ -27,7 +27,7 @@ func NewStatsApi(z zenon.Zenon, p2p p2p.Server) *StatsApi {
 	return &StatsApi{
 		z:   z,
 		p2p: p2p,
-		log: common.RPCLogger.New("module", "net_api"),
+		log: common.RPCLogger.New("module", "stats_api"),
 	}
 }
 
@@ -46,7 +46,9 @@ type OsInfoResponse struct {
 func (api *StatsApi) OsInfo() (*OsInfoResponse, error) {
 	result := &OsInfoResponse{}
 	stat, e := host.Info()
-	if e == nil {
+	if e != nil {
+		api.log.Error("failed to get host info", "reason", e)
+	} else {
 		result.Os = stat.OS
 		result.Platform = stat.Platform
 		result.PlatformFamily = stat.PlatformFamily
@@ -55,7 +57,9 @@ func (api *StatsApi) OsInfo() (*OsInfoResponse, error) {
 	}
 
 	memO, e := mem.VirtualMemory()
-	if e == nil {
+	if e != nil {
+		api.log.Error("failed to get memory info", "reason", e)
+	} else {
 		result.MemoryFree = memO.Available
 		result.MemoryTotal = memO.Total
 	}

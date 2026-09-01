@@ -88,6 +88,9 @@ func GetSwapAssets(context db.DB) ([]*SwapAssets, error) {
 			}
 			break
 		}
+		if len(iterator.Value()) == 0 {
+			continue
+		}
 		if info, err := parseSwapAssets(iterator.Value(), iterator.Key()); err == nil && info != nil {
 			list = append(list, info)
 		} else {

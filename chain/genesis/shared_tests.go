@@ -10,11 +10,13 @@ import (
 )
 
 func checkAccountBalance(g *GenesisConfig, addr types.Address, required map[types.ZenonTokenStandard]*big.Int) error {
+	found := false
 	// Check account balance for enough qsr
 	for _, block := range g.GenesisBlocks.Blocks {
 		if block.Address != addr {
 			continue
 		}
+		found = true
 
 		for zts, amount := range block.BalanceList {
 			requiredAmount, ok := required[zts]
@@ -30,6 +32,14 @@ func checkAccountBalance(g *GenesisConfig, addr types.Address, required map[type
 		for token := range required {
 			_, ok := block.BalanceList[token]
 			if !ok && required[token].Cmp(common.Big0) != 0 {
+				return errors.Errorf("invalid balance for %v Expected token %v to be present", addr, token)
+			}
+		}
+	}
+
+	if !found {
+		for token, amount := range required {
+			if amount.Cmp(common.Big0) != 0 {
 				return errors.Errorf("invalid balance for %v Expected token %v to be present", addr, token)
 			}
 		}

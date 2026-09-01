@@ -120,7 +120,7 @@ func (p *CancelStakeMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	amount := stakeInfo.Amount
 	stakeInfo.RevokeTime = momentum.Timestamp.Unix()
 	// signal that the amount has been received, to future-proof
-	stakeInfo.Amount = common.Big0
+	stakeInfo.Amount = big.NewInt(0)
 	common.DealWithErr(stakeInfo.Save(context.Storage()))
 
 	stakeLog.Debug("revoked stake entry", "id", stakeInfo.Id, "owner", stakeInfo.StakeAddress, "start-time", stakeInfo.StartTime, "revoke-time", stakeInfo.RevokeTime)
@@ -214,7 +214,7 @@ func computeStakeRewardsForEpoch(context vm_context.AccountVmContext, epoch uint
 
 		addReward(context, epoch, definition.RewardDeposit{
 			Address: &stakeInfo.StakeAddress,
-			Znn:     common.Big0,
+			Znn:     big.NewInt(0),
 			Qsr:     reward,
 		})
 

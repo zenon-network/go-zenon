@@ -49,6 +49,13 @@ func DeriveForPath(path string, seed []byte) (*KeyPair, error) {
 	if !isValidPath(path) {
 		return nil, ErrInvalidPath
 	}
+	// An empty seed still yields a well-formed master key (the HMAC of an empty
+	// message is defined), landing every caller on the same publicly-derivable
+	// addresses. A zeroed KeyStore reaches this with a nil seed, so it must be
+	// an error, not a silent success.
+	if len(seed) == 0 {
+		return nil, ErrInvalidSeed
+	}
 
 	key, err := newMasterKey(seed)
 	if err != nil {

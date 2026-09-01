@@ -22,10 +22,12 @@ func MakeEmbeddedGenesisConfig() (store.Genesis, error) {
 	return NewGenesis(embeddedGenesis), nil
 }
 
-func ReadGenesisConfigFromFile(genesisFile string) (store.Genesis, error) {
+func ReadGenesisConfigFromFile(genesisFile string) (genesisStore store.Genesis, err error) {
 	defer func() {
-		if err := recover(); err != nil {
-			log.Crit("invalid genesis file", "method", "readGenesis", "genesisFile", genesisFile)
+		if r := recover(); r != nil {
+			log.Crit("invalid genesis file", "method", "readGenesis", "reason", r, "genesisFile", genesisFile)
+			genesisStore = nil
+			err = ErrInvalidGenesisConfig
 		}
 	}()
 

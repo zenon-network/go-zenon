@@ -10,15 +10,6 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
-func (ms *momentumStore) SetFrontier(momentum *nom.Momentum) error {
-	data, err := momentum.Serialize()
-	if err != nil {
-		return err
-	}
-
-	return db.SetFrontier(ms.DB, momentum.Identifier(), data)
-}
-
 func parseMomentum(data []byte, err error) (*nom.Momentum, error) {
 	if err == leveldb.ErrNotFound {
 		return nil, nil
@@ -39,6 +30,11 @@ func (ms *momentumStore) GetMomentumsByHash(blockHash types.Hash, higher bool, c
 	momentum, err := ms.GetMomentumByHash(blockHash)
 	if err != nil {
 		return nil, err
+	}
+	// parseMomentum reports an unknown hash as (nil, nil), which callers such as
+	// HasBlock and GetBlock already account for.
+	if momentum == nil {
+		return nil, nil
 	}
 	return ms.GetMomentumsByHeight(momentum.Height, higher, count)
 }
@@ -78,11 +74,23 @@ func (ms *momentumStore) PrefetchMomentum(momentum *nom.Momentum) (*nom.Detailed
 }
 
 func (ms *momentumStore) getMomentumsByRange(from, to uint64) ([]*nom.Momentum, error) {
+	// Cap at the frontier so heights beyond it are not reported as entries;
+	// a missing momentum at or below the frontier is a store hole and an error.
+	frontierHeight := db.GetFrontierIdentifier(ms.DB).Height
+	if to > frontierHeight+1 {
+		to = frontierHeight + 1
+	}
+	if from >= to {
+		return []*nom.Momentum{}, nil
+	}
 	list := make([]*nom.Momentum, 0, to-from)
 	for i := from; i < to; i += 1 {
 		momentum, err := ms.GetMomentumByHeight(i)
 		if err != nil {
 			return nil, err
+		}
+		if momentum == nil {
+			return nil, fmt.Errorf("momentum at height %d is missing below frontier %d", i, frontierHeight)
 		}
 		list = append(list, momentum)
 	}

@@ -89,6 +89,7 @@ var (
 	ErrInvalidECDSASignature                = errors.New("invalid secp256k1 signature")
 	ErrInvalidDecompressedECDSAPubKeyLength = errors.New("invalid decompressed secp256k1 public key length")
 	ErrInvalidCompressedECDSAPubKeyLength   = errors.New("invalid compressed secp256k1 public key length")
+	ErrInvalidCompressedECDSAPubKey         = errors.New("invalid compressed secp256k1 public key")
 	ErrNotAllowedToChangeTss                = errors.New("changing the tss public key is not allowed")
 	ErrInvalidJsonContent                   = errors.New("metadata does not respect the JSON format")
 	ErrInvalidMinAmount                     = errors.New("invalid min amount")

@@ -36,6 +36,7 @@ balance`
 var AllLoggers = []common.Logger{
 	common.ZenonLogger,
 	common.ChainLogger,
+	common.ConsensusLogger,
 	common.SupervisorLogger,
 	common.P2PLogger,
 	common.PillarLogger,
@@ -130,6 +131,7 @@ type mockZenon struct {
 	loggers              []log15.Logger
 	handlers             []log15.Handler
 	initialEpochDuration time.Duration
+	initialClock         common.ClockType
 
 	// failInsertFor, when non-nil, makes CreateAccountBlock reject every
 	// block for that account address with an injected error instead of
@@ -350,6 +352,7 @@ func (zenon *mockZenon) Stop() error {
 	}
 
 	consensus.EpochDuration = zenon.initialEpochDuration
+	common.Clock = zenon.initialClock
 	return nil
 }
 func (zenon *mockZenon) StopPanic() {
@@ -387,6 +390,16 @@ func NewMockZenonWithCustomEpochDuration(t common.T, epochDuration time.Duration
 }
 
 func newMockZenon(t common.T, customEpochDuration time.Duration) MockZenon {
+	// snapshot global state BEFORE overriding any of it, so Stop can restore
+	initialEpochDuration := consensus.EpochDuration
+	initialClock := common.Clock
+	loggers := make([]log15.Logger, len(AllLoggers))
+	handlers := make([]log15.Handler, len(AllLoggers))
+	for i := range AllLoggers {
+		loggers[i] = AllLoggers[i]
+		handlers[i] = AllLoggers[i].GetHandler()
+	}
+
 	// silence loggers
 	common.ChainLogger.SetHandler(log15.LvlFilterHandler(log15.LvlError, log15.StderrHandler))
 	common.ConsensusLogger.SetHandler(log15.LvlFilterHandler(log15.LvlError, log15.StderrHandler))
@@ -402,14 +415,10 @@ func newMockZenon(t common.T, customEpochDuration time.Duration) MockZenon {
 		chain:                ch,
 		consensus:            cs,
 		supervisor:           supervisor,
-		loggers:              make([]log15.Logger, len(AllLoggers)),
-		handlers:             make([]log15.Handler, len(AllLoggers)),
-		initialEpochDuration: consensus.EpochDuration,
-	}
-
-	for i := range AllLoggers {
-		zenon.loggers[i] = AllLoggers[i]
-		zenon.handlers[i] = AllLoggers[i].GetHandler()
+		loggers:              loggers,
+		handlers:             handlers,
+		initialEpochDuration: initialEpochDuration,
+		initialClock:         initialClock,
 	}
 
 	common.Clock = &mockClock{

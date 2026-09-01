@@ -81,8 +81,8 @@ func AvailablePlasma(cache store.Cache, account store.Account) (uint64, error) {
 	if answer.Sign() == -1 {
 		return 0, errors.Errorf("got negative available plasma")
 	}
-	if answer.Cmp(constants.MaxFussedAmountForAccountBig) == +1 {
-		return constants.MaxFussedAmountForAccount, nil
+	if answer.Cmp(constants.MaxFusionPlasmaForAccountBig) == +1 {
+		return constants.MaxFusionPlasmaForAccount, nil
 	} else {
 		return answer.Uint64(), nil
 	}

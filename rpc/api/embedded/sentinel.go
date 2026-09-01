@@ -4,6 +4,7 @@ import (
 	"github.com/inconshreveable/log15"
 
 	"github.com/zenon-network/go-zenon/chain"
+	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	rpcapi "github.com/zenon-network/go-zenon/rpc/api"
@@ -36,12 +37,7 @@ func NewSentinelApi(z zenon.Zenon) *SentinelApi {
 	}
 }
 
-func (api *SentinelApi) toSentinelInfo(sentinel *definition.SentinelInfo) *SentinelInfo {
-	m, _, err := rpcapi.GetFrontierContext(api.chain, types.SentinelContract)
-	if err != nil {
-		return nil
-	}
-
+func toSentinelInfo(m *nom.Momentum, sentinel *definition.SentinelInfo) *SentinelInfo {
 	canBeRevoked, revokeCooldown := implementation.GetSentinelRevokeStatus(sentinel.RegistrationTimestamp, m)
 	return &SentinelInfo{
 		Owner:                 sentinel.Owner,
@@ -53,13 +49,13 @@ func (api *SentinelApi) toSentinelInfo(sentinel *definition.SentinelInfo) *Senti
 }
 
 func (api *SentinelApi) GetByOwner(owner types.Address) (*SentinelInfo, error) {
-	_, context, err := rpcapi.GetFrontierContext(api.chain, types.SentinelContract)
+	m, context, err := rpcapi.GetFrontierContext(api.chain, types.SentinelContract)
 	if err != nil {
 		return nil, err
 	}
 	sentinel := definition.GetSentinelInfoByOwner(context.Storage(), owner)
 	if sentinel != nil {
-		return api.toSentinelInfo(sentinel), nil
+		return toSentinelInfo(m, sentinel), nil
 	} else {
 		return nil, nil
 	}
@@ -68,7 +64,7 @@ func (api *SentinelApi) GetAllActive(pageIndex, pageSize uint32) (*SentinelInfoL
 	if pageSize > rpcapi.RpcMaxPageSize {
 		return nil, rpcapi.ErrPageSizeParamTooBig
 	}
-	_, context, err := rpcapi.GetFrontierContext(api.chain, types.SentinelContract)
+	m, context, err := rpcapi.GetFrontierContext(api.chain, types.SentinelContract)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +74,7 @@ func (api *SentinelApi) GetAllActive(pageIndex, pageSize uint32) (*SentinelInfoL
 	list := make([]*SentinelInfo, 0, len(rawList))
 	for _, raw := range rawList {
 		if raw.RevokeTimestamp == 0 {
-			list = append(list, api.toSentinelInfo(raw))
+			list = append(list, toSentinelInfo(m, raw))
 		}
 	}
 	start, end := rpcapi.GetRange(pageIndex, pageSize, uint32(len(list)))

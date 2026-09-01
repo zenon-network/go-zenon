@@ -5,14 +5,12 @@ import (
 	"math/big"
 	"sort"
 
-	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
-	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/vm"
@@ -23,17 +21,11 @@ import (
 
 type PlasmaApi struct {
 	chain chain.Chain
-	z     zenon.Zenon
-	cs    consensus.Consensus
-	log   log15.Logger
 }
 
 func NewPlasmaApi(z zenon.Zenon) *PlasmaApi {
 	return &PlasmaApi{
 		chain: z.Chain(),
-		z:     z,
-		cs:    z.Consensus(),
-		log:   common.RPCLogger.New("module", "embedded_plasma_api"),
 	}
 }
 

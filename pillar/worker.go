@@ -81,10 +81,10 @@ func (w *worker) Process(e consensus.ProducerEvent) common.Task {
 	}
 
 	task := common.NewTask(func(task common.TaskResolver) {
+		defer w.working.Unlock()
+		defer w.children.Done()
 		defer common.RecoverStack()
 		w.work(task, e)
-		w.children.Done()
-		w.working.Unlock()
 	})
 
 	return task

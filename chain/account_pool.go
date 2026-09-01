@@ -140,7 +140,7 @@ func (ap *accountPool) canRollback(block *nom.AccountBlock) error {
 	}
 	if truePrevious.Identifier() != previous {
 		log.Info("failed to insert account-block-transaction", "reason", "previous mismatch", "frontier-identifier", frontierIdentifier)
-		return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "missing previous", frontierIdentifier, identifier)
+		return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "previous mismatch", frontierIdentifier, identifier)
 	}
 
 	return nil

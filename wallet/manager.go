@@ -62,7 +62,9 @@ func (m *Manager) Start() error {
 }
 func (m *Manager) Stop() {
 	for _, ks := range m.decrypted {
-		ks.Zero()
+		if ks != nil {
+			ks.Zero()
+		}
 	}
 	m.decrypted = nil
 	m.encrypted = nil
@@ -94,6 +96,7 @@ func (m *Manager) GetKeyStore(path string) (*KeyStore, error) {
 		return ks, nil
 	}
 }
+
 func (m *Manager) GetKeyFileAndDecrypt(path, password string) (*KeyStore, error) {
 	if kf, err := m.GetKeyFile(path); err != nil {
 		return nil, err
@@ -148,7 +151,7 @@ func (m *Manager) Lock(path string) {
 	path = m.MakePathAbsolut(path)
 	if ks, ok := m.decrypted[path]; ok {
 		ks.Zero()
-		m.decrypted[path] = nil
+		delete(m.decrypted, path)
 	}
 }
 func (m *Manager) IsUnlocked(path string) (bool, error) {

@@ -176,6 +176,13 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		if err != nil {
 			return 0, err
 		}
+		// GetMomentumByHeight returns (nil, nil) when that height is not in the
+		// store (e.g. a side-chain whose head is more than one above our frontier).
+		// Guard the nil before dereferencing it, matching the check in the loop
+		// above; the downloader turns this error into a peer drop + retry.
+		if target == nil {
+			return 0, errors.Errorf("can't link momentums to insert. No momentum at height %d to link head %v (frontier %v)", head.Height-1, head.Identifier(), ourFrontier.Identifier())
+		}
 		if target.Identifier() != head.Previous() {
 			log.Error("can't link momentums to insert", "first")
 			return 0, errors.Errorf("can't link momentums to insert. First momentum Prev is %v but he have %v", head.Previous(), target.Identifier())

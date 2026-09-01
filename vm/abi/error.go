@@ -37,7 +37,7 @@ func errNoMethodId(sigdata []byte) error {
 	return fmt.Errorf("no method with id: %#x", sigdata[:4])
 }
 func errVariableNotFound(name string) error {
-	return fmt.Errorf("varible '%s' not found", name)
+	return fmt.Errorf("variable '%s' not found", name)
 }
 
 // type errors
@@ -98,10 +98,10 @@ func errNegativeInputSize(size int) error {
 	return fmt.Errorf("cannot marshal input to array, size is negative (%d)", size)
 }
 func errArrayOffsetOverflow(output []byte, start, size int) error {
-	return fmt.Errorf("abi: cannot marshal in to go array: offset %d would go over slice boundary (len=%d)", len(output), start+WordSize*size)
+	return fmt.Errorf("abi: cannot marshal in to go array: offset %d would go over slice boundary (len=%d)", start+WordSize*size, len(output))
 }
-func errInsufficientLength(outputSize []byte, index int) error {
-	return fmt.Errorf("abi: cannot marshal in to go type: length insufficient %d require %d", outputSize, index+WordSize)
+func errInsufficientLength(output []byte, index int) error {
+	return fmt.Errorf("abi: cannot marshal in to go type: length insufficient %d require %d", len(output), index+WordSize)
 }
 func errBigSliceOffsetOverflow(bigOffsetEnd, outputLength *big.Int) error {
 	return fmt.Errorf("abi: cannot marshal in to go slice: offset %v would go over slice boundary (len=%v)", bigOffsetEnd, outputLength)
