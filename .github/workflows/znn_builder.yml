@@ -3,9 +3,10 @@ name: Build and release znnd and libznn
 on:
   push:
     branches:
-      - master
       - dev
       - testnet
+    tags:
+      - "v*"
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
@@ -21,9 +22,42 @@ jobs:
   xgo:
     needs: harden_security
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release_name: ${{ steps.version.outputs.release_name }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="$(git describe --tags --always)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          case "${{ github.ref_name }}" in
+            dev)
+              echo "release_name=$VERSION-dev" >> "$GITHUB_OUTPUT"
+              echo "release_tag=$VERSION-dev" >> "$GITHUB_OUTPUT"
+              echo "prerelease=true" >> "$GITHUB_OUTPUT"
+              ;;
+            testnet)
+              echo "release_name=$VERSION-testnet" >> "$GITHUB_OUTPUT"
+              echo "release_tag=$VERSION-testnet" >> "$GITHUB_OUTPUT"
+              echo "prerelease=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "release_name=$VERSION" >> "$GITHUB_OUTPUT"
+              echo "release_tag=$VERSION" >> "$GITHUB_OUTPUT"
+              echo "prerelease=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
       - name: Install zip utility
         run: |
           sudo apt update
@@ -33,7 +67,7 @@ jobs:
           go env
       - name: Run tests
         run: |
-          for s in $(go list ./...); do if ! go test -failfast -v -p 1 $s; then exit 1; fi; done
+          for s in $(go list ./...); do if ! go test -failfast -p 1 $s; then exit 1; fi; done
       # - name: Check for Go vulnerabilities
       #   run: |
       #     go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -49,7 +83,7 @@ jobs:
           targets: darwin/arm64,darwin/amd64,windows/amd64,linux/amd64,linux/arm64
           v: true
           x: true
-          ldflags: -s -w
+          ldflags: -s -w -X github.com/zenon-network/go-zenon/metadata.Version=${{ steps.version.outputs.version }} -X github.com/zenon-network/go-zenon/metadata.GitCommit=${{ github.sha }}
           buildvcs: false
           buildmode: default
           trimpath: true
@@ -65,7 +99,7 @@ jobs:
           v: true
           x: true
           tags: libznn
-          ldflags: -s -w
+          ldflags: -s -w -X github.com/zenon-network/go-zenon/metadata.Version=${{ steps.version.outputs.version }}-libznn -X github.com/zenon-network/go-zenon/metadata.GitCommit=${{ github.sha }}
           buildvcs: false
           buildmode: c-shared
           trimpath: true
@@ -81,7 +115,7 @@ jobs:
           v: true
           x: true
           tags: libznn
-          ldflags: -s -w
+          ldflags: -s -w -X github.com/zenon-network/go-zenon/metadata.Version=${{ steps.version.outputs.version }}-libznn -X github.com/zenon-network/go-zenon/metadata.GitCommit=${{ github.sha }}
           buildvcs: false
           buildmode: c-shared
           trimpath: true
@@ -113,45 +147,22 @@ jobs:
         with:
           name: slice-checksums
           path: build/SHA256CHECKSUMS.txt
-      - name: Set version
-        run: |
-          GOZENON=$(cat metadata/version.go | grep Version | awk -F '"' '{print $2}')
-          echo "GOZENON_VERSION=$GOZENON" >> $GITHUB_ENV
-          case "${{ github.ref_name }}" in
-            dev)
-              echo "RELEASE_NAME=$GOZENON-dev" >> $GITHUB_ENV
-              echo "RELEASE_TAG=$GOZENON-dev" >> $GITHUB_ENV
-              echo "RELEASE_PRERELEASE=true" >> $GITHUB_ENV
-              ;;
-            testnet)
-              echo "RELEASE_NAME=$GOZENON-testnet" >> $GITHUB_ENV
-              echo "RELEASE_TAG=$GOZENON-testnet" >> $GITHUB_ENV
-              echo "RELEASE_PRERELEASE=true" >> $GITHUB_ENV
-              ;;
-            *)
-              echo "RELEASE_NAME=$GOZENON" >> $GITHUB_ENV
-              echo "RELEASE_TAG=$GOZENON-alphanet" >> $GITHUB_ENV
-              echo "RELEASE_PRERELEASE=false" >> $GITHUB_ENV
-              ;;
-          esac
       - name: Upload files to a GitHub release
         uses: svenstaro/upload-release-action@04733e069f2d7f7f0b4aebc4fbdbce8613b03ccd
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: build/*
-          release_name: ${{ env.RELEASE_NAME }}
-          tag: ${{ env.RELEASE_TAG }}
+          release_name: ${{ steps.version.outputs.release_name }}
+          tag: ${{ steps.version.outputs.release_tag }}
           file_glob: true
           overwrite: true
-          prerelease: ${{ env.RELEASE_PRERELEASE }}
+          prerelease: ${{ steps.version.outputs.prerelease }}
           body: ""
   makefat:
     name: Create universal Darwin binaries
     needs: xgo
     runs-on: macos-latest
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Download Darwin slices
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -193,36 +204,14 @@ jobs:
         run: |
           cat slice-checksums/SHA256CHECKSUMS.txt universal/UNIVERSAL_CHECKSUMS.txt > SHA256CHECKSUMS.txt
           rm universal/UNIVERSAL_CHECKSUMS.txt
-      - name: Set version
-        run: |
-          GOZENON=$(grep Version metadata/version.go \
-                     | awk -F '"' '{print $2}')
-          echo "GOZENON_VERSION=$GOZENON" >> $GITHUB_ENV
-          case "${{ github.ref_name }}" in
-            dev)
-              echo "RELEASE_NAME=$GOZENON-dev" >> $GITHUB_ENV
-              echo "RELEASE_TAG=$GOZENON-dev" >> $GITHUB_ENV
-              echo "RELEASE_PRERELEASE=true" >> $GITHUB_ENV
-              ;;
-            testnet)
-              echo "RELEASE_NAME=$GOZENON-testnet" >> $GITHUB_ENV
-              echo "RELEASE_TAG=$GOZENON-testnet" >> $GITHUB_ENV
-              echo "RELEASE_PRERELEASE=true" >> $GITHUB_ENV
-              ;;
-            *)
-              echo "RELEASE_NAME=$GOZENON" >> $GITHUB_ENV
-              echo "RELEASE_TAG=$GOZENON-alphanet" >> $GITHUB_ENV
-              echo "RELEASE_PRERELEASE=false" >> $GITHUB_ENV
-              ;;
-          esac
       - name: Upload universal Darwin binaries
         uses: svenstaro/upload-release-action@04733e069f2d7f7f0b4aebc4fbdbce8613b03ccd
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: universal/*
-          release_name: ${{ env.RELEASE_NAME }}
-          tag: ${{ env.RELEASE_TAG }}
+          release_name: ${{ needs.xgo.outputs.release_name }}
+          tag: ${{ needs.xgo.outputs.release_tag }}
           overwrite: true
           file_glob: true
-          prerelease: ${{ env.RELEASE_PRERELEASE }}
+          prerelease: ${{ needs.xgo.outputs.prerelease }}
           body: ""
