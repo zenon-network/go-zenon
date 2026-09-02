@@ -19,7 +19,8 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Ensure SHA pinned actions
         uses: zgosalvez/github-actions-ensure-sha-pinned-actions@2d6823da4039243036c86d76f503c84e2ded2517
-  xgo:
+  version:
+    name: Determine version
     needs: harden_security
     runs-on: ubuntu-latest
     outputs:
@@ -37,42 +38,63 @@ jobs:
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
             VERSION="${{ github.ref_name }}"
+            PRERELEASE="false"
           else
-            VERSION="$(git describe --tags --always)"
+            BASE_TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-dev' --exclude '*-testnet')"
+            BASE_VERSION="${BASE_TAG%-alphanet}"
+            COUNT="$(git rev-list "${BASE_TAG}..HEAD" --count)"
+            HASH="$(git rev-parse --short HEAD)"
+            case "${{ github.ref_name }}" in
+              dev)
+                VERSION="${BASE_VERSION}-dev-${COUNT}-g${HASH}"
+                PRERELEASE="true"
+                ;;
+              testnet)
+                VERSION="${BASE_VERSION}-testnet-${COUNT}-g${HASH}"
+                PRERELEASE="true"
+                ;;
+              *)
+                VERSION="${BASE_VERSION}-${COUNT}-g${HASH}"
+                PRERELEASE="false"
+                ;;
+            esac
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          case "${{ github.ref_name }}" in
-            dev)
-              echo "release_name=$VERSION-dev" >> "$GITHUB_OUTPUT"
-              echo "release_tag=$VERSION-dev" >> "$GITHUB_OUTPUT"
-              echo "prerelease=true" >> "$GITHUB_OUTPUT"
-              ;;
-            testnet)
-              echo "release_name=$VERSION-testnet" >> "$GITHUB_OUTPUT"
-              echo "release_tag=$VERSION-testnet" >> "$GITHUB_OUTPUT"
-              echo "prerelease=true" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "release_name=$VERSION" >> "$GITHUB_OUTPUT"
-              echo "release_tag=$VERSION" >> "$GITHUB_OUTPUT"
-              echo "prerelease=false" >> "$GITHUB_OUTPUT"
-              ;;
-          esac
-      - name: Install zip utility
-        run: |
-          sudo apt update
-          sudo apt install -y zip
+          echo "release_name=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+  test:
+    name: Test
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Check Go environment
         run: |
           go env
       - name: Run tests
         run: |
           for s in $(go list ./...); do if ! go test -failfast -p 1 $s; then exit 1; fi; done
+  vulnerability:
+    name: Vulnerability scan
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Check for Go vulnerabilities
         continue-on-error: true
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           $(go env GOPATH)/bin/govulncheck ./...
+  build:
+    name: Build znnd and libznn
+    needs: [version, test, vulnerability]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Build znnd
         uses: crazy-max/ghaction-xgo@acf46aa99b919eb9ef6bba89dfd13bafa680667f
         with:
@@ -84,7 +106,7 @@ jobs:
           targets: darwin/arm64,darwin/amd64,windows/amd64,linux/amd64,linux/arm64
           v: true
           x: true
-          ldflags: -s -w -X github.com/zenon-network/go-zenon/metadata.Version=${{ steps.version.outputs.version }} -X github.com/zenon-network/go-zenon/metadata.GitCommit=${{ github.sha }}
+          ldflags: -s -w -X github.com/zenon-network/go-zenon/metadata.Version=${{ needs.version.outputs.version }} -X github.com/zenon-network/go-zenon/metadata.GitCommit=${{ github.sha }}
           buildvcs: false
           buildmode: default
           trimpath: true
@@ -100,7 +122,7 @@ jobs:
           v: true
           x: true
           tags: libznn
-          ldflags: -s -w -X github.com/zenon-network/go-zenon/metadata.Version=${{ steps.version.outputs.version }}-libznn -X github.com/zenon-network/go-zenon/metadata.GitCommit=${{ github.sha }}
+          ldflags: -s -w -X github.com/zenon-network/go-zenon/metadata.Version=${{ needs.version.outputs.version }}-libznn -X github.com/zenon-network/go-zenon/metadata.GitCommit=${{ github.sha }}
           buildvcs: false
           buildmode: c-shared
           trimpath: true
@@ -116,7 +138,7 @@ jobs:
           v: true
           x: true
           tags: libznn
-          ldflags: -s -w -X github.com/zenon-network/go-zenon/metadata.Version=${{ steps.version.outputs.version }}-libznn -X github.com/zenon-network/go-zenon/metadata.GitCommit=${{ github.sha }}
+          ldflags: -s -w -X github.com/zenon-network/go-zenon/metadata.Version=${{ needs.version.outputs.version }}-libznn -X github.com/zenon-network/go-zenon/metadata.GitCommit=${{ github.sha }}
           buildvcs: false
           buildmode: c-shared
           trimpath: true
@@ -129,7 +151,26 @@ jobs:
             build/znnd-darwin-arm64
             build/libznn-darwin-amd64.dylib
             build/libznn-darwin-arm64.dylib
-      - name: Go back to build directory, remove header files and add execute flag
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: build-bins
+          path: build/*
+  package:
+    name: Package and release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install zip utility
+        run: |
+          sudo apt update
+          sudo apt install -y zip
+      - name: Download build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: build-bins
+          path: build
+      - name: Remove header files and add execute flag
         run: |
           cd build/
           rm ./*.h
@@ -153,15 +194,15 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: build/*
-          release_name: ${{ steps.version.outputs.release_name }}
-          tag: ${{ steps.version.outputs.release_tag }}
+          release_name: ${{ needs.version.outputs.release_name }}
+          tag: ${{ needs.version.outputs.release_tag }}
           file_glob: true
           overwrite: true
-          prerelease: ${{ steps.version.outputs.prerelease }}
+          prerelease: ${{ needs.version.outputs.prerelease }}
           body: ""
   makefat:
     name: Create universal Darwin binaries
-    needs: xgo
+    needs: [version, build, package]
     runs-on: macos-latest
     steps:
       - name: Download Darwin slices
@@ -210,9 +251,9 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: universal/*
-          release_name: ${{ needs.xgo.outputs.release_name }}
-          tag: ${{ needs.xgo.outputs.release_tag }}
+          release_name: ${{ needs.version.outputs.release_name }}
+          tag: ${{ needs.version.outputs.release_tag }}
           overwrite: true
           file_glob: true
-          prerelease: ${{ needs.xgo.outputs.prerelease }}
+          prerelease: ${{ needs.version.outputs.prerelease }}
           body: ""
