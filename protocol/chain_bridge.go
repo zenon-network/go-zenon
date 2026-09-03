@@ -53,6 +53,19 @@ func (c chainBridge) AddAccountBlocks(blocks []*nom.AccountBlock) error {
 	}
 	return nil
 }
+
+// poolHoldsSameBytes reports whether the account pool's frontier chain already
+// contains this exact block. A pool copy that matches by identifier but not by
+// bytes must not be reused, because the stored bytes feed into the momentum
+// changes-hash and the momentum was built from the copy passed in here.
+func (c chainBridge) poolHoldsSameBytes(block *nom.AccountBlock) bool {
+	stored, err := c.chain.GetFrontierAccountStore(block.Address).ByHeight(block.Height)
+	if err != nil || stored == nil {
+		return false
+	}
+	return stored.EqualBytes(block)
+}
+
 func (c chainBridge) GetTransactions() []*nom.AccountBlock {
 	blocks := c.chain.GetAllUncommittedAccountBlocks()
 	return blocks
@@ -184,7 +197,7 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 			if block.BlockType == nom.BlockTypeContractSend {
 				continue
 			}
-			if patch := c.chain.GetPatch(block.Address, block.Identifier()); patch != nil {
+			if c.poolHoldsSameBytes(block) {
 				// already applied
 				continue
 			}

@@ -131,8 +131,16 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 		return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, err, frontierIdentifier, identifier)
 	}
 	if trueBlock != nil && trueBlock.Identifier() == identifier {
-		log.Info("account-block is already inserted")
-		return nil
+		// A block's identifier covers only its hashed fields. Fields that are
+		// stored but not hashed can still differ between two copies, and the
+		// stored bytes feed into the momentum changes-hash. A forced insert
+		// carries the copy the momentum was built from, so it must replace a
+		// byte-different copy instead of being treated as a duplicate.
+		if !forceAdd || trueBlock.EqualBytes(block) {
+			log.Info("account-block is already inserted")
+			return nil
+		}
+		log.Info("replacing account-block with different bytes but same identifier")
 	}
 
 	if err := ap.canRollback(block); err != nil {
