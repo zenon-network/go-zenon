@@ -307,6 +307,11 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 			} else if err != nil {
 				return errResp(ErrDecode, "msg %v: %v", msg, err)
 			}
+			// Every requested hash costs a store lookup whether or not the
+			// block exists, so bound the request itself, not only the hits.
+			if len(hashes) >= MaxBlocksRequest {
+				return errResp(ErrMsgTooLarge, "msg %v: more than %d block hashes requested", msg, MaxBlocksRequest)
+			}
 			hashes = append(hashes, hash)
 
 			// Retrieve the requested block, stopping if enough was found
@@ -319,13 +324,7 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		}
 
 		if len(blocks) == 0 && len(hashes) > 0 {
-			list := "["
-			for _, hash := range hashes {
-				list += fmt.Sprintf("%x, ", hash[:4])
-			}
-			list = list[:len(list)-2] + "]"
-
-			log.Debug("no blocks found for requested hashes", "peer-id", p.id, "hashes", list)
+			log.Debug("no blocks found for requested hashes", "peer-id", p.id, "count", len(hashes), "first-hash", fmt.Sprintf("%x", hashes[0][:4]))
 		}
 		return p.SendBlocks(blocks)
 

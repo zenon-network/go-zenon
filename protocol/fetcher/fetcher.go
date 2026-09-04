@@ -37,7 +37,7 @@ const (
 	fetchTimeout  = 5 * time.Second        // Maximum alloted time to return an explicitly requested block
 	maxUncleDist  = 7                      // Maximum allowed backward distance from the chain head
 	maxQueueDist  = 32                     // Maximum allowed distance from the chain head to queue
-	hashLimit     = 256                    // Maximum number of unique blocks a peer may have announced
+	HashLimit     = 256                    // Maximum number of unique blocks a peer may have announced; also the largest batch one fetch request names
 	blockLimit    = 64                     // Maximum number of unique blocks a per may have delivered
 )
 
@@ -267,8 +267,8 @@ func (f *Fetcher) loop() {
 		case notification := <-f.notify:
 			// A block was announced, make sure the peer isn't DOSing us
 			count := f.announces[notification.origin] + 1
-			if count > hashLimit {
-				log.Info("Peer exceeded outstanding announces", "peer", notification.origin, "hash-limit", hashLimit)
+			if count > HashLimit {
+				log.Info("Peer exceeded outstanding announces", "peer", notification.origin, "hash-limit", HashLimit)
 				break
 			}
 			// All is well, schedule the announce if block's not yet downloading

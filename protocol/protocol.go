@@ -18,6 +18,7 @@ package protocol
 
 import (
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/protocol/fetcher"
 )
 
 // Supported versions of the eth protocol (first is primary).
@@ -28,6 +29,19 @@ var ProtocolLengths = []uint64{9}
 
 const (
 	ProtocolMaxMsgSize = 10 * 1024 * 1024 // Maximum cap on the size of a protocol message
+
+	// MaxBlocksRequest is the most hashes a peer may name in one GetBlocksMsg.
+	// Every named hash costs the receiver a store lookup whether or not the
+	// block exists, so the bound is on the request rather than on the hits,
+	// and a request naming more is treated as a protocol violation.
+	//
+	// The value is the larger of the two batch sizes honest requesters use:
+	// the downloader asks for at most downloader.MaxBlockFetch blocks per
+	// request and the fetcher for up to fetcher.HashLimit announced hashes
+	// per peer. peer.RequestBlocks, the only sender, splits anything larger
+	// into requests of this size, so a node running this code never exceeds
+	// it whatever its callers hand it.
+	MaxBlocksRequest = fetcher.HashLimit
 )
 
 // eth protocol message codes
