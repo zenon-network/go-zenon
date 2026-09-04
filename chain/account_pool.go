@@ -131,8 +131,16 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 		return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, err, frontierIdentifier, identifier)
 	}
 	if trueBlock != nil && trueBlock.Identifier() == identifier {
-		log.Info("account-block is already inserted")
-		return nil
+		// A block's identifier covers only its hashed fields. Fields that are
+		// stored but not hashed can still differ between two copies, and the
+		// stored bytes feed into the momentum changes-hash. A forced insert
+		// carries the copy the momentum was built from, so it must replace a
+		// byte-different copy instead of being treated as a duplicate.
+		if !forceAdd || trueBlock.EqualBytes(block) {
+			log.Info("account-block is already inserted")
+			return nil
+		}
+		log.Info("replacing account-block with different bytes but same identifier")
 	}
 
 	if err := ap.canRollback(block); err != nil {
@@ -265,6 +273,67 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 	}
 
 	ap.log.Debug("finished rebuilding account-pool")
+	return nil
+}
+
+// UncommittedSnapshot captures the pool managers of a set of addresses so they
+// can be put back after a failed insertion. Each entry is an independent clone
+// of the manager as it was, or nil when the address had no manager. A snapshot
+// can be restored once; restoring installs the clones themselves.
+type UncommittedSnapshot struct {
+	managers map[types.Address]db.Manager
+}
+
+// SnapshotUncommitted clones the current pool manager of each given address.
+// Restoring the snapshot returns those addresses to exactly this state, byte
+// for byte and patch for patch, as long as their stable state has not advanced.
+func (ap *accountPool) SnapshotUncommitted(insertLocker sync.Locker, addresses []types.Address) *UncommittedSnapshot {
+	if insertLocker == nil {
+		panic("insertLocker can't be nil")
+	}
+	ap.changes.Lock()
+	defer ap.changes.Unlock()
+
+	snapshot := &UncommittedSnapshot{managers: make(map[types.Address]db.Manager, len(addresses))}
+	for _, address := range addresses {
+		if _, seen := snapshot.managers[address]; seen {
+			continue
+		}
+		manager := ap.managers[address]
+		if manager == nil {
+			snapshot.managers[address] = nil
+			continue
+		}
+		cloneable, ok := manager.(db.Cloneable)
+		if !ok {
+			// The pool only ever creates in-memory managers, which clone.
+			panic(fmt.Sprintf("account pool manager for %v can't be cloned", address))
+		}
+		snapshot.managers[address] = cloneable.Clone()
+	}
+	return snapshot
+}
+
+// RestoreUncommitted puts the snapshotted managers back, discarding whatever
+// the pool holds for those addresses now. The snapshot is consumed.
+func (ap *accountPool) RestoreUncommitted(insertLocker sync.Locker, snapshot *UncommittedSnapshot) error {
+	if insertLocker == nil {
+		return errors.Errorf("insertLocker can't be nil")
+	}
+	if snapshot == nil {
+		return nil
+	}
+	ap.changes.Lock()
+	defer ap.changes.Unlock()
+
+	for address, manager := range snapshot.managers {
+		if manager == nil {
+			delete(ap.managers, address)
+		} else {
+			ap.managers[address] = manager
+		}
+	}
+	snapshot.managers = nil
 	return nil
 }
 
