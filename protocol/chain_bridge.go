@@ -157,6 +157,25 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 	}
 	momentums = momentums[start:]
 
+	// Cheap structural check on peer-supplied data before anything is
+	// sized from it, before any rollback and before any pool state is
+	// touched. The verifier repeats the semantic checks later; this only
+	// bounds the input and puts the blocks into content order. The caller
+	// keeps using its own objects concurrently (the fetcher broadcasts the
+	// same DetailedMomentum while importing it), and the VM writes computed
+	// plasma fields onto whatever block it applies, so the loop below works
+	// on private copies of the blocks rather than on the caller's.
+	candidates := make([]*nom.DetailedMomentum, len(momentums))
+	for index, detailed := range momentums {
+		ordered, err := validatePrefetchedBlocks(detailed)
+		if err != nil {
+			log.Error("malformed prefetched account-blocks", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+			return index + start, err
+		}
+		candidates[index] = &nom.DetailedMomentum{Momentum: detailed.Momentum, AccountBlocks: copyAccountBlocks(ordered)}
+	}
+	momentums = candidates
+
 	head := momentums[0].Momentum
 	tail := momentums[len(momentums)-1].Momentum
 	ourFrontier, err := store.GetFrontierMomentum()
@@ -213,6 +232,61 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 	}
 
 	return 0, nil
+}
+
+// validatePrefetchedBlocks rejects a detailed momentum whose block list is not
+// exactly the set of blocks named by the momentum's content: no nil entries,
+// no duplicates, no more entries than a momentum may hold, and one block per
+// content header. Peers are not required to send the blocks in content order,
+// so on success it returns the blocks in content order, which is also the
+// order they must be applied in. The supplied momentum is not modified.
+func validatePrefetchedBlocks(detailed *nom.DetailedMomentum) ([]*nom.AccountBlock, error) {
+	if detailed == nil || detailed.Momentum == nil {
+		return nil, errors.Errorf("missing momentum")
+	}
+	blocks := detailed.AccountBlocks
+	content := detailed.Momentum.Content
+	if len(blocks) > chain.MaxAccountBlocksInMomentum {
+		return nil, errors.Errorf("too many prefetched account-blocks: %v > %v", len(blocks), chain.MaxAccountBlocksInMomentum)
+	}
+	if len(blocks) != len(content) {
+		return nil, errors.Errorf("prefetched account-blocks (%v) do not match momentum content (%v)", len(blocks), len(content))
+	}
+
+	byIdentifier := make(map[types.HashHeight]*nom.AccountBlock, len(blocks))
+	for index, block := range blocks {
+		if block == nil {
+			return nil, errors.Errorf("prefetched account-block at index %v is nil", index)
+		}
+		identifier := block.Identifier()
+		if _, seen := byIdentifier[identifier]; seen {
+			return nil, errors.Errorf("duplicate prefetched account-block %v", identifier)
+		}
+		byIdentifier[identifier] = block
+	}
+
+	ordered := make([]*nom.AccountBlock, len(content))
+	for index, header := range content {
+		if header == nil {
+			return nil, errors.Errorf("momentum content header at index %v is nil", index)
+		}
+		block, ok := byIdentifier[header.Identifier()]
+		if !ok || block.Address != header.Address {
+			return nil, errors.Errorf("momentum content header %v has no matching prefetched account-block", header)
+		}
+		ordered[index] = block
+	}
+	return ordered, nil
+}
+
+// copyAccountBlocks returns deep copies of the blocks, descendants included,
+// so nothing downstream writes to objects the caller still shares.
+func copyAccountBlocks(blocks []*nom.AccountBlock) []*nom.AccountBlock {
+	copied := make([]*nom.AccountBlock, len(blocks))
+	for index, block := range blocks {
+		copied[index] = block.Copy()
+	}
+	return copied
 }
 
 // momentumAddresses lists each account whose pool state the momentum's blocks

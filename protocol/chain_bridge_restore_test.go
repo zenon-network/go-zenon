@@ -31,6 +31,12 @@ type restoreFixture struct {
 }
 
 func newRestoreFixture(t *testing.T) *restoreFixture {
+	return newRestoreFixtureWith(t, false)
+}
+
+// newRestoreFixtureWith optionally puts a second, independent account's block
+// (a User1 send) into the same momentum as the User2 receive.
+func newRestoreFixtureWith(t *testing.T, twoBlocks bool) *restoreFixture {
 	z := mock.NewMockZenon(t)
 	supervisor := vm.NewSupervisor(z.Chain(), z.Consensus())
 	f := &restoreFixture{
@@ -53,6 +59,16 @@ func newRestoreFixture(t *testing.T) *restoreFixture {
 	// User2 receives the first send; that block goes into the next momentum.
 	f.receive = f.generateReceive(t, f.sends[0])
 	z.Broadcaster().CreateAccountBlock(f.receive)
+	expectedBlocks := 1
+	if twoBlocks {
+		z.InsertSendBlock(&nom.AccountBlock{
+			Address:       g.User1.Address,
+			ToAddress:     g.User2.Address,
+			TokenStandard: types.ZnnTokenStandard,
+			Amount:        big.NewInt(1),
+		}, nil, mock.SkipVmChanges)
+		expectedBlocks = 2
+	}
 	z.InsertNewMomentum()
 
 	store := z.Chain().GetFrontierMomentumStore()
@@ -60,7 +76,7 @@ func newRestoreFixture(t *testing.T) *restoreFixture {
 	common.FailIfErr(t, err)
 	f.detailed, err = store.PrefetchMomentum(momentum)
 	common.FailIfErr(t, err)
-	common.Expect(t, len(f.detailed.AccountBlocks), 1)
+	common.Expect(t, len(f.detailed.AccountBlocks), expectedBlocks)
 	f.previous = momentum.Previous()
 
 	insert := z.Chain().AcquireInsert("test rollback")
@@ -230,4 +246,199 @@ func TestInsertChain_SecondBlockFailureRestoresFirstBlockReplacement(t *testing.
 
 	common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.previous)
 	f.expectPoolChain(t, first.Block, second.Block)
+}
+
+// snapshotCountingChain records how often the bridge snapshots the pool.
+type snapshotCountingChain struct {
+	chain.Chain
+	snapshots int
+}
+
+func (c *snapshotCountingChain) SnapshotUncommitted(insertLocker sync.Locker, addresses []types.Address) *chain.UncommittedSnapshot {
+	c.snapshots++
+	return c.Chain.SnapshotUncommitted(insertLocker, addresses)
+}
+
+func TestInsertChain_RejectsMalformedPrefetchedBlocksBeforeTouchingPool(t *testing.T) {
+	f := newRestoreFixture(t)
+	defer f.z.StopPanic()
+	counting := &snapshotCountingChain{Chain: f.z.Chain()}
+	bridge := protocol.NewChainBridge(counting, f.z.Consensus(), f.z.Verifier(), f.supervisor)
+
+	// Pool holds a competing chain so any force-add would be visible.
+	first := f.generateReceive(t, f.sends[1])
+	f.addToPool(t, first)
+	second := f.generateReceive(t, f.sends[0])
+	f.addToPool(t, second)
+
+	genuine := f.detailed.AccountBlocks[0]
+	oversized := make([]*nom.AccountBlock, chain.MaxAccountBlocksInMomentum+1)
+	for i := range oversized {
+		oversized[i] = genuine
+	}
+	cases := map[string][]*nom.AccountBlock{
+		"oversized list":      oversized,
+		"length mismatch":     {genuine, second.Block},
+		"nil entry":           {nil},
+		"identifier mismatch": {second.Block},
+		"empty list":          {},
+	}
+	for name, blocks := range cases {
+		detailed := &nom.DetailedMomentum{Momentum: f.detailed.Momentum, AccountBlocks: blocks}
+		_, err := bridge.InsertChain([]*nom.DetailedMomentum{detailed})
+		if err == nil {
+			t.Fatalf("%s: expected an error", name)
+		}
+		common.Expect(t, counting.snapshots, 0)
+		common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.previous)
+		f.expectPoolChain(t, first.Block, second.Block)
+	}
+
+	// The well-formed momentum still inserts through the same bridge.
+	_, err := bridge.InsertChain([]*nom.DetailedMomentum{f.detailed})
+	common.FailIfErr(t, err)
+	common.Expect(t, counting.snapshots, 1)
+}
+
+func TestInsertChain_AcceptsPrefetchedBlocksInAnyOrder(t *testing.T) {
+	f := newRestoreFixtureWith(t, true)
+	defer f.z.StopPanic()
+
+	blocks := f.detailed.AccountBlocks
+	if blocks[0].Address == blocks[1].Address {
+		t.Fatal("fixture should hold blocks from two different accounts")
+	}
+	swapped := &nom.DetailedMomentum{
+		Momentum:      f.detailed.Momentum,
+		AccountBlocks: []*nom.AccountBlock{blocks[1], blocks[0]},
+	}
+	_, err := f.bridge.InsertChain([]*nom.DetailedMomentum{swapped})
+	common.FailIfErr(t, err)
+	common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.detailed.Momentum.Identifier())
+}
+
+func TestInsertChain_RejectsDuplicatePrefetchedBlocks(t *testing.T) {
+	f := newRestoreFixtureWith(t, true)
+	defer f.z.StopPanic()
+	counting := &snapshotCountingChain{Chain: f.z.Chain()}
+	bridge := protocol.NewChainBridge(counting, f.z.Consensus(), f.z.Verifier(), f.supervisor)
+
+	blocks := f.detailed.AccountBlocks
+	duplicated := &nom.DetailedMomentum{
+		Momentum:      f.detailed.Momentum,
+		AccountBlocks: []*nom.AccountBlock{blocks[0], blocks[0]},
+	}
+	_, err := bridge.InsertChain([]*nom.DetailedMomentum{duplicated})
+	if err == nil {
+		t.Fatal("expected duplicate prefetched blocks to be rejected")
+	}
+	common.Expect(t, counting.snapshots, 0)
+	common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.previous)
+}
+
+func TestInsertChain_MalformedSideChainDoesNotRollBack(t *testing.T) {
+	f := newRestoreFixture(t)
+	defer f.z.StopPanic()
+
+	// Advance one momentum so the node has a frontier the side chain competes with.
+	_, err := f.bridge.InsertChain([]*nom.DetailedMomentum{f.detailed})
+	common.FailIfErr(t, err)
+	frontier := f.z.Chain().GetFrontierMomentumStore().Identifier()
+	common.Expect(t, frontier, f.detailed.Momentum.Identifier())
+
+	// A longer side chain forking below the frontier, whose first momentum
+	// carries an oversized block list. Only the linkage and length are
+	// inspected before the rollback decision, so the momentums need no
+	// valid hashes or signatures.
+	oversized := make([]*nom.AccountBlock, chain.MaxAccountBlocksInMomentum+1)
+	for i := range oversized {
+		oversized[i] = f.detailed.AccountBlocks[0]
+	}
+	head := &nom.Momentum{Version: 1, ChainIdentifier: 1, Height: frontier.Height, PreviousHash: f.previous.Hash}
+	head.Hash = types.NewHash([]byte("side-chain head"))
+	tail := &nom.Momentum{Version: 1, ChainIdentifier: 1, Height: frontier.Height + 1, PreviousHash: head.Hash}
+	tail.Hash = types.NewHash([]byte("side-chain tail"))
+	side := []*nom.DetailedMomentum{
+		{Momentum: head, AccountBlocks: oversized},
+		{Momentum: tail, AccountBlocks: nil},
+	}
+	_, err = f.bridge.InsertChain(side)
+	if err == nil {
+		t.Fatal("expected the malformed side chain to be rejected")
+	}
+	common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), frontier)
+}
+
+func TestInsertChain_DoesNotMutateCallerDetailedMomentum(t *testing.T) {
+	f := newRestoreFixtureWith(t, true)
+	defer f.z.StopPanic()
+
+	blocks := f.detailed.AccountBlocks
+	supplied := &nom.DetailedMomentum{
+		Momentum:      f.detailed.Momentum,
+		AccountBlocks: []*nom.AccountBlock{blocks[1], blocks[0]},
+	}
+	before := append([]*nom.AccountBlock(nil), supplied.AccountBlocks...)
+
+	// The fetcher hands the same object to a broadcast goroutine before it
+	// calls InsertChain, so a concurrent reader must be safe.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 10000; i++ {
+			for _, block := range supplied.AccountBlocks {
+				_ = block.Height
+			}
+		}
+	}()
+	_, err := f.bridge.InsertChain([]*nom.DetailedMomentum{supplied})
+	<-done
+	common.FailIfErr(t, err)
+
+	common.Expect(t, len(supplied.AccountBlocks), len(before))
+	for i := range before {
+		if supplied.AccountBlocks[i] != before[i] {
+			t.Fatalf("caller's block list was reordered at index %d", i)
+		}
+	}
+}
+
+func TestInsertChain_DoesNotWriteToCallerAccountBlocks(t *testing.T) {
+	f := newRestoreFixture(t)
+	defer f.z.StopPanic()
+
+	// Pool holds a byte-different copy, so the momentum's block takes the
+	// replacement path through the VM, which sets plasma fields on the block
+	// it is given.
+	poolCopy := f.receive.Block.Copy()
+	poolCopy.Signature = alternateSign(g.User2, poolCopy.Hash.Bytes())
+	common.FailIfErr(t, f.bridge.AddAccountBlocks([]*nom.AccountBlock{poolCopy}))
+
+	supplied := f.detailed.AccountBlocks[0].Copy()
+	const sentinel = uint64(12345)
+	supplied.BasePlasma = sentinel
+	supplied.TotalPlasma = sentinel
+	detailed := &nom.DetailedMomentum{Momentum: f.detailed.Momentum, AccountBlocks: []*nom.AccountBlock{supplied}}
+
+	// Models the fetcher's concurrent broadcast reading the same block.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 10000; i++ {
+			_ = supplied.BasePlasma + supplied.TotalPlasma
+		}
+	}()
+	_, err := f.bridge.InsertChain([]*nom.DetailedMomentum{detailed})
+	<-done
+	common.FailIfErr(t, err)
+
+	common.Expect(t, supplied.BasePlasma, sentinel)
+	common.Expect(t, supplied.TotalPlasma, sentinel)
+
+	// What reached the chain is the canonical bytes, not the sentinel.
+	committed, err := f.z.Chain().GetFrontierMomentumStore().GetAccountBlock(f.receive.Block.Header())
+	common.FailIfErr(t, err)
+	if committed == nil || !committed.EqualBytes(f.receive.Block) {
+		t.Fatal("committed block does not match the canonical bytes")
+	}
 }

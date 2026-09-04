@@ -266,3 +266,12 @@ func TestAccountPool_RestoreUncommittedEmptySnapshotClearsAddress(t *testing.T) 
 	common.Expect(t, len(ap.GetAllUncommittedAccountBlocks()), 0)
 	common.FailIfErr(t, ap.RestoreUncommitted(locker, nil))
 }
+
+func TestAccountBlockCopyPreservesBytes(t *testing.T) {
+	base, receive := embeddedReceiveChain()
+	for _, block := range []*nom.AccountBlock{base, receive} {
+		if !block.Copy().EqualBytes(block) {
+			t.Fatalf("copy of block at height %d serializes differently", block.Height)
+		}
+	}
+}
