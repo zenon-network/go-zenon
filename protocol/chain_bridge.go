@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/pkg/errors"
 
@@ -193,34 +194,66 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 
 	// Insert momentum now
 	for index, detailed := range momentums {
-		for _, block := range detailed.AccountBlocks {
-			if block.BlockType == nom.BlockTypeContractSend {
-				continue
+		// Blocks are force-inserted into the pool before the momentum itself
+		// is validated, so keep a snapshot of every account the momentum
+		// touches and put it back if anything fails.
+		snapshot := c.chain.SnapshotUncommitted(insert, momentumAddresses(detailed))
+		frontierBefore := c.chain.GetFrontierMomentumStore().Identifier()
+		if err := c.insertMomentum(insert, detailed); err != nil {
+			if c.chain.GetFrontierMomentumStore().Identifier() != frontierBefore {
+				// The momentum was committed before the error surfaced. The
+				// snapshot predates that commit, so putting it back would
+				// resurrect pool state that no longer links to the chain.
+				log.Error("momentum committed despite insert error; not restoring account-pool", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+			} else if restoreErr := c.chain.RestoreUncommitted(insert, snapshot); restoreErr != nil {
+				log.Error("error while restoring account-pool after failed momentum", "reason", restoreErr, "momentum-identifier", detailed.Momentum.Identifier())
 			}
-			if c.poolHoldsSameBytes(block) {
-				// already applied
-				continue
-			}
-			transaction, err := c.supervisor.ApplyBlock(block)
-			if err != nil {
-				log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
-				return index + start, err
-			}
-			if err := c.chain.ForceAddAccountBlockTransaction(insert, transaction); err != nil {
-				log.Error("error while inserting account-block in pool", "reason", err, "account-block-header", block.Header())
-				return index + start, err
-			}
-		}
-
-		transaction, err := c.supervisor.ApplyMomentum(detailed)
-		if err != nil {
-			return index + start, err
-		}
-		if err := c.chain.AddMomentumTransaction(insert, transaction); err != nil {
-			log.Error("error while inserting momentum", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
 			return index + start, err
 		}
 	}
 
 	return 0, nil
+}
+
+// momentumAddresses lists each account whose pool state the momentum's blocks
+// can modify.
+func momentumAddresses(detailed *nom.DetailedMomentum) []types.Address {
+	addresses := make([]types.Address, 0, len(detailed.AccountBlocks))
+	for _, block := range detailed.AccountBlocks {
+		addresses = append(addresses, block.Address)
+	}
+	return addresses
+}
+
+// insertMomentum applies the momentum's blocks to the pool, then validates and
+// commits the momentum. Under the caller's insert lock.
+func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMomentum) error {
+	for _, block := range detailed.AccountBlocks {
+		if block.BlockType == nom.BlockTypeContractSend {
+			continue
+		}
+		if c.poolHoldsSameBytes(block) {
+			// already applied
+			continue
+		}
+		transaction, err := c.supervisor.ApplyBlock(block)
+		if err != nil {
+			log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
+			return err
+		}
+		if err := c.chain.ForceAddAccountBlockTransaction(insert, transaction); err != nil {
+			log.Error("error while inserting account-block in pool", "reason", err, "account-block-header", block.Header())
+			return err
+		}
+	}
+
+	transaction, err := c.supervisor.ApplyMomentum(detailed)
+	if err != nil {
+		return err
+	}
+	if err := c.chain.AddMomentumTransaction(insert, transaction); err != nil {
+		log.Error("error while inserting momentum", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+		return err
+	}
+	return nil
 }
