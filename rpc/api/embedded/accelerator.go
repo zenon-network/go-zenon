@@ -171,7 +171,10 @@ func (a *AcceleratorApi) GetAll(pageIndex, pageSize uint32) (*ProjectList, error
 	if err != nil {
 		return nil, err
 	}
+	return a.getAll(context, pageIndex, pageSize)
+}
 
+func (a *AcceleratorApi) getAll(context vm_context.AccountVmContext, pageIndex, pageSize uint32) (*ProjectList, error) {
 	projects, err := definition.GetProjectList(context.Storage())
 	if err != nil {
 		return nil, err
@@ -181,17 +184,16 @@ func (a *AcceleratorApi) GetAll(pageIndex, pageSize uint32) (*ProjectList, error
 		return projects[i].LastUpdateTimestamp > projects[j].LastUpdateTimestamp
 	})
 
+	// The listing and the sort need every project; the vote and phase
+	// lookups are only done for the page that is returned.
+	start, end := api.GetRange(pageIndex, pageSize, uint32(len(projects)))
 	result := &ProjectList{
 		Count: len(projects),
-		List:  make([]*Project, len(projects)),
+		List:  make([]*Project, 0, end-start),
 	}
-
-	for index, project := range projects {
-		result.List[index] = a.toProject(context, project)
+	for _, project := range projects[start:end] {
+		result.List = append(result.List, a.toProject(context, project))
 	}
-
-	start, end := api.GetRange(pageIndex, pageSize, uint32(len(result.List)))
-	result.List = result.List[start:end]
 
 	return result, nil
 }
@@ -233,6 +235,7 @@ func (a *AcceleratorApi) GetVoteBreakdown(id types.Hash) (*definition.VoteBreakd
 	}
 	return voteBreakdown, nil
 }
+
 func (a *AcceleratorApi) GetPillarVotes(name string, hashes []types.Hash) ([]*definition.PillarVote, error) {
 	_, context, err := api.GetFrontierContext(a.chain, types.AcceleratorContract)
 	if err != nil {
