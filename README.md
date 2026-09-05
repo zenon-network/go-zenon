@@ -16,6 +16,8 @@ Since version `0.0.2`, `znnd` is configured with the Alphanet Genesis and defaul
 
 Use [znn-controller](https://github.com/zenon-network/znn_controller_dart) to configure your full node. For more information please consult the [Wiki](https://github.com/zenon-network/znn-wiki).
 
+By default the HTTP (`35997`) and WebSocket (`35998`) JSON-RPC servers listen on `127.0.0.1` only and grant no cross-origin browser access. To serve other hosts, set `RPC.HTTPHost` / `RPC.WSHost` in `config.json` (or pass `--http-addr` / `--ws-addr`), and add `RPC.HTTPCors` / `RPC.WSOrigins` entries for any browser origins that need access. `znnd` logs a warning at startup for each setting that reaches beyond the local machine; put a firewall or a proxy in front of a public endpoint.
+
 ## Local devnet
 
 This branch includes a dockerized five-node local devnet with three
