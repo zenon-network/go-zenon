@@ -14,6 +14,7 @@ import (
 	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm"
+	"github.com/zenon-network/go-zenon/wallet"
 )
 
 type chainBridge struct {
@@ -198,6 +199,29 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 			return 0, errors.Errorf("won't insert side-chain which is not longer")
 		}
 
+		// Everything that can be checked without chain state is checked
+		// before any canonical momentum is removed, so a candidate that is
+		// not even internally consistent never triggers a rollback.
+		for index, detailed := range momentums {
+			if err := verifyMomentumStatically(detailed.Momentum); err != nil {
+				log.Info("side-chain momentum failed static verification", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+				return index + start, err
+			}
+		}
+		if c.verifier != nil {
+			if err := c.verifier.Momentum(momentums[0]); err != nil {
+				log.Info("side-chain head failed verification", "reason", err, "momentum-identifier", head.Identifier())
+				return start, err
+			}
+		}
+
+		// The state-dependent checks can only run after the rollback, so keep
+		// the branch being removed and put it back if the replacement fails.
+		removed, err := c.chain.CaptureBranchAbove(insert, target.Identifier())
+		if err != nil {
+			return 0, errors.Errorf("unable to capture branch above %v for rollback. Reason:%v", target.Identifier(), err)
+		}
+
 		if err := c.rollbackSideChain(insert, target.Identifier()); err != nil {
 			var uncertain *chain.ErrCanonicalStateUncertain
 			if errors.As(err, &uncertain) {
@@ -206,9 +230,89 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 			}
 			return 0, errors.Errorf("unable to rollback to %v. Reason:%v", target.Identifier(), err)
 		}
+
+		index, err := c.insertMomentums(insert, momentums)
+		if err != nil {
+			// index is also how many candidates were committed. Once that
+			// prefix is longer than the branch it replaced, the node sits on a
+			// valid chain longer than the one it had, so the prefix stays.
+			// A restore only happens while the prefix is at most as long as
+			// the removed branch, which the depth check above bounds to 30;
+			// rolling that far back always fits in the cache's rollback
+			// window, whereas the committed prefix has no such bound.
+			if index > len(removed) {
+				log.Info("side-chain replacement failed after exceeding the removed branch, keeping the applied prefix", "reason", err, "target", target.Identifier(), "num-applied", index, "num-removed", len(removed))
+				return index + start, err
+			}
+			log.Info("side-chain replacement failed, restoring original branch", "reason", err, "target", target.Identifier(), "num-momentums", len(removed))
+			if restoreErr := c.restoreBranch(insert, target.Identifier(), removed); restoreErr != nil {
+				log.Crit("chain state uncertain after failed side-chain restore, can't continue", "reason", restoreErr, "cause", err, "target", target.Identifier())
+				os.Exit(2)
+			}
+			return index + start, err
+		}
+		return 0, nil
 	}
 
-	// Insert momentum now
+	index, err := c.insertMomentums(insert, momentums)
+	if err != nil {
+		return index + start, err
+	}
+	return 0, nil
+}
+
+// verifyMomentumStatically runs the checks that need no chain state: the
+// advertised hash matches the content, and the signature is valid for the
+// public key carried by the momentum. Whether that key is the elected
+// producer is a state-dependent check that runs later.
+func verifyMomentumStatically(momentum *nom.Momentum) error {
+	if momentum == nil {
+		return errors.Errorf("missing momentum")
+	}
+	if momentum.ComputeHash() != momentum.Hash {
+		return verifier.ErrMHashInvalid
+	}
+	if len(momentum.Signature) == 0 {
+		return verifier.ErrMSignatureMissing
+	}
+	if len(momentum.PublicKey) == 0 {
+		return verifier.ErrMPublicKeyMissing
+	}
+	isVerified, err := wallet.VerifySignature(momentum.PublicKey, momentum.Hash.Bytes(), momentum.Signature)
+	if err != nil || !isVerified {
+		return verifier.ErrMSignatureInvalid
+	}
+	return nil
+}
+
+// restoreBranch drops whatever replaced the branch above target and puts the
+// captured momentums back, in order, with their cache state.
+//
+// What it restores is the canonical chain and the cache. It does not undo the
+// delete events listeners already saw (they see insert events for the same
+// momentums instead), and the account pool stays as the rollback left it. The
+// captured branch lives only in memory: if the process dies part-way through,
+// the node comes back at the fork point plus whatever was committed, which is
+// a valid prefix it resynchronises from, not the restored branch.
+func (c chainBridge) restoreBranch(insert sync.Locker, target types.HashHeight, removed []*chain.RemovedMomentum) error {
+	if err := c.rollbackSideChain(insert, target); err != nil {
+		return err
+	}
+	for _, momentum := range removed {
+		if err := c.chain.UpdateCache(insert, momentum.Detailed, momentum.Changes); err != nil {
+			return errors.Errorf("unable to restore cache for %v. Reason:%v", momentum.Detailed.Momentum.Identifier(), err)
+		}
+		transaction := &nom.MomentumTransaction{Momentum: momentum.Detailed.Momentum, Changes: momentum.Changes}
+		if err := c.chain.AddMomentumTransaction(insert, transaction); err != nil {
+			return errors.Errorf("unable to restore momentum %v. Reason:%v", momentum.Detailed.Momentum.Identifier(), err)
+		}
+	}
+	return nil
+}
+
+// insertMomentums applies and commits the momentums one by one. The returned
+// index identifies the momentum that failed.
+func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.DetailedMomentum) (int, error) {
 	for index, detailed := range momentums {
 		for _, block := range detailed.AccountBlocks {
 			if block.BlockType == nom.BlockTypeContractSend {
@@ -221,21 +325,21 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 			transaction, err := c.supervisor.ApplyBlock(block)
 			if err != nil {
 				log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
-				return index + start, err
+				return index, err
 			}
 			if err := c.chain.ForceAddAccountBlockTransaction(insert, transaction); err != nil {
 				log.Error("error while inserting account-block in pool", "reason", err, "account-block-header", block.Header())
-				return index + start, err
+				return index, err
 			}
 		}
 
 		transaction, err := c.supervisor.ApplyMomentum(detailed)
 		if err != nil {
-			return index + start, err
+			return index, err
 		}
 		if err := c.chain.UpdateCache(insert, detailed, transaction.Changes); err != nil {
 			log.Error("error while inserting cache", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
-			return index + start, err
+			return index, err
 		}
 		if err := c.chain.AddMomentumTransaction(insert, transaction); err != nil {
 			log.Error("error while inserting momentum", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
@@ -248,7 +352,7 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 				log.Crit("cache rollback failed after failed momentum insertion, can't continue", "reason", rollbackErr, "cause", err, "momentum-identifier", detailed.Momentum.Identifier())
 				os.Exit(2)
 			}
-			return index + start, err
+			return index, err
 		}
 	}
 
