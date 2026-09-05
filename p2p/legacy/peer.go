@@ -68,6 +68,11 @@ type Peer struct {
 	protoErr chan error
 	closed   chan struct{}
 	disc     chan p2p.DiscReason
+
+	// pongPending holds at most one pending pong reply; pings that arrive
+	// while it is full are answered by that same pong. The keepalive loop
+	// is the only writer of pongs.
+	pongPending chan struct{}
 }
 
 // NewPeer returns a peer for testing purposes.
@@ -128,6 +133,8 @@ func newPeer(conn *conn, protocols []p2p.Protocol) *Peer {
 		disc:     make(chan p2p.DiscReason),
 		protoErr: make(chan error, len(protomap)+1), // protocols + pingLoop
 		closed:   make(chan struct{}),
+
+		pongPending: make(chan struct{}, 1),
 	}
 	return p
 }
@@ -201,6 +208,10 @@ loop:
 	return reason
 }
 
+// pingLoop sends our periodic pings and the pong replies to the remote
+// peer's pings, so base-protocol writes for a peer come from one goroutine
+// and a write that cannot complete holds up further replies instead of
+// piling up writers.
 func (p *Peer) pingLoop() {
 	ping := time.NewTicker(pingInterval)
 	defer ping.Stop()
@@ -208,6 +219,11 @@ func (p *Peer) pingLoop() {
 		select {
 		case <-ping.C:
 			if err := p2p.SendItems(p.rw, pingMsg); err != nil {
+				p.protoErr <- err
+				return
+			}
+		case <-p.pongPending:
+			if err := p2p.SendItems(p.rw, pongMsg); err != nil {
 				p.protoErr <- err
 				return
 			}
@@ -236,11 +252,12 @@ func (p *Peer) handle(msg p2p.Msg) error {
 	switch {
 	case msg.Code == pingMsg:
 		msg.Discard()
-		p.wg.Add(1)
-		go func() {
-			p2p.SendItems(p.rw, pongMsg)
-			p.wg.Done()
-		}()
+		// Hand the reply to the keepalive loop. A pong that is already
+		// pending answers this ping as well.
+		select {
+		case p.pongPending <- struct{}{}:
+		default:
+		}
 	case msg.Code == discMsg:
 		var reason [1]p2p.DiscReason
 		// This is the last message. We don't need to discard or
