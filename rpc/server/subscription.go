@@ -36,7 +36,14 @@ var (
 	ErrNotificationsUnsupported = errors.New("notifications not supported")
 	// ErrNotificationNotFound is returned when the notification for the given id is not found
 	ErrSubscriptionNotFound = errors.New("subscription not found")
+	// ErrTooManySubscriptions is returned when a connection already holds
+	// maxSubscriptionsPerConn server subscriptions.
+	ErrTooManySubscriptions = errors.New("too many subscriptions on this connection")
 )
+
+// maxSubscriptionsPerConn bounds the server subscriptions one connection can
+// hold at a time; a client that needs more must unsubscribe first.
+const maxSubscriptionsPerConn = 64
 
 var globalGen = randomIDGenerator()
 

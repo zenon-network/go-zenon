@@ -64,6 +64,10 @@ type handler struct {
 
 	subLock    sync.Mutex
 	serverSubs map[ID]*Subscription
+	// pendingSubs counts subscribe calls that have been accepted against the
+	// per-connection limit but whose notifier has not been collected by
+	// addSubscriptions yet. Guarded by subLock together with serverSubs.
+	pendingSubs int
 }
 
 type callProc struct {
@@ -198,10 +202,30 @@ func (h *handler) addSubscriptions(nn []*Notifier) {
 	defer h.subLock.Unlock()
 
 	for _, n := range nn {
+		// Every notifier handed out by handleSubscribe holds one reservation,
+		// whether or not the service created a subscription with it.
+		h.pendingSubs--
 		if sub := n.takeSubscription(); sub != nil {
 			h.serverSubs[sub.ID] = sub
 		}
 	}
+}
+
+// reserveSubscription claims one slot of the connection's subscription budget
+// for a subscribe call that is about to run. Slots held by calls still in
+// flight count as well, so neither a batch nor concurrent single requests can
+// exceed maxSubscriptionsPerConn. The slot is released by addSubscriptions
+// when the call's notifier is collected, and the installed subscription's
+// slot is released by unsubscribe or cancelServerSubscriptions.
+func (h *handler) reserveSubscription() error {
+	h.subLock.Lock()
+	defer h.subLock.Unlock()
+
+	if len(h.serverSubs)+h.pendingSubs >= maxSubscriptionsPerConn {
+		return ErrTooManySubscriptions
+	}
+	h.pendingSubs++
+	return nil
 }
 
 // cancelServerSubscriptions removes all subscriptions and closes their error channels.
@@ -379,6 +403,14 @@ func (h *handler) handleSubscribe(cp *callProc, msg *jsonrpcMessage) *jsonrpcMes
 		return msg.errorResponse(&invalidParamsError{err.Error()})
 	}
 	args = args[1:]
+
+	// Reserve the connection's budget only for well-formed requests, and
+	// before the notifier exists: the notifier is collected by
+	// addSubscriptions unconditionally, so a reservation and a notifier must
+	// always be created together.
+	if err := h.reserveSubscription(); err != nil {
+		return msg.errorResponse(err)
+	}
 
 	// Install notifier in context so the subscription handler can find it.
 	n := &Notifier{h: h, namespace: namespace}
