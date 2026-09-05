@@ -345,6 +345,12 @@ func (c *Client) BatchCall(b []BatchElem) error {
 //
 // Note that batch calls may not be executed atomically on the server side.
 func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
+	// The server answers a batch beyond its limit with a single error that
+	// carries no IDs, which this client could not resolve against b; refuse
+	// it here instead of waiting for replies that will not come.
+	if len(b) > maxBatchRequests {
+		return errBatchTooLarge
+	}
 	msgs := make([]*jsonrpcMessage, len(b))
 	op := &requestOp{
 		ids:  make([]json.RawMessage, len(b)),
@@ -635,6 +641,12 @@ func (c *Client) drainRead() {
 func (c *Client) read(codec ServerCodec) {
 	for {
 		msgs, batch, err := codec.readBatch()
+		if err == errBatchTooLarge {
+			// The value was consumed whole; answer it and keep serving the
+			// connection.
+			codec.writeJSON(context.Background(), errorMessage(err))
+			continue
+		}
 		if _, ok := err.(*json.SyntaxError); ok {
 			codec.writeJSON(context.Background(), errorMessage(&parseError{err.Error()}))
 		}

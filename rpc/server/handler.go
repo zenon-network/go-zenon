@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
@@ -56,6 +57,9 @@ type handler struct {
 	respWait       map[string]*requestOp          // active client requests
 	clientSubs     map[string]*ClientSubscription // active client subscriptions
 	callWG         sync.WaitGroup                 // pending call goroutines
+	callSlots      chan struct{}                  // bounds running call goroutines, see startCallProc
+	callsPending   int32                          // accepted but unfinished messages, see startCallProc
+	callsClosed    chan struct{}                  // closed by close(); releases goroutines waiting for a slot
 	rootCtx        context.Context                // canceled by close()
 	cancelRoot     func()                         // cancel function for rootCtx
 	conn           jsonWriter                     // where responses will be sent
@@ -82,6 +86,8 @@ func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *
 		rootCtx:        rootCtx,
 		cancelRoot:     cancelRoot,
 		allowSubscribe: true,
+		callSlots:      make(chan struct{}, maxInFlightCalls),
+		callsClosed:    make(chan struct{}),
 		serverSubs:     make(map[ID]*Subscription),
 		log:            log.Root(),
 	}
@@ -113,11 +119,24 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 		return
 	}
 	// Process calls on a goroutine because they may block indefinitely:
-	h.startCallProc(func(cp *callProc) {
+	started := h.startCallProc(func(cp *callProc) {
 		answers := make([]*jsonrpcMessage, 0, len(msgs))
-		for _, msg := range calls {
+		responseBytes := 0
+		for i, msg := range calls {
 			if answer := h.handleCallMsg(cp, msg); answer != nil {
 				answers = append(answers, answer)
+				responseBytes += answer.payloadSize()
+			}
+			// The answer that crosses the budget is still delivered; the
+			// calls after it are answered without being executed.
+			if responseBytes > maxBatchResponseBytes {
+				h.log.Warn("Batch response too large", "responseBytes", responseBytes, "skipped", len(calls)-i-1)
+				for _, rest := range calls[i+1:] {
+					if rest.hasValidID() {
+						answers = append(answers, rest.errorResponse(new(batchResponseTooLargeError)))
+					}
+				}
+				break
 			}
 		}
 		h.addSubscriptions(cp.notifiers)
@@ -128,6 +147,17 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 			n.activate()
 		}
 	})
+	if !started {
+		answers := make([]*jsonrpcMessage, 0, len(calls))
+		for _, msg := range calls {
+			if msg.hasValidID() {
+				answers = append(answers, msg.errorResponse(new(tooManyPendingError)))
+			}
+		}
+		if len(answers) > 0 {
+			h.conn.writeJSON(h.rootCtx, answers)
+		}
+	}
 }
 
 // handleMsg handles a single message.
@@ -135,7 +165,7 @@ func (h *handler) handleMsg(msg *jsonrpcMessage) {
 	if ok := h.handleImmediate(msg); ok {
 		return
 	}
-	h.startCallProc(func(cp *callProc) {
+	started := h.startCallProc(func(cp *callProc) {
 		answer := h.handleCallMsg(cp, msg)
 		h.addSubscriptions(cp.notifiers)
 		if answer != nil {
@@ -145,12 +175,16 @@ func (h *handler) handleMsg(msg *jsonrpcMessage) {
 			n.activate()
 		}
 	})
+	if !started && msg.hasValidID() {
+		h.conn.writeJSON(h.rootCtx, msg.errorResponse(new(tooManyPendingError)))
+	}
 }
 
 // close cancels all requests except for inflightReq and waits for
 // call goroutines to shut down.
 func (h *handler) close(err error, inflightReq *requestOp) {
 	h.cancelAllRequests(err, inflightReq)
+	close(h.callsClosed)
 	h.callWG.Wait()
 	h.cancelRoot()
 	h.cancelServerSubscriptions(err)
@@ -217,14 +251,44 @@ func (h *handler) cancelServerSubscriptions(err error) {
 }
 
 // startCallProc runs fn in a new goroutine and starts tracking it in the h.calls wait group.
-func (h *handler) startCallProc(fn func(*callProc)) {
+//
+// The connection may have at most maxPendingCalls messages accepted but not
+// finished; beyond that startCallProc returns false without starting
+// anything and the caller answers the message with an overload error. Of
+// the accepted messages, at most maxInFlightCalls run at a time: the
+// goroutine waits for one of the connection's call slots before running fn
+// and returns it when fn is done. The wait happens on the new goroutine,
+// never on the caller: the caller is the connection's dispatch loop, which
+// running calls need to deliver replies to their reverse calls, so blocking
+// it could leave every slot holder waiting on the loop that waits on them.
+func (h *handler) startCallProc(fn func(*callProc)) bool {
+	if atomic.AddInt32(&h.callsPending, 1) > maxPendingCalls {
+		atomic.AddInt32(&h.callsPending, -1)
+		return false
+	}
 	h.callWG.Add(1)
 	go func() {
-		ctx, cancel := context.WithCancel(h.rootCtx)
 		defer h.callWG.Done()
+		defer atomic.AddInt32(&h.callsPending, -1)
+		// A free slot is taken even if the handler is already closing: the
+		// HTTP path closes the handler right after dispatch and waits for
+		// the call, and select would otherwise pick between the two ready
+		// cases at random.
+		select {
+		case h.callSlots <- struct{}{}:
+		default:
+			select {
+			case h.callSlots <- struct{}{}:
+			case <-h.callsClosed:
+				return
+			}
+		}
+		defer func() { <-h.callSlots }()
+		ctx, cancel := context.WithCancel(h.rootCtx)
 		defer cancel()
 		fn(&callProc{ctx: ctx})
 	}()
+	return true
 }
 
 // handleImmediate executes non-call messages. It returns false if the message is a
