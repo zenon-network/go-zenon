@@ -233,6 +233,17 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 
 		index, err := c.insertMomentums(insert, momentums)
 		if err != nil {
+			// index is also how many candidates were committed. Once that
+			// prefix is longer than the branch it replaced, the node sits on a
+			// valid chain longer than the one it had, so the prefix stays.
+			// A restore only happens while the prefix is at most as long as
+			// the removed branch, which the depth check above bounds to 30;
+			// rolling that far back always fits in the cache's rollback
+			// window, whereas the committed prefix has no such bound.
+			if index > len(removed) {
+				log.Info("side-chain replacement failed after exceeding the removed branch, keeping the applied prefix", "reason", err, "target", target.Identifier(), "num-applied", index, "num-removed", len(removed))
+				return index + start, err
+			}
 			log.Info("side-chain replacement failed, restoring original branch", "reason", err, "target", target.Identifier(), "num-momentums", len(removed))
 			if restoreErr := c.restoreBranch(insert, target.Identifier(), removed); restoreErr != nil {
 				log.Crit("chain state uncertain after failed side-chain restore, can't continue", "reason", restoreErr, "cause", err, "target", target.Identifier())
@@ -276,6 +287,13 @@ func verifyMomentumStatically(momentum *nom.Momentum) error {
 
 // restoreBranch drops whatever replaced the branch above target and puts the
 // captured momentums back, in order, with their cache state.
+//
+// What it restores is the canonical chain and the cache. It does not undo the
+// delete events listeners already saw (they see insert events for the same
+// momentums instead), and the account pool stays as the rollback left it. The
+// captured branch lives only in memory: if the process dies part-way through,
+// the node comes back at the fork point plus whatever was committed, which is
+// a valid prefix it resynchronises from, not the restored branch.
 func (c chainBridge) restoreBranch(insert sync.Locker, target types.HashHeight, removed []*chain.RemovedMomentum) error {
 	if err := c.rollbackSideChain(insert, target); err != nil {
 		return err

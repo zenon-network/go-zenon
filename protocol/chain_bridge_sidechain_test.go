@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/zenon-network/go-zenon/chain"
+	"github.com/zenon-network/go-zenon/chain/cache/storage"
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
@@ -105,6 +106,18 @@ func detailedOf(momentums ...*nom.Momentum) []*nom.DetailedMomentum {
 	return detailed
 }
 
+// invalidTail chains attacker momentums on top of previous up to and
+// including height top. Each passes the stateless checks and fails the first
+// state-dependent one.
+func invalidTail(previous *nom.Momentum, top uint64) []*nom.DetailedMomentum {
+	tail := make([]*nom.Momentum, 0, top-previous.Height)
+	for height := previous.Height + 1; height <= top; height++ {
+		previous = attackerMomentum(previous, height)
+		tail = append(tail, previous)
+	}
+	return detailedOf(tail...)
+}
+
 func momentumAt(t *testing.T, c chain.Chain, height uint64) *nom.Momentum {
 	t.Helper()
 	momentum, err := c.GetFrontierMomentumStore().GetMomentumByHeight(height)
@@ -113,14 +126,6 @@ func momentumAt(t *testing.T, c chain.Chain, height uint64) *nom.Momentum {
 		t.Fatalf("no momentum at height %d", height)
 	}
 	return momentum
-}
-
-func rollbackChainAndCache(t *testing.T, c chain.Chain, identifier types.HashHeight) {
-	t.Helper()
-	insert := c.AcquireInsert("test rollback")
-	defer insert.Unlock()
-	common.FailIfErr(t, c.RollbackTo(insert, identifier))
-	common.FailIfErr(t, c.RollbackCacheTo(insert, identifier))
 }
 
 // expectRolledBack asserts the canonical chain was rolled back at least once;
@@ -201,52 +206,68 @@ func TestInsertChain_SideChainWithTamperedHashIsRejectedBeforeRollback(t *testin
 }
 
 // forkFixture holds a node at an original branch plus a genuine, valid
-// alternative branch forking one below its frontier.
+// alternative branch forking one below the original branch's lowest momentum.
 type forkFixture struct {
 	z        mock.MockZenon
 	original chainSnapshot
-	fork     []*nom.DetailedMomentum
+	// removed is how many momentums the original branch has above the fork
+	// point.
+	removed int
+	fork    []*nom.DetailedMomentum
 }
 
-func newForkFixture(t *testing.T) *forkFixture {
+// newForkFixture builds the original branch on one node and the fork on a
+// second node so that neither branch has to be rolled back to reach the fork
+// point; the cache only keeps 100 rollback steps, which a long fork exceeds.
+// Both nodes share genesis and a deterministic clock, so the momentums below
+// the fork point are byte-identical on both. The original branch spans heights
+// forkBase+1..originalTop, the fork spans forkBase+1..forkTop.
+func newForkFixture(t *testing.T, originalTop, forkTop uint64) *forkFixture {
+	const forkBase = uint64(5)
 	z := mock.NewMockZenon(t)
-	z.InsertMomentumsTo(6)
-	store := z.Chain().GetFrontierMomentumStore()
-	originalSix, err := store.PrefetchMomentum(momentumAt(t, z.Chain(), 6))
-	common.FailIfErr(t, err)
-	base := momentumAt(t, z.Chain(), 5).Identifier()
+	z.InsertMomentumsTo(originalTop)
 
-	// Produce a different branch from height 5: add a transaction so the
-	// content differs, then let the pillars build two momentums.
-	rollbackChainAndCache(t, z.Chain(), base)
-	z.InsertSendBlock(&nom.AccountBlock{
+	other := mock.NewMockZenon(t)
+	defer other.StopPanic()
+	other.InsertMomentumsTo(forkBase)
+	common.Expect(t, momentumAt(t, other.Chain(), forkBase).Hash, momentumAt(t, z.Chain(), forkBase).Hash)
+	// Produce a different branch from the fork point: add a transaction so
+	// the content differs, then let the pillars build the rest.
+	other.InsertSendBlock(&nom.AccountBlock{
 		Address:       g.User1.Address,
 		ToAddress:     g.User2.Address,
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(1),
 	}, nil, mock.SkipVmChanges)
-	z.InsertMomentumsTo(7)
-	fork := make([]*nom.DetailedMomentum, 0, 2)
-	for height := uint64(6); height <= 7; height++ {
-		detailed, err := z.Chain().GetFrontierMomentumStore().PrefetchMomentum(momentumAt(t, z.Chain(), height))
+	other.InsertMomentumsTo(forkTop)
+	fork := make([]*nom.DetailedMomentum, 0, forkTop-forkBase)
+	for height := forkBase + 1; height <= forkTop; height++ {
+		detailed, err := other.Chain().GetFrontierMomentumStore().PrefetchMomentum(momentumAt(t, other.Chain(), height))
 		common.FailIfErr(t, err)
 		fork = append(fork, detailed)
 	}
-	if fork[0].Momentum.Hash == originalSix.Momentum.Hash {
+	if fork[0].Momentum.Hash == momentumAt(t, z.Chain(), forkBase+1).Hash {
 		t.Fatal("fork did not diverge from the original branch")
 	}
 
-	// Back to the original branch.
-	rollbackChainAndCache(t, z.Chain(), base)
-	_, bridge := newSideChainBridge(z)
-	_, err = bridge.InsertChain([]*nom.DetailedMomentum{originalSix})
-	common.FailIfErr(t, err)
+	return &forkFixture{
+		z:        z,
+		original: snapshotChain(t, z.Chain()),
+		removed:  int(originalTop - forkBase),
+		fork:     fork,
+	}
+}
 
-	return &forkFixture{z: z, original: snapshotChain(t, z.Chain()), fork: fork}
+// expectFrontierAt asserts both the canonical and the cache frontier sit at
+// the given momentum.
+func expectFrontierAt(t *testing.T, c chain.Chain, momentum *nom.Momentum) {
+	t.Helper()
+	common.Expect(t, c.GetFrontierMomentumStore().Identifier(), momentum.Identifier())
+	common.Expect(t, c.GetFrontierCacheStore().Identifier(), momentum.Identifier())
 }
 
 func TestInsertChain_ValidLongerSideChainReplacesBranch(t *testing.T) {
-	f := newForkFixture(t)
+	f := newForkFixture(t, 6, 7)
 	defer f.z.StopPanic()
 	counting, bridge := newSideChainBridge(f.z)
 
@@ -258,7 +279,7 @@ func TestInsertChain_ValidLongerSideChainReplacesBranch(t *testing.T) {
 }
 
 func TestInsertChain_SideChainRestoredWhenLaterCandidateFails(t *testing.T) {
-	f := newForkFixture(t)
+	f := newForkFixture(t, 6, 7)
 	defer f.z.StopPanic()
 	counting, bridge := newSideChainBridge(f.z)
 
@@ -278,6 +299,85 @@ func TestInsertChain_SideChainRestoredWhenLaterCandidateFails(t *testing.T) {
 	_, err = bridge.InsertChain(f.fork)
 	common.FailIfErr(t, err)
 	common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.fork[1].Momentum.Identifier())
+}
+
+// TestInsertChain_RestoreBoundaryAtRemovedBranchLength pins the rule that
+// decides between restoring the original branch and keeping the committed
+// replacement prefix: the original comes back only while the prefix is no
+// longer than it. A longer prefix is a valid chain longer than the one the
+// node had, so it stays, exactly as it would have before restores existed.
+func TestInsertChain_RestoreBoundaryAtRemovedBranchLength(t *testing.T) {
+	cases := []struct {
+		name      string
+		committed int
+		restored  bool
+	}{
+		{"prefix shorter than removed branch is restored", 1, true},
+		{"prefix as long as removed branch is restored", 2, true},
+		{"prefix longer than removed branch is kept", 3, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newForkFixture(t, 7, 9)
+			defer f.z.StopPanic()
+			common.Expect(t, f.removed, 2)
+			counting, bridge := newSideChainBridge(f.z)
+
+			// The genuine prefix, then invalid candidates up to a height that
+			// keeps the side chain taller than our frontier.
+			candidates := append([]*nom.DetailedMomentum{}, f.fork[:tc.committed]...)
+			candidates = append(candidates, invalidTail(f.fork[tc.committed-1].Momentum, 10)...)
+
+			index, err := bridge.InsertChain(candidates)
+			if err == nil {
+				t.Fatal("expected the side chain to be rejected")
+			}
+			common.Expect(t, index, tc.committed)
+			if tc.restored {
+				common.Expect(t, counting.rollbacks, 2)
+				expectChainEquals(t, f.z.Chain(), f.original)
+			} else {
+				common.Expect(t, counting.rollbacks, 1)
+				expectFrontierAt(t, f.z.Chain(), f.fork[tc.committed-1].Momentum)
+			}
+
+			// Whatever was kept is real state: the rest of the genuine fork
+			// still inserts on top of it.
+			_, err = bridge.InsertChain(f.fork)
+			common.FailIfErr(t, err)
+			expectFrontierAt(t, f.z.Chain(), f.fork[len(f.fork)-1].Momentum)
+		})
+	}
+}
+
+// TestInsertChain_ReplacementPrefixBeyondCacheWindowIsKept commits more
+// replacement momentums than the cache keeps rollback steps for, then fails
+// the next candidate. A restore would have to roll the cache back further
+// than it can go, after the canonical chain has already been rolled back,
+// and the node would exit with a cache it cannot reconcile on restart. The
+// committed prefix is longer than the removed branch, so it stays instead.
+func TestInsertChain_ReplacementPrefixBeyondCacheWindowIsKept(t *testing.T) {
+	committed := storage.GetRollbackCacheSize() + 1
+	f := newForkFixture(t, 6, uint64(5+committed+1))
+	defer f.z.StopPanic()
+	counting, bridge := newSideChainBridge(f.z)
+
+	candidates := append([]*nom.DetailedMomentum{}, f.fork[:committed]...)
+	last := f.fork[committed-1].Momentum
+	candidates = append(candidates, invalidTail(last, last.Height+1)...)
+
+	index, err := bridge.InsertChain(candidates)
+	if err == nil {
+		t.Fatal("expected the side chain to be rejected")
+	}
+	common.Expect(t, index, committed)
+	common.Expect(t, counting.rollbacks, 1)
+	expectFrontierAt(t, f.z.Chain(), last)
+
+	// The node carries on from the kept prefix.
+	_, err = bridge.InsertChain(f.fork[committed:])
+	common.FailIfErr(t, err)
+	expectFrontierAt(t, f.z.Chain(), f.fork[len(f.fork)-1].Momentum)
 }
 
 func TestInsertChain_SideChainDepthBoundary(t *testing.T) {
@@ -312,16 +412,19 @@ func TestInsertChain_SideChainDepthBoundary(t *testing.T) {
 }
 
 // storedPatchDumps returns the serialized state patch of every momentum above
-// identifier, as the momentum store holds them right now.
+// identifier exactly as the momentum store holds it, frontier writes included.
+// It deliberately does not go through CaptureBranchAbove, which strips those
+// writes and would hide the very growth this is used to detect.
 func storedPatchDumps(t *testing.T, c chain.Chain, identifier types.HashHeight) [][]byte {
 	t.Helper()
-	insert := c.AcquireInsert("test capture")
-	defer insert.Unlock()
-	removed, err := c.CaptureBranchAbove(insert, identifier)
-	common.FailIfErr(t, err)
-	dumps := make([][]byte, len(removed))
-	for i, momentum := range removed {
-		dumps[i] = momentum.Changes.Dump()
+	frontier := c.GetFrontierMomentumStore().Identifier()
+	dumps := make([][]byte, 0, frontier.Height-identifier.Height)
+	for height := identifier.Height + 1; height <= frontier.Height; height++ {
+		patch := c.GetMomentumPatch(momentumAt(t, c, height).Identifier())
+		if patch == nil {
+			t.Fatalf("no stored patch for height %d", height)
+		}
+		dumps = append(dumps, patch.Dump())
 	}
 	return dumps
 }

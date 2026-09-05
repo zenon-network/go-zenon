@@ -41,6 +41,9 @@ type MomentumPool interface {
 	// together with its stored state patch, so the branch can be re-inserted
 	// after a rollback. It fails, without side effects, if any patch is missing.
 	CaptureBranchAbove(insertLocker sync.Locker, identifier types.HashHeight) ([]*RemovedMomentum, error)
+	// GetMomentumPatch returns the state patch stored for the momentum with
+	// this identifier, as the manager holds it, or nil if there is none.
+	GetMomentumPatch(identifier types.HashHeight) db.Patch
 	AddMomentumTransaction(insertLocker sync.Locker, transaction *nom.MomentumTransaction) error
 	RollbackTo(insertLocker sync.Locker, identifier types.HashHeight) error
 

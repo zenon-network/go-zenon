@@ -166,6 +166,12 @@ func (c *momentumPool) CaptureBranchAbove(insertLocker sync.Locker, identifier t
 	return removed, nil
 }
 
+func (c *momentumPool) GetMomentumPatch(identifier types.HashHeight) db.Patch {
+	c.changes.Lock()
+	defer c.changes.Unlock()
+	return c.chainManager.GetPatch(identifier)
+}
+
 func (c *momentumPool) RollbackTo(insertLocker sync.Locker, identifier types.HashHeight) error {
 	c.log.Info("rollbacking momentums", "to-identifier", identifier)
 	if insertLocker == nil {
