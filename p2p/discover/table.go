@@ -44,6 +44,9 @@ const (
 	nBuckets   = hashBits + 1 // Number of buckets
 
 	maxBondingPingPongs = 16
+	// maxInboundBonds bounds the bonding processes started for unsolicited
+	// pings, whether they are waiting for a bonding slot or holding one.
+	maxInboundBonds     = 64
 	maxFindnodeFailures = 5
 )
 
@@ -58,6 +61,10 @@ type Table struct {
 	bondmu    sync.Mutex
 	bonding   map[NodeID]*bondproc
 	bondslots chan struct{} // limits total number of active bonding processes
+	// inboundBonds is a counting semaphore for bonds started by unsolicited
+	// pings; a slot is taken before the goroutine is started and released
+	// when it exits, so work is admitted before it is queued anywhere.
+	inboundBonds chan struct{}
 
 	nodeAddedHook func(*Node) // for testing
 
@@ -105,6 +112,8 @@ func newTable(t transport, ourID NodeID, ourAddr *net.UDPAddr, nodeDBPath string
 		closing:   make(chan struct{}),
 		bonding:   make(map[NodeID]*bondproc),
 		bondslots: make(chan struct{}, maxBondingPingPongs),
+
+		inboundBonds: make(chan struct{}, maxInboundBonds),
 	}
 	for i := 0; i < cap(tab.bondslots); i++ {
 		tab.bondslots <- struct{}{}
@@ -433,22 +442,19 @@ func (tab *Table) bond(pinged bool, id NodeID, addr *net.UDPAddr, tcpPort uint16
 }
 
 func (tab *Table) pingpong(w *bondproc, pinged bool, id NodeID, addr *net.UDPAddr, tcpPort uint16) {
-	// Request a bonding slot to limit network usage
-	<-tab.bondslots
-	ok := true
-	go func() {
-		select {
-		case <-w.done:
-		case <-tab.bondslots:
-		case <-tab.closing:
-			ok = false
-		}
-	}()
-	defer func() {
-		if ok {
-			tab.bondslots <- struct{}{}
-		}
-	}()
+	// Request a bonding slot to limit network usage. Waiting also ends at
+	// shutdown so queued processes exit at once instead of each taking a
+	// slot and failing through the closed transport in turn.
+	select {
+	case <-tab.bondslots:
+	case <-tab.closing:
+		w.err = errClosed
+		close(w.done)
+		return
+	}
+	// The slot is always returned: there are exactly cap(bondslots) tokens
+	// and this process holds one, so the send cannot block.
+	defer func() { tab.bondslots <- struct{}{} }()
 
 	// Ping the remote side and wait for a pong
 	if w.err = tab.ping(id, addr); w.err != nil {

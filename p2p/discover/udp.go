@@ -537,10 +537,21 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromID NodeID, mac []byte) er
 	})
 	if !t.handleReply(fromID, pingPacket, req) {
 		// Note: we're ignoring the provided IP address right now
+		//
+		// Admit the bond before starting anything for it. The pong above
+		// has already answered the remote; when the budget is exhausted the
+		// follow-up bond is skipped and the remote can ping again later.
+		select {
+		case t.inboundBonds <- struct{}{}:
+		default:
+			common.P2PLogger.Debug(fmt.Sprintf("Inbound bonding budget exhausted, not bonding %x", fromID[:8]))
+			return nil
+		}
 		t.wg.Add(1)
 		go func() {
+			defer t.wg.Done()
+			defer func() { <-t.inboundBonds }()
 			t.bond(true, fromID, from, req.From.TCP)
-			t.wg.Done()
 		}()
 	}
 	return nil
