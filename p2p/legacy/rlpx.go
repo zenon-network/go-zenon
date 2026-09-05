@@ -46,6 +46,14 @@ import (
 const (
 	maxUint24 = ^uint32(0) >> 8
 
+	// maxMessageSize matches protocol.ProtocolMaxMsgSize, the largest
+	// payload the protocol layer accepts, and maxFrameSize adds the
+	// RLP-encoded message code (at most 9 bytes) that shares the frame
+	// with the payload. A frame header announcing more is rejected before
+	// any buffer of the announced size is allocated.
+	maxMessageSize = 10 * 1024 * 1024
+	maxFrameSize   = maxMessageSize + 9
+
 	sskLen = 16 // ecies.MaxSharedKeyLength(pubKey) / 2
 	sigLen = 65 // elliptic S256
 	pubLen = 64 // 512 bit pubkey in uncompressed representation without format byte
@@ -585,6 +593,12 @@ func (rw *rlpxFrameRW) ReadMsg() (msg p2p.Msg, err error) {
 	rw.dec.XORKeyStream(headbuf[:16], headbuf[:16]) // first half is now decrypted
 	fsize := readInt24(headbuf)
 	// ignore protocol type for now
+
+	// The header is authenticated but its length is the sender's choice;
+	// bound it before sizing anything by it.
+	if fsize > maxFrameSize {
+		return msg, fmt.Errorf("frame size %d exceeds maximum %d", fsize, maxFrameSize)
+	}
 
 	// read the frame content
 	var rsize = fsize // frame size rounded up to 16 byte boundary
