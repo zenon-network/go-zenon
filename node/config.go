@@ -1,9 +1,12 @@
 package node
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pkg/errors"
 
@@ -16,12 +19,87 @@ import (
 	"github.com/zenon-network/go-zenon/zenon"
 )
 
+// Secret is a string that does not reveal itself: every fmt verb and JSON
+// encoding renders it as a fixed marker, so a configuration carrying one
+// can be printed or logged whole. The value is read from JSON as a plain
+// string and is obtained with a string conversion where it is used.
+type Secret string
+
+const redactedMarker = "<redacted>"
+
+// String implements fmt.Stringer.
+func (s Secret) String() string {
+	if s == "" {
+		return ""
+	}
+	return redactedMarker
+}
+
+// GoString implements fmt.GoStringer.
+func (s Secret) GoString() string {
+	return fmt.Sprintf("node.Secret(%q)", s.String())
+}
+
+// Format implements fmt.Formatter so that every verb, including the
+// numeric, float and rune verbs for which fmt would otherwise print a
+// diagnostic containing the raw value, renders the marker. The one verb
+// this cannot cover is %p applied to a non-pointer Secret: fmt handles %p
+// before consulting the operand's methods and prints its diagnostic with
+// the raw value.
+func (s Secret) Format(f fmt.State, verb rune) {
+	switch verb {
+	case 'q':
+		fmt.Fprintf(f, "%q", s.String())
+	case 'v':
+		if f.Flag('#') {
+			io.WriteString(f, s.GoString())
+			return
+		}
+		io.WriteString(f, s.String())
+	default:
+		io.WriteString(f, s.String())
+	}
+}
+
+// MarshalJSON writes the marker in place of the value.
+func (s Secret) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.String())
+}
+
+// UnmarshalJSON reads the value like a plain string.
+func (s *Secret) UnmarshalJSON(data []byte) error {
+	var v string
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*s = Secret(v)
+	return nil
+}
+
 type ProducerConfig struct {
 	Address     string
 	Index       uint32
 	KeyFilePath string
-	Password    string
+	Password    Secret
 }
+
+// Format implements fmt.Formatter. A pointer to this struct nested in
+// another value and printed with a verb that is invalid for pointers would
+// otherwise be re-printed by fmt's diagnostic path, which does not consult
+// the fields' own formatting; rendering the struct here keeps Password
+// redacted under every verb.
+func (c ProducerConfig) Format(f fmt.State, verb rune) {
+	type view ProducerConfig // same fields, no methods: default struct rendering
+	switch {
+	case verb == 'v' && f.Flag('#'):
+		fmt.Fprintf(f, "node.ProducerConfig%s", strings.TrimPrefix(fmt.Sprintf("%#v", view(c)), "node.view"))
+	case verb == 'v' && f.Flag('+'):
+		fmt.Fprintf(f, "%+v", view(c))
+	default:
+		fmt.Fprintf(f, "%v", view(c))
+	}
+}
+
 type RPCConfig struct {
 	EnableHTTP bool
 	EnableWS   bool
@@ -175,7 +253,7 @@ func (c *Config) parseProducer(walletManager *wallet.Manager) (*wallet.KeyPair, 
 		log.Error("unable to get keyFile", "keyFilePath", c.Producer.KeyFilePath, "reason", err)
 		return nil, err
 	}
-	if err := walletManager.Unlock(c.Producer.KeyFilePath, c.Producer.Password); err != nil {
+	if err := walletManager.Unlock(c.Producer.KeyFilePath, string(c.Producer.Password)); err != nil {
 		log.Error("unable to unlock keyFile", "keyFilePath", c.Producer.KeyFilePath, "reason", err)
 		return nil, err
 	}
