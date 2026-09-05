@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/inconshreveable/log15"
 
@@ -18,11 +20,28 @@ import (
 // full; the caller should retry.
 var ErrSubscribeBacklogFull = errors.New("subscribe server backlog is full")
 
+// ErrSubscriptionLimitReached is returned when the server already serves
+// maxSubscriptions live subscriptions across all connections.
+var ErrSubscriptionLimitReached = errors.New("subscribe server subscription limit reached")
+
 const (
 	acChanSize  = 100
 	mChanSize   = 100
 	installSize = 100
+
+	// maxSubscriptions bounds the subscriptions kept installed across all
+	// connections. Every matching chain event is delivered to each of them
+	// from the single worker goroutine, so this also bounds the work one
+	// event can cost. Each connection is separately limited by the RPC
+	// server.
+	maxSubscriptions = 4096
 )
+
+// sweepInterval is how often the worker drops subscriptions whose client has
+// unsubscribed or disconnected. Broadcasts only visit subscriptions their
+// event matches, so without the sweep an address-filtered subscription
+// would stay installed until a block for that address arrives.
+var sweepInterval = 10 * time.Second
 
 var (
 	oneSingleton sync.Mutex
@@ -70,6 +89,13 @@ type Api struct {
 	isStopped bool
 	installCh chan *Subscription // add subscription
 	stopped   chan struct{}
+
+	// live counts subscriptions that hold a slot of maxSubscriptions: those
+	// waiting in installCh plus those installed by the worker. Only subscribe
+	// increments it, serialized by stopLock, and only the worker's uninstall
+	// decrements it, so the check-then-increment in subscribe cannot
+	// overshoot.
+	live atomic.Int64
 }
 type Server struct {
 	*Api
@@ -179,6 +205,8 @@ func (s *Server) work() {
 	defer common.RecoverStack()
 	log.Info("start event loop")
 	defer log.Info("stop event loop")
+	sweep := time.NewTicker(sweepInterval)
+	defer sweep.Stop()
 	for {
 		select {
 		case <-s.stopped:
@@ -187,6 +215,8 @@ func (s *Server) work() {
 			return
 		case sub := <-s.installCh:
 			s.install(sub)
+		case <-sweep.C:
+			s.sweep()
 		case momentums := <-s.mCh:
 			s.broadcastMomentums(momentums)
 		case blocks := <-s.acCh:
@@ -205,8 +235,32 @@ func (s *Server) install(subscription *Subscription) {
 	s.subscriptions[subscription.options.subscriptionType][subscription.rpc.ID] = subscription
 }
 func (s *Server) uninstall(subscription *Subscription) {
+	installed := s.subscriptions[subscription.options.subscriptionType]
+	if _, ok := installed[subscription.rpc.ID]; !ok {
+		return
+	}
 	s.log.Info("uninstall", "id", subscription.rpc.ID)
-	delete(s.subscriptions[subscription.options.subscriptionType], subscription.rpc.ID)
+	delete(installed, subscription.rpc.ID)
+	// Released exactly once, together with the map entry the slot was held for.
+	s.live.Add(-1)
+}
+
+// sweep uninstalls every subscription whose client has unsubscribed or
+// disconnected, regardless of whether an event for it has arrived.
+func (s *Server) sweep() {
+	startTime := common.Clock.Now()
+	stats := &BroadcastStats{}
+	for _, installed := range s.subscriptions {
+		for _, subscription := range installed {
+			if subscription.Closed() {
+				stats.NumUninstalls += 1
+				s.uninstall(subscription)
+			}
+		}
+	}
+	if stats.NumUninstalls > 0 {
+		s.log.Info("finish sweeping subscriptions", "elapsed", common.Clock.Now().Sub(startTime), "stats", stats)
+	}
 }
 func (s *Server) broadcast(subscription *Subscription, data interface{}, stats *BroadcastStats) {
 	if subscription.Closed() {
@@ -300,10 +354,17 @@ func (s *Api) subscribe(ctx context.Context, options *subscriptionOptions) (*rpc
 	// client never learns and cannot unsubscribe. stopLock serializes
 	// producers and the worker only drains, so once there is room the send
 	// below cannot block.
+	// The slot is claimed here, before the entry is handed to the worker, so
+	// the count covers queued and installed subscriptions alike; the worker
+	// returns it when it uninstalls the entry.
+	if s.live.Load() >= maxSubscriptions {
+		return nil, ErrSubscriptionLimitReached
+	}
 	if len(s.installCh) == cap(s.installCh) {
 		return nil, ErrSubscribeBacklogFull
 	}
 	subscription := NewSubscription(notifier, options)
+	s.live.Add(1)
 	s.installCh <- subscription
 	return subscription.rpc, nil
 }
