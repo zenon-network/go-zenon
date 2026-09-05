@@ -455,7 +455,6 @@ func (a *BridgeApi) GetAllUnsignedWrapTokenRequests(pageIndex, pageSize uint32) 
 	if err != nil {
 		return nil, err
 	}
-	var unsignedRequests []*WrapTokenRequest
 
 	momentum, err := context.GetFrontierMomentum()
 	if err != nil {
@@ -466,28 +465,35 @@ func (a *BridgeApi) GetAllUnsignedWrapTokenRequests(pageIndex, pageSize uint32) 
 		return nil, err
 	}
 
-	for _, request := range requests {
-		if request.Signature == "" {
-			token, err := a.getToken(request.TokenStandard)
-			if err != nil {
-				return nil, err
-			}
-			confirmationsToFinality := a.getConfirmationsToFinality(*request, orchestratorInfo.ConfirmationsToFinality, *momentum)
-			wrapRequest := &WrapTokenRequest{request, token, confirmationsToFinality}
-			unsignedRequests = append(unsignedRequests, wrapRequest)
-		}
-	}
-
-	for i, j := 0, len(unsignedRequests)-1; i < j; i, j = i+1, j-1 {
-		unsignedRequests[i], unsignedRequests[j] = unsignedRequests[j], unsignedRequests[i]
-	}
-
-	start, end := api.GetRange(pageIndex, pageSize, uint32(len(unsignedRequests)))
+	// Select the page first; token and finality lookups are only done for
+	// the requests on it.
+	page, count := selectUnsignedWrapRequests(requests, pageIndex, pageSize)
 	result := &WrapTokenRequestList{
-		Count: len(unsignedRequests),
-		List:  unsignedRequests[start:end],
+		Count: count,
+		List:  make([]*WrapTokenRequest, 0, len(page)),
+	}
+	for _, request := range page {
+		token, err := a.getToken(request.TokenStandard)
+		if err != nil {
+			return nil, err
+		}
+		confirmationsToFinality := a.getConfirmationsToFinality(*request, orchestratorInfo.ConfirmationsToFinality, *momentum)
+		result.List = append(result.List, &WrapTokenRequest{request, token, confirmationsToFinality})
 	}
 	return result, nil
+}
+
+// selectUnsignedWrapRequests keeps the requests without a signature, newest
+// first, and returns the requested page of them with the total count.
+func selectUnsignedWrapRequests(requests []*definition.WrapTokenRequest, pageIndex, pageSize uint32) ([]*definition.WrapTokenRequest, int) {
+	unsigned := make([]*definition.WrapTokenRequest, 0, len(requests))
+	for i := len(requests) - 1; i >= 0; i-- {
+		if requests[i].Signature == "" {
+			unsigned = append(unsigned, requests[i])
+		}
+	}
+	start, end := api.GetRange(pageIndex, pageSize, uint32(len(unsigned)))
+	return unsigned[start:end], len(unsigned)
 }
 
 type UnwrapTokenRequest struct {
