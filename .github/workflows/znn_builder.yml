@@ -35,34 +35,10 @@ jobs:
           fetch-depth: 0
       - name: Determine version
         id: version
-        run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION="${{ github.ref_name }}"
-            PRERELEASE="false"
-          else
-            BASE_TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-dev' --exclude '*-testnet')"
-            BASE_VERSION="${BASE_TAG%-alphanet}"
-            COUNT="$(git rev-list "${BASE_TAG}..HEAD" --count)"
-            HASH="$(git rev-parse --short HEAD)"
-            case "${{ github.ref_name }}" in
-              dev)
-                VERSION="${BASE_VERSION}-dev-${COUNT}-g${HASH}"
-                PRERELEASE="true"
-                ;;
-              testnet)
-                VERSION="${BASE_VERSION}-testnet-${COUNT}-g${HASH}"
-                PRERELEASE="true"
-                ;;
-              *)
-                VERSION="${BASE_VERSION}-${COUNT}-g${HASH}"
-                PRERELEASE="false"
-                ;;
-            esac
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "release_name=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "release_tag=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: .github/scripts/determine-version.sh
   test:
     name: Test
     needs: version
