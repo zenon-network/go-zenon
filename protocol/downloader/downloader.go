@@ -405,14 +405,25 @@ func (d *Downloader) findAncestor(p *peer) (uint64, error) {
 				log.Info("%v: empty head hash set", "peer", p)
 				return 0, errEmptyHashSet
 			}
+			if len(hashes) > MaxHashFetch {
+				log.Info("oversized head hash set", "peer", p, "num-hashes", len(hashes))
+				return 0, errBadPeer
+			}
 			// Check if a common ancestor was found. Peers reply newest first, so
-			// the first hash we have is the highest common one.
+			// the first hash we have is the highest common one. Take its height
+			// from our own chain rather than its position in the reply: momentums
+			// start at height 1, and the reply layout is peer-controlled.
 			finished = true
 			for i := 0; i < len(hashes); i++ {
-				if d.hasBlock(hashes[i]) {
-					number, hash = uint64(from)+uint64(len(hashes)-1-i), hashes[i]
-					break
+				if !d.hasBlock(hashes[i]) {
+					continue
 				}
+				detailed := d.getBlock(hashes[i])
+				if detailed == nil {
+					continue
+				}
+				number, hash = detailed.Momentum.Height, hashes[i]
+				break
 			}
 
 		case <-d.blockCh:

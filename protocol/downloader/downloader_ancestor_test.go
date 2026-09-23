@@ -18,6 +18,7 @@ func testHash(prefix byte, height uint64) types.Hash {
 // mockAncestorChains builds a downloader over a local chain of `head` blocks
 // sharing history with a peer only up to `forkAt`, and a peer answering
 // getAbsHashes from its own chain, newest first like the protocol handler.
+// Momentums start at height 1, so a reply never contains a height 0 hash.
 func mockAncestorChains(head, forkAt uint64) (*Downloader, *peer) {
 	localHash := func(h uint64) types.Hash {
 		if h <= forkAt {
@@ -32,7 +33,7 @@ func mockAncestorChains(head, forkAt uint64) (*Downloader, *peer) {
 		return testHash('p', h)
 	}
 	localByHash := make(map[types.Hash]uint64, head+1)
-	for h := uint64(0); h <= head; h++ {
+	for h := uint64(1); h <= head; h++ {
 		localByHash[localHash(h)] = h
 	}
 
@@ -55,6 +56,9 @@ func mockAncestorChains(head, forkAt uint64) (*Downloader, *peer) {
 	p.getAbsHashes = func(from uint64, count int) error {
 		hashes := make([]types.Hash, 0, count)
 		for i := count - 1; i >= 0; i-- {
+			if from+uint64(i) == 0 {
+				continue
+			}
 			hashes = append(hashes, peerHash(from+uint64(i)))
 		}
 		go func() { d.hashCh <- hashPack{peerId: p.id, hashes: hashes} }()
@@ -104,5 +108,35 @@ func TestFindAncestorFreshNode(t *testing.T) {
 	}
 	if number != forkAt {
 		t.Fatalf("findAncestor = %d, want %d", number, forkAt)
+	}
+}
+
+// A short local chain sits inside a head-scan window that starts at height 0,
+// which the reply does not include; the ancestor must still be the local head.
+func TestFindAncestorShortChain(t *testing.T) {
+	const head, forkAt = uint64(100), uint64(100)
+	d, p := mockAncestorChains(head, forkAt)
+
+	number, err := d.findAncestor(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if number != forkAt {
+		t.Fatalf("findAncestor = %d, want %d", number, forkAt)
+	}
+}
+
+// A head-scan reply larger than requested is rejected rather than trusted.
+func TestFindAncestorOversizedReply(t *testing.T) {
+	d, p := mockAncestorChains(1, 1)
+	p.getAbsHashes = func(from uint64, count int) error {
+		hashes := make([]types.Hash, MaxHashFetch+1)
+		hashes[0] = testHash('s', 1)
+		go func() { d.hashCh <- hashPack{peerId: p.id, hashes: hashes} }()
+		return nil
+	}
+
+	if _, err := d.findAncestor(p); err != errBadPeer {
+		t.Fatalf("findAncestor error = %v, want %v", err, errBadPeer)
 	}
 }
