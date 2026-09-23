@@ -17,7 +17,7 @@ func testHash(prefix byte, height uint64) types.Hash {
 
 // mockAncestorChains builds a downloader over a local chain of `head` blocks
 // sharing history with a peer only up to `forkAt`, and a peer answering
-// getAbsHashes from its own chain.
+// getAbsHashes from its own chain, newest first like the protocol handler.
 func mockAncestorChains(head, forkAt uint64) (*Downloader, *peer) {
 	localHash := func(h uint64) types.Hash {
 		if h <= forkAt {
@@ -54,7 +54,7 @@ func mockAncestorChains(head, forkAt uint64) (*Downloader, *peer) {
 	p := newPeer("test-peer", 0, peerHash(head), nil, nil, nil)
 	p.getAbsHashes = func(from uint64, count int) error {
 		hashes := make([]types.Hash, 0, count)
-		for i := 0; i < count; i++ {
+		for i := count - 1; i >= 0; i-- {
 			hashes = append(hashes, peerHash(from+uint64(i)))
 		}
 		go func() { d.hashCh <- hashPack{peerId: p.id, hashes: hashes} }()
@@ -89,5 +89,20 @@ func TestFindAncestorRecentFork(t *testing.T) {
 	}
 	if number != forkAt {
 		t.Fatalf("findAncestor = %d, want %d (fork point)", number, forkAt)
+	}
+}
+
+// A node at the first momentum must resolve the ancestor to its own height
+// even when the peer's reply spans a full hash window.
+func TestFindAncestorFreshNode(t *testing.T) {
+	const head, forkAt = uint64(1), uint64(1)
+	d, p := mockAncestorChains(head, forkAt)
+
+	number, err := d.findAncestor(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if number != forkAt {
+		t.Fatalf("findAncestor = %d, want %d", number, forkAt)
 	}
 }

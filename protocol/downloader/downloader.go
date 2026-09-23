@@ -405,11 +405,12 @@ func (d *Downloader) findAncestor(p *peer) (uint64, error) {
 				log.Info("%v: empty head hash set", "peer", p)
 				return 0, errEmptyHashSet
 			}
-			// Check if a common ancestor was found
+			// Check if a common ancestor was found. Peers reply newest first, so
+			// the first hash we have is the highest common one.
 			finished = true
-			for i := len(hashes) - 1; i >= 0; i-- {
+			for i := 0; i < len(hashes); i++ {
 				if d.hasBlock(hashes[i]) {
-					number, hash = uint64(from)+uint64(i), hashes[i]
+					number, hash = uint64(from)+uint64(len(hashes)-1-i), hashes[i]
 					break
 				}
 			}
