@@ -422,7 +422,22 @@ func (d *Downloader) findAncestor(p *peer) (uint64, error) {
 				if detailed == nil {
 					continue
 				}
-				number, hash = detailed.Momentum.Height, hashes[i]
+				// A reply covers a contiguous descending range inside the
+				// requested window. Derive the range this match implies and
+				// reject the reply if it does not fit, so a reply cannot move
+				// the ancestor outside the window we asked for.
+				height := detailed.Momentum.Height
+				top := height + uint64(i)
+				span := uint64(len(hashes) - 1)
+				low := uint64(from)
+				if low == 0 {
+					low = 1
+				}
+				if height < low || top > uint64(from)+uint64(MaxHashFetch)-1 || top < span || top-span < low {
+					log.Info("head hash set outside requested range", "peer", p, "momentum-height", height, "index", i, "num-hashes", len(hashes), "from", from)
+					return 0, errBadPeer
+				}
+				number, hash = height, hashes[i]
 				break
 			}
 

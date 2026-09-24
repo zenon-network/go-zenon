@@ -140,3 +140,37 @@ func TestFindAncestorOversizedReply(t *testing.T) {
 		t.Fatalf("findAncestor error = %v, want %v", err, errBadPeer)
 	}
 }
+
+// A reply whose only hash we hold lies far below the requested window must be
+// rejected rather than moving the ancestor outside that window.
+func TestFindAncestorReplyBelowWindow(t *testing.T) {
+	d, p := mockAncestorChains(1100, 1100)
+	p.getAbsHashes = func(from uint64, count int) error {
+		hashes := []types.Hash{testHash('s', 1)}
+		go func() { d.hashCh <- hashPack{peerId: p.id, hashes: hashes} }()
+		return nil
+	}
+
+	if _, err := d.findAncestor(p); err != errBadPeer {
+		t.Fatalf("findAncestor error = %v, want %v", err, errBadPeer)
+	}
+}
+
+// A full-size reply that puts an out-of-window hash we hold at the front is
+// rejected: its implied height range does not fit the requested window.
+func TestFindAncestorReplyLayoutMismatch(t *testing.T) {
+	d, p := mockAncestorChains(1100, 1100)
+	p.getAbsHashes = func(from uint64, count int) error {
+		hashes := make([]types.Hash, MaxHashFetch)
+		hashes[0] = testHash('s', 1)
+		for i := 1; i < len(hashes); i++ {
+			hashes[i] = testHash('x', uint64(i))
+		}
+		go func() { d.hashCh <- hashPack{peerId: p.id, hashes: hashes} }()
+		return nil
+	}
+
+	if _, err := d.findAncestor(p); err != errBadPeer {
+		t.Fatalf("findAncestor error = %v, want %v", err, errBadPeer)
+	}
+}
