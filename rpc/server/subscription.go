@@ -163,18 +163,47 @@ func (n *Notifier) activate() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	// Mark activated even if a buffered write fails. Otherwise the notifier
+	// stays in buffering mode forever, and every subsequent Notify appends to
+	// n.buffer with no bound — an unresponsive client would grow that slice
+	// without limit. The bounded write makes this reachable in practice, where
+	// the old 10s default made it near-impossible. The caller still gets the
+	// error; what to do about a client that cannot take its own backlog is the
+	// maintainers' policy call, not ours to decide here.
+	defer func() { n.activated = true }()
+
 	for _, data := range n.buffer {
 		if err := n.send(n.sub, data); err != nil {
 			return err
 		}
 	}
-	n.activated = true
 	return nil
 }
 
+// notificationWriteTimeout bounds a single notification write.
+//
+// Subscription fan-out is a serial loop: subscribe.Server.broadcast walks the
+// subscription set and calls Notify on each in turn, so a subscriber that stops
+// reading blocks every subscriber behind it. The shared defaultWriteTimeout is
+// 10s, the same order as the momentum interval, so one unresponsive client can
+// stall roughly a full interval of broadcasting before the loop moves on.
+//
+// A short bound caps how long any single subscriber can hold up the fan-out on
+// each momentum. Note what it does NOT do: a timed-out write is only logged at
+// Info level by the caller; the subscription stays installed and no reconnect
+// happens. Deciding whether to uninstall or drop is a policy question for the
+// maintainers, so this change deliberately only bounds the wait.
+//
+// The bound also applies to activate's flush of the pre-activation buffer,
+// since both paths share send. activate() marks itself activated regardless of
+// a failed flush, so a client that cannot absorb its own backlog does not leave
+// the notifier buffering forever.
+const notificationWriteTimeout = time.Second
+
 func (n *Notifier) send(sub *Subscription, data json.RawMessage) error {
 	params, _ := json.Marshal(&subscriptionResult{ID: string(sub.ID), Result: data})
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), notificationWriteTimeout)
+	defer cancel()
 	return n.h.conn.writeJSON(ctx, &jsonrpcMessage{
 		Version: vsn,
 		Method:  n.namespace + notificationMethodSuffix,
