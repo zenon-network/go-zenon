@@ -331,12 +331,24 @@ func TestConcurrentSubscribesRespectPerConnectionLimit(t *testing.T) {
 		case err == nil:
 			accepted++
 		case err.Error() == ErrTooManySubscriptions.Error():
+		case strings.Contains(err.Error(), "too many pending requests"):
+			// The connection's admission cap can refuse a request outright
+			// while the burst is in flight; that says nothing about the
+			// subscription limit, which the top-up below still reaches.
 		default:
 			t.Fatalf("unexpected subscribe error: %v", err)
 		}
 	}
-	if accepted != maxSubscriptionsPerConn {
-		t.Fatalf("accepted %d concurrent subscriptions, want %d", accepted, maxSubscriptionsPerConn)
+	if accepted > maxSubscriptionsPerConn {
+		t.Fatalf("accepted %d concurrent subscriptions, limit is %d", accepted, maxSubscriptionsPerConn)
+	}
+	// Whatever the burst left, the limit is reached at exactly
+	// maxSubscriptionsPerConn and not before.
+	for accepted < maxSubscriptionsPerConn {
+		if _, err := client.Subscribe(context.Background(), "test", make(chan int, 1), "events"); err != nil {
+			t.Fatalf("subscription %d after the burst failed: %v", accepted+1, err)
+		}
+		accepted++
 	}
 	_, err := client.Subscribe(context.Background(), "test", make(chan int, 1), "events")
 	assertLimitError(t, err)
