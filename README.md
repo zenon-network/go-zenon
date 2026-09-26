@@ -14,6 +14,8 @@ make znnd
 
 Since version `0.0.2`, `znnd` is configured with the Alphanet Genesis and default seeders.
 
+`--host` sets the P2P listen host (`Net.ListenHost`) and does not configure RPC; use `--http-addr` for HTTP JSON-RPC and `--ws-addr` for WebSocket RPC. On earlier versions `--host X` set the HTTP-RPC host instead: replace that use with `--http-addr X`, and pass `--host X` only when P2P should bind to `X`.
+
 Use [znn-controller](https://github.com/zenon-network/znn_controller_dart) to configure your full node. For more information please consult the [Wiki](https://github.com/zenon-network/znn-wiki).
 
 ## Local devnet
