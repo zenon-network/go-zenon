@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/urfave/cli/v2"
@@ -38,7 +39,9 @@ func TestMakeConfigDoesNotRevealProducerPassword(t *testing.T) {
 	}
 
 	set := flag.NewFlagSet("znnd", flag.ContinueOnError)
-	ConfigFileFlag.Apply(set)
+	if err := ConfigFileFlag.Apply(set); err != nil {
+		t.Fatal(err)
+	}
 	if err := set.Parse([]string{"--" + ConfigFileFlag.Name, cfgPath}); err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +78,10 @@ func TestMakeConfigDoesNotRevealProducerPassword(t *testing.T) {
 	}
 }
 
+// captureStdout redirects os.Stdout into a pipe and returns a function
+// that restores it and yields what was written. The restore also runs from
+// t.Cleanup, so a failure or panic while captured cannot leave os.Stdout
+// redirected for the rest of the package's tests.
 func captureStdout(t *testing.T) func() string {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -83,16 +90,31 @@ func captureStdout(t *testing.T) func() string {
 	}
 	old := os.Stdout
 	os.Stdout = w
-	done := make(chan string)
+	done := make(chan string, 1)
 	go func() {
-		b, _ := io.ReadAll(r)
+		b, err := io.ReadAll(r)
+		if err != nil {
+			t.Error(err)
+		}
 		done <- string(b)
 	}()
-	return func() string {
-		os.Stdout = old
-		w.Close()
-		return <-done
+	var once sync.Once
+	var out string
+	stop := func() string {
+		once.Do(func() {
+			os.Stdout = old
+			if err := w.Close(); err != nil {
+				t.Error(err)
+			}
+			out = <-done
+			if err := r.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		return out
 	}
+	t.Cleanup(func() { stop() })
+	return stop
 }
 
 func readLogs(t *testing.T, dataPath string) string {
