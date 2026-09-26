@@ -119,7 +119,13 @@ func (n *Notifier) CreateSubscription() *Subscription {
 }
 
 // Notify sends a notification to the client with the given data as payload.
-// If an error occurs the RPC connection is closed and the error is returned.
+//
+// If an error occurs it is returned to the caller; the RPC connection is not
+// closed here. The bundled subscription server (rpc/api/subscribe) treats a
+// failed notify as non-fatal: it logs "failed to notify" and leaves the
+// subscription installed, so a slow or unresponsive client can keep a
+// subscription alive and failing until the connection is closed by the
+// connection's own lifecycle (see Server.Stop and the codec teardown paths).
 func (n *Notifier) Notify(id ID, data interface{}) error {
 	enc, err := json.Marshal(data)
 	if err != nil {
