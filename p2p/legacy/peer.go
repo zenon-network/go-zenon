@@ -72,7 +72,20 @@ type Peer struct {
 	// pongPending holds at most one pending pong reply; pings that arrive
 	// while it is full are answered by that same pong. The keepalive loop
 	// is the only writer of pongs.
+	//
+	// This is a deliberate policy: a peer that sends several pings before
+	// reading a pong receives fewer pongs than pings. Pings are liveness
+	// probes, this implementation's read deadline is re-armed by any
+	// received frame (rlpx.ReadMsg), and the alternative of queueing one
+	// reply per ping is what let a remote grow the number of pending
+	// writers without bound. A remote that insists on one pong per ping
+	// is the tradeoff.
 	pongPending chan struct{}
+
+	// pingC delivers the periodic ping ticks to pingLoop. It is nil for
+	// real peers, which use a pingInterval ticker; tests set it to fire
+	// ticks on demand.
+	pingC <-chan time.Time
 }
 
 // NewPeer returns a peer for testing purposes.
@@ -213,11 +226,15 @@ loop:
 // and a write that cannot complete holds up further replies instead of
 // piling up writers.
 func (p *Peer) pingLoop() {
-	ping := time.NewTicker(pingInterval)
-	defer ping.Stop()
+	tick := p.pingC
+	if tick == nil {
+		ticker := time.NewTicker(pingInterval)
+		defer ticker.Stop()
+		tick = ticker.C
+	}
 	for {
 		select {
-		case <-ping.C:
+		case <-tick:
 			if err := p2p.SendItems(p.rw, pingMsg); err != nil {
 				p.protoErr <- err
 				return
