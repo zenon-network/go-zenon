@@ -45,17 +45,22 @@ const (
 	// larger batches are rejected while parsing, before any element is
 	// allocated or executed.
 	maxBatchRequests = 1000
-	// maxBatchResponseBytes bounds the result bytes accumulated for one
-	// batch; once exceeded, the remaining calls are answered with an error
-	// instead of being executed.
+	// maxBatchResponseBytes bounds the result and error bytes accumulated
+	// for one batch; once exceeded, the remaining calls are answered with an
+	// error instead of being executed. It is a threshold on the payloads,
+	// not a ceiling on the encoded response: the answer that crosses it is
+	// still delivered, and IDs and envelopes are not counted.
 	maxBatchResponseBytes = 25 * 1000 * 1000
-	// maxInFlightCalls bounds the call procedures one connection may have
-	// running at a time; further messages wait for a free slot.
-	maxInFlightCalls = 32
 	// maxPendingCalls bounds the messages one connection may have accepted
-	// but not yet finished (running or waiting for a slot); beyond it a
-	// message is answered with an overload error immediately.
+	// but not yet finished, each of which runs on a goroutine of its own;
+	// beyond it a message is answered with an overload error immediately.
 	maxPendingCalls = 64
+	// maxQueuedAnswers and maxQueuedAnswerBytes bound the answers produced
+	// on a connection's dispatch loop that wait for its answer writer, by
+	// count and by the bytes they retain (an answer echoes the request's
+	// id); see handler.writeAnswer.
+	maxQueuedAnswers     = 4 * maxPendingCalls
+	maxQueuedAnswerBytes = 1 << 20
 )
 
 var null = json.RawMessage("null")
@@ -120,6 +125,28 @@ func (msg *jsonrpcMessage) payloadSize() int {
 		}
 	}
 	return size
+}
+
+// retainedSize is the number of bytes the message keeps alive while it
+// waits to be written: its payload and the echoed id.
+func (msg *jsonrpcMessage) retainedSize() int64 {
+	return int64(len(msg.ID) + msg.payloadSize())
+}
+
+// answerSize is the retained size of an answer handed to handler.writeAnswer,
+// which is a message or a batch of messages.
+func answerSize(v interface{}) int64 {
+	switch a := v.(type) {
+	case *jsonrpcMessage:
+		return a.retainedSize()
+	case []*jsonrpcMessage:
+		var size int64
+		for _, msg := range a {
+			size += msg.retainedSize()
+		}
+		return size
+	}
+	return 0
 }
 
 func (msg *jsonrpcMessage) errorResponse(err error) *jsonrpcMessage {

@@ -126,6 +126,7 @@ func (cc *clientConn) close(err error, inflightReq *requestOp) {
 type readOp struct {
 	msgs  []*jsonrpcMessage
 	batch bool
+	err   error // set for a batch the codec refused; the handler answers it
 }
 
 type requestOp struct {
@@ -347,7 +348,8 @@ func (c *Client) BatchCall(b []BatchElem) error {
 func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
 	// The server answers a batch beyond its limit with a single error that
 	// carries no IDs, which this client could not resolve against b; refuse
-	// it here instead of waiting for replies that will not come.
+	// it here instead of waiting for replies that will not come. The check
+	// applies whatever server the client is connected to.
 	if len(b) > maxBatchRequests {
 		return errBatchTooLarge
 	}
@@ -573,9 +575,12 @@ func (c *Client) dispatch(codec ServerCodec) {
 
 		// Read path:
 		case op := <-c.readOp:
-			if op.batch {
+			switch {
+			case op.err != nil:
+				conn.handler.handleBatchTooLarge()
+			case op.batch:
 				conn.handler.handleBatch(op.msgs)
-			} else {
+			default:
 				conn.handler.handleMsg(op.msgs[0])
 			}
 
@@ -642,9 +647,9 @@ func (c *Client) read(codec ServerCodec) {
 	for {
 		msgs, batch, err := codec.readBatch()
 		if err == errBatchTooLarge {
-			// The value was consumed whole; answer it and keep serving the
-			// connection.
-			codec.writeJSON(context.Background(), errorMessage(err))
+			// The value was consumed whole; hand the rejection to the
+			// dispatch loop and keep reading.
+			c.readOp <- readOp{batch: batch, err: err}
 			continue
 		}
 		if _, ok := err.(*json.SyntaxError); ok {
@@ -654,6 +659,6 @@ func (c *Client) read(codec ServerCodec) {
 			c.readErr <- err
 			return
 		}
-		c.readOp <- readOp{msgs, batch}
+		c.readOp <- readOp{msgs: msgs, batch: batch}
 	}
 }

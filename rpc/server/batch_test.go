@@ -117,7 +117,7 @@ func postHTTP(t *testing.T, url string, body []byte) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	out, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
@@ -162,8 +162,10 @@ func TestBatchRequestLimitWebSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := conn.WriteMessage(websocket.TextMessage, batchOf(maxBatchRequests+1)); err != nil {
 		t.Fatal(err)
@@ -311,11 +313,11 @@ func TestClientRefusesOversizedBatch(t *testing.T) {
 	}
 }
 
-// Callbacks that call back into the client need the connection's dispatch
-// loop to deliver their replies, so waiting for a call slot must never
-// happen on that loop. More calls than slots, all of them reverse calls,
-// have to complete.
-func TestReverseCallsBeyondSlotsComplete(t *testing.T) {
+// Every accepted call may call back into the client on the same
+// connection; the replies are delivered by the connection's dispatch loop,
+// which therefore must never wait on a call. A full connection of such
+// calls completes.
+func TestReverseCallsAtCapacityComplete(t *testing.T) {
 	server, svc := newBatchTestServer(t)
 	client := DialInProc(server)
 	defer client.Close()
@@ -323,7 +325,7 @@ func TestReverseCallsBeyondSlotsComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n := maxInFlightCalls + 1
+	n := maxPendingCalls
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
 	for i := 0; i < n; i++ {
@@ -338,7 +340,7 @@ func TestReverseCallsBeyondSlotsComplete(t *testing.T) {
 	}
 	// Let every request reach the server before the callbacks proceed.
 	deadline := time.Now().Add(5 * time.Second)
-	for atomic.LoadInt32(&svc.calls) < maxInFlightCalls {
+	for atomic.LoadInt32(&svc.calls) < int32(n) {
 		if time.Now().After(deadline) {
 			t.Fatalf("only %d calls reached the service", atomic.LoadInt32(&svc.calls))
 		}
@@ -392,8 +394,14 @@ func TestPendingCallsOverloadIsRejected(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 	}
-	if got := atomic.LoadInt32(&svc.inside); got != maxInFlightCalls {
-		t.Fatalf("%d calls executing, want %d", got, maxInFlightCalls)
+	// Every accepted call runs at once; the last may still be on its way
+	// into the service when the rejections come back.
+	deadline = time.Now().Add(5 * time.Second)
+	for atomic.LoadInt32(&svc.inside) != maxPendingCalls {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d calls executing, want every accepted one (%d)", atomic.LoadInt32(&svc.inside), maxPendingCalls)
+		}
+		time.Sleep(time.Millisecond)
 	}
 	close(svc.release)
 	wg.Wait()
@@ -405,49 +413,5 @@ func TestPendingCallsOverloadIsRejected(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&svc.calls); got != maxPendingCalls {
 		t.Fatalf("%d calls executed, want %d", got, maxPendingCalls)
-	}
-}
-
-// One connection runs at most maxInFlightCalls call procedures at a time;
-// further messages wait for a slot and run once earlier calls finish.
-func TestInFlightCallsPerConnection(t *testing.T) {
-	server, svc := newBatchTestServer(t)
-	client := DialInProc(server)
-	defer client.Close()
-
-	const extra = 8
-	var wg sync.WaitGroup
-	errs := make(chan error, maxInFlightCalls+extra)
-	for i := 0; i < maxInFlightCalls+extra; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var res string
-			errs <- client.CallContext(context.Background(), &res, "test.block")
-		}()
-	}
-
-	deadline := time.Now().Add(5 * time.Second)
-	for atomic.LoadInt32(&svc.inside) < maxInFlightCalls {
-		if time.Now().After(deadline) {
-			t.Fatalf("only %d calls entered the service", atomic.LoadInt32(&svc.inside))
-		}
-		time.Sleep(time.Millisecond)
-	}
-	time.Sleep(100 * time.Millisecond)
-	if got := atomic.LoadInt32(&svc.inside); got != maxInFlightCalls {
-		t.Fatalf("%d calls in flight on one connection, limit is %d", got, maxInFlightCalls)
-	}
-
-	close(svc.release)
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatalf("call failed: %v", err)
-		}
-	}
-	if got := atomic.LoadInt32(&svc.calls); got != maxInFlightCalls+extra {
-		t.Fatalf("%d calls executed in total", got)
 	}
 }
