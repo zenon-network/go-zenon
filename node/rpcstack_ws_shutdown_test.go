@@ -16,6 +16,10 @@ func (stackProbe) Ping() string { return "pong" }
 
 var stackAPIs = []rpc.API{{Namespace: "probe", Service: stackProbe{}, Public: true}}
 
+// stackTestTimeout bounds the dial and every read. A live connection with
+// nothing to deliver reaches it; a closed one returns at once.
+const stackTestTimeout = 5 * time.Second
+
 // startStackServer configures an httpServer on an ephemeral loopback port
 // with WebSocket enabled and, when withHTTP is set, HTTP JSON-RPC too.
 func startStackServer(t *testing.T, withHTTP bool) *httpServer {
@@ -43,18 +47,20 @@ func startStackServer(t *testing.T, withHTTP bool) *httpServer {
 // live with one JSON-RPC round trip.
 func dialStackWS(t *testing.T, h *httpServer) *websocket.Conn {
 	t.Helper()
-	dialer := websocket.Dialer{HandshakeTimeout: 2 * time.Second}
+	dialer := websocket.Dialer{HandshakeTimeout: stackTestTimeout}
 	conn, _, err := dialer.Dial("ws://"+h.listenAddr(), nil)
 	if err != nil {
 		t.Fatalf("WS dial: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 
 	req := []byte(`{"jsonrpc":"2.0","id":1,"method":"probe.ping","params":[]}`)
 	if err := conn.WriteMessage(websocket.TextMessage, req); err != nil {
 		t.Fatalf("WS write: %v", err)
 	}
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(stackTestTimeout)); err != nil {
+		t.Fatalf("WS set read deadline: %v", err)
+	}
 	if _, _, err := conn.ReadMessage(); err != nil {
 		t.Fatalf("WS read before stop: %v", err)
 	}
@@ -87,9 +93,15 @@ func TestHTTPServerStopClosesWebSocketConnections(t *testing.T) {
 				t.Error("HTTP handler still installed after stop")
 			}
 
-			// A closed connection surfaces as a read error. A live one would
-			// block until the deadline and return a timeout instead.
-			conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			// In this test the server is the only party that can close the loopback
+			// connection, and a closed connection surfaces as a read error
+			// that is not a timeout. A live one, with nothing to deliver,
+			// blocks until the deadline and returns a timeout instead. The
+			// client's own socket is still open, so setting the deadline
+			// must succeed.
+			if err := conn.SetReadDeadline(time.Now().Add(stackTestTimeout)); err != nil {
+				t.Fatalf("WS set read deadline after stop: %v", err)
+			}
 			_, _, err := conn.ReadMessage()
 			if err == nil {
 				t.Fatal("WebSocket connection still delivering messages after stop")
