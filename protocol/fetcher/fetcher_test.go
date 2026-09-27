@@ -427,9 +427,10 @@ type accountingEvents struct {
 // marks imported, the hook events, and n distinct blocks to announce.
 func newAccountingHarness(n int) (*testHarness, *importedSet, *accountingEvents, []*nom.DetailedMomentum) {
 	imported := &importedSet{blocks: make(map[types.Hash]*nom.DetailedMomentum)}
-	// Each hash begins fetching at most once and expires at most once, so
-	// n slots guarantee the hooks never block the loop however the events
-	// are batched.
+	// In these tests each hash begins fetching at most once and expires at
+	// most once, and every hook call carries at least one hash, so n slots
+	// keep the hooks from ever blocking the loop however the events are
+	// batched. A test that re-announced an expired hash would need more.
 	events := &accountingEvents{
 		fetching: make(chan []types.Hash, n),
 		expired:  make(chan []types.Hash, n),
@@ -457,7 +458,8 @@ func testBlocks(n int) []*nom.DetailedMomentum {
 }
 
 // announceAll sends every block's hash to the fetcher on behalf of peer with a
-// request function that never delivers, and returns how many were accepted.
+// request function that never delivers. Whether each was accepted is read
+// from the fetcher's tables once the loop is stopped.
 func announceAll(t *testing.T, h *testHarness, peer string, blocks []*nom.DetailedMomentum) {
 	t.Helper()
 	for _, b := range blocks {
@@ -643,6 +645,145 @@ func TestAnnounces_ExpiredFetchesFreeAllowanceBeforeNextAnnounce(t *testing.T) {
 	// meanwhile, so check the exact set the peer holds across both tables.
 	expectHeld(t, h.f, blocks[HashLimit:], blocks[:HashLimit])
 	checkAccounting(t, h.f)
+}
+
+// Re-announcing a hash that is already fetching is dropped without charging
+// anyone: not the peer whose fetch it is, and not another peer.
+func TestAnnounces_ReannounceOfFetchingHashIsNotCharged(t *testing.T) {
+	h, _, events, blocks := newAccountingHarness(8)
+	defer h.stop()
+
+	announceAll(t, h, "announcer", blocks)
+	waitForFetching(t, events, len(blocks))
+	announceAll(t, h, "announcer", blocks)
+	announceAll(t, h, "other", blocks)
+
+	h.stop()
+	expectHeld(t, h.f, blocks, nil)
+	if len(h.f.announced) != 0 {
+		t.Fatalf("%d re-announces of fetching hashes were kept", len(h.f.announced))
+	}
+	checkAccounting(t, h.f)
+	if count := h.f.announces["announcer"]; count != len(blocks) {
+		t.Fatalf("announcer charged %d for %d fetches after re-announcing them", count, len(blocks))
+	}
+	if count, ok := h.f.announces["other"]; ok {
+		t.Fatalf("other charged %d for re-announcing hashes it never fetches", count)
+	}
+}
+
+// When several peers announce one hash, the fetch is charged to the peer it
+// was requested from and the other announcers are released.
+func TestAnnounces_OnlySelectedAnnouncerIsChargedForFetch(t *testing.T) {
+	h, _, events, blocks := newAccountingHarness(8)
+	defer h.stop()
+
+	// Announce each hash from every peer before moving to the next, so the
+	// three announces of one hash are microseconds apart and resident
+	// together long before the announce timer can fire.
+	peers := []string{"first", "second", "third"}
+	for _, b := range blocks {
+		for _, peer := range peers {
+			announceAll(t, h, peer, []*nom.DetailedMomentum{b})
+		}
+	}
+	waitForFetching(t, events, len(blocks))
+
+	h.stop()
+	expectHeld(t, h.f, blocks, nil)
+	if len(h.f.announced) != 0 {
+		t.Fatalf("%d announces survived the transition to fetching", len(h.f.announced))
+	}
+	checkAccounting(t, h.f)
+	total := 0
+	for _, count := range h.f.announces {
+		total += count
+	}
+	if total != len(blocks) {
+		t.Fatalf("%d charged across %d announcers for %d fetches, want one charge per fetch", total, len(peers), len(blocks))
+	}
+}
+
+// A hash that becomes known before its announce timer fires is released at
+// the transition and never charged as a fetch.
+func TestAnnounces_KnownAtTransitionIsNotCharged(t *testing.T) {
+	h, imported, events, blocks := newAccountingHarness(9)
+	defer h.stop()
+
+	known, probe := blocks[:8], blocks[8:]
+	// Known before they are announced: admission does not consult the
+	// chain, so the announces are accepted and the transition finds them.
+	imported.add(known)
+	announceAll(t, h, "announcer", known)
+	// The probe is announced after the known hashes, so by the time it
+	// begins fetching the known hashes have been through the transition.
+	announceAll(t, h, "probe", probe)
+	waitForFetching(t, events, len(probe))
+
+	h.stop()
+	expectHeld(t, h.f, probe, known)
+	checkAccounting(t, h.f)
+	if count, ok := h.f.announces["announcer"]; ok {
+		t.Fatalf("announcer charged %d for hashes that were known at the transition", count)
+	}
+}
+
+// farBlock returns a block too far above the chain head for enqueue to accept.
+func farBlock() []*nom.DetailedMomentum {
+	return []*nom.DetailedMomentum{{Momentum: newTestMomentum(uint64(maxQueueDist)+10, types.Hash{})}}
+}
+
+// deliverRefused announces far on behalf of announcer, waits for it to begin
+// fetching, and delivers it, which the import queue refuses for distance.
+func deliverRefused(t *testing.T, h *testHarness, events *accountingEvents, far []*nom.DetailedMomentum) {
+	t.Helper()
+	announceAll(t, h, "announcer", far)
+	waitForFetching(t, events, 1)
+	if rest := h.f.Filter("deliverer", far); len(rest) != 0 {
+		t.Fatalf("the explicitly fetched block was not consumed")
+	}
+}
+
+// A delivered block that the import queue refuses leaves its fetching entry
+// in place and still charged to the announcer.
+func TestAnnounces_RejectedDeliveryStaysCharged(t *testing.T) {
+	h, _, events, _ := newAccountingHarness(1)
+	defer h.stop()
+
+	far := farBlock()
+	deliverRefused(t, h, events, far)
+
+	h.stop()
+	expectHeld(t, h.f, far, nil)
+	if len(h.f.fetching) != 1 {
+		t.Fatalf("%d fetching entries after a refused delivery, want the refused fetch", len(h.f.fetching))
+	}
+	checkAccounting(t, h.f)
+	if count := h.f.announces["announcer"]; count != 1 {
+		t.Fatalf("announcer charged %d while its refused fetch is still pending, want 1", count)
+	}
+}
+
+// The refused fetch is released by the sweep when it times out.
+func TestAnnounces_RejectedDeliveryReleasedAtTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits out fetchTimeout")
+	}
+	h, _, events, _ := newAccountingHarness(1)
+	defer h.stop()
+
+	far := farBlock()
+	deliverRefused(t, h, events, far)
+	// The sweep reports only entries it removed, so this event shows the
+	// refused delivery left the fetch in place until it timed out.
+	waitForExpiry(t, events, 1)
+
+	h.stop()
+	expectHeld(t, h.f, nil, far)
+	checkAccounting(t, h.f)
+	if count, ok := h.f.announces["announcer"]; ok {
+		t.Fatalf("announcer still charged %d after its refused fetch timed out", count)
+	}
 }
 
 // expectHeld fails unless the fetcher holds exactly the want blocks, each in
