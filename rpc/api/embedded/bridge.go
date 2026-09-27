@@ -483,17 +483,31 @@ func (a *BridgeApi) GetAllUnsignedWrapTokenRequests(pageIndex, pageSize uint32) 
 	return result, nil
 }
 
-// selectUnsignedWrapRequests keeps the requests without a signature, newest
-// first, and returns the requested page of them with the total count.
+// selectUnsignedWrapRequests returns the requested page of the requests
+// without a signature and their total count. Storage lists requests newest
+// first (the key holds the creation height subtracted from MaxInt64), and
+// the page is taken walking that list backwards, so it is oldest first: the
+// order this method has always returned. Only the page is allocated.
 func selectUnsignedWrapRequests(requests []*definition.WrapTokenRequest, pageIndex, pageSize uint32) ([]*definition.WrapTokenRequest, int) {
-	unsigned := make([]*definition.WrapTokenRequest, 0, len(requests))
-	for i := len(requests) - 1; i >= 0; i-- {
-		if requests[i].Signature == "" {
-			unsigned = append(unsigned, requests[i])
+	count := 0
+	for _, request := range requests {
+		if request.Signature == "" {
+			count++
 		}
 	}
-	start, end := api.GetRange(pageIndex, pageSize, uint32(len(unsigned)))
-	return unsigned[start:end], len(unsigned)
+	start, end := api.GetRange(pageIndex, pageSize, uint32(count))
+	page := make([]*definition.WrapTokenRequest, 0, end-start)
+	seen := uint32(0)
+	for i := len(requests) - 1; i >= 0 && seen < end; i-- {
+		if requests[i].Signature != "" {
+			continue
+		}
+		if seen >= start {
+			page = append(page, requests[i])
+		}
+		seen++
+	}
+	return page, count
 }
 
 type UnwrapTokenRequest struct {

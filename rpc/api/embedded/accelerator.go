@@ -171,10 +171,7 @@ func (a *AcceleratorApi) GetAll(pageIndex, pageSize uint32) (*ProjectList, error
 	if err != nil {
 		return nil, err
 	}
-	return a.getAll(context, pageIndex, pageSize)
-}
 
-func (a *AcceleratorApi) getAll(context vm_context.AccountVmContext, pageIndex, pageSize uint32) (*ProjectList, error) {
 	projects, err := definition.GetProjectList(context.Storage())
 	if err != nil {
 		return nil, err
@@ -235,7 +232,6 @@ func (a *AcceleratorApi) GetVoteBreakdown(id types.Hash) (*definition.VoteBreakd
 	}
 	return voteBreakdown, nil
 }
-
 func (a *AcceleratorApi) GetPillarVotes(name string, hashes []types.Hash) ([]*definition.PillarVote, error) {
 	_, context, err := api.GetFrontierContext(a.chain, types.AcceleratorContract)
 	if err != nil {
