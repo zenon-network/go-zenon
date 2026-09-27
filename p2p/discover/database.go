@@ -26,6 +26,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
@@ -54,8 +55,17 @@ type nodeDB struct {
 
 	self NodeID // Own node id to prevent adding it into the database
 
-	runner sync.Once     // Ensures we can start at most one expirer
+	// mu orders the expiration sweep against writers: a writer holds it
+	// shared for the duration of one put, the sweep holds it exclusively
+	// from reading an identity's last pong to deleting its keys. A bond
+	// that completes concurrently is therefore either seen by the sweep or
+	// written after the sweep has finished with that identity.
+	mu sync.RWMutex
+
+	bonded atomic.Bool   // A bond has succeeded, so node records may be expired
 	quit   chan struct{} // Channel to signal the expiring thread to stop
+
+	beforeDelete func(id NodeID) // Test seam, called before an identity is deleted by a sweep
 }
 
 // Schema layout for the node database
@@ -86,11 +96,7 @@ func newMemoryNodeDB(self NodeID) (*nodeDB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &nodeDB{
-		lvl:  db,
-		self: self,
-		quit: make(chan struct{}),
-	}, nil
+	return openNodeDB(db, self), nil
 }
 
 // newPersistentNodeDB creates/opens a leveldb backed persistent node database,
@@ -128,11 +134,18 @@ func newPersistentNodeDB(path string, version int, self NodeID) (*nodeDB, error)
 			return newPersistentNodeDB(path, version, self)
 		}
 	}
-	return &nodeDB{
-		lvl:  db,
+	return openNodeDB(db, self), nil
+}
+
+// openNodeDB wraps an opened store and starts its expiration sweep.
+func openNodeDB(lvl *leveldb.DB, self NodeID) *nodeDB {
+	db := &nodeDB{
+		lvl:  lvl,
 		self: self,
 		quit: make(chan struct{}),
-	}, nil
+	}
+	go db.expirer(nodeDBCleanupCycle)
+	return db
 }
 
 // makeKey generates the leveldb key-blob from a node id and its particular
@@ -178,6 +191,8 @@ func (db *nodeDB) storeInt64(key []byte, n int64) error {
 	blob := make([]byte, binary.MaxVarintLen64)
 	blob = blob[:binary.PutVarint(blob, n)]
 
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 	return db.lvl.Put(key, blob, nil)
 }
 
@@ -203,40 +218,49 @@ func (db *nodeDB) updateNode(node *Node) error {
 	if err != nil {
 		return err
 	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 	return db.lvl.Put(makeKey(node.ID, nodeDBDiscoverRoot), blob, nil)
 }
 
 // deleteNode deletes all information/keys associated with a node.
 func (db *nodeDB) deleteNode(id NodeID) error {
+	// The nil id names the global key namespace, not an identity, and has
+	// no keys of its own to delete.
+	if id == nodeDBNilNodeID {
+		return nil
+	}
 	deleter := db.lvl.NewIterator(util.BytesPrefix(makeKey(id, "")), nil)
+	defer deleter.Release()
+
 	for deleter.Next() {
 		if err := db.lvl.Delete(deleter.Key(), nil); err != nil {
 			return err
 		}
 	}
-	return nil
+	return deleter.Error()
 }
 
-// ensureExpirer is a small helper method ensuring that the data expiration
-// mechanism is running. If the expiration goroutine is already running, this
-// method simply returns.
+// markBonded records that a bond has succeeded, which lifts the protection
+// of node records from expiration.
 //
-// The goal is to start the data evacuation only after the network successfully
-// bootstrapped itself (to prevent dumping potentially useful seed nodes). Since
-// it would require significant overhead to exactly trace the first successful
-// convergence, it's simpler to "ensure" the correct state when an appropriate
-// condition occurs (i.e. a successful bonding), and discard further events.
-func (db *nodeDB) ensureExpirer() {
-	db.runner.Do(func() { go db.expirer() })
+// The sweep itself runs from the moment the database is opened, but node
+// records must not be dropped before the network has been bootstrapped, as
+// they are the seeds that bootstrapping draws on. Since it would require
+// significant overhead to exactly trace the first successful convergence,
+// the first successful bonding is taken as that point.
+func (db *nodeDB) markBonded() {
+	db.bonded.Store(true)
 }
 
 // expirer should be started in a go routine, and is responsible for looping ad
 // infinitum and dropping stale data from the database.
-func (db *nodeDB) expirer() {
-	tick := time.Tick(nodeDBCleanupCycle)
+func (db *nodeDB) expirer(cycle time.Duration) {
+	tick := time.NewTicker(cycle)
+	defer tick.Stop()
 	for {
 		select {
-		case <-tick:
+		case <-tick.C:
 			if err := db.expireNodes(); err != nil {
 				common.P2PLogger.Error("Failed to expire nodedb items", "reason", err)
 			}
@@ -253,7 +277,8 @@ func (db *nodeDB) expirer() {
 // An identity is considered whenever any discovery field is stored for it,
 // not only when it has a node record: a ping that was never answered leaves
 // timing metadata alone, and those entries expire on the same terms as a
-// node record whose last pong is old.
+// node record whose last pong is old. Until a bond has succeeded, node
+// records are kept regardless of age (see markBonded).
 func (db *nodeDB) expireNodes() error {
 	threshold := time.Now().Add(-nodeDBNodeExpiration)
 
@@ -271,21 +296,51 @@ func (db *nodeDB) expireNodes() error {
 		if !strings.HasPrefix(field, nodeDBDiscoverRoot) {
 			continue
 		}
+		// Skip the global key namespace, which belongs to no identity
+		if id == nodeDBNilNodeID {
+			continue
+		}
 		// The fields of one identity are adjacent; decide it once
 		if checked && id == lastID {
 			continue
 		}
 		lastID, checked = id, true
-		// Skip the node if not expired yet (and not self)
-		if bytes.Compare(id[:], db.self[:]) != 0 {
-			if seen := db.lastPong(id); seen.After(threshold) {
-				continue
+		if err := db.expireNode(id, threshold); err != nil {
+			return fmt.Errorf("expire node %v: %w", id, err)
+		}
+	}
+	return it.Error()
+}
+
+// expireNode deletes all information about an identity unless a pong from it
+// is more recent than threshold. Reading the pong and deleting happen under
+// the exclusive lock so that no write from a concurrent bond can fall between
+// the two.
+func (db *nodeDB) expireNode(id NodeID, threshold time.Time) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// Skip the node if not expired yet (and not self)
+	if bytes.Compare(id[:], db.self[:]) != 0 {
+		if seen := db.lastPong(id); seen.After(threshold) {
+			return nil
+		}
+		// Until a bond has succeeded, keep node records as seeds
+		if !db.bonded.Load() {
+			stored, err := db.lvl.Has(makeKey(id, nodeDBDiscoverRoot), nil)
+			if err != nil {
+				return err
+			}
+			if stored {
+				return nil
 			}
 		}
-		// Otherwise delete all associated information
-		db.deleteNode(id)
 	}
-	return nil
+	// Otherwise delete all associated information
+	if db.beforeDelete != nil {
+		db.beforeDelete(id)
+	}
+	return db.deleteNode(id)
 }
 
 // lastPing retrieves the time of the last ping packet send to a remote node,
