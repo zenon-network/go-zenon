@@ -12,7 +12,11 @@ set -euo pipefail
 
 if [ "${REF_TYPE}" = "tag" ]; then
   VERSION="${REF_NAME}"
-  PRERELEASE="false"
+  PUBLISH="true"
+  case "${REF_NAME}" in
+    *-rc* | *-dev-* | *-testnet-*) PRERELEASE="true" ;;
+    *) PRERELEASE="false" ;;
+  esac
 else
   BASE_TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-dev' --exclude '*-dev-*' --exclude '*-testnet' --exclude '*-testnet-*')"
   BASE_VERSION="${BASE_TAG%-alphanet}"
@@ -22,14 +26,19 @@ else
     dev)
       VERSION="${BASE_VERSION}-dev-${COUNT}-g${HASH}"
       PRERELEASE="true"
+      PUBLISH="true"
       ;;
     testnet)
       VERSION="${BASE_VERSION}-testnet-${COUNT}-g${HASH}"
       PRERELEASE="true"
+      PUBLISH="true"
       ;;
     *)
       VERSION="${BASE_VERSION}-${COUNT}-g${HASH}"
       PRERELEASE="false"
+      # Only dev/testnet builds mint a release tag; any other branch would
+      # create a tag that the base-tag lookup can't exclude later.
+      PUBLISH="false"
       ;;
   esac
 fi
@@ -37,7 +46,8 @@ fi
 OUTPUT="version=$VERSION
 release_name=$VERSION
 release_tag=$VERSION
-prerelease=$PRERELEASE"
+prerelease=$PRERELEASE
+publish=$PUBLISH"
 
 echo "$OUTPUT"
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
