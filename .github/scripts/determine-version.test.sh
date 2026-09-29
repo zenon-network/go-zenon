@@ -65,6 +65,7 @@ run_determine_version() {
   out="$(cd "$WORK" && REF_TYPE="$ref_type" REF_NAME="$ref_name" "$DETERMINE_VERSION")"
   OUT_VERSION="$(sed -n 's/^version=//p' <<<"$out")"
   OUT_PRERELEASE="$(sed -n 's/^prerelease=//p' <<<"$out")"
+  OUT_PUBLISH="$(sed -n 's/^publish=//p' <<<"$out")"
 }
 
 echo "== Case 1: two consecutive dev releases after a stable/alphanet base tag =="
@@ -128,6 +129,26 @@ tag "v1.2.3-alphanet"
 run_determine_version tag "v1.2.3-alphanet"
 assert_eq "tag build version" "v1.2.3-alphanet" "$OUT_VERSION"
 assert_eq "tag build prerelease" "false" "$OUT_PRERELEASE"
+
+echo "== Case 5: manually pushed tags are classified by name =="
+new_repo
+commit "base"
+for t in v0.1.0-rc1 v0.0.9-dev-5-gabc1234 v0.0.9-testnet-5-gabc1234; do
+  run_determine_version tag "$t"
+  assert_eq "$t prerelease" "true" "$OUT_PRERELEASE"
+done
+run_determine_version tag "v0.1.0"
+assert_eq "v0.1.0 prerelease" "false" "$OUT_PRERELEASE"
+
+echo "== Case 6: non-channel branch dispatch does not publish =="
+new_repo
+commit "base"
+tag "v0.0.8-alphanet"
+commit "c1"
+run_determine_version branch master
+assert_eq "master dispatch publish" "false" "$OUT_PUBLISH"
+run_determine_version branch dev
+assert_eq "dev build publish" "true" "$OUT_PUBLISH"
 
 echo
 echo "$pass passed, $fail failed"
