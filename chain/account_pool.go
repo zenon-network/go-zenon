@@ -369,13 +369,48 @@ func (ap *accountPool) InsertMomentum(detailed *nom.DetailedMomentum) {
 		common.ChainLogger.Error("failed to handle InsertMomentum in AccountPool", "reason", err)
 	}
 }
-func (ap *accountPool) DeleteMomentum(*nom.DetailedMomentum) {
+func (ap *accountPool) DeleteMomentum(detailed *nom.DetailedMomentum) {
 	ap.refreshDynamicPlasma()
 
 	ap.changes.Lock()
 	defer ap.changes.Unlock()
 
-	ap.managers = make(map[types.Address]*accountManager)
+	// Only remove managers for addresses whose account blocks were included
+	// in the deleted momentum.  Wiping every manager discards pending blocks
+	// that are unrelated to the rollback and leaves the subsequent rebuild
+	// with nothing to iterate over.
+	if detailed == nil {
+		return
+	}
+	touched := make(map[types.Address]struct{})
+	rolledBackSends := make(map[types.Hash]struct{})
+	for _, block := range detailed.AccountBlocks {
+		touched[block.Address] = struct{}{}
+		if block.IsSendBlock() {
+			rolledBackSends[block.Hash] = struct{}{}
+		}
+	}
+	for address := range touched {
+		delete(ap.managers, address)
+	}
+
+	// Evict managers holding pending receives whose from-block (send) was
+	// rolled back.  Such receives are orphaned: their from-block no longer
+	// exists on the committed chain, so including them in the next momentum
+	// would fail with "Can't find from-block in store" and stall block
+	// production.
+	if len(rolledBackSends) > 0 {
+		for address, manager := range ap.managers {
+			for _, block := range manager.blocks {
+				if block.IsReceiveBlock() && block.BlockType != nom.BlockTypeGenesisReceive {
+					if _, ok := rolledBackSends[block.FromBlockHash]; ok {
+						delete(ap.managers, address)
+						break
+					}
+				}
+			}
+		}
+	}
 }
 func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 	addresses := make([]types.Address, 0, len(ap.managers))
@@ -412,6 +447,18 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 			blocks: make(map[uint64]*nom.AccountBlock),
 		}
 		for _, block := range uncommitted {
+			// After a rollback the frontier may be lower than when the block
+			// was accepted.  A block whose MomentumAcknowledged is above the
+			// current frontier is invalid against the new chain state; drop
+			// it and every subsequent block on this account chain, since they
+			// build on it.
+			if block.MomentumAcknowledged.Height > detailed.Momentum.Height {
+				log.Info("dropping block with momentum-acknowledged above frontier",
+					"block", block.Header(),
+					"ma-height", block.MomentumAcknowledged.Height,
+					"frontier-height", detailed.Momentum.Height)
+				break
+			}
 			patch := oldManager.db.GetPatch(block.Identifier())
 			err := manager.Add(&nom.AccountBlockTransaction{
 				Block:   block,
