@@ -459,6 +459,33 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 					"frontier-height", detailed.Momentum.Height)
 				break
 			}
+			// A rollback may have replaced the momentum at the acknowledged
+			// height with a different hash (a longer branch).  Normal account-
+			// block verification checks the hash (verifier/account_block.go
+			// momentumAcknowledged), but the rebuild path replays cached
+			// patches without re-verifying.  Drop blocks whose acknowledged
+			// momentum hash no longer matches the canonical chain.
+			if block.MomentumAcknowledged.Height > 0 {
+				momentumStore := ap.stable.GetFrontierMomentumStore()
+				if momentumStore != nil {
+					canonical, err := momentumStore.GetMomentumByHeight(block.MomentumAcknowledged.Height)
+					if err != nil {
+						return errors.Errorf("account pool rebuild error. Unable to check momentum-acknowledged for block %v. Reason %v", block.Header(), err)
+					}
+					if canonical == nil || canonical.Hash != block.MomentumAcknowledged.Hash {
+						canonicalHash := types.ZeroHash
+						if canonical != nil {
+							canonicalHash = canonical.Hash
+						}
+						log.Info("dropping block with stale momentum-acknowledged hash",
+							"block", block.Header(),
+							"ma-hash", block.MomentumAcknowledged.Hash,
+							"ma-height", block.MomentumAcknowledged.Height,
+							"canonical-hash", canonicalHash)
+						break
+					}
+				}
+			}
 			patch := oldManager.db.GetPatch(block.Identifier())
 			err := manager.Add(&nom.AccountBlockTransaction{
 				Block:   block,
