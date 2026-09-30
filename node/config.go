@@ -2,8 +2,11 @@ package node
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/pkg/errors"
 
@@ -240,15 +243,22 @@ func (c *Config) makeNetConfig() *p2p.Net {
 		ListenPort:        c.Net.ListenPort,
 	}
 }
+
+// joinHostPort builds a host:port listen address, handling IPv6 literals
+// in both raw and pre-bracketed form.
+func joinHostPort(host string, port int) string {
+	return net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port))
+}
+
 func (c *Config) HTTPEndpoint() string {
 	if c.RPC.HTTPHost == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s:%d", c.RPC.HTTPHost, c.RPC.HTTPPort)
+	return joinHostPort(c.RPC.HTTPHost, c.RPC.HTTPPort)
 }
 func (c *Config) WSEndpoint() string {
 	if c.RPC.WSHost == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s:%d", c.RPC.WSHost, c.RPC.WSPort)
+	return joinHostPort(c.RPC.WSHost, c.RPC.WSPort)
 }
