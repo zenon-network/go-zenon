@@ -30,13 +30,14 @@ func checkSporkMetaDataStatic(sporkInfo *definition.Spork) error {
 func checkCommunitySporkAddressValidity(context vm_context.AccountVmContext) error {
 	frontierMomentum, err := context.GetFrontierMomentum()
 	common.DealWithErr(err)
-	if frontierMomentum.Identifier().Height < definition.CommunitySporkAddressStartHeight {
-		return constants.ErrPermissionDenied
+	height := frontierMomentum.Identifier().Height
+	if height >= definition.CommunitySporkAddressStartHeight && height < definition.CommunitySporkAddressEndHeight {
+		return nil
 	}
-	if frontierMomentum.Identifier().Height >= definition.CommunitySporkAddressEndHeight {
-		return constants.ErrPermissionDenied
+	if height >= definition.CommunitySporkAddressRenewalStartHeight && height < definition.CommunitySporkAddressRenewalEndHeight {
+		return nil
 	}
-	return nil
+	return constants.ErrPermissionDenied
 }
 
 func (p *CreateSporkMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
