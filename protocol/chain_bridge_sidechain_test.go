@@ -13,9 +13,12 @@ import (
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/protocol"
+	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm"
+	"github.com/zenon-network/go-zenon/wallet"
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
@@ -89,11 +92,11 @@ func expectChainEquals(t *testing.T, c chain.Chain, expected chainSnapshot) {
 	}
 }
 
-// attackerMomentum builds a momentum on top of previous that is internally
-// consistent (hash recomputed, signed by a key that is not an elected
-// producer) but carries a changes-hash the node cannot reproduce. It passes
-// every check that needs no chain state and fails the first one that does.
-func attackerMomentum(previous *nom.Momentum, height uint64) *nom.Momentum {
+// unsignedMomentum builds an empty momentum on top of previous, in the next
+// slot, that carries a changes-hash the node cannot reproduce. It passes
+// every check that runs against the state at previous and fails the first
+// one that needs the state it claims to produce.
+func unsignedMomentum(previous *nom.Momentum, height uint64) *nom.Momentum {
 	timestamp := time.Unix(int64(previous.TimestampUnix+10), 0)
 	momentum := &nom.Momentum{
 		Version:         previous.Version,
@@ -106,9 +109,54 @@ func attackerMomentum(previous *nom.Momentum, height uint64) *nom.Momentum {
 		ChangesHash:     types.NewHash([]byte("not the state this momentum produces")),
 	}
 	momentum.Hash = momentum.ComputeHash()
-	momentum.PublicKey = g.User1.Public
-	momentum.Signature = g.User1.Sign(momentum.Hash.Bytes())
 	return momentum
+}
+
+// signedBy recomputes the hash and signs the momentum with key.
+func signedBy(momentum *nom.Momentum, key *wallet.KeyPair) *nom.Momentum {
+	momentum.Hash = momentum.ComputeHash()
+	momentum.PublicKey = key.Public
+	momentum.Signature = key.Sign(momentum.Hash.Bytes())
+	return momentum
+}
+
+// attackerMomentum is an unsignedMomentum signed by a key that is not an
+// elected producer: internally consistent, so it costs nothing to make, and
+// rejected by the producer check.
+func attackerMomentum(previous *nom.Momentum, height uint64) *nom.Momentum {
+	return signedBy(unsignedMomentum(previous, height), g.User1)
+}
+
+// pillarKey returns the genesis pillar key producing at address.
+func pillarKey(t *testing.T, address types.Address) *wallet.KeyPair {
+	t.Helper()
+	for _, key := range g.PillarKeys {
+		if key.Address == address {
+			return key
+		}
+	}
+	t.Fatalf("no pillar key produces at %v", address)
+	return nil
+}
+
+// electedKey returns the key of the pillar elected for the slot at timestamp
+// by the election z's frontier implies.
+func electedKey(t *testing.T, z mock.MockZenon, timestamp time.Time) *wallet.KeyPair {
+	t.Helper()
+	producer, err := z.Consensus().GetMomentumProducer(timestamp)
+	common.FailIfErr(t, err)
+	return pillarKey(t, *producer)
+}
+
+// producerMomentum is an unsignedMomentum signed by the pillar elected for
+// its slot. It passes every check that runs before the rollback, including
+// the producer check, and fails on its changes-hash once applied. The slot
+// is within the election z's frontier implies, which the tests keep on the
+// same proof block as the election at previous.
+func producerMomentum(t *testing.T, z mock.MockZenon, previous *nom.Momentum, height uint64) *nom.Momentum {
+	t.Helper()
+	momentum := unsignedMomentum(previous, height)
+	return signedBy(momentum, electedKey(t, z, *momentum.Timestamp))
 }
 
 func detailedOf(momentums ...*nom.Momentum) []*nom.DetailedMomentum {
@@ -150,10 +198,14 @@ func expectRolledBack(t *testing.T, c *rollbackCountingChain) {
 	}
 }
 
+// newSideChainBridge builds the bridge the way the node does, with a real
+// verifier; the mock node carries none, and a nil verifier would skip the
+// head verification that runs before the rollback.
 func newSideChainBridge(z mock.MockZenon) (*rollbackCountingChain, protocol.ChainBridge) {
 	counting := &rollbackCountingChain{Chain: z.Chain()}
 	supervisor := vm.NewSupervisor(z.Chain(), z.Consensus())
-	return counting, protocol.NewChainBridge(counting, z.Consensus(), z.Verifier(), supervisor)
+	momentumVerifier := verifier.NewVerifier(counting, z.Consensus(), vm.CanonicalBasePlasma)
+	return counting, protocol.NewChainBridge(counting, z.Consensus(), momentumVerifier, supervisor)
 }
 
 func TestInsertChain_SideChainRestoredWhenCandidateFailsAfterRollback(t *testing.T) {
@@ -163,18 +215,67 @@ func TestInsertChain_SideChainRestoredWhenCandidateFailsAfterRollback(t *testing
 	counting, bridge := newSideChainBridge(z)
 	before := snapshotChain(t, z.Chain())
 
-	// Side chain forking one below the frontier, longer than ours.
+	// Side chain forking one below the frontier, longer than ours, whose
+	// head is signed by the elected producer.
+	target := momentumAt(t, z.Chain(), 5)
+	head := producerMomentum(t, z, target, 6)
+	tail := attackerMomentum(head, 7)
+
+	_, err := bridge.InsertChain(detailedOf(head, tail))
+	if !errors.Is(err, verifier.ErrMChangesHashInvalid) {
+		t.Fatalf("expected the side chain to be rejected on its changes-hash, got %v", err)
+	}
+	// The head passes every check that runs before the rollback, so the
+	// rollback happens; the failure comes from the replacement state.
+	expectRolledBack(t, counting)
+	expectChainEquals(t, z.Chain(), before)
+}
+
+// TestInsertChain_SideChainFromNonProducerIsRejectedBeforeRollback pins the
+// cost of triggering a rollback: a candidate that is internally consistent
+// but not signed by the pillar elected for its slot is refused before any
+// canonical momentum is removed.
+func TestInsertChain_SideChainFromNonProducerIsRejectedBeforeRollback(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(6)
+	counting, bridge := newSideChainBridge(z)
+	before := snapshotChain(t, z.Chain())
+
 	target := momentumAt(t, z.Chain(), 5)
 	head := attackerMomentum(target, 6)
 	tail := attackerMomentum(head, 7)
 
 	_, err := bridge.InsertChain(detailedOf(head, tail))
-	if err == nil {
-		t.Fatal("expected the side chain to be rejected")
+	if !errors.Is(err, verifier.ErrMProducerInvalid) {
+		t.Fatalf("expected the side chain to be rejected on its producer, got %v", err)
 	}
-	// The candidate passes every stateless check, so the rollback happens;
-	// the failure comes from the state-dependent checks after it.
-	expectRolledBack(t, counting)
+	common.Expect(t, counting.rollbacks, 0)
+	expectChainEquals(t, z.Chain(), before)
+}
+
+// TestInsertChain_SideChainHeadFailingStateChecksIsRejectedBeforeRollback
+// pins that the head is verified against the state at the fork point before
+// the rollback: it is signed by the elected producer, so only the verifier
+// can refuse it, and it belongs to another chain.
+func TestInsertChain_SideChainHeadFailingStateChecksIsRejectedBeforeRollback(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(6)
+	counting, bridge := newSideChainBridge(z)
+	before := snapshotChain(t, z.Chain())
+
+	target := momentumAt(t, z.Chain(), 5)
+	head := unsignedMomentum(target, 6)
+	head.ChainIdentifier = target.ChainIdentifier + 1
+	head = signedBy(head, electedKey(t, z, *head.Timestamp))
+	tail := attackerMomentum(head, 7)
+
+	_, err := bridge.InsertChain(detailedOf(head, tail))
+	if !errors.Is(err, verifier.ErrABChainIdentifierMismatch) {
+		t.Fatalf("expected the side chain to be rejected on its chain identifier, got %v", err)
+	}
+	common.Expect(t, counting.rollbacks, 0)
 	expectChainEquals(t, z.Chain(), before)
 }
 
@@ -229,36 +330,52 @@ type forkFixture struct {
 	fork    []*nom.DetailedMomentum
 }
 
+// buildFork produces, on a fresh node that agrees with z up to forkBase, a
+// genuine branch spanning forkBase+1..forkTop whose first momentum carries a
+// send of amount from User1 to User2, so that branches built with different
+// amounts differ from each other and from z's own branch. Both nodes share
+// genesis and a deterministic clock, so the momentums up to forkBase are
+// byte-identical on both.
+func buildFork(t *testing.T, z mock.MockZenon, forkBase, forkTop uint64, amount int64) []*nom.DetailedMomentum {
+	t.Helper()
+	other := mock.NewMockZenon(t)
+	defer other.StopPanic()
+	other.InsertMomentumsTo(forkBase)
+	common.Expect(t, momentumAt(t, other.Chain(), forkBase).Hash, momentumAt(t, z.Chain(), forkBase).Hash)
+	other.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(amount),
+	}, nil, mock.SkipVmChanges)
+	other.InsertMomentumsTo(forkTop)
+	return prefetchAbove(t, other, forkBase, forkTop)
+}
+
+// prefetchAbove returns the momentums of z at heights from+1..to with their
+// account blocks.
+func prefetchAbove(t *testing.T, z mock.MockZenon, from, to uint64) []*nom.DetailedMomentum {
+	t.Helper()
+	branch := make([]*nom.DetailedMomentum, 0, to-from)
+	for height := from + 1; height <= to; height++ {
+		detailed, err := z.Chain().GetFrontierMomentumStore().PrefetchMomentum(momentumAt(t, z.Chain(), height))
+		common.FailIfErr(t, err)
+		branch = append(branch, detailed)
+	}
+	return branch
+}
+
 // newForkFixture builds the original branch on one node and the fork on a
 // second node so that neither branch has to be rolled back to reach the fork
 // point; the cache only keeps 100 rollback steps, which a long fork exceeds.
-// Both nodes share genesis and a deterministic clock, so the momentums below
-// the fork point are byte-identical on both. The original branch spans heights
-// forkBase+1..originalTop, the fork spans forkBase+1..forkTop.
+// The original branch spans heights forkBase+1..originalTop, the fork spans
+// forkBase+1..forkTop.
 func newForkFixture(t *testing.T, originalTop, forkTop uint64) *forkFixture {
 	const forkBase = uint64(5)
 	z := mock.NewMockZenon(t)
 	z.InsertMomentumsTo(originalTop)
 
-	other := mock.NewMockZenon(t)
-	defer other.StopPanic()
-	other.InsertMomentumsTo(forkBase)
-	common.Expect(t, momentumAt(t, other.Chain(), forkBase).Hash, momentumAt(t, z.Chain(), forkBase).Hash)
-	// Produce a different branch from the fork point: add a transaction so
-	// the content differs, then let the pillars build the rest.
-	other.InsertSendBlock(&nom.AccountBlock{
-		Address:       g.User1.Address,
-		ToAddress:     g.User2.Address,
-		TokenStandard: types.ZnnTokenStandard,
-		Amount:        big.NewInt(1),
-	}, nil, mock.SkipVmChanges)
-	other.InsertMomentumsTo(forkTop)
-	fork := make([]*nom.DetailedMomentum, 0, forkTop-forkBase)
-	for height := forkBase + 1; height <= forkTop; height++ {
-		detailed, err := other.Chain().GetFrontierMomentumStore().PrefetchMomentum(momentumAt(t, other.Chain(), height))
-		common.FailIfErr(t, err)
-		fork = append(fork, detailed)
-	}
+	fork := buildFork(t, z, forkBase, forkTop, 1)
 	if fork[0].Momentum.Hash == momentumAt(t, z.Chain(), forkBase+1).Hash {
 		t.Fatal("fork did not diverge from the original branch")
 	}
@@ -414,7 +531,7 @@ func TestInsertChain_SideChainDepthBoundary(t *testing.T) {
 	// Depth 30: allowed, rolls back, fails after, and every removed momentum
 	// comes back.
 	deepest := momentumAt(t, z.Chain(), 10)
-	head = attackerMomentum(deepest, 11)
+	head = producerMomentum(t, z, deepest, 11)
 	tail = attackerMomentum(head, 41)
 	_, err = bridge.InsertChain(detailedOf(head, tail))
 	if err == nil {
@@ -427,13 +544,20 @@ func TestInsertChain_SideChainDepthBoundary(t *testing.T) {
 // storedPatchDumps returns the serialized state patch of every momentum above
 // identifier exactly as the momentum store holds it, frontier writes included.
 // It deliberately does not go through CaptureBranchAbove, which strips those
-// writes and would hide the very growth this is used to detect.
+// writes and would hide the very growth this is used to detect. The accessor
+// is a test oracle on the concrete chain, not part of the Chain interface.
 func storedPatchDumps(t *testing.T, c chain.Chain, identifier types.HashHeight) [][]byte {
 	t.Helper()
+	patches, ok := c.(interface {
+		GetMomentumPatch(identifier types.HashHeight) db.Patch
+	})
+	if !ok {
+		t.Fatalf("chain %T does not expose its stored momentum patches", c)
+	}
 	frontier := c.GetFrontierMomentumStore().Identifier()
 	dumps := make([][]byte, 0, frontier.Height-identifier.Height)
 	for height := identifier.Height + 1; height <= frontier.Height; height++ {
-		patch := c.GetMomentumPatch(momentumAt(t, c, height).Identifier())
+		patch := patches.GetMomentumPatch(momentumAt(t, c, height).Identifier())
 		if patch == nil {
 			t.Fatalf("no stored patch for height %d", height)
 		}
@@ -446,18 +570,19 @@ func TestInsertChain_RepeatedRestoresKeepStoredPatchesIdentical(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
 	z.InsertMomentumsTo(6)
-	_, bridge := newSideChainBridge(z)
+	counting, bridge := newSideChainBridge(z)
 	before := snapshotChain(t, z.Chain())
 	target := momentumAt(t, z.Chain(), 4).Identifier()
 	patchesBefore := storedPatchDumps(t, z.Chain(), target)
 
 	for attempt := 0; attempt < 3; attempt++ {
-		head := attackerMomentum(momentumAt(t, z.Chain(), 4), 5)
+		head := producerMomentum(t, z, momentumAt(t, z.Chain(), 4), 5)
 		tail := attackerMomentum(head, 7)
 		_, err := bridge.InsertChain(detailedOf(head, tail))
 		if err == nil {
 			t.Fatalf("attempt %d: expected the side chain to be rejected", attempt)
 		}
+		common.Expect(t, counting.rollbacks, 2*(attempt+1))
 		expectChainEquals(t, z.Chain(), before)
 
 		patchesAfter := storedPatchDumps(t, z.Chain(), target)
@@ -661,14 +786,13 @@ func TestInsertChain_PendingPoolAfterRestore(t *testing.T) {
 	}, nil, mock.SkipVmChanges)
 	common.Expect(t, len(f.z.Chain().GetAllUncommittedAccountBlocks()), 1)
 
-	// A candidate carrying the fork's genuine account block, but signed by a
-	// key that is not the elected producer and advertising a changes-hash the
-	// node can't reproduce: the block applies, the momentum fails.
+	// A candidate carrying the fork's genuine account block, signed by the
+	// elected producer but advertising a changes-hash the node can't
+	// reproduce: the block applies, the momentum fails.
 	target := momentumAt(t, f.z.Chain(), 5)
-	head := attackerMomentum(target, 6)
+	head := unsignedMomentum(target, 6)
 	head.Content = f.fork[0].Momentum.Content
-	head.Hash = head.ComputeHash()
-	head.Signature = g.User1.Sign(head.Hash.Bytes())
+	head = signedBy(head, electedKey(t, f.z, *head.Timestamp))
 	carried := f.fork[0].AccountBlocks
 	if len(carried) == 0 {
 		t.Fatal("fork head carries no account block")
@@ -694,4 +818,107 @@ func TestInsertChain_PendingPoolAfterRestore(t *testing.T) {
 			t.Fatal("block pending before the side chain survived the rollback")
 		}
 	}
+}
+
+// TestInsertChain_SecondForkAtSameForkPointReplacesFirst replaces the
+// original branch with one fork and then with a longer fork from the same
+// fork point. The head of each fork is verified against the state at the
+// fork point before the rollback. That state is read through a historical
+// view whose rollback overlay is cached against the frontier it was built
+// under; once the first fork has replaced the original branch, an overlay
+// kept from before that replacement would skip the first fork's rollbacks
+// and show its account blocks at the fork point, so the second fork's head
+// would fail on the account chains the first fork touched.
+func TestInsertChain_SecondForkAtSameForkPointReplacesFirst(t *testing.T) {
+	f := newForkFixture(t, 6, 7)
+	defer f.z.StopPanic()
+	second := buildFork(t, f.z, 5, 8, 2)
+	if second[0].Momentum.Hash == f.fork[0].Momentum.Hash {
+		t.Fatal("second fork did not diverge from the first")
+	}
+	counting, bridge := newSideChainBridge(f.z)
+
+	_, err := bridge.InsertChain(f.fork)
+	common.FailIfErr(t, err)
+	common.Expect(t, counting.rollbacks, 1)
+	expectFrontierAt(t, f.z.Chain(), f.fork[len(f.fork)-1].Momentum)
+
+	_, err = bridge.InsertChain(second)
+	common.FailIfErr(t, err)
+	common.Expect(t, counting.rollbacks, 2)
+	expectFrontierAt(t, f.z.Chain(), second[len(second)-1].Momentum)
+}
+
+// forkAfterGap builds, on a fresh node that agrees with z up to forkBase, a
+// genuine branch whose first momentum sits two ticks after the momentum at
+// forkBase, in a slot for which the branch's own election and the election
+// z's frontier implies name different producers. The branch's election is
+// seeded by its last momentum before the tick's proof time, which is the
+// momentum at forkBase; z's is seeded by z's last momentum before that
+// time, which lies above forkBase. The branch spans forkBase+1..forkTop.
+func forkAfterGap(t *testing.T, z mock.MockZenon, forkBase, forkTop uint64) []*nom.DetailedMomentum {
+	t.Helper()
+	other := mock.NewMockZenon(t)
+	defer other.StopPanic()
+	other.InsertMomentumsTo(forkBase)
+	base := momentumAt(t, other.Chain(), forkBase)
+	common.Expect(t, base.Hash, momentumAt(t, z.Chain(), forkBase).Hash)
+
+	genesis := z.Chain().GetGenesisMomentum().Timestamp
+	var slot time.Time
+	var producer *types.Address
+	for offset := 2 * 300; offset < 3*300; offset += 10 {
+		candidate := genesis.Add(time.Duration(offset) * time.Second)
+		ours, err := z.Consensus().GetMomentumProducer(candidate)
+		common.FailIfErr(t, err)
+		theirs, err := other.Consensus().GetMomentumProducer(candidate)
+		common.FailIfErr(t, err)
+		if *ours != *theirs {
+			slot, producer = candidate, theirs
+			break
+		}
+	}
+	if producer == nil {
+		t.Fatal("both elections name the same producer for every slot of the tick")
+	}
+
+	template := &nom.Momentum{
+		Version:         base.Version,
+		ChainIdentifier: base.ChainIdentifier,
+		PreviousHash:    base.Hash,
+		Height:          base.Height + 1,
+		TimestampUnix:   uint64(slot.Unix()),
+		Content:         nom.NewMomentumContent(nil),
+	}
+	template.EnsureCache()
+	detailed := &nom.DetailedMomentum{Momentum: template, AccountBlocks: []*nom.AccountBlock{}}
+	transaction, err := vm.NewSupervisor(other.Chain(), other.Consensus()).GenerateMomentum(detailed, pillarKey(t, *producer).Signer)
+	common.FailIfErr(t, err)
+	other.Broadcaster().CreateMomentum(transaction, detailed)
+	other.InsertMomentumsTo(forkTop)
+	return prefetchAbove(t, other, forkBase, forkTop)
+}
+
+// TestInsertChain_ForkHeadIsJudgedByItsOwnElection pins which election the
+// pre-rollback producer check uses. A genuine fork whose first momentum comes
+// after a gap, while our branch kept producing, is elected by a proof block
+// at the fork point; our frontier implies a proof block above it and names
+// another producer for that slot. The fork is valid and longer, so it has to
+// replace our branch.
+func TestInsertChain_ForkHeadIsJudgedByItsOwnElection(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(6)
+	fork := forkAfterGap(t, z, 5, 7)
+	counting, bridge := newSideChainBridge(z)
+
+	// The election our frontier implies rejects the head.
+	isProducer, err := z.Consensus().VerifyMomentumProducer(fork[0].Momentum)
+	common.FailIfErr(t, err)
+	common.Expect(t, isProducer, false)
+
+	_, err = bridge.InsertChain(fork)
+	common.FailIfErr(t, err)
+	common.Expect(t, counting.rollbacks, 1)
+	expectFrontierAt(t, z.Chain(), fork[len(fork)-1].Momentum)
 }

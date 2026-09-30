@@ -166,6 +166,10 @@ func (c *momentumPool) CaptureBranchAbove(insertLocker sync.Locker, identifier t
 	return removed, nil
 }
 
+// GetMomentumPatch returns a copy of the state patch stored for the momentum
+// with this identifier, as the manager holds it, frontier writes included, or
+// nil if there is none. It is a test oracle for the stored history and is
+// deliberately not part of the MomentumPool interface.
 func (c *momentumPool) GetMomentumPatch(identifier types.HashHeight) db.Patch {
 	c.changes.Lock()
 	defer c.changes.Unlock()

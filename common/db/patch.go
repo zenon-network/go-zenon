@@ -130,7 +130,10 @@ func (pa *patchApplierWO) Delete(key []byte) {
 	if ok, err := pa.db.Has(key); err != nil {
 		pa.err = err
 	} else if !ok {
-		pa.err = pa.db.Put(key, []byte{0})
+		// A deleted key is an empty value, the same encoding the on-disk
+		// frontier uses, so the delete-aware view reports it as absent.
+		// A one-byte value would read as present with an empty payload.
+		pa.err = pa.db.Put(key, []byte{})
 	}
 }
 

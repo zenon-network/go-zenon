@@ -14,7 +14,6 @@ import (
 	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm"
-	"github.com/zenon-network/go-zenon/wallet"
 )
 
 type chainBridge struct {
@@ -199,24 +198,41 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 			return 0, errors.Errorf("won't insert side-chain which is not longer")
 		}
 
-		// Everything that can be checked without chain state is checked
-		// before any canonical momentum is removed, so a candidate that is
-		// not even internally consistent never triggers a rollback.
+		// Everything that can be checked before any canonical momentum is
+		// removed is checked here, so that a rollback costs the sender at
+		// least a momentum the elected producer signed.
+		//
+		// Every candidate has to be internally consistent.
 		for index, detailed := range momentums {
-			if err := verifyMomentumStatically(detailed.Momentum); err != nil {
+			if err := verifier.MomentumStatic(detailed.Momentum); err != nil {
 				log.Info("side-chain momentum failed static verification", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
 				return index + start, err
 			}
 		}
-		if c.verifier != nil {
-			if err := c.verifier.Momentum(momentums[0]); err != nil {
-				log.Info("side-chain head failed verification", "reason", err, "momentum-identifier", head.Identifier())
-				return start, err
-			}
+		// The head extends target, which the node has, so its state-dependent
+		// checks run against the store at target. Later candidates extend
+		// momentums the node does not have yet.
+		if err := c.verifier.Momentum(momentums[0]); err != nil {
+			log.Info("side-chain head failed verification", "reason", err, "momentum-identifier", head.Identifier())
+			return start, err
+		}
+		// The head's producer is judged by the election of the chain the head
+		// belongs to, which agrees with ours up to target. Our own frontier
+		// may imply a different election for the same slot when our branch
+		// continued past the proof time the head's tick uses, so it is not
+		// the reference here.
+		isProducer, err := c.consensus.VerifyMomentumProducerAt(target.Identifier(), head)
+		if err != nil {
+			log.Info("side-chain head producer check failed", "reason", err, "momentum-identifier", head.Identifier())
+			return start, verifier.InternalError(err)
+		}
+		if !isProducer {
+			log.Info("side-chain head not signed by the elected producer", "momentum-identifier", head.Identifier(), "producer", head.Producer())
+			return start, verifier.ErrMProducerInvalid
 		}
 
-		// The state-dependent checks can only run after the rollback, so keep
-		// the branch being removed and put it back if the replacement fails.
+		// The remaining checks need the replacement state, so keep the branch
+		// being removed and put it back if the replacement fails.
 		removed, err := c.chain.CaptureBranchAbove(insert, target.Identifier())
 		if err != nil {
 			return 0, errors.Errorf("unable to capture branch above %v for rollback. Reason:%v", target.Identifier(), err)
@@ -259,30 +275,6 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		return index + start, err
 	}
 	return 0, nil
-}
-
-// verifyMomentumStatically runs the checks that need no chain state: the
-// advertised hash matches the content, and the signature is valid for the
-// public key carried by the momentum. Whether that key is the elected
-// producer is a state-dependent check that runs later.
-func verifyMomentumStatically(momentum *nom.Momentum) error {
-	if momentum == nil {
-		return errors.Errorf("missing momentum")
-	}
-	if momentum.ComputeHash() != momentum.Hash {
-		return verifier.ErrMHashInvalid
-	}
-	if len(momentum.Signature) == 0 {
-		return verifier.ErrMSignatureMissing
-	}
-	if len(momentum.PublicKey) == 0 {
-		return verifier.ErrMPublicKeyMissing
-	}
-	isVerified, err := wallet.VerifySignature(momentum.PublicKey, momentum.Hash.Bytes(), momentum.Signature)
-	if err != nil || !isVerified {
-		return verifier.ErrMSignatureInvalid
-	}
-	return nil
 }
 
 // restoreBranch drops whatever replaced the branch above target and puts the
