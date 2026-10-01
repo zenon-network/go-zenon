@@ -25,7 +25,7 @@ func (node *Node) startRPC() error {
 	// Configure WebSocket.
 	if node.config.RPC.WSHost != "" {
 		server := node.wsServerForPort(node.config.RPC.WSPort)
-		if server == node.http && node.config.RPC.WSHost != node.config.RPC.HTTPHost {
+		if server == node.http && node.config.RPC.HTTPHost != "" && node.config.RPC.WSHost != node.config.RPC.HTTPHost {
 			return fmt.Errorf("RPC: HTTP and WebSocket share port %d but bind different hosts (%q vs %q); "+
 				"set both hosts to the same value or use different ports",
 				node.config.RPC.WSPort, node.config.RPC.HTTPHost, node.config.RPC.WSHost)

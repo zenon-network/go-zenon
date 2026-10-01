@@ -40,9 +40,29 @@ func TestStartRPC_SharedPortHostMismatch(t *testing.T) {
 			name: "different ports different hosts is allowed",
 			rpcCfg: RPCConfig{
 				HTTPHost: "127.0.0.1",
+				HTTPPort: 53997,
+				WSHost:   "0.0.0.0",
+				WSPort:   53998,
+			},
+			wantErr: "",
+		},
+		{
+			name: "WS-only config is allowed",
+			rpcCfg: RPCConfig{
+				HTTPHost: "",
 				HTTPPort: 0,
 				WSHost:   "127.0.0.1",
 				WSPort:   0,
+			},
+			wantErr: "",
+		},
+		{
+			name: "WS-only config with different host than empty HTTP is allowed",
+			rpcCfg: RPCConfig{
+				HTTPHost: "",
+				HTTPPort: 0,
+				WSHost:   "0.0.0.0",
+				WSPort:   45999,
 			},
 			wantErr: "",
 		},
