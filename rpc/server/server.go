@@ -84,12 +84,15 @@ func (s *Server) RegisterName(name string, receiver interface{}) error {
 //
 // Note that codec options are no longer supported.
 func (s *Server) ServeCodec(codec ServerCodec, options CodecOption) {
-	defer codec.close()
-
 	if !s.trackCodec(codec) {
+		codec.close()
 		return
 	}
+	// Deferred in this order so the codec is closed before it leaves the set
+	// on every exit path, not only the normal one below, which waits on
+	// codec.closed() before either deferred call runs.
 	defer s.untrackCodec(codec)
+	defer codec.close()
 
 	c := initClient(codec, s.idgen, &s.services)
 	<-codec.closed()
@@ -149,9 +152,13 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 	}
 }
 
-// Stop stops reading new requests, waits for stopPendingRequestTimeout to allow pending
-// requests to finish, then closes all codecs which will cancel pending requests and
-// subscriptions.
+// Stop stops admitting new codecs and closes every codec registered before it
+// took its snapshot of the set, which cancels their pending requests and
+// subscriptions. The call that moves the server to stopped returns once it
+// has issued those closes; it does not wait for the serving goroutines to
+// observe them and leave the set. Any other call, whether concurrent with
+// that one or re-entered from the code it runs, returns at once and may do so
+// before those closes have been issued.
 func (s *Server) Stop() {
 	s.mu.Lock()
 	if !atomic.CompareAndSwapInt32(&s.run, 1, 0) {

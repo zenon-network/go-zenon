@@ -186,6 +186,86 @@ func TestStopMayBeReenteredFromCodecClose(t *testing.T) {
 	assertNoCodecs(t, srv)
 }
 
+// gatedCloseConn blocks Close until gate is closed, so a Stop that is closing
+// the codec over it can be held inside its close loop. entered is closed the
+// first time Close is reached, so a test can wait until the hold is in effect.
+type gatedCloseConn struct {
+	net.Conn
+	gate    <-chan struct{}
+	entered chan struct{}
+	once    *sync.Once
+}
+
+func (c gatedCloseConn) Close() error {
+	c.once.Do(func() { close(c.entered) })
+	<-c.gate
+	return c.Conn.Close()
+}
+
+// Only the Stop call that moves the server to stopped waits for its closes to
+// be issued. A second call, here concurrent with the first, returns at the
+// flag while the first is still inside its close loop and the connection is
+// still open. The first call is held there by a Conn whose Close blocks; the
+// codec's closed channel fires before that, so the far end of the pipe is
+// what shows the close has not completed.
+func TestSecondStopReturnsBeforeFirstHasClosedCodecs(t *testing.T) {
+	srv := NewServer()
+	if err := srv.RegisterName("probe", stopProbe{}); err != nil {
+		t.Fatal(err)
+	}
+	p1, p2 := net.Pipe()
+	gate := make(chan struct{})
+	var openGate sync.Once
+	release := func() { openGate.Do(func() { close(gate) }) }
+	// Registered after the pipe cleanups, so it runs first: a failure before
+	// the release must not leave the first Stop waiting on the gate.
+	t.Cleanup(func() { _ = p2.Close() })
+	t.Cleanup(release)
+	connClosed := make(chan struct{})
+	go func() {
+		defer close(connClosed)
+		_, _ = p2.Read(make([]byte, 1))
+	}()
+	entered := make(chan struct{})
+	codec := NewCodec(gatedCloseConn{Conn: p1, gate: gate, entered: entered, once: new(sync.Once)})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.ServeCodec(codec, 0)
+	}()
+	waitRegistered(t, srv, codec)
+
+	first := make(chan struct{})
+	go func() {
+		defer close(first)
+		srv.Stop()
+	}()
+	// The first call is inside the gated Close, so it has released the lock
+	// and is held in its close loop.
+	awaitClose(t, entered, "the first Stop reaching the codec's Close")
+
+	second := make(chan struct{})
+	go func() {
+		defer close(second)
+		srv.Stop()
+	}()
+	awaitClose(t, second, "the second Stop returning")
+	select {
+	case <-first:
+		t.Fatal("first Stop returned while its codec close was held")
+	case <-connClosed:
+		t.Fatal("connection was closed while the first Stop was held in its close loop")
+	default:
+	}
+
+	release()
+	awaitClose(t, first, "the first Stop returning")
+	awaitClose(t, connClosed, "the connection being closed by the first Stop")
+	awaitClose(t, codec.closed(), "the codec being closed by the first Stop")
+	awaitClose(t, done, "ServeCodec returning")
+	assertNoCodecs(t, srv)
+}
+
 // halter is a service whose one method stops the server serving the call.
 type halter struct{ srv *Server }
 
