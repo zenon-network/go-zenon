@@ -520,14 +520,8 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 					"frontier-height", detailed.Momentum.Height)
 				break
 			}
-			// NOTE: the hash check for stale MomentumAcknowledged was removed.
-			// DeleteMomentum now evicts blocks with MA.Height >= popped.Height,
-			// which covers all cases where the acknowledged momentum is no longer
-			// canonical.  The height-only eviction is strictly stronger than the
-			// old hash check (it catches replacements at any acknowledged height,
-			// not just hash mismatches), needs no store lookup, and removes one
-			// LevelDB Get per pending block per momentum insert on the steady-state
-			// path.
+			// DeleteMomentum's eviction keeps every retained acknowledgement
+			// at or below the frontier, so no hash re-check is needed here.
 			patch := oldManager.db.GetPatch(block.Identifier())
 			err := manager.Add(&nom.AccountBlockTransaction{
 				Block:   block,

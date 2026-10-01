@@ -199,25 +199,24 @@ func TestRollbackReplacesMomentum_DropsStaleAcknowledged(t *testing.T) {
 	}
 
 	// The send's MA still points to the OLD m4 hash.
-	// Height check: MA.Height(4) > frontier(4)? No — passes.
-	// Hash check: GetMomentumByHeight(4).Hash(newM4.Hash) != MA.Hash(old m4.Hash) — drops.
-	// Trigger rebuild by inserting another momentum.
+	// DeleteMomentum already evicted it during rollback (MA.Height 4 >= popped
+	// height 4), so it must not be cemented into the replacement momentum.
+	// Trigger momentum selection by inserting another momentum.
 	z.InsertNewMomentum()
 
-	// The stale-acknowledged send must NOT be on chain — it should have been
-	// dropped by the hash check, not cemented.
+	// The stale-acknowledged send must NOT be on chain.
 	frontier := z.Chain().GetFrontierMomentumStore()
 	sendOnChain, _ := frontier.GetAccountBlockByHash(send.Hash)
 	if sendOnChain != nil {
-		t.Errorf("stale-acknowledged send %v was cemented on chain despite MomentumAcknowledged hash %v not matching canonical %v at height %d",
-			send.Hash, send.MomentumAcknowledged, newM4.Hash, send.MomentumAcknowledged.Height)
+		t.Errorf("stale-acknowledged send %v was cemented on chain despite MomentumAcknowledged height %d >= popped height %d",
+			send.Hash, send.MomentumAcknowledged.Height, m4.Height)
 	}
 
 	// It must also not remain in the pending pool.
 	for _, b := range z.Chain().GetAllUncommittedAccountBlocks() {
 		if b.Hash == send.Hash {
-			t.Errorf("stale-acknowledged send %v still pending despite MomentumAcknowledged hash %v not matching canonical %v at height %d",
-				b.Hash, b.MomentumAcknowledged, newM4.Hash, b.MomentumAcknowledged.Height)
+			t.Errorf("stale-acknowledged send %v still pending despite MomentumAcknowledged height %d >= popped height %d",
+				b.Hash, b.MomentumAcknowledged.Height, m4.Height)
 		}
 	}
 }
