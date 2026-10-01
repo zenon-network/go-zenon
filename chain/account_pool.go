@@ -444,6 +444,13 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 	}
 
 	ap.log.Debug("started rebuilding account-pool", "momentum-identifier", detailed.Momentum.Identifier())
+	// Rebuild must not abandon the remaining addresses when one of them fails.
+	// Returning mid-loop leaves the addresses already processed bound to the
+	// new stable DB and the rest still bound to the previous one, with no
+	// indication which is which.  Fail each address independently instead:
+	// the address whose rebuild failed keeps no manager, and every other
+	// address is rebuilt consistently.
+	var firstErr error
 	for _, address := range addresses {
 		log := ap.log.New("address", address)
 		log.Debug("start rebuilding")
@@ -498,16 +505,31 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 				Changes: patch,
 			})
 			if err != nil {
-				return errors.Errorf("account pool rebuild error. Unable to re-apply block %v. Reason %v", block.Header(), err)
+				// Drop this address's manager entirely and carry on with the
+				// others.  Re-applying the rest of the chain from a manager
+				// whose state is already inconsistent is not safe.
+				log.Error("rebuild failed, dropping pending blocks for address",
+					"block", block.Header(),
+					"reason", err)
+				if firstErr == nil {
+					firstErr = errors.Errorf("account pool rebuild error. Unable to re-apply block %v. Reason %v", block.Header(), err)
+				}
+				manager = nil
+				break
 			}
 		}
-		ap.managers[address] = manager
-
-		log.Debug("successfully rebuild", "num-uncommitted", len(uncommitted))
+		// An empty manager is a map entry with nothing in it until the next
+		// rebuild.  Only re-register the address when blocks survived.
+		if manager != nil && len(manager.blocks) > 0 {
+			ap.managers[address] = manager
+			log.Debug("successfully rebuild", "num-uncommitted", len(uncommitted))
+		} else {
+			log.Debug("rebuild produced no blocks, dropping manager")
+		}
 	}
 
 	ap.log.Debug("finished rebuilding account-pool")
-	return nil
+	return firstErr
 }
 
 func (ap *accountPool) GetNewMomentumContent() []*nom.AccountBlock {
