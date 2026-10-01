@@ -544,7 +544,7 @@ func TestAccountPool_RebuildDropsBlocksAboveFrontier(t *testing.T) {
 	})
 
 	common.Expect(t, len(ap.managers), 1)
- surviving := ap.managers[addr]
+	surviving := ap.managers[addr]
 	if surviving == nil {
 		t.Fatal("manager should survive rebuild with valid prefix")
 	}

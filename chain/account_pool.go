@@ -413,39 +413,24 @@ func (ap *accountPool) DeleteMomentum(detailed *nom.DetailedMomentum) {
 	}
 
 	// Evict blocks whose MomentumAcknowledged is no longer canonical after
-	// the rollback.  This runs during DeleteMomentum (not just during rebuild)
-	// so that stale-acknowledged blocks are removed BEFORE momentum selection
-	// can pick them up.  Without this, a block acknowledging a replaced
-	// momentum could be cemented by the next momentum, bypassing the
-	// canonical-acknowledgement check that normal verification performs.
-	ap.evictStaleAcknowledged()
-}
-
-// evictStaleAcknowledged removes pending blocks whose MomentumAcknowledged
-// no longer matches the canonical chain.  A block is stale if its MA height
-// is above the current frontier, or if the canonical momentum at its MA
-// height has a different hash (a replacement momentum from a longer branch).
-func (ap *accountPool) evictStaleAcknowledged() {
-	momentumStore := ap.stable.GetFrontierMomentumStore()
-	if momentumStore == nil {
-		return
-	}
+	// the rollback.  Rollback pops from the top, so at DeleteMomentum(popped)
+	// every pending block with MA.Height >= popped.Height acknowledges a
+	// momentum that is no longer canonical.  After the last pop every retained
+	// block acknowledges a height at or below the target, where the chain is
+	// byte-identical by construction (RollbackTo verifies the target hash).
+	// A height-only suffix truncation closes the window without a store
+	// lookup.  This runs during DeleteMomentum (not just during rebuild) so
+	// that stale-acknowledged blocks are removed BEFORE momentum selection
+	// can pick them up.
+	poppedHeight := detailed.Momentum.Height
 	for address, manager := range ap.managers {
 		for _, block := range manager.blocks {
-			if block.MomentumAcknowledged.Height == 0 {
-				continue
-			}
-			canonical, err := momentumStore.GetMomentumByHeight(block.MomentumAcknowledged.Height)
-			if err != nil || canonical == nil || canonical.Hash != block.MomentumAcknowledged.Hash {
-				canonicalHash := types.ZeroHash
-				if canonical != nil {
-					canonicalHash = canonical.Hash
-				}
+			if block.MomentumAcknowledged.Height > 0 && block.MomentumAcknowledged.Height >= poppedHeight {
 				ap.log.Info("evicting block with stale momentum-acknowledged",
 					"block", block.Header(),
 					"ma-hash", block.MomentumAcknowledged.Hash,
 					"ma-height", block.MomentumAcknowledged.Height,
-					"canonical-hash", canonicalHash)
+					"popped-height", poppedHeight)
 				delete(ap.managers, address)
 				break
 			}
@@ -499,33 +484,14 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 					"frontier-height", detailed.Momentum.Height)
 				break
 			}
-			// A rollback may have replaced the momentum at the acknowledged
-			// height with a different hash (a longer branch).  Normal account-
-			// block verification checks the hash (verifier/account_block.go
-			// momentumAcknowledged), but the rebuild path replays cached
-			// patches without re-verifying.  Drop blocks whose acknowledged
-			// momentum hash no longer matches the canonical chain.
-			if block.MomentumAcknowledged.Height > 0 {
-				momentumStore := ap.stable.GetFrontierMomentumStore()
-				if momentumStore != nil {
-					canonical, err := momentumStore.GetMomentumByHeight(block.MomentumAcknowledged.Height)
-					if err != nil {
-						return errors.Errorf("account pool rebuild error. Unable to check momentum-acknowledged for block %v. Reason %v", block.Header(), err)
-					}
-					if canonical == nil || canonical.Hash != block.MomentumAcknowledged.Hash {
-						canonicalHash := types.ZeroHash
-						if canonical != nil {
-							canonicalHash = canonical.Hash
-						}
-						log.Info("dropping block with stale momentum-acknowledged hash",
-							"block", block.Header(),
-							"ma-hash", block.MomentumAcknowledged.Hash,
-							"ma-height", block.MomentumAcknowledged.Height,
-							"canonical-hash", canonicalHash)
-						break
-					}
-				}
-			}
+			// NOTE: the hash check for stale MomentumAcknowledged was removed.
+			// DeleteMomentum now evicts blocks with MA.Height >= popped.Height,
+			// which covers all cases where the acknowledged momentum is no longer
+			// canonical.  The height-only eviction is strictly stronger than the
+			// old hash check (it catches replacements at any acknowledged height,
+			// not just hash mismatches), needs no store lookup, and removes one
+			// LevelDB Get per pending block per momentum insert on the steady-state
+			// path.
 			patch := oldManager.db.GetPatch(block.Identifier())
 			err := manager.Add(&nom.AccountBlockTransaction{
 				Block:   block,

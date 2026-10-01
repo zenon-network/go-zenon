@@ -246,10 +246,10 @@ func TestRollbackCanonicalAck_KeepsValidPending(t *testing.T) {
 	// Insert a pending send acknowledging m4 (which is BELOW the rollback
 	// target m5, so m4 survives the rollback).
 	send := z.InsertSendBlock(&nom.AccountBlock{
-		Address:       g.User1.Address,
-		ToAddress:     g.User2.Address,
-		TokenStandard: types.ZnnTokenStandard,
-		Amount:        big.NewInt(1),
+		Address:              g.User1.Address,
+		ToAddress:            g.User2.Address,
+		TokenStandard:        types.ZnnTokenStandard,
+		Amount:               big.NewInt(1),
 		MomentumAcknowledged: m4,
 	}, nil, mock.SkipVmChanges)
 	t.Logf("send.MA=%v m4=%v m5=%v", send.MomentumAcknowledged, m4, m5)
