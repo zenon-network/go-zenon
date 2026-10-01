@@ -144,10 +144,11 @@ func TestRollbackKeepsUnrelatedPending(t *testing.T) {
 	}
 }
 
-// TestRollbackReplacesMomentum_DropsStaleAcknowledged tests the hash-mismatch
-// path in rebuild(): a pending block whose MomentumAcknowledged hash no longer
-// matches the canonical momentum at that height (because a rollback + reinsert
-// produced a different momentum at the same height) must be dropped.
+// TestRollbackReplacesMomentum_DropsStaleAcknowledged tests the stale-MA
+// eviction in DeleteMomentum: a pending block whose MomentumAcknowledged
+// height is >= the popped momentum's height acknowledges a momentum that is
+// no longer canonical after the rollback and must be evicted before momentum
+// selection can pick it up.
 //
 // This is the scenario edgepillar identified in review of PR #115: the height
 // check alone is not enough — a replacement momentum at the same height has a
