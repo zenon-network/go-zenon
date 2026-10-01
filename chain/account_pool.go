@@ -424,19 +424,48 @@ func (ap *accountPool) DeleteMomentum(detailed *nom.DetailedMomentum) {
 	// can pick them up.
 	poppedHeight := detailed.Momentum.Height
 	for address, manager := range ap.managers {
-		for _, block := range manager.blocks {
+		// Find the lowest height whose block acknowledges a stale momentum.
+		// Blocks form a chain and MA is non-decreasing along it, so stale
+		// blocks are a contiguous suffix: truncate from the cutoff, keep
+		// everything below it.
+		cutoff := uint64(0)
+		for height, block := range manager.blocks {
 			if block.MomentumAcknowledged.Height > 0 && block.MomentumAcknowledged.Height >= poppedHeight {
-				ap.log.Info("evicting block with stale momentum-acknowledged",
-					"block", block.Header(),
-					"ma-hash", block.MomentumAcknowledged.Hash,
-					"ma-height", block.MomentumAcknowledged.Height,
-					"popped-height", poppedHeight)
+				if cutoff == 0 || height < cutoff {
+					cutoff = height
+				}
+			}
+		}
+		if cutoff == 0 {
+			continue
+		}
+		ap.log.Info("truncating stale momentum-acknowledged suffix",
+			"address", address,
+			"cutoff-height", cutoff,
+			"popped-height", poppedHeight)
+		// Pop versions until the frontier is below the cutoff.  Each Pop
+		// removes one block (and its descendants) from the manager.
+		for {
+			frontier := db.GetFrontierIdentifier(manager.db.Frontier())
+			if frontier.Height < cutoff {
+				break
+			}
+			if err := manager.Pop(); err != nil {
+				ap.log.Error("failed to pop stale block during truncation",
+					"address", address,
+					"frontier", frontier,
+					"reason", err)
 				delete(ap.managers, address)
 				break
 			}
 		}
+		// If every block was stale the manager is now empty; drop it.
+		if len(manager.blocks) == 0 {
+			delete(ap.managers, address)
+		}
 	}
 }
+
 func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 	addresses := make([]types.Address, 0, len(ap.managers))
 	for address := range ap.managers {
