@@ -411,6 +411,46 @@ func (ap *accountPool) DeleteMomentum(detailed *nom.DetailedMomentum) {
 			}
 		}
 	}
+
+	// Evict blocks whose MomentumAcknowledged is no longer canonical after
+	// the rollback.  This runs during DeleteMomentum (not just during rebuild)
+	// so that stale-acknowledged blocks are removed BEFORE momentum selection
+	// can pick them up.  Without this, a block acknowledging a replaced
+	// momentum could be cemented by the next momentum, bypassing the
+	// canonical-acknowledgement check that normal verification performs.
+	ap.evictStaleAcknowledged()
+}
+
+// evictStaleAcknowledged removes pending blocks whose MomentumAcknowledged
+// no longer matches the canonical chain.  A block is stale if its MA height
+// is above the current frontier, or if the canonical momentum at its MA
+// height has a different hash (a replacement momentum from a longer branch).
+func (ap *accountPool) evictStaleAcknowledged() {
+	momentumStore := ap.stable.GetFrontierMomentumStore()
+	if momentumStore == nil {
+		return
+	}
+	for address, manager := range ap.managers {
+		for _, block := range manager.blocks {
+			if block.MomentumAcknowledged.Height == 0 {
+				continue
+			}
+			canonical, err := momentumStore.GetMomentumByHeight(block.MomentumAcknowledged.Height)
+			if err != nil || canonical == nil || canonical.Hash != block.MomentumAcknowledged.Hash {
+				canonicalHash := types.ZeroHash
+				if canonical != nil {
+					canonicalHash = canonical.Hash
+				}
+				ap.log.Info("evicting block with stale momentum-acknowledged",
+					"block", block.Header(),
+					"ma-hash", block.MomentumAcknowledged.Hash,
+					"ma-height", block.MomentumAcknowledged.Height,
+					"canonical-hash", canonicalHash)
+				delete(ap.managers, address)
+				break
+			}
+		}
+	}
 }
 func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 	addresses := make([]types.Address, 0, len(ap.managers))
