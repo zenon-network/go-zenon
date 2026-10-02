@@ -77,6 +77,10 @@ func TestJoinHostPort_MalformedBrackets(t *testing.T) {
 		{"double-nested brackets", "[[]]", 35997},
 		{"only open bracket", "[[", 35997},
 		{"only close bracket", "]]", 35997},
+		{"nested IPv6 wildcard", "[[::]]", 35997},
+		{"unclosed IPv6 wildcard", "[::", 35997},
+		{"truncated IPv4 wildcard", "[0.0.0.0", 35997},
+		{"trailing bracket on IPv4 wildcard", "0.0.0.0]", 35997},
 	}
 
 	for _, tt := range tests {
@@ -88,11 +92,46 @@ func TestJoinHostPort_MalformedBrackets(t *testing.T) {
 				t.Errorf("joinHostPort(%q, %d) = %q, must not produce wildcard address",
 					tt.host, tt.port, got)
 			}
+			// Malformed input must never be silently repaired into an
+			// all-interface address, i.e. IPv4 0.0.0.0 or IPv6 ::.
+			if addr, err := net.ResolveTCPAddr("tcp", got); err == nil && addr.IP.IsUnspecified() {
+				t.Errorf("joinHostPort(%q, %d) = %q, must not become a wildcard listener",
+					tt.host, tt.port, got)
+			}
 			// The malformed result must fail TCP resolution so that
 			// downstream validation rejects it.
 			if _, err := net.ResolveTCPAddr("tcp", got); err == nil {
 				t.Errorf("joinHostPort(%q, %d) = %q, expected ResolveTCPAddr error for malformed input",
 					tt.host, tt.port, got)
+			}
+		})
+	}
+}
+
+// TestSetListenAddr_MalformedBrackets verifies that the runtime HTTP/WS
+// listener builder preserves malformed bracketed hosts instead of repairing
+// them into wildcard (all-interface) bind addresses.
+func TestSetListenAddr_MalformedBrackets(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		port int
+	}{
+		{"nested IPv6 wildcard", "[[::]]", 35997},
+		{"truncated IPv4 wildcard", "[0.0.0.0", 35997},
+		{"trailing bracket on IPv4 wildcard", "0.0.0.0]", 35997},
+		{"double-nested brackets", "[[]]", 35997},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &httpServer{}
+			if err := h.setListenAddr(tt.host, tt.port); err != nil {
+				t.Fatalf("setListenAddr(%q, %d) unexpected error: %v", tt.host, tt.port, err)
+			}
+			if addr, err := net.ResolveTCPAddr("tcp", h.endpoint); err == nil && addr.IP.IsUnspecified() {
+				t.Errorf("setListenAddr(%q, %d) endpoint %q must not become a wildcard listener",
+					tt.host, tt.port, h.endpoint)
 			}
 		})
 	}
@@ -130,23 +169,6 @@ func TestSetListenAddr_JoinHostPort(t *testing.T) {
 					tt.host, tt.port, h.endpoint, err)
 			}
 		})
-	}
-}
-
-// TestSetListenAddr_MalformedBrackets verifies that setListenAddr does not
-// produce a wildcard listener from malformed bracketed input.
-func TestSetListenAddr_MalformedBrackets(t *testing.T) {
-	h := newHTTPServer(rpc.DefaultHTTPTimeouts)
-	if err := h.setListenAddr("[[]]", 35997); err != nil {
-		t.Fatalf("setListenAddr error: %v", err)
-	}
-	if h.endpoint == ":35997" {
-		t.Errorf("setListenAddr(\"[[]]\", 35997) endpoint = %q, must not produce wildcard address",
-			h.endpoint)
-	}
-	if _, err := net.ResolveTCPAddr("tcp", h.endpoint); err == nil {
-		t.Errorf("setListenAddr(\"[[]]\", 35997) endpoint = %q, expected ResolveTCPAddr error for malformed input",
-			h.endpoint)
 	}
 }
 

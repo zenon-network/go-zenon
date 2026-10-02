@@ -247,15 +247,41 @@ func (c *Config) makeNetConfig() *p2p.Net {
 // joinHostPort builds a host:port listen address, handling IPv6 literals
 // in both raw and pre-bracketed form.
 //
-// Malformed bracketed input (e.g. "[[]]") that trims to an empty string is
-// returned unchanged so that downstream validation rejects it instead of
+// Malformed bracketed input (e.g. "[[]]", "[[::]]", "[0.0.0.0", "0.0.0.0]")
+// is returned unchanged so that downstream validation rejects it instead of
 // silently producing a wildcard (all-interface) listener.
 func joinHostPort(host string, port int) string {
-	trimmed := strings.Trim(host, "[]")
-	if trimmed == "" && host != "" {
+	normalized, ok := normalizeListenHost(host)
+	if !ok {
+		// Leave the malformed host untouched so that net.Listen /
+		// ResolveTCPAddr fails closed instead of binding all interfaces.
 		return host + ":" + strconv.Itoa(port)
 	}
-	return net.JoinHostPort(trimmed, strconv.Itoa(port))
+	return net.JoinHostPort(normalized, strconv.Itoa(port))
+}
+
+// normalizeListenHost strips at most one enclosing bracket pair from a
+// pre-bracketed IPv6 literal. It reports ok=false for empty-but-non-empty,
+// unbalanced or nested bracketed input, so that such configuration is
+// rejected rather than silently repaired into a valid address.
+func normalizeListenHost(host string) (string, bool) {
+	if host == "" {
+		return "", true
+	}
+	if strings.HasPrefix(host, "[") {
+		if !strings.HasSuffix(host, "]") || len(host) < 2 {
+			return "", false
+		}
+		inner := host[1 : len(host)-1]
+		if strings.ContainsAny(inner, "[]") {
+			return "", false
+		}
+		return inner, true
+	}
+	if strings.ContainsAny(host, "[]") {
+		return "", false
+	}
+	return host, true
 }
 
 func (c *Config) HTTPEndpoint() string {
