@@ -177,6 +177,7 @@ func (m *memdbManager) Pop() error {
 	m.frontierIdentifier = previous
 	return nil
 }
+
 // Rebase moves the stable floor of the manager to a new stable DB.
 // Versions at or below the new stable height are discarded; versions
 // above it are preserved but their overlay chains are rebuilt directly

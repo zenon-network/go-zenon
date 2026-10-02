@@ -343,7 +343,6 @@ func TestLevelDBManagerAddRejectsNonFrontierPrevious(t *testing.T) {
 	}
 }
 
-
 // --- Rebase overlay-chain tests -------------------------------------------------
 
 // overlayChainDepth returns the number of nested mergedDB levels reachable
