@@ -88,7 +88,7 @@ func (h *httpServer) setListenAddr(host string, port int) error {
 	}
 
 	h.host, h.port = host, port
-	h.endpoint = fmt.Sprintf("%s:%d", host, port)
+	h.endpoint = joinHostPort(host, port)
 	return nil
 }
 

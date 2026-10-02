@@ -246,8 +246,16 @@ func (c *Config) makeNetConfig() *p2p.Net {
 
 // joinHostPort builds a host:port listen address, handling IPv6 literals
 // in both raw and pre-bracketed form.
+//
+// Malformed bracketed input (e.g. "[[]]") that trims to an empty string is
+// returned unchanged so that downstream validation rejects it instead of
+// silently producing a wildcard (all-interface) listener.
 func joinHostPort(host string, port int) string {
-	return net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port))
+	trimmed := strings.Trim(host, "[]")
+	if trimmed == "" && host != "" {
+		return host + ":" + strconv.Itoa(port)
+	}
+	return net.JoinHostPort(trimmed, strconv.Itoa(port))
 }
 
 func (c *Config) HTTPEndpoint() string {
