@@ -342,3 +342,304 @@ func TestLevelDBManagerAddRejectsNonFrontierPrevious(t *testing.T) {
 		t.Fatalf("frontier changed from %v to %v after rejected Add", frontierBefore, got)
 	}
 }
+
+
+// --- Rebase overlay-chain tests -------------------------------------------------
+
+// overlayChainDepth returns the number of nested mergedDB levels reachable
+// from d, following enableDeleteDB wrappers.  A freshly snapshotted DB has
+// depth 1 (one mergedDB).  Each additional overlay level adds 1.
+func overlayChainDepth(d DB) int {
+	ed, ok := d.(*enableDeleteDB)
+	if !ok {
+		return 0
+	}
+	return rawOverlayDepth(ed.db)
+}
+
+func rawOverlayDepth(d db) int {
+	if m, ok := d.(*mergedDB); ok {
+		maxInner := 0
+		for _, inner := range m.dbs {
+			if depth := rawOverlayDepth(inner); depth > maxInner {
+				maxInner = depth
+			}
+		}
+		return 1 + maxInner
+	}
+	return 0
+}
+
+// TestRebase_SevensOverlayChain verifies that after Rebase the pending
+// versions' mergedDb chains are rebuilt directly on the new stable DB and
+// no longer reference deleted committed overlays.
+func TestRebase_SevensOverlayChain(t *testing.T) {
+	// Build: stable(h0) → A(h1) → B(h2) → C(h3)
+	// Rebase to h1: B and C are pending; their chains must sit on the new
+	// stable DB, not on A's overlay.
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	// Add block A (height 1) with a real write.
+	tA := newMockTransaction(1, m.Frontier())
+	common.DealWithErr(m.Add(tA))
+	idA := tA.commit.Identifier()
+	patchA := m.GetPatch(idA)
+
+	// Add block B (height 2) with a real write.
+	tB := newMockTransaction(2, m.Frontier())
+	common.DealWithErr(m.Add(tB))
+
+	// Add block C (height 3) with a real write.
+	tC := newMockTransaction(3, m.Frontier())
+	common.DealWithErr(m.Add(tC))
+	idC := tC.commit.Identifier()
+
+	// Before Rebase: C's overlay chain has 3 mergedDB levels
+	// (C → B → A → stable).
+	depthBefore := overlayChainDepth(m.versions[idC])
+	if depthBefore != 3 {
+		t.Fatalf("pre-rebase overlay depth = %d, want 3", depthBefore)
+	}
+
+	// Build the new stable DB at height 1 by replaying A's patch.
+	newStable := NewMemDB()
+	common.DealWithErr(ApplyPatch(newStable, patchA))
+	common.DealWithErr(SetFrontier(newStable, idA, []byte("block-A")))
+
+	m.Rebase(newStable)
+
+	// After Rebase: C's overlay chain must have depth 2
+	// (C' → newStable), not 3.
+	depthAfter := overlayChainDepth(m.versions[idC])
+	if depthAfter != 2 {
+		t.Fatalf("post-rebase overlay depth = %d, want 2 (chain not severed)", depthAfter)
+	}
+}
+
+// TestRebase_PreservesPendingData verifies that data written by pending
+// versions remains readable after Rebase.
+func TestRebase_PreservesPendingData(t *testing.T) {
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	// Block A at height 1.
+	tA := newMockTransaction(1, m.Frontier())
+	common.DealWithErr(m.Add(tA))
+	idA := tA.commit.Identifier()
+	patchA := m.GetPatch(idA)
+
+	// Block B at height 2.
+	tB := newMockTransaction(2, m.Frontier())
+	common.DealWithErr(m.Add(tB))
+
+	// Block C at height 3.
+	tC := newMockTransaction(3, m.Frontier())
+	common.DealWithErr(m.Add(tC))
+	idC := tC.commit.Identifier()
+
+	// Snapshot C's full visible state before Rebase.
+	fullCBefore := DebugDB(m.Get(idC))
+
+	// Build new stable at height 1.  Use the real serialized block data so
+	// the comparison is exact.
+	blockAData, err := tA.commit.Serialize()
+	common.FailIfErr(t, err)
+	newStable := NewMemDB()
+	common.DealWithErr(ApplyPatch(newStable, patchA))
+	common.DealWithErr(SetFrontier(newStable, idA, blockAData))
+
+	m.Rebase(newStable)
+
+	// After Rebase, Get(idC) must return the same visible data.
+	fullCAfter := DebugDB(m.Get(idC))
+	common.ExpectString(t, fullCAfter, fullCBefore)
+}
+
+// TestRebase_PopAfterRebase verifies that Pop works correctly after Rebase,
+// stopping at the new stable floor.
+func TestRebase_PopAfterRebase(t *testing.T) {
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	// Add three blocks.
+	tA := newMockTransaction(1, m.Frontier())
+	common.DealWithErr(m.Add(tA))
+	idA := tA.commit.Identifier()
+	patchA := m.GetPatch(idA)
+
+	tB := newMockTransaction(2, m.Frontier())
+	common.DealWithErr(m.Add(tB))
+
+	tC := newMockTransaction(3, m.Frontier())
+	common.DealWithErr(m.Add(tC))
+
+	// Rebase to height 1 (commit A).
+	newStable := NewMemDB()
+	common.DealWithErr(ApplyPatch(newStable, patchA))
+	common.DealWithErr(SetFrontier(newStable, idA, []byte("block-A")))
+	m.Rebase(newStable)
+
+	// Pop C (h3).
+	common.DealWithErr(m.Pop())
+	if got := GetFrontierIdentifier(m.Frontier()); got.Height != 2 {
+		t.Fatalf("after pop: frontier height = %d, want 2", got.Height)
+	}
+
+	// Pop B (h2).
+	common.DealWithErr(m.Pop())
+	if got := GetFrontierIdentifier(m.Frontier()); got.Height != 1 {
+		t.Fatalf("after second pop: frontier height = %d, want 1", got.Height)
+	}
+
+	// Pop should now fail (at stable).
+	if err := m.Pop(); err == nil {
+		t.Fatal("expected Pop at stable floor to fail")
+	}
+}
+
+// TestRebase_AddAfterRebase verifies that new blocks can be added after
+// Rebase.
+func TestRebase_AddAfterRebase(t *testing.T) {
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	tA := newMockTransaction(1, m.Frontier())
+	common.DealWithErr(m.Add(tA))
+	idA := tA.commit.Identifier()
+	patchA := m.GetPatch(idA)
+
+	tB := newMockTransaction(2, m.Frontier())
+	common.DealWithErr(m.Add(tB))
+
+	// Rebase to height 1.
+	newStable := NewMemDB()
+	common.DealWithErr(ApplyPatch(newStable, patchA))
+	common.DealWithErr(SetFrontier(newStable, idA, []byte("block-A")))
+	m.Rebase(newStable)
+
+	// Add a new block at height 3 (on top of B at height 2).
+	tC := newMockTransaction(3, m.Frontier())
+	common.DealWithErr(m.Add(tC))
+
+	if got := GetFrontierIdentifier(m.Frontier()); got.Height != 3 {
+		t.Fatalf("frontier height = %d, want 3", got.Height)
+	}
+}
+
+// TestRebase_RollingCommitBoundedDepth simulates a rolling commit pattern
+// where each new momentum commits one block and Rebase is called.  Without
+// the overlay-chain rebuild, the depth would grow by one per commit; with
+// the fix it must stay bounded.
+func TestRebase_RollingCommitBoundedDepth(t *testing.T) {
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	// Add 5 blocks.
+	var ids []types.HashHeight
+	var patches []Patch
+	for i := 0; i < 5; i++ {
+		tx := newMockTransaction(int64(i+1), m.Frontier())
+		common.DealWithErr(m.Add(tx))
+		ids = append(ids, tx.commit.Identifier())
+		patches = append(patches, m.GetPatch(ids[i]))
+	}
+
+	// Simulate rolling commits: rebase to height 1, 2, 3, 4.
+	// After each Rebase, check that the frontier's overlay depth is bounded.
+	for rebaseTo := uint64(1); rebaseTo <= 4; rebaseTo++ {
+		// Build new stable DB by replaying all patches up to rebaseTo.
+		newStable := NewMemDB()
+		for h := uint64(0); h < rebaseTo; h++ {
+			common.DealWithErr(ApplyPatch(newStable, patches[h]))
+		}
+		data := ids[rebaseTo-1].Serialize()
+		common.DealWithErr(SetFrontier(newStable, ids[rebaseTo-1], data))
+
+		m.Rebase(newStable)
+
+		// Check frontier overlay depth.
+		frontierID := GetFrontierIdentifier(m.Frontier())
+		depth := overlayChainDepth(m.versions[frontierID])
+
+		// After rebasing to height rebaseTo, the frontier is at height 5.
+		// Pending versions are at heights rebaseTo+1..5, so the overlay
+		// depth should be 5-rebaseTo (number of pending versions), not 5.
+		wantDepth := int(5 - rebaseTo)
+		if depth != wantDepth {
+			t.Fatalf("after rebase to h%d: overlay depth = %d, want %d (unbounded growth)",
+				rebaseTo, depth, wantDepth)
+		}
+	}
+}
+
+// TestRebase_DeletesInPendingPatch verifies that pending versions with
+// delete operations in their patches are correctly rebuilt after Rebase.
+func TestRebase_DeletesInPendingPatch(t *testing.T) {
+	// Use a custom patch that writes then deletes.
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	// Block A: write some keys.
+	tA := newMockTransaction(1, m.Frontier())
+	common.DealWithErr(m.Add(tA))
+	idA := tA.commit.Identifier()
+	patchA := m.GetPatch(idA)
+
+	// Block B: delete a key that A wrote.
+	// Build a custom patch for B that deletes one of A's keys.
+	dbB := m.Frontier()
+	// Find a key from A's patch and delete it.
+	pr := &patchRecorder{}
+	common.DealWithErr(patchA.Replay(pr))
+	if len(pr.puts) == 0 {
+		t.Fatal("block A patch has no puts to delete")
+	}
+	common.DealWithErr(dbB.Delete(pr.puts[0].key))
+	changesB, err := dbB.Changes()
+	common.FailIfErr(t, err)
+
+	// Create a transaction for B with the delete.
+	frontier := GetFrontierIdentifier(m.Frontier())
+	commitB := &mockCommit{
+		prevHash:    frontier.Hash,
+		height:      frontier.Height + 1,
+		changesHash: PatchHash(changesB),
+	}
+	commitB.hash = types.NewHash(commitB.changesHash.Bytes())
+	txB := &mockTransaction{patch: changesB, commit: commitB}
+	common.DealWithErr(m.Add(txB))
+	idB := commitB.Identifier()
+
+	// Verify B's frontier can read the state (key should be deleted).
+	dbBefore := m.Get(idB)
+	for _, kv := range pr.puts[:1] {
+		_, err := dbBefore.Get(kv.key)
+		if err != leveldb.ErrNotFound {
+			t.Fatalf("key should be deleted before rebase, got err=%v", err)
+		}
+	}
+
+	// Rebase to height 1.
+	newStable := NewMemDB()
+	common.DealWithErr(ApplyPatch(newStable, patchA))
+	common.DealWithErr(SetFrontier(newStable, idA, []byte("block-A")))
+	m.Rebase(newStable)
+
+	// After Rebase, B's view must still show the key as deleted.
+	dbAfter := m.Get(idB)
+	for _, kv := range pr.puts[:1] {
+		_, err := dbAfter.Get(kv.key)
+		if err != leveldb.ErrNotFound {
+			t.Fatalf("key should be deleted after rebase, got err=%v", err)
+		}
+	}
+}
+
+type kvPair struct {
+	key   []byte
+	value []byte
+}
+
+type patchRecorder struct {
+	puts []kvPair
+}
+
+func (pr *patchRecorder) Put(key, value []byte) {
+	pr.puts = append(pr.puts, kvPair{key: key, value: value})
+}
+func (pr *patchRecorder) Delete(key []byte) {}

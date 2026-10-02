@@ -2,6 +2,7 @@ package db
 
 import (
 	"runtime"
+	"sort"
 	"sync"
 
 	lru "github.com/hashicorp/golang-lru"
@@ -176,21 +177,95 @@ func (m *memdbManager) Pop() error {
 	m.frontierIdentifier = previous
 	return nil
 }
+// Rebase moves the stable floor of the manager to a new stable DB.
+// Versions at or below the new stable height are discarded; versions
+// above it are preserved but their overlay chains are rebuilt directly
+// on top of the new stable DB.
+//
+// Without the rebuild, each pending version's mergedDb would retain a
+// reference to the deleted committed overlay as its read-through base,
+// so the overlay chain would grow by one level per committed block and
+// never shrink, causing unbounded memory growth across momentums.
 func (m *memdbManager) Rebase(newStableDB DB) {
 	m.changes.Lock()
 	defer m.changes.Unlock()
 	newStableIdentifier := GetFrontierIdentifier(newStableDB)
-	m.stableDB = newStableDB
-	m.stableIdentifier = newStableIdentifier
-	// Discard versions at or below the new stable height; they are
-	// now served from the stable store directly.
+	newStableHeight := newStableIdentifier.Height
+
+	// Capture pending versions before mutating maps.  A pending version is
+	// any version above the new stable height.  Head commits carry a
+	// m.previous link to the preceding head (or the old stable); intermediate
+	// batched commits share the same DB object as their batch's head and
+	// have no m.previous entry.
+	type pendingVersion struct {
+		id      types.HashHeight
+		origDB  DB
+		patch   Patch
+		prev    types.HashHeight
+		hasPrev bool
+	}
+	var pending []pendingVersion
+	for id, verDB := range m.versions {
+		if id.Height > newStableHeight {
+			prev, hasPrev := m.previous[id]
+			pending = append(pending, pendingVersion{
+				id:      id,
+				origDB:  verDB,
+				patch:   m.patches[id],
+				prev:    prev,
+				hasPrev: hasPrev,
+			})
+		}
+	}
+	sort.Slice(pending, func(i, j int) bool { return pending[i].id.Height < pending[j].id.Height })
+
+	// Discard committed versions; they are now served from the stable store.
 	for id := range m.versions {
-		if id.Height <= newStableIdentifier.Height && id != newStableIdentifier {
+		if id.Height <= newStableHeight && id != newStableIdentifier {
 			delete(m.versions, id)
 			delete(m.previous, id)
 			delete(m.patches, id)
 		}
 	}
+
+	// Rebuild each pending version's overlay chain on top of the new stable
+	// DB.  Head commits are rebuilt by snapshotting from their (already
+	// rebuilt) previous version and replaying their stored patch.  Versions
+	// that shared the same original DB (batched commits) continue to share
+	// the same rebuilt DB, preserving the invariant established by Add.
+	rebuilt := make(map[types.HashHeight]DB, len(pending))
+	rebuiltByOrig := make(map[DB]DB, len(pending))
+	var deferred []pendingVersion
+
+	for _, p := range pending {
+		if !p.hasPrev {
+			// Intermediate batched commit; resolved after its head.
+			deferred = append(deferred, p)
+			continue
+		}
+		var base DB
+		if p.prev.Height <= newStableHeight {
+			base = newStableDB
+		} else {
+			base = rebuilt[p.prev]
+		}
+		newDB := base.Snapshot()
+		if p.patch != nil {
+			common.DealWithErr(newDB.Apply(p.patch))
+		}
+		rebuilt[p.id] = newDB
+		rebuiltByOrig[p.origDB] = newDB
+		m.versions[p.id] = newDB
+	}
+
+	for _, p := range deferred {
+		if newDB, ok := rebuiltByOrig[p.origDB]; ok {
+			m.versions[p.id] = newDB
+		}
+	}
+
+	m.stableDB = newStableDB
+	m.stableIdentifier = newStableIdentifier
 	m.versions[newStableIdentifier] = newStableDB
 }
 
