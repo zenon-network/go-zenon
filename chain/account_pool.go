@@ -388,42 +388,40 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 		log := ap.log.New("address", address)
 		log.Debug("start rebuilding")
 
-		uncommitted := make([]*nom.AccountBlock, 0)
-		oldManager := ap.managers[address]
-
+		manager := ap.managers[address]
 		stable := account.NewAccountStore(address, ap.stable.GetStableAccountDB(address))
-		uncommittedStore := account.NewAccountStore(address, oldManager.db.Frontier())
-		for i := stable.Identifier().Height + 1; i <= uncommittedStore.Identifier().Height; i += 1 {
-			block, err := oldManager.BlockByHeight(i)
-			common.DealWithErr(err)
-			uncommitted = append(uncommitted, block)
-		}
+		stableHeight := stable.Identifier().Height
+		frontierHeight := db.GetFrontierIdentifier(manager.db.Frontier()).Height
 
-		delete(ap.managers, address)
-
-		if len(uncommitted) == 0 {
+		if frontierHeight <= stableHeight {
+			// Every pending block has been committed by this momentum.
+			delete(ap.managers, address)
 			log.Debug("no uncommitted changes")
 			continue
 		}
 
-		log.Debug("staring applying blocks", "num-uncommitted", len(uncommitted))
-		manager := &accountManager{
-			db:     db.NewMemDBManager(ap.stable.GetStableAccountDB(address)),
-			blocks: make(map[uint64]*nom.AccountBlock),
-		}
-		for _, block := range uncommitted {
-			patch := oldManager.db.GetPatch(block.Identifier())
-			err := manager.Add(&nom.AccountBlockTransaction{
-				Block:   block,
-				Changes: patch,
-			})
-			if err != nil {
-				return errors.Errorf("account pool rebuild error. Unable to re-apply block %v. Reason %v", block.Header(), err)
+		// Some blocks are still pending.  Keep the existing manager — its
+		// in-memory state for uncommitted blocks is already correct.
+		// Re-adding blocks onto a fresh manager would replay stored patches
+		// a second time (every replay appends another copy of the frontier
+		// writes, so the patch grows without bound) and would reject batched
+		// embedded transactions whose descendants were already re-added
+		// individually.
+		//
+		// Rebase the manager's stable reference to the new stable DB so
+		// that Pop() during a subsequent rollback stops at the correct
+		// floor, and committed versions are released from the chain.
+		manager.db.Rebase(ap.stable.GetStableAccountDB(address))
+
+		// Remove committed blocks from the manager's block map.  Their state
+		// is now in the stable DB and they are no longer pending.
+		for height := range manager.blocks {
+			if height <= stableHeight {
+				delete(manager.blocks, height)
 			}
 		}
-		ap.managers[address] = manager
 
-		log.Debug("successfully rebuild", "num-uncommitted", len(uncommitted))
+		log.Debug("successfully rebuild", "num-uncommitted", len(manager.blocks))
 	}
 
 	ap.log.Debug("finished rebuilding account-pool")

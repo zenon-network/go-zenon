@@ -51,6 +51,13 @@ type Manager interface {
 	Add(Transaction) error
 	Pop() error
 
+	// Rebase moves the stable floor of the manager to a new stable DB.
+	// Versions at or below the new stable height are discarded; versions
+	// above it are preserved.  This lets a caller advance the stable
+	// reference without re-creating the manager and re-applying patches.
+	// It is a no-op for managers that are their own stable store.
+	Rebase(newStableDB DB)
+
 	Stop() error
 	Location() string
 }
@@ -169,6 +176,24 @@ func (m *memdbManager) Pop() error {
 	m.frontierIdentifier = previous
 	return nil
 }
+func (m *memdbManager) Rebase(newStableDB DB) {
+	m.changes.Lock()
+	defer m.changes.Unlock()
+	newStableIdentifier := GetFrontierIdentifier(newStableDB)
+	m.stableDB = newStableDB
+	m.stableIdentifier = newStableIdentifier
+	// Discard versions at or below the new stable height; they are
+	// now served from the stable store directly.
+	for id := range m.versions {
+		if id.Height <= newStableIdentifier.Height && id != newStableIdentifier {
+			delete(m.versions, id)
+			delete(m.previous, id)
+			delete(m.patches, id)
+		}
+	}
+	m.versions[newStableIdentifier] = newStableDB
+}
+
 func (m *memdbManager) Stop() error {
 	m.frontierIdentifier = types.ZeroHashHeight
 	m.versions = nil
@@ -404,6 +429,10 @@ func (m *ldbManager) Pop() error {
 	batch.Delete(common.JoinBytes(rollbackByte, common.Uint64ToBytes(frontierIdentifier.Height)))
 	return m.write(batch)
 }
+func (m *ldbManager) Rebase(_ DB) {
+	// ldbManager IS the stable store; there is nothing to rebase.
+}
+
 func (m *ldbManager) Stop() error {
 	m.changes.Lock()
 	defer m.changes.Unlock()

@@ -163,6 +163,8 @@ func (m *fakeAccountManagerDB) Pop() error {
 	return nil
 }
 
+func (m *fakeAccountManagerDB) Rebase(db.DB) {}
+
 func (m *fakeAccountManagerDB) Stop() error {
 	return nil
 }
