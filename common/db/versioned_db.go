@@ -171,6 +171,17 @@ func (m *memdbManager) Pop() error {
 		return errors.Errorf("can't find previous for %v", m.frontierIdentifier)
 	}
 
+	// Remove intermediate batched commits that share the popped head's DB.
+	// Without this cleanup the intermediate entries survive Pop, leaving
+	// stale references to the orphaned DB object.
+	poppedDB := m.versions[m.frontierIdentifier]
+	for id, verDB := range m.versions {
+		if id != m.frontierIdentifier && verDB == poppedDB {
+			delete(m.versions, id)
+			delete(m.patches, id)
+		}
+	}
+
 	delete(m.previous, m.frontierIdentifier)
 	delete(m.versions, m.frontierIdentifier)
 	delete(m.patches, m.frontierIdentifier)
@@ -262,6 +273,12 @@ func (m *memdbManager) Rebase(newStableDB DB) {
 	for _, p := range deferred {
 		if newDB, ok := rebuiltByOrig[p.origDB]; ok {
 			m.versions[p.id] = newDB
+		} else {
+			// The batch head that shared this DB was popped before Rebase;
+			// the intermediate is orphaned.  Remove it so no stale reference
+			// to the old DB survives.
+			delete(m.versions, p.id)
+			delete(m.patches, p.id)
 		}
 	}
 

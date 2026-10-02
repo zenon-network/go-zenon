@@ -642,3 +642,381 @@ func (pr *patchRecorder) Put(key, value []byte) {
 	pr.puts = append(pr.puts, kvPair{key: key, value: value})
 }
 func (pr *patchRecorder) Delete(key []byte) {}
+
+// --- Regression tests for edgepillar's review -------------------------------
+
+// mockBatchTransaction produces multiple commits, mimicking a batched
+// embedded account-block transaction whose DescendantBlocks carry the
+// contract sends triggered by a contract receive.
+type mockBatchTransaction struct {
+	patch   Patch
+	commits []Commit
+}
+
+func (m *mockBatchTransaction) GetCommits() []Commit {
+	return m.commits
+}
+func (m *mockBatchTransaction) StealChanges() Patch {
+	p := m.patch
+	m.patch = nil
+	return p
+}
+
+// newMockBatchTransaction creates a batch of count commits starting at the
+// current frontier.  The last commit is the head; the earlier ones are
+// intermediates.  Each commit gets a distinct write so patches are non-trivial.
+func newMockBatchTransaction(seed int64, db DB, count int) *mockBatchTransaction {
+	frontier := GetFrontierIdentifier(db)
+	r := rand.New(rand.NewSource(seed))
+
+	// Apply stress writes to generate a real patch.
+	stressTestConcurrentUse(nil, db, 5, 1, r)
+	changes, _ := db.Changes()
+
+	commits := make([]Commit, 0, count)
+	prevHash := frontier.Hash
+	baseHeight := frontier.Height
+	for i := 0; i < count; i++ {
+		h := baseHeight + uint64(i) + 1
+		mc := &mockCommit{
+			prevHash: prevHash,
+			height:   h,
+		}
+		// Give each commit a distinct changesHash so identifiers differ.
+		mc.changesHash = types.NewHash(common.Uint64ToBytes(uint64(seed*1000) + uint64(i)))
+		mc.hash = types.NewHash(mc.changesHash.Bytes())
+		commits = append(commits, mc)
+		prevHash = mc.hash
+	}
+
+	return &mockBatchTransaction{
+		patch:   changes,
+		commits: commits,
+	}
+}
+
+// TestRebase_InterleavedAddCommitBoundedDepth reproduces the exact scenario
+// from the review: interleave new Add calls with commits, keeping exactly one
+// pending block after each commit, and assert bounded retained overlay depth.
+func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	// Start with two blocks so we have something to commit.
+	t1 := newMockTransaction(1, m.Frontier())
+	common.DealWithErr(m.Add(t1))
+	id1 := t1.commit.Identifier()
+	patch1 := m.GetPatch(id1)
+
+	t2 := newMockTransaction(2, m.Frontier())
+	common.DealWithErr(m.Add(t2))
+	id2 := t2.commit.Identifier()
+	patch2 := m.GetPatch(id2)
+
+	// Interleaved pattern: commit one block, add one new block, repeat.
+	// After each commit there is exactly one pending block.
+	// Simulate 5 rolling commits.
+	committedPatches := []Patch{patch1, patch2}
+	committedIDs := []types.HashHeight{id1, id2}
+
+	for cycle := 0; cycle < 5; cycle++ {
+		// Commit the oldest pending block by rebasing to its height.
+		rebaseTo := committedIDs[0]
+		newStable := NewMemDB()
+		for i, p := range committedPatches {
+			common.DealWithErr(ApplyPatch(newStable, p))
+			if committedIDs[i] == rebaseTo {
+				break
+			}
+		}
+		data := rebaseTo.Serialize()
+		common.DealWithErr(SetFrontier(newStable, rebaseTo, data))
+
+		m.Rebase(newStable)
+
+		// After rebase, exactly one block should be pending (the one that was
+		// at height rebaseTo+1).  Add a replacement to keep the chain going.
+		frontierID := GetFrontierIdentifier(m.Frontier())
+		depth := overlayChainDepth(m.versions[frontierID])
+
+		// With one pending block, the overlay depth should be 1 (just the
+		// pending version on top of the new stable DB).
+		if depth != 1 {
+			t.Fatalf("cycle %d: overlay depth = %d, want 1 (unbounded growth)",
+				cycle, depth)
+		}
+
+		// Add a new block on top of the current frontier.
+		tx := newMockTransaction(int64(100+cycle), m.Frontier())
+		common.DealWithErr(m.Add(tx))
+		committedPatches = append(committedPatches, m.GetPatch(tx.commit.Identifier()))
+		committedIDs = append(committedIDs, tx.commit.Identifier())
+
+		// Remove the committed entry from our tracking.
+		committedPatches = committedPatches[1:]
+		committedIDs = committedIDs[1:]
+	}
+}
+
+// TestRebase_NonEmptyWritesAndDeletes verifies Rebase with non-empty
+// application writes and deletions: pending-suffix effects are removed,
+// stable-floor state is restored, and replacement insertion works.
+func TestRebase_NonEmptyWritesAndDeletes(t *testing.T) {
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	// Block A (h1): write keys k1, k2.
+	tA := newMockTransaction(1, m.Frontier())
+	common.DealWithErr(m.Add(tA))
+	idA := tA.commit.Identifier()
+	patchA := m.GetPatch(idA)
+
+	// Extract a key written by A so we can delete it in B.
+	pr := &patchRecorder{}
+	common.DealWithErr(patchA.Replay(pr))
+	if len(pr.puts) < 2 {
+		t.Fatal("need at least 2 puts in patch A")
+	}
+	keyToDelete := pr.puts[0].key
+	keyToKeep := pr.puts[1].key
+
+	// Block B (h2): delete k1, write k3.
+	dbB := m.Frontier()
+	common.DealWithErr(dbB.Delete(keyToDelete))
+	// Write a new key.
+	newKey := []byte("new-key-from-B")
+	newVal := []byte("value-B")
+	common.DealWithErr(dbB.Put(newKey, newVal))
+	changesB, err := dbB.Changes()
+	common.FailIfErr(t, err)
+
+	frontier := GetFrontierIdentifier(m.Frontier())
+	commitB := &mockCommit{
+		prevHash:    frontier.Hash,
+		height:      frontier.Height + 1,
+		changesHash: PatchHash(changesB),
+	}
+	commitB.hash = types.NewHash(commitB.changesHash.Bytes())
+	txB := &mockTransaction{patch: changesB, commit: commitB}
+	common.DealWithErr(m.Add(txB))
+	idB := commitB.Identifier()
+
+	// Verify pre-rebase state: B's frontier shows k1 deleted, k2 present, k3 present.
+	dbBefore := m.Get(idB)
+	_, err = dbBefore.Get(keyToDelete)
+	if err != leveldb.ErrNotFound {
+		t.Fatalf("keyToDelete should be absent before rebase, got err=%v", err)
+	}
+	_, err = dbBefore.Get(keyToKeep)
+	if err != nil {
+		t.Fatalf("keyToKeep should be present before rebase, got err=%v", err)
+	}
+	val, err := dbBefore.Get(newKey)
+	if err != nil || string(val) != string(newVal) {
+		t.Fatalf("newKey should be present before rebase, got val=%q err=%v", val, err)
+	}
+
+	// Rebase to height 1 (commit A).
+	blockAData, err := tA.commit.Serialize()
+	common.FailIfErr(t, err)
+	newStable := NewMemDB()
+	common.DealWithErr(ApplyPatch(newStable, patchA))
+	common.DealWithErr(SetFrontier(newStable, idA, blockAData))
+	m.Rebase(newStable)
+
+	// After Rebase:
+	// 1. B's pending-suffix effects must still be visible (delete + new write).
+	dbAfter := m.Get(idB)
+	_, err = dbAfter.Get(keyToDelete)
+	if err != leveldb.ErrNotFound {
+		t.Fatalf("pending-suffix delete lost after rebase: keyToDelete err=%v", err)
+	}
+	val, err = dbAfter.Get(newKey)
+	if err != nil || string(val) != string(newVal) {
+		t.Fatalf("pending-suffix write lost after rebase: newKey val=%q err=%v", val, err)
+	}
+
+	// 2. Stable-floor state must be restored: k2 (from A) still present.
+	_, err = dbAfter.Get(keyToKeep)
+	if err != nil {
+		t.Fatalf("stable-floor key lost after rebase: keyToKeep err=%v", err)
+	}
+
+	// 3. Pop B and verify stable-floor state is fully restored (k1 reappears,
+	//    k3 is gone).
+	common.DealWithErr(m.Pop())
+	dbPopped := m.Frontier()
+	val, err = dbPopped.Get(keyToDelete)
+	if err != nil {
+		t.Fatalf("stable-floor key k1 not restored after Pop: err=%v", err)
+	}
+	_ = val
+	_, err = dbPopped.Get(newKey)
+	if err != leveldb.ErrNotFound {
+		t.Fatalf("pending-suffix key k3 not removed after Pop: err=%v", err)
+	}
+
+	// 4. Replacement insertion: add a new block C at height 2.
+	tC := newMockTransaction(3, m.Frontier())
+	common.DealWithErr(m.Add(tC))
+	idC := tC.commit.Identifier()
+	if idC.Height != 2 {
+		t.Fatalf("replacement block C height = %d, want 2", idC.Height)
+	}
+
+	// Verify C can read the stable-floor state.
+	dbC := m.Get(idC)
+	_, err = dbC.Get(keyToDelete)
+	if err != nil {
+		t.Fatalf("replacement C cannot read stable-floor key k1: err=%v", err)
+	}
+}
+
+// TestPop_CleansBatchIntermediates verifies that Pop removes intermediate
+// batched commits that shared the popped head's DB, preventing stale entries
+// from surviving across Rebase.
+func TestPop_CleansBatchIntermediates(t *testing.T) {
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	// Add a single block at height 1 to establish a frontier.
+	t0 := newMockTransaction(1, m.Frontier())
+	common.DealWithErr(m.Add(t0))
+
+	// Add a batch: intermediate at h2, head at h3.
+	batch := newMockBatchTransaction(2, m.Frontier(), 2)
+	common.DealWithErr(m.Add(batch))
+	intermediateID := batch.commits[0].Identifier()
+	headID := batch.commits[1].Identifier()
+
+	// Verify both entries exist.
+	if m.Get(intermediateID) == nil {
+		t.Fatal("intermediate version not accessible before Pop")
+	}
+	if m.Get(headID) == nil {
+		t.Fatal("head version not accessible before Pop")
+	}
+
+	// Pop the batch head.
+	common.DealWithErr(m.Pop())
+
+	// The intermediate entry must also be gone.
+	if m.Get(intermediateID) != nil {
+		t.Fatal("intermediate version survived Pop — stale reference leak")
+	}
+
+	// The frontier should be back at h1.
+	frontierID := GetFrontierIdentifier(m.Frontier())
+	if frontierID.Height != 1 {
+		t.Fatalf("frontier height after Pop = %d, want 1", frontierID.Height)
+	}
+}
+
+// TestRebase_PoppedBatchIntermediateCleaned verifies the full leak path from
+// the review: batch Add → Pop → replacement Add → Rebase.  The orphaned
+// intermediate must not survive Rebase.
+func TestRebase_PoppedBatchIntermediateCleaned(t *testing.T) {
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	// Add a base block at h1.
+	t0 := newMockTransaction(1, m.Frontier())
+	common.DealWithErr(m.Add(t0))
+	id1 := t0.commit.Identifier()
+	patch1 := m.GetPatch(id1)
+
+	// Add a batch: intermediate at h2, head at h3.
+	batch := newMockBatchTransaction(2, m.Frontier(), 2)
+	common.DealWithErr(m.Add(batch))
+	intermediateID := batch.commits[0].Identifier()
+
+	// Pop the batch.
+	common.DealWithErr(m.Pop())
+
+	// Add a replacement single block at h2.
+	t2 := newMockTransaction(3, m.Frontier())
+	common.DealWithErr(m.Add(t2))
+	id2 := t2.commit.Identifier()
+	patch2 := m.GetPatch(id2)
+
+	// Rebase to h1 (commit the base block).
+	block1Data, err := t0.commit.Serialize()
+	common.FailIfErr(t, err)
+	newStable := NewMemDB()
+	common.DealWithErr(ApplyPatch(newStable, patch1))
+	common.DealWithErr(SetFrontier(newStable, id1, block1Data))
+	m.Rebase(newStable)
+
+	// The orphaned intermediate must not be in versions anymore.
+	m.changes.Lock()
+	_, exists := m.versions[intermediateID]
+	m.changes.Unlock()
+	if exists {
+		t.Fatal("orphaned intermediate survived Rebase — stale DB reference retained")
+	}
+
+	// The replacement block must be accessible and correct.
+	db2 := m.Get(id2)
+	if db2 == nil {
+		t.Fatal("replacement block not accessible after Rebase")
+	}
+
+	// Verify the frontier is correct.
+	frontierID := GetFrontierIdentifier(m.Frontier())
+	if frontierID != id2 {
+		t.Fatalf("frontier = %v, want %v", frontierID, id2)
+	}
+
+	// Verify version map size is bounded: should contain only the stable
+	// identifier and the replacement block.
+	m.changes.Lock()
+	versionCount := len(m.versions)
+	m.changes.Unlock()
+	if versionCount > 2 {
+		t.Fatalf("version map has %d entries, want at most 2 (stable + replacement)", versionCount)
+	}
+
+	// Also verify patch2 is intact.
+	p2 := m.GetPatch(id2)
+	if p2 == nil {
+		t.Fatal("replacement patch missing after Rebase")
+	}
+	_ = patch2
+}
+
+// TestRebase_LiveBatchIntermediatePreserved verifies that intermediates
+// belonging to live (non-popped) batches are NOT removed by Rebase.
+func TestRebase_LiveBatchIntermediatePreserved(t *testing.T) {
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	// Add a base block at h1.
+	t0 := newMockTransaction(1, m.Frontier())
+	common.DealWithErr(m.Add(t0))
+	id1 := t0.commit.Identifier()
+	patch1 := m.GetPatch(id1)
+
+	// Add a batch: intermediate at h2, head at h3.  Do NOT pop.
+	batch := newMockBatchTransaction(2, m.Frontier(), 2)
+	common.DealWithErr(m.Add(batch))
+	intermediateID := batch.commits[0].Identifier()
+	headID := batch.commits[1].Identifier()
+
+	// Rebase to h1.
+	block1Data, err := t0.commit.Serialize()
+	common.FailIfErr(t, err)
+	newStable := NewMemDB()
+	common.DealWithErr(ApplyPatch(newStable, patch1))
+	common.DealWithErr(SetFrontier(newStable, id1, block1Data))
+	m.Rebase(newStable)
+
+	// The intermediate must still be accessible (its batch head survived).
+	dbIntermediate := m.Get(intermediateID)
+	if dbIntermediate == nil {
+		t.Fatal("live batch intermediate removed by Rebase — should be preserved")
+	}
+
+	// The head must also be accessible.
+	dbHead := m.Get(headID)
+	if dbHead == nil {
+		t.Fatal("batch head removed by Rebase — should be preserved")
+	}
+
+	// Both should return the same visible data (they share the same DB).
+	common.ExpectString(t, DebugDB(dbIntermediate), DebugDB(dbHead))
+}
