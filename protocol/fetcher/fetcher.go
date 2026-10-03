@@ -310,13 +310,10 @@ func (f *Fetcher) loop() {
 			// Send out all block requests
 			for peer, hashes := range request {
 				if len(hashes) > 0 {
-					list := "["
-					for _, hash := range hashes {
-						list += fmt.Sprintf("%x, ", hash[:4])
-					}
-					list = list[:len(list)-2] + "]"
-
-					log.Debug("fetching", "peer", peer, "hashes", list)
+					// Log a summary rather than the whole list: formatting
+					// every hash costs work proportional to the batch before
+					// the logger decides whether debug output is even on.
+					log.Debug("fetching", "peer", peer, "count", len(hashes), "first-hash", fmt.Sprintf("%x", hashes[0][:4]))
 				}
 				// Create a closure of the fetch and schedule in on a new thread
 				fetcher, hashes := f.fetching[hashes[0]].fetch, hashes
