@@ -154,6 +154,7 @@ func (node *Node) Start() error {
 		log.Error("failed to start rpc", "reason", err)
 		return err
 	}
+	node.warnRPCExposure()
 
 	return nil
 }

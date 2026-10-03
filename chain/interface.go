@@ -37,6 +37,10 @@ type MomentumEventManager interface {
 }
 
 type MomentumPool interface {
+	// CaptureBranchAbove returns every momentum above identifier, lowest first,
+	// together with its stored state patch, so the branch can be re-inserted
+	// after a rollback. It fails, without side effects, if any patch is missing.
+	CaptureBranchAbove(insertLocker sync.Locker, identifier types.HashHeight) ([]*RemovedMomentum, error)
 	AddMomentumTransaction(insertLocker sync.Locker, transaction *nom.MomentumTransaction) error
 	RollbackTo(insertLocker sync.Locker, identifier types.HashHeight) error
 

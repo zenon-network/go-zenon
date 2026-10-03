@@ -71,7 +71,7 @@ func applyFlagsToConfig(ctx *cli.Context, cfg *node.Config) {
 	}
 
 	if listenHost := ctx.String(ListenHostFlag.Name); ctx.IsSet(ListenHostFlag.Name) && len(listenHost) > 0 {
-		cfg.RPC.HTTPHost = listenHost
+		cfg.Net.ListenHost = listenHost
 	}
 
 	if ctx.IsSet(ListenPortFlag.Name) {
