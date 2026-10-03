@@ -115,6 +115,11 @@ func NewNode(conf *Config) (*Node, error) {
 		NATPortMap:           netConfig.NATPortMap,
 		PeerstoreDir:         netConfig.PeerstoreDir,
 
+		// Backend override (issue #105). "libp2p" lets a fresh node
+		// bootstrap from a post-activation network where no legacy
+		// peers remain. Empty string defaults to auto (spork-gated).
+		P2PBackend: netConfig.P2PBackend,
+
 		// Activation gate. The switcher polls this on a 1s ticker; when
 		// it returns true (the libp2p spork's EnforcementHeight has
 		// passed on this node's local chain) the swap fires.
