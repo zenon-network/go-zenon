@@ -455,7 +455,6 @@ func (a *BridgeApi) GetAllUnsignedWrapTokenRequests(pageIndex, pageSize uint32) 
 	if err != nil {
 		return nil, err
 	}
-	var unsignedRequests []*WrapTokenRequest
 
 	momentum, err := context.GetFrontierMomentum()
 	if err != nil {
@@ -466,28 +465,49 @@ func (a *BridgeApi) GetAllUnsignedWrapTokenRequests(pageIndex, pageSize uint32) 
 		return nil, err
 	}
 
-	for _, request := range requests {
-		if request.Signature == "" {
-			token, err := a.getToken(request.TokenStandard)
-			if err != nil {
-				return nil, err
-			}
-			confirmationsToFinality := a.getConfirmationsToFinality(*request, orchestratorInfo.ConfirmationsToFinality, *momentum)
-			wrapRequest := &WrapTokenRequest{request, token, confirmationsToFinality}
-			unsignedRequests = append(unsignedRequests, wrapRequest)
-		}
-	}
-
-	for i, j := 0, len(unsignedRequests)-1; i < j; i, j = i+1, j-1 {
-		unsignedRequests[i], unsignedRequests[j] = unsignedRequests[j], unsignedRequests[i]
-	}
-
-	start, end := api.GetRange(pageIndex, pageSize, uint32(len(unsignedRequests)))
+	// Select the page first; token and finality lookups are only done for
+	// the requests on it.
+	page, count := selectUnsignedWrapRequests(requests, pageIndex, pageSize)
 	result := &WrapTokenRequestList{
-		Count: len(unsignedRequests),
-		List:  unsignedRequests[start:end],
+		Count: count,
+		List:  make([]*WrapTokenRequest, 0, len(page)),
+	}
+	for _, request := range page {
+		token, err := a.getToken(request.TokenStandard)
+		if err != nil {
+			return nil, err
+		}
+		confirmationsToFinality := a.getConfirmationsToFinality(*request, orchestratorInfo.ConfirmationsToFinality, *momentum)
+		result.List = append(result.List, &WrapTokenRequest{request, token, confirmationsToFinality})
 	}
 	return result, nil
+}
+
+// selectUnsignedWrapRequests returns the requested page of the requests
+// without a signature and their total count. Storage lists requests newest
+// first (the key holds the creation height subtracted from MaxInt64), and
+// the page is taken walking that list backwards, so it is oldest first: the
+// order this method has always returned. Only the page is allocated.
+func selectUnsignedWrapRequests(requests []*definition.WrapTokenRequest, pageIndex, pageSize uint32) ([]*definition.WrapTokenRequest, int) {
+	count := 0
+	for _, request := range requests {
+		if request.Signature == "" {
+			count++
+		}
+	}
+	start, end := api.GetRange(pageIndex, pageSize, uint32(count))
+	page := make([]*definition.WrapTokenRequest, 0, end-start)
+	seen := uint32(0)
+	for i := len(requests) - 1; i >= 0 && seen < end; i-- {
+		if requests[i].Signature != "" {
+			continue
+		}
+		if seen >= start {
+			page = append(page, requests[i])
+		}
+		seen++
+	}
+	return page, count
 }
 
 type UnwrapTokenRequest struct {
