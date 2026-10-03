@@ -372,6 +372,11 @@ func TestRepeatedIdentityDoesNotStarveOthers(t *testing.T) {
 	u.waitFor(t, 5*time.Second, "other identity bonded", func() bool {
 		return u.bonded(other)
 	})
+	// The noisy identity's permit is released only after its one ping was
+	// written and its reply timed out, so the count below is final.
+	u.waitFor(t, 5*time.Second, "noisy exchange ended", func() bool {
+		return u.admitted() == 0
+	})
 	if got := u.conn.count(noisy.addr, pingPacket); got != 1 {
 		t.Fatalf("%d pings sent to the noisy identity, want one exchange", got)
 	}
@@ -398,11 +403,14 @@ func TestIdentityIsAdmittedAgainAfterItsBondEnds(t *testing.T) {
 
 	u.respond(s)
 	s.ping(t, u)
-	if got := u.admitted(); got != 1 {
-		t.Fatalf("%d permits held after the second ping", got)
-	}
+	// The responder answers at once, so the worker may already have
+	// released its permit here; the bond itself proves the identity was
+	// admitted again, and the permit must come back afterwards.
 	u.waitFor(t, 5*time.Second, "sender bonded on retry", func() bool {
 		return u.bonded(s)
+	})
+	u.waitFor(t, 5*time.Second, "permit returned", func() bool {
+		return u.admitted() == 0
 	})
 }
 
@@ -440,11 +448,11 @@ func TestInboundBondingBudgetIsReturned(t *testing.T) {
 	late := newSender(t, 50000)
 	u.respond(late)
 	late.ping(t, u)
-	if got := u.admitted(); got != 1 {
-		t.Fatalf("%d permits held after the budget drained", got)
-	}
 	u.waitFor(t, 5*time.Second, "late sender bonded", func() bool {
 		return u.bonded(late)
+	})
+	u.waitFor(t, 5*time.Second, "permit returned", func() bool {
+		return u.admitted() == 0
 	})
 }
 
