@@ -74,6 +74,10 @@ type Server struct {
 
 	// ---- activation gate ----
 	Oracle SporkOracle
+	// P2PBackend overrides the oracle-based backend selection.
+	// "auto" or empty keeps the default behavior. "libp2p" starts
+	// libp2p unconditionally. "legacy" starts legacy and never swaps.
+	P2PBackend p2p.P2PBackend
 
 	// ---- test hooks (nil = use real backends) ----
 	// NewLegacy, if non-nil, is called instead of constructing a
@@ -109,13 +113,15 @@ type backend interface {
 
 // Start launches the server.
 //
-// The choice of backend is driven by the spork oracle:
-//   - If the oracle reports the libp2p spork as already active (e.g.
-//     a node syncing onto a chain where the swap happened in history),
-//     libp2p is started directly. The legacy backend is never spun up.
-//   - Otherwise the legacy backend is started and the activation
-//     watcher goroutine is launched. It polls the oracle on a 1s
-//     ticker; on the first true reading it triggers the swap.
+// The choice of backend is driven by the P2PBackend override and the
+// spork oracle:
+//   - "libp2p": libp2p is started directly, skipping the oracle check
+//     and the activation watcher. Used by fresh nodes joining a network
+//     where the libp2p spork has already activated (issue #105).
+//   - "legacy": legacy is started and never swaps.
+//   - "auto" (default): If the oracle reports the libp2p spork as
+//     already active, libp2p is started directly. Otherwise the legacy
+//     backend is started and the activation watcher polls for the spork.
 func (srv *Server) Start() error {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
@@ -133,8 +139,32 @@ func (srv *Server) Start() error {
 		return fmt.Errorf("switcher: MaxPeers must be > 0 (got %d)", srv.MaxPeers)
 	}
 
+	// Validate the backend override.
+	switch srv.P2PBackend {
+	case "", p2p.P2PBackendAuto, p2p.P2PBackendLibp2p, p2p.P2PBackendLegacy:
+		// valid
+	default:
+		return fmt.Errorf("switcher: invalid P2PBackend %q (valid values: %q, %q, %q)",
+			srv.P2PBackend, p2p.P2PBackendAuto, p2p.P2PBackendLibp2p, p2p.P2PBackendLegacy)
+	}
+
 	srv.stopCh = make(chan struct{})
 
+	// Explicit override: start libp2p directly, skip oracle and watcher.
+	if srv.P2PBackend == p2p.P2PBackendLibp2p {
+		common.P2PLogger.Info("P2PBackend=libp2p; starting libp2p backend directly (skipping spork oracle)")
+		return srv.startLibp2pLocked()
+	}
+
+	// Explicit override: start legacy, never swap.
+	if srv.P2PBackend == p2p.P2PBackendLegacy {
+		// Warn, not Info: a node pinned to legacy drops off the network when
+		// the spork oracle activates libp2p, and nothing else says so.
+		common.P2PLogger.Warn("P2PBackend=legacy; starting legacy backend (will not swap to libp2p)")
+		return srv.startLegacyLocked()
+	}
+
+	// Auto mode: consult the oracle.
 	libp2pActive := false
 	if srv.Oracle != nil {
 		libp2pActive = srv.Oracle.IsLibp2pActive()

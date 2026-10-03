@@ -39,6 +39,7 @@ func (node *Node) startRPC() error {
 			Modules:                 node.config.RPC.Endpoints,
 			Origins:                 node.config.RPC.WSOrigins,
 			MaxSubscriptionsPerConn: node.config.RPC.MaxSubscriptionsPerConn,
+			MaxConnectionsPerIP:     node.config.RPC.MaxWSConnectionsPerIP,
 			prefix:                  "",
 		}
 		if err := server.setListenAddr(node.config.RPC.WSHost, node.config.RPC.WSPort); err != nil {
