@@ -994,7 +994,11 @@ func TestRebase_PoppedBatchIntermediateCleaned(t *testing.T) {
 
 	// Make an independent copy of patch2's serialized contents before Rebase
 	// so we can verify it survives the rebase byte-for-byte.
-	patch2Dump := patch2.Dump()
+	// Dump() returns b.data directly rather than copying it, so without the
+	// Clone both sides of the comparison below would alias the same slice and
+	// an in-place mutation would change the expectation along with the
+	// actual, leaving the assertion vacuously true.
+	patch2Dump := bytes.Clone(patch2.Dump())
 
 	// Rebase to h1 (commit the base block).
 	block1Data, err := t0.commit.Serialize()
@@ -1040,6 +1044,26 @@ func TestRebase_PoppedBatchIntermediateCleaned(t *testing.T) {
 	}
 	if !bytes.Equal(p2.Dump(), patch2Dump) {
 		t.Fatal("replacement patch2 changed across Rebase — want byte-identical")
+	}
+
+	// Negative control for the snapshot above. Dump() hands back the batch's
+	// internal slice rather than a copy, so without bytes.Clone the baseline
+	// would alias that data and move with it. want is a second independent
+	// copy taken here, so comparing it against the baseline detects the
+	// aliasing: with the Clone both hold the original bytes and match; without
+	// it the baseline has been mutated in place and no longer matches.
+	want := bytes.Clone(patch2.Dump())
+	own := patch2.Dump()
+	if len(own) == 0 {
+		t.Fatal("patch2 dump is empty, cannot run the aliasing control")
+	}
+	own[0] ^= 0xff
+	if !bytes.Equal(want, patch2Dump) {
+		t.Fatal("mutating the live dump moved the baseline — patch2Dump is not an independent snapshot")
+	}
+	own[0] ^= 0xff
+	if !bytes.Equal(patch2.Dump(), patch2Dump) {
+		t.Fatal("patch2 dump did not return to its original bytes after restoring the control byte")
 	}
 }
 
