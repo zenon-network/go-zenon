@@ -70,11 +70,7 @@ func NewConsensus(db db.DB, chain chain.Chain, testing bool) Consensus {
 	}
 }
 
-func (cs *consensus) GetMomentumProducer(timestamp time.Time) (*types.Address, error) {
-	election, err := cs.electionManager.ElectionByTime(timestamp)
-	if err != nil {
-		return nil, err
-	}
+func producerAt(election *electionResult, timestamp time.Time) (*types.Address, error) {
 	for _, plan := range election.Producers {
 		if plan.StartTime == timestamp {
 			return &plan.Producer, nil
@@ -82,8 +78,33 @@ func (cs *consensus) GetMomentumProducer(timestamp time.Time) (*types.Address, e
 	}
 	return nil, errors.Errorf("couldn't find producer for timestamp")
 }
+func (cs *consensus) GetMomentumProducer(timestamp time.Time) (*types.Address, error) {
+	election, err := cs.electionManager.ElectionByTime(timestamp)
+	if err != nil {
+		return nil, err
+	}
+	return producerAt(election, timestamp)
+}
 func (cs *consensus) VerifyMomentumProducer(momentum *nom.Momentum) (bool, error) {
 	expected, err := cs.GetMomentumProducer(*momentum.Timestamp)
+	if err != nil {
+		return false, err
+	}
+	if momentum.Producer() == *expected {
+		return true, nil
+	}
+	return false, nil
+}
+func (cs *consensus) VerifyMomentumProducerAt(frontier types.HashHeight, momentum *nom.Momentum) (bool, error) {
+	store := cs.chain.GetMomentumStore(frontier)
+	if store == nil {
+		return false, errors.Errorf("no momentum store at %v", frontier)
+	}
+	election, err := cs.electionManager.electionByTimeAt(store, *momentum.Timestamp)
+	if err != nil {
+		return false, err
+	}
+	expected, err := producerAt(election, *momentum.Timestamp)
 	if err != nil {
 		return false, err
 	}

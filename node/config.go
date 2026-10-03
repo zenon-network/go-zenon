@@ -1,9 +1,12 @@
 package node
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pkg/errors"
 
@@ -16,12 +19,94 @@ import (
 	"github.com/zenon-network/go-zenon/zenon"
 )
 
+// Secret is a string that does not reveal itself: the fmt verbs (with the
+// two exceptions noted on Format) and JSON encoding of a value or field
+// render it as a fixed marker, so a configuration carrying one can be
+// printed or logged whole. encoding/json writes a Secret used as a map key
+// as is, since it uses keys of string kind directly.
+//
+// Decoding is encoding/json's own for a string kind, so a config.json
+// reads exactly as it did for a plain string field: a JSON null leaves the
+// value unchanged and a non-string value is a type error recorded against
+// the field while the enclosing object keeps decoding. The value is
+// obtained with a string conversion where it is used; assigning from a
+// string variable takes a conversion as well, Secret(v), while untyped
+// constants assign directly.
+//
+// The JSON encoding is diagnostic output, not a persistence format:
+// decoding it yields the marker, not the value.
+type Secret string
+
+const redactedMarker = "[redacted]"
+
+// String implements fmt.Stringer.
+func (s Secret) String() string {
+	if s == "" {
+		return ""
+	}
+	return redactedMarker
+}
+
+// GoString implements fmt.GoStringer.
+func (s Secret) GoString() string {
+	return fmt.Sprintf("node.Secret(%q)", s.String())
+}
+
+// writeState writes s to a fmt.State. The state writes into fmt's own
+// buffer and never reports an error.
+func writeState(f fmt.State, s string) {
+	_, _ = io.WriteString(f, s)
+}
+
+// Format implements fmt.Formatter so that every verb, including the
+// numeric, float and rune verbs for which fmt would otherwise print a
+// diagnostic containing the raw value, renders the marker. Two verbs
+// cannot be covered because fmt rejects them before consulting the
+// operand's methods and prints its diagnostic with the raw value: %p
+// applied to a non-pointer value and %w applied to a value that is not an
+// error, when the operand is a Secret or a ProducerConfig holding one (a
+// Config holds the section behind a pointer, which that path prints as an
+// address). go vet's printf check reports both misuses.
+func (s Secret) Format(f fmt.State, verb rune) {
+	switch {
+	case verb == 'q':
+		writeState(f, fmt.Sprintf("%q", s.String()))
+	case verb == 'v' && f.Flag('#'):
+		writeState(f, s.GoString())
+	default:
+		writeState(f, s.String())
+	}
+}
+
+// MarshalJSON writes the marker in place of the value.
+func (s Secret) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.String())
+}
+
 type ProducerConfig struct {
 	Address     string
 	Index       uint32
 	KeyFilePath string
-	Password    string
+	Password    Secret
 }
+
+// Format implements fmt.Formatter. A pointer to this struct nested in
+// another value and printed with a verb that is invalid for pointers would
+// otherwise be re-printed by fmt's diagnostic path, which does not consult
+// the fields' own formatting; rendering the struct here keeps Password
+// redacted under every verb except the two noted on Secret.Format.
+func (c ProducerConfig) Format(f fmt.State, verb rune) {
+	type view ProducerConfig // same fields, no methods: default struct rendering
+	switch {
+	case verb == 'v' && f.Flag('#'):
+		writeState(f, "node.ProducerConfig"+strings.TrimPrefix(fmt.Sprintf("%#v", view(c)), "node.view"))
+	case verb == 'v' && f.Flag('+'):
+		writeState(f, fmt.Sprintf("%+v", view(c)))
+	default:
+		writeState(f, fmt.Sprintf("%v", view(c)))
+	}
+}
+
 type RPCConfig struct {
 	EnableHTTP bool
 	EnableWS   bool
@@ -186,7 +271,7 @@ func (c *Config) parseProducer(walletManager *wallet.Manager) (*wallet.KeyPair, 
 		log.Error("unable to get keyFile", "keyFilePath", c.Producer.KeyFilePath, "reason", err)
 		return nil, err
 	}
-	if err := walletManager.Unlock(c.Producer.KeyFilePath, c.Producer.Password); err != nil {
+	if err := walletManager.Unlock(c.Producer.KeyFilePath, string(c.Producer.Password)); err != nil {
 		log.Error("unable to unlock keyFile", "keyFilePath", c.Producer.KeyFilePath, "reason", err)
 		return nil, err
 	}

@@ -61,7 +61,7 @@ var (
 
 	ListenHostFlag = &cli.StringFlag{
 		Name:  "host",
-		Usage: "Network listening host",
+		Usage: "P2P network listening host, an IPv4 address or a bracketed IPv6 address (the RPC servers use --http-addr and --ws-addr)",
 		Value: p2p.DefaultListenHost,
 	}
 	ListenPortFlag = &cli.IntFlag{
@@ -88,7 +88,7 @@ var (
 	}
 	RPCListenAddrFlag = &cli.StringFlag{
 		Name:  "http-addr",
-		Usage: "HTTP-RPC server listening interface",
+		Usage: "HTTP-RPC server listening interface (--host does not affect it)",
 	}
 	RPCPortFlag = &cli.IntFlag{
 		Name:  "http-port",
@@ -101,7 +101,7 @@ var (
 	}
 	WSListenAddrFlag = &cli.StringFlag{
 		Name:  "ws-addr",
-		Usage: "WS-RPC server listening interface",
+		Usage: "WS-RPC server listening interface (--host does not affect it)",
 	}
 	WSPortFlag = &cli.IntFlag{
 		Name:  "ws-port",

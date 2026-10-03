@@ -7,6 +7,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus/storage"
@@ -16,8 +17,8 @@ var (
 	ErrElectionBeforeGenesis = errors.New("election time/tick before genesis timestamp")
 )
 
-func getMomentumBeforeTime(chain chain.Chain, t time.Time) (*nom.Momentum, error) {
-	block, err := chain.GetFrontierMomentumStore().GetMomentumBeforeTime(&t)
+func getMomentumBeforeTime(momentumStore store.Momentum, t time.Time) (*nom.Momentum, error) {
+	block, err := momentumStore.GetMomentumBeforeTime(&t)
 	if err != nil {
 		return nil, err
 	}
@@ -81,18 +82,28 @@ type ElectionReader interface {
 }
 
 func (em *electionManager) ElectionByTime(t time.Time) (*electionResult, error) {
+	return em.electionByTimeAt(em.chain.GetFrontierMomentumStore(), t)
+}
+func (em *electionManager) ElectionByTick(tick uint64) (*electionResult, error) {
+	return em.electionByTickAt(em.chain.GetFrontierMomentumStore(), tick)
+}
+
+// electionByTimeAt computes the election for the tick containing t as a
+// chain ending at momentumStore's frontier sees it: the proof block is the
+// last momentum of that chain before the tick's proof time.
+func (em *electionManager) electionByTimeAt(momentumStore store.Momentum, t time.Time) (*electionResult, error) {
 	if t.Before(em.GenesisTime) {
 		return nil, ErrElectionBeforeGenesis
 	}
 	tick := em.ToTick(t)
-	return em.ElectionByTick(tick)
+	return em.electionByTickAt(momentumStore, tick)
 }
-func (em *electionManager) ElectionByTick(tick uint64) (*electionResult, error) {
+func (em *electionManager) electionByTickAt(momentumStore store.Momentum, tick uint64) (*electionResult, error) {
 	if int64(tick) < 0 {
 		return nil, ErrElectionBeforeGenesis
 	}
 	proofTime := em.genProofTime(tick)
-	proofBlock, err := getMomentumBeforeTime(em.chain, proofTime)
+	proofBlock, err := getMomentumBeforeTime(momentumStore, proofTime)
 	if err != nil {
 		em.log.Error("GetMomentumBeforeTime failed", "reason", err)
 		return nil, err
@@ -127,7 +138,7 @@ func (em *electionManager) ElectionByTick(tick uint64) (*electionResult, error) 
 }
 func (em *electionManager) DelegationsByTick(tick uint64) ([]*types.PillarDelegationDetail, error) {
 	proofTime := em.genProofTime(tick)
-	proofBlock, err := getMomentumBeforeTime(em.chain, proofTime)
+	proofBlock, err := getMomentumBeforeTime(em.chain.GetFrontierMomentumStore(), proofTime)
 	if err != nil {
 		em.log.Error("GetMomentumBeforeTime failed", "reason", err)
 		return nil, err
