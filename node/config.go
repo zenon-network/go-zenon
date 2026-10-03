@@ -121,6 +121,14 @@ type RPCConfig struct {
 	HTTPVirtualHosts []string
 	HTTPCors         []string
 	WSOrigins        []string
+
+	// MaxWSConnectionsPerIP bounds concurrent WebSocket connections from a
+	// single remote IP address; connections in excess are refused with HTTP
+	// 429. Zero means no per-IP limit. This composes with the per-connection
+	// subscription limit: with MaxSubscriptionsPerConn subscriptions per
+	// connection and MaxWSConnectionsPerIP connections, one address can hold
+	// at most their product in subscriptions.
+	MaxWSConnectionsPerIP int
 }
 type NetConfig struct {
 	ListenHost string

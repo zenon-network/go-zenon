@@ -35,9 +35,10 @@ func (node *Node) startRPC() error {
 	if wsEnabled {
 		server := node.wsServerForPort(httpEnabled, node.config.RPC.WSPort)
 		config := wsConfig{
-			Modules: node.config.RPC.Endpoints,
-			Origins: node.config.RPC.WSOrigins,
-			prefix:  "",
+			Modules:             node.config.RPC.Endpoints,
+			Origins:             node.config.RPC.WSOrigins,
+			MaxConnectionsPerIP: node.config.RPC.MaxWSConnectionsPerIP,
+			prefix:              "",
 		}
 		if err := server.setListenAddr(node.config.RPC.WSHost, node.config.RPC.WSPort); err != nil {
 			return err
