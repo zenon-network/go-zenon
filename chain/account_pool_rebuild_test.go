@@ -331,3 +331,122 @@ func TestRebuild_MultipleRebuildsPreserveState(t *testing.T) {
 		t.Fatalf("frontier height after add = %d, want 4", frontier.Height)
 	}
 }
+
+// TestRebuild_RepeatedReplacementBatchesPreserveState verifies that the
+// account pool survives repeated pop-and-replace cycles at the same heights
+// across rebuilds: the manager stays alive, the frontier is correct, all
+// blocks are accessible, and the pool accepts new blocks on top.
+func TestRebuild_RepeatedReplacementBatchesPreserveState(t *testing.T) {
+	address := types.Address{0, 5}
+	stable := newAdvancingStable()
+	ap := newAccountPool(stable)
+	locker := &sync.Mutex{}
+
+	// Add blocks at heights 1-3.
+	blocks := rebuildTestBlocks(address, 3)
+	for _, block := range blocks {
+		common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, &nom.AccountBlockTransaction{
+			Block:   block,
+			Changes: db.NewPatch(),
+		}))
+	}
+
+	// Advance stable to height 1 (commit block 1).
+	stable.advanceTo(blocks[0])
+	ap.InsertMomentum(&nom.DetailedMomentum{Momentum: &nom.Momentum{Height: 1}})
+
+	// Blocks 2,3 stay pending.
+	manager := ap.managers[address]
+	if manager == nil {
+		t.Fatal("manager removed despite pending blocks")
+	}
+
+	// Pop block 3 via the manager's Pop (simulates a rollback).
+	common.FailIfErr(t, manager.Pop())
+
+	// Frontier should now be block 2.
+	frontier := db.GetFrontierIdentifier(manager.db.Frontier())
+	if frontier.Height != 2 {
+		t.Fatalf("frontier height after pop = %d, want 2", frontier.Height)
+	}
+
+	// Add replacement blocks at heights 2-3 (different content so hashes differ).
+	replacement2 := &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeUserSend,
+		Address:         address,
+		Height:          2,
+		PreviousHash:    blocks[0].Hash,
+		Amount:          big.NewInt(1), // different amount => different hash
+	}
+	replacement2.Hash = replacement2.ComputeHash()
+
+	replacement3 := &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeUserSend,
+		Address:         address,
+		Height:          3,
+		PreviousHash:    replacement2.Hash,
+		Amount:          big.NewInt(1),
+	}
+	replacement3.Hash = replacement3.ComputeHash()
+
+	// Use ForceAdd to bypass plasma comparison (replacement2 has a different
+	// plasma ratio than the original block 2, but we want it to replace).
+	common.FailIfErr(t, ap.ForceAddAccountBlockTransaction(locker, &nom.AccountBlockTransaction{
+		Block:   replacement2,
+		Changes: db.NewPatch(),
+	}))
+	common.FailIfErr(t, ap.ForceAddAccountBlockTransaction(locker, &nom.AccountBlockTransaction{
+		Block:   replacement3,
+		Changes: db.NewPatch(),
+	}))
+
+	// Trigger rebuild again.
+	ap.InsertMomentum(&nom.DetailedMomentum{Momentum: &nom.Momentum{Height: 2}})
+
+	// Assert: manager still exists.
+	manager = ap.managers[address]
+	if manager == nil {
+		t.Fatal("manager removed after rebuild despite pending blocks")
+	}
+
+	// Assert: frontier is correct (block 3 replacement).
+	frontier = db.GetFrontierIdentifier(manager.db.Frontier())
+	if frontier.Height != 3 {
+		t.Fatalf("frontier height after rebuild = %d, want 3", frontier.Height)
+	}
+	if frontier.Hash != replacement3.Hash {
+		t.Fatalf("frontier hash = %x, want replacement3 hash %x", frontier.Hash, replacement3.Hash)
+	}
+
+	// Assert: all blocks accessible by height.
+	for _, h := range []uint64{2, 3} {
+		if _, err := manager.BlockByHeight(h); err != nil {
+			t.Fatalf("BlockByHeight(%d) error after rebuild: %v", h, err)
+		}
+	}
+
+	// Assert: the pool accepts new blocks on top.
+	block4 := &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeUserSend,
+		Address:         address,
+		Height:          4,
+		PreviousHash:    replacement3.Hash,
+		Amount:          big.NewInt(0),
+	}
+	block4.Hash = block4.ComputeHash()
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, &nom.AccountBlockTransaction{
+		Block:   block4,
+		Changes: db.NewPatch(),
+	}))
+
+	frontier = db.GetFrontierIdentifier(manager.db.Frontier())
+	if frontier.Height != 4 {
+		t.Fatalf("frontier height after adding block 4 = %d, want 4", frontier.Height)
+	}
+}

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -698,6 +699,9 @@ func newMockBatchTransaction(seed int64, db DB, count int) *mockBatchTransaction
 // TestRebase_InterleavedAddCommitBoundedDepth reproduces the exact scenario
 // from the review: interleave new Add calls with commits, keeping exactly one
 // pending block after each commit, and assert bounded retained overlay depth.
+//
+// The stable DB is cumulative: one base MemDB accumulates every committed
+// patch so that earlier committed application state is carried forward.
 func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 	m := NewMemDBManager(NewMemDB()).(*memdbManager)
 
@@ -712,6 +716,11 @@ func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 	id2 := t2.commit.Identifier()
 	patch2 := m.GetPatch(id2)
 
+	// Cumulative stable DB: one base MemDB that accumulates all committed
+	// patches so that earlier committed application state is carried forward
+	// into every subsequent rebase.
+	stableDB := NewMemDB()
+
 	// Interleaved pattern: commit one block, add one new block, repeat.
 	// After each commit there is exactly one pending block.
 	// Simulate 5 rolling commits.
@@ -719,19 +728,14 @@ func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 	committedIDs := []types.HashHeight{id1, id2}
 
 	for cycle := 0; cycle < 5; cycle++ {
-		// Commit the oldest pending block by rebasing to its height.
+		// Commit the oldest pending block by applying its patch to the
+		// cumulative stable DB and rebasing to its height.
 		rebaseTo := committedIDs[0]
-		newStable := NewMemDB()
-		for i, p := range committedPatches {
-			common.DealWithErr(ApplyPatch(newStable, p))
-			if committedIDs[i] == rebaseTo {
-				break
-			}
-		}
+		common.DealWithErr(ApplyPatch(stableDB, committedPatches[0]))
 		data := rebaseTo.Serialize()
-		common.DealWithErr(SetFrontier(newStable, rebaseTo, data))
+		common.DealWithErr(SetFrontier(stableDB, rebaseTo, data))
 
-		m.Rebase(newStable)
+		m.Rebase(stableDB)
 
 		// After rebase, exactly one block should be pending (the one that was
 		// at height rebaseTo+1).  Add a replacement to keep the chain going.
@@ -743,6 +747,45 @@ func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 		if depth != 1 {
 			t.Fatalf("cycle %d: overlay depth = %d, want 1 (unbounded growth)",
 				cycle, depth)
+		}
+
+		// Verify representative committed key/value bytes are present in the
+		// frontier DB.  Replay the committed patch to pick keys that were
+		// written by the block we just committed and are NOT overwritten by
+		// the pending block (the pending overlay may legitimately replace
+		// values for keys it also writes).
+		pr := &patchRecorder{}
+		common.DealWithErr(committedPatches[0].Replay(pr))
+		pendingPR := &patchRecorder{}
+		common.DealWithErr(committedPatches[1].Replay(pendingPR))
+		pendingKeys := make(map[string]bool)
+		for _, kv := range pendingPR.puts {
+			pendingKeys[string(kv.key)] = true
+		}
+		if len(pr.puts) > 0 {
+			frontier := m.Frontier()
+			checked := 0
+			for _, kv := range pr.puts {
+				if pendingKeys[string(kv.key)] {
+					continue // pending block overwrote this key; skip
+				}
+				val, err := frontier.Get(kv.key)
+				if err != nil {
+					t.Fatalf("cycle %d: committed key %x missing from frontier: %v",
+						cycle, kv.key, err)
+				}
+				if !bytes.Equal(val, kv.value) {
+					t.Fatalf("cycle %d: committed key %x has value %x, want %x",
+						cycle, kv.key, val, kv.value)
+				}
+				checked++
+				if checked >= 2 {
+					break
+				}
+			}
+			if checked == 0 {
+				t.Fatalf("cycle %d: no non-overlapping committed keys to verify", cycle)
+			}
 		}
 
 		// Add a new block on top of the current frontier.
@@ -769,14 +812,17 @@ func TestRebase_NonEmptyWritesAndDeletes(t *testing.T) {
 	idA := tA.commit.Identifier()
 	patchA := m.GetPatch(idA)
 
-	// Extract a key written by A so we can delete it in B.
+	// Extract keys and values written by A so we can delete one in B and
+	// verify the other byte-for-byte after Rebase.
 	pr := &patchRecorder{}
 	common.DealWithErr(patchA.Replay(pr))
 	if len(pr.puts) < 2 {
 		t.Fatal("need at least 2 puts in patch A")
 	}
 	keyToDelete := pr.puts[0].key
+	valToDelete := pr.puts[0].value
 	keyToKeep := pr.puts[1].key
+	valToKeep := pr.puts[1].value
 
 	// Block B (h2): delete k1, write k3.
 	dbB := m.Frontier()
@@ -805,13 +851,16 @@ func TestRebase_NonEmptyWritesAndDeletes(t *testing.T) {
 	if err != leveldb.ErrNotFound {
 		t.Fatalf("keyToDelete should be absent before rebase, got err=%v", err)
 	}
-	_, err = dbBefore.Get(keyToKeep)
+	preVal, err := dbBefore.Get(keyToKeep)
 	if err != nil {
 		t.Fatalf("keyToKeep should be present before rebase, got err=%v", err)
 	}
-	val, err := dbBefore.Get(newKey)
-	if err != nil || string(val) != string(newVal) {
-		t.Fatalf("newKey should be present before rebase, got val=%q err=%v", val, err)
+	if !bytes.Equal(preVal, valToKeep) {
+		t.Fatalf("keyToKeep value before rebase = %x, want %x", preVal, valToKeep)
+	}
+	preNewVal, err := dbBefore.Get(newKey)
+	if err != nil || !bytes.Equal(preNewVal, newVal) {
+		t.Fatalf("newKey should be present before rebase, got val=%q err=%v", preNewVal, err)
 	}
 
 	// Rebase to height 1 (commit A).
@@ -829,26 +878,34 @@ func TestRebase_NonEmptyWritesAndDeletes(t *testing.T) {
 	if err != leveldb.ErrNotFound {
 		t.Fatalf("pending-suffix delete lost after rebase: keyToDelete err=%v", err)
 	}
-	val, err = dbAfter.Get(newKey)
-	if err != nil || string(val) != string(newVal) {
-		t.Fatalf("pending-suffix write lost after rebase: newKey val=%q err=%v", val, err)
+	afterNewVal, err := dbAfter.Get(newKey)
+	if err != nil || !bytes.Equal(afterNewVal, newVal) {
+		t.Fatalf("pending-suffix write lost after rebase: newKey val=%q err=%v", afterNewVal, err)
 	}
 
-	// 2. Stable-floor state must be restored: k2 (from A) still present.
-	_, err = dbAfter.Get(keyToKeep)
+	// 2. Stable-floor state must be restored: k2 (from A) still present with
+	//    the exact byte-for-byte value written in block A.
+	afterKeepVal, err := dbAfter.Get(keyToKeep)
 	if err != nil {
 		t.Fatalf("stable-floor key lost after rebase: keyToKeep err=%v", err)
+	}
+	if !bytes.Equal(afterKeepVal, valToKeep) {
+		t.Fatalf("stable-floor keyToKeep value after rebase = %x, want %x",
+			afterKeepVal, valToKeep)
 	}
 
 	// 3. Pop B and verify stable-floor state is fully restored (k1 reappears,
 	//    k3 is gone).
 	common.DealWithErr(m.Pop())
 	dbPopped := m.Frontier()
-	val, err = dbPopped.Get(keyToDelete)
+	restoredVal, err := dbPopped.Get(keyToDelete)
 	if err != nil {
 		t.Fatalf("stable-floor key k1 not restored after Pop: err=%v", err)
 	}
-	_ = val
+	if !bytes.Equal(restoredVal, valToDelete) {
+		t.Fatalf("restored keyToDelete value after Pop = %x, want %x",
+			restoredVal, valToDelete)
+	}
 	_, err = dbPopped.Get(newKey)
 	if err != leveldb.ErrNotFound {
 		t.Fatalf("pending-suffix key k3 not removed after Pop: err=%v", err)
@@ -935,6 +992,10 @@ func TestRebase_PoppedBatchIntermediateCleaned(t *testing.T) {
 	id2 := t2.commit.Identifier()
 	patch2 := m.GetPatch(id2)
 
+	// Make an independent copy of patch2's serialized contents before Rebase
+	// so we can verify it survives the rebase byte-for-byte.
+	patch2Dump := patch2.Dump()
+
 	// Rebase to h1 (commit the base block).
 	block1Data, err := t0.commit.Serialize()
 	common.FailIfErr(t, err)
@@ -972,12 +1033,14 @@ func TestRebase_PoppedBatchIntermediateCleaned(t *testing.T) {
 		t.Fatalf("version map has %d entries, want at most 2 (stable + replacement)", versionCount)
 	}
 
-	// Also verify patch2 is intact.
+	// Also verify patch2 is intact and byte-identical to the pre-Rebase copy.
 	p2 := m.GetPatch(id2)
 	if p2 == nil {
 		t.Fatal("replacement patch missing after Rebase")
 	}
-	_ = patch2
+	if !bytes.Equal(p2.Dump(), patch2Dump) {
+		t.Fatal("replacement patch2 changed across Rebase — want byte-identical")
+	}
 }
 
 // TestRebase_LiveBatchIntermediatePreserved verifies that intermediates
@@ -1019,4 +1082,116 @@ func TestRebase_LiveBatchIntermediatePreserved(t *testing.T) {
 
 	// Both should return the same visible data (they share the same DB).
 	common.ExpectString(t, DebugDB(dbIntermediate), DebugDB(dbHead))
+}
+
+// TestRebase_RepeatedReplacementBatches verifies that two successive
+// batch-add-then-pop cycles at the same heights leave no orphaned
+// intermediates or stale patches behind after Rebase.
+func TestRebase_RepeatedReplacementBatches(t *testing.T) {
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	// 1. Stable floor: commit block at h1.
+	t0 := newMockTransaction(1, m.Frontier())
+	common.DealWithErr(m.Add(t0))
+	id1 := t0.commit.Identifier()
+	patch1 := m.GetPatch(id1)
+
+	// Extract a representative key/value from the stable-floor patch.
+	pr := &patchRecorder{}
+	common.DealWithErr(patch1.Replay(pr))
+	if len(pr.puts) == 0 {
+		t.Fatal("stable-floor patch has no puts")
+	}
+	floorKey := pr.puts[0].key
+	floorVal := pr.puts[0].value
+
+	// 2. Add batch 1 (intermediate h2, head h3), then Pop it.
+	batch1 := newMockBatchTransaction(10, m.Frontier(), 2)
+	common.DealWithErr(m.Add(batch1))
+	intermediate1ID := batch1.commits[0].Identifier()
+	head1ID := batch1.commits[1].Identifier()
+	common.DealWithErr(m.Pop())
+
+	// 3. Add replacement batch A at same heights (intermediate h2', head h3'),
+	//    then Pop it too.
+	batchA := newMockBatchTransaction(20, m.Frontier(), 2)
+	common.DealWithErr(m.Add(batchA))
+	intermediateAID := batchA.commits[0].Identifier()
+	headAID := batchA.commits[1].Identifier()
+	common.DealWithErr(m.Pop())
+
+	// 4. Add replacement batch B at same heights (intermediate h2'', head h3'').
+	batchB := newMockBatchTransaction(30, m.Frontier(), 2)
+	common.DealWithErr(m.Add(batchB))
+	intermediateBID := batchB.commits[0].Identifier()
+	headBID := batchB.commits[1].Identifier()
+
+	// 5. Rebase to h1 (the stable floor).
+	block1Data, err := t0.commit.Serialize()
+	common.FailIfErr(t, err)
+	newStable := NewMemDB()
+	common.DealWithErr(ApplyPatch(newStable, patch1))
+	common.DealWithErr(SetFrontier(newStable, id1, block1Data))
+	m.Rebase(newStable)
+
+	// Assert: orphaned intermediates from BOTH popped batches are absent.
+	m.changes.Lock()
+	_, exists1 := m.versions[intermediate1ID]
+	_, existsA := m.versions[intermediateAID]
+	m.changes.Unlock()
+	if exists1 {
+		t.Fatal("orphaned intermediate from batch 1 survived Rebase")
+	}
+	if existsA {
+		t.Fatal("orphaned intermediate from batch A survived Rebase")
+	}
+
+	// Assert: patches of the popped batches are absent.
+	if m.GetPatch(intermediate1ID) != nil {
+		t.Fatal("patch for batch 1 intermediate still present after Rebase")
+	}
+	if m.GetPatch(head1ID) != nil {
+		t.Fatal("patch for batch 1 head still present after Rebase")
+	}
+	if m.GetPatch(intermediateAID) != nil {
+		t.Fatal("patch for batch A intermediate still present after Rebase")
+	}
+	if m.GetPatch(headAID) != nil {
+		t.Fatal("patch for batch A head still present after Rebase")
+	}
+
+	// Assert: retained versions count is bounded (stable + live batch members).
+	m.changes.Lock()
+	versionCount := len(m.versions)
+	m.changes.Unlock()
+	// Expected: stable (h1) + intermediate (h2'') + head (h3'') = 3.
+	if versionCount > 3 {
+		t.Fatalf("version map has %d entries, want at most 3 (stable + 2 live batch)", versionCount)
+	}
+
+	// Assert: overlay depth at the frontier is bounded.
+	frontierID := GetFrontierIdentifier(m.Frontier())
+	depth := overlayChainDepth(m.versions[frontierID])
+	if depth != 1 {
+		t.Fatalf("overlay depth at frontier = %d, want 1", depth)
+	}
+
+	// Assert: live batch lookups work.
+	if m.Get(intermediateBID) == nil {
+		t.Fatal("live batch intermediate not accessible after Rebase")
+	}
+	if m.Get(headBID) == nil {
+		t.Fatal("live batch head not accessible after Rebase")
+	}
+
+	// Assert: application state is correct — representative key from the
+	// stable floor is present with the correct byte-for-byte value.
+	frontier := m.Frontier()
+	val, err := frontier.Get(floorKey)
+	if err != nil {
+		t.Fatalf("stable-floor key missing from frontier after Rebase: %v", err)
+	}
+	if !bytes.Equal(val, floorVal) {
+		t.Fatalf("stable-floor key value = %x, want %x", val, floorVal)
+	}
 }
