@@ -148,7 +148,10 @@ func TestAccountPool_RestoreUncommittedRevertsForcedReplacement(t *testing.T) {
 	expectPatchDumps(t, patchesBefore, poolPatchDumps(ap, a.Address, base, a, descendant))
 }
 
-// poolPatchDumps returns the serialized patch of each block as the pool holds it.
+// poolPatchDumps returns the serialized patch of each block as the pool holds
+// it. Each dump is copied: Patch.Dump returns the patch's own backing buffer,
+// so a baseline taken from it would otherwise follow later changes to the
+// patch and a comparison against it could never fail.
 func poolPatchDumps(ap *accountPool, address types.Address, blocks ...*nom.AccountBlock) [][]byte {
 	dumps := make([][]byte, 0, len(blocks))
 	for _, block := range blocks {
@@ -157,9 +160,39 @@ func poolPatchDumps(ap *accountPool, address types.Address, blocks ...*nom.Accou
 			dumps = append(dumps, nil)
 			continue
 		}
-		dumps = append(dumps, patch.Dump())
+		dumps = append(dumps, append([]byte(nil), patch.Dump()...))
 	}
 	return dumps
+}
+
+// TestAccountPool_PatchDumpBaselinesAreIndependentCopies is the control for
+// the comparisons above: a baseline must not change when the pool's patch
+// bytes do, and the comparison must then see the difference.
+func TestAccountPool_PatchDumpBaselinesAreIndependentCopies(t *testing.T) {
+	base, a, _, _ := poolBlockChain()
+
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(a)))
+
+	baseline := poolPatchDumps(ap, a.Address, a)[0]
+	if len(baseline) == 0 {
+		t.Fatal("block a has no patch bytes to compare")
+	}
+	expected := append([]byte(nil), baseline...)
+
+	// Write through the live patch's buffer, as a later pool operation that
+	// appends to or rewrites the stored patch would.
+	live := ap.GetPatch(a.Address, a.Identifier()).Dump()
+	live[0] ^= 0xff
+
+	if !bytes.Equal(baseline, expected) {
+		t.Fatal("baseline changed with the live patch; it aliases the patch buffer")
+	}
+	if bytes.Equal(baseline, poolPatchDumps(ap, a.Address, a)[0]) {
+		t.Fatal("comparison did not detect the altered patch bytes")
+	}
 }
 
 func expectPatchDumps(t *testing.T, before, after [][]byte) {

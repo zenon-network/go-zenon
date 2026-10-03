@@ -13,6 +13,7 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/protocol"
+	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm"
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
@@ -97,6 +98,20 @@ func (f *restoreFixture) generateReceive(t *testing.T, send *nom.AccountBlock) *
 	return transaction
 }
 
+// generateSend builds and signs a User1 send to User2 on top of whatever the
+// pool currently holds for User1.
+func (f *restoreFixture) generateSend(t *testing.T) *nom.AccountBlockTransaction {
+	transaction, err := f.supervisor.GenerateFromTemplate(&nom.AccountBlock{
+		BlockType:     nom.BlockTypeUserSend,
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(1),
+	}, g.User1.Signer)
+	common.FailIfErr(t, err)
+	return transaction
+}
+
 // addToPool inserts an already generated transaction into the pool and fails
 // the test on any error, unlike the mock broadcaster which only logs it.
 func (f *restoreFixture) addToPool(t *testing.T, transaction *nom.AccountBlockTransaction) {
@@ -116,7 +131,14 @@ func (f *restoreFixture) tamperedMomentum() *nom.DetailedMomentum {
 
 func (f *restoreFixture) expectPoolChain(t *testing.T, blocks ...*nom.AccountBlock) {
 	t.Helper()
-	frontier := f.z.Chain().GetFrontierAccountStore(g.User2.Address)
+	f.expectPoolChainFor(t, g.User2.Address, blocks...)
+}
+
+// expectPoolChainFor checks that the pool's frontier for address is the last of
+// blocks and that every block is held with exactly its bytes.
+func (f *restoreFixture) expectPoolChainFor(t *testing.T, address types.Address, blocks ...*nom.AccountBlock) {
+	t.Helper()
+	frontier := f.z.Chain().GetFrontierAccountStore(address)
 	common.Expect(t, frontier.Identifier(), blocks[len(blocks)-1].Identifier())
 	for _, expected := range blocks {
 		stored, err := frontier.ByHeight(expected.Height)
@@ -222,41 +244,89 @@ func TestInsertChain_FailureAfterCommitDoesNotRestoreStalePool(t *testing.T) {
 	}
 }
 
+// TestInsertChain_SecondBlockFailureRestoresFirstBlockReplacement drives a
+// well-formed two-block momentum through the whole insert path: the first
+// block replaces a byte-different pool copy that has a descendant on top of
+// it, then the second block fails signature verification. The pool must come
+// back to exactly what it held before, descendant included, and the bridge
+// must have reached the snapshot, the replacement and the restoration rather
+// than rejecting the input up front.
 func TestInsertChain_SecondBlockFailureRestoresFirstBlockReplacement(t *testing.T) {
-	f := newRestoreFixture(t)
+	f := newRestoreFixtureWith(t, true)
 	defer f.z.StopPanic()
+	counting := &snapshotCountingChain{Chain: f.z.Chain()}
+	bridge := protocol.NewChainBridge(counting, f.z.Consensus(), f.z.Verifier(), f.supervisor)
 
-	// Pool holds a competing chain; the momentum carries the canonical block
-	// followed by a block that cannot be applied.
-	first := f.generateReceive(t, f.sends[1])
-	f.addToPool(t, first)
-	second := f.generateReceive(t, f.sends[0])
-	f.addToPool(t, second)
+	first, second := f.detailed.AccountBlocks[0], f.detailed.AccountBlocks[1]
+	if first.Address != g.User1.Address || second.Address != g.User2.Address {
+		t.Fatal("fixture should list the User1 send before the User2 receive")
+	}
 
-	broken := second.Block.Copy()
+	// Pool holds a byte-different copy of the first block with a descendant on
+	// top of it, so applying the momentum's first block is a replacement that
+	// also drops the descendant. User2's pool state is whatever the rollback
+	// left; it must be untouched as well.
+	poolCopy := byteDifferentCopy(t, first)
+	common.FailIfErr(t, bridge.AddAccountBlocks([]*nom.AccountBlock{poolCopy}))
+	descendant := f.generateSend(t)
+	f.addToPool(t, descendant)
+	f.expectPoolChainFor(t, g.User1.Address, poolCopy, descendant.Block)
+	user2Before := f.z.Chain().GetFrontierAccountStore(g.User2.Address).Identifier()
+
+	// The momentum is exactly its content, in order; only the second block's
+	// signature is corrupted, so the preflight passes and the failure is the
+	// verifier's.
+	broken := second.Copy()
 	broken.Signature[0] ^= 0xff
 	detailed := &nom.DetailedMomentum{
 		Momentum:      f.detailed.Momentum,
-		AccountBlocks: []*nom.AccountBlock{f.detailed.AccountBlocks[0], broken},
+		AccountBlocks: []*nom.AccountBlock{first, broken},
 	}
-	_, err := f.bridge.InsertChain([]*nom.DetailedMomentum{detailed})
-	if err == nil {
-		t.Fatal("expected the second block to fail")
+	_, err := bridge.InsertChain([]*nom.DetailedMomentum{detailed})
+	if !errors.Is(err, verifier.ErrABSignatureInvalid) {
+		t.Fatalf("expected the second block's signature failure, got %v", err)
 	}
+
+	// The failure happened after the pool was snapshotted and the first block
+	// was force-added over the pool copy, and the snapshot was put back.
+	common.Expect(t, counting.snapshots, 1)
+	common.Expect(t, len(counting.forceAdded), 1)
+	common.Expect(t, counting.forceAdded[0], first.Identifier())
+	common.Expect(t, counting.restores, 1)
 
 	common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.previous)
-	f.expectPoolChain(t, first.Block, second.Block)
+	f.expectPoolChainFor(t, g.User1.Address, poolCopy, descendant.Block)
+	common.Expect(t, f.z.Chain().GetFrontierAccountStore(g.User2.Address).Identifier(), user2Before)
+
+	// The genuine momentum still goes through the same bridge afterwards.
+	_, err = bridge.InsertChain([]*nom.DetailedMomentum{f.detailed})
+	common.FailIfErr(t, err)
+	common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.detailed.Momentum.Identifier())
 }
 
-// snapshotCountingChain records how often the bridge snapshots the pool.
+// snapshotCountingChain records how often the bridge snapshots the pool,
+// which blocks it force-adds over pool copies, and how often it restores a
+// snapshot, so a test can tell which part of the insert path was reached.
 type snapshotCountingChain struct {
 	chain.Chain
-	snapshots int
+	snapshots  int
+	forceAdded []types.HashHeight
+	restores   int
 }
 
 func (c *snapshotCountingChain) SnapshotUncommitted(insertLocker sync.Locker, addresses []types.Address) *chain.UncommittedSnapshot {
 	c.snapshots++
 	return c.Chain.SnapshotUncommitted(insertLocker, addresses)
+}
+
+func (c *snapshotCountingChain) ForceAddAccountBlockTransaction(insertLocker sync.Locker, transaction *nom.AccountBlockTransaction) error {
+	c.forceAdded = append(c.forceAdded, transaction.Block.Identifier())
+	return c.Chain.ForceAddAccountBlockTransaction(insertLocker, transaction)
+}
+
+func (c *snapshotCountingChain) RestoreUncommitted(insertLocker sync.Locker, snapshot *chain.UncommittedSnapshot) error {
+	c.restores++
+	return c.Chain.RestoreUncommitted(insertLocker, snapshot)
 }
 
 func TestInsertChain_RejectsMalformedPrefetchedBlocksBeforeTouchingPool(t *testing.T) {
