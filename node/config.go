@@ -41,6 +41,13 @@ type NetConfig struct {
 	ListenHost string
 	ListenPort int
 
+	// P2PBackend selects which transport backend to start: "auto"
+	// (default, spork-gated), "libp2p" (skip oracle, start libp2p
+	// directly), or "legacy" (start legacy, never swap). The
+	// "libp2p" value lets a fresh node bootstrap from a post-activation
+	// network where no legacy peers remain (issue #105).
+	P2PBackend string
+
 	MinPeers          int
 	MinConnectedPeers int
 	MaxPeers          int
@@ -236,6 +243,7 @@ func (c *Config) makeNetConfig() *p2p.Net {
 		NATPortMap:        c.Net.NATPortMap,
 		PeerstoreDir:      peerstoreDir,
 		NodeDatabase:      networkDataDir,
+		P2PBackend:        p2p.P2PBackend(c.Net.P2PBackend),
 		ListenAddr:        c.Net.ListenHost,
 		ListenPort:        c.Net.ListenPort,
 	}
