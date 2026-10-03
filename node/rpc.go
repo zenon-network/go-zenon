@@ -1,5 +1,7 @@
 package node
 
+import "fmt"
+
 // configureRPC is a helper method to configure all the various RPC endpoints during node
 // startup. It's not meant to be called at any time afterwards as it makes certain
 // assumptions about the state of the node.
@@ -34,6 +36,14 @@ func (node *Node) startRPC() error {
 	// Configure WebSocket.
 	if wsEnabled {
 		server := node.wsServerForPort(httpEnabled, node.config.RPC.WSPort)
+		// wsServerForPort returns node.http only when HTTP is enabled and
+		// shares this port, so that is the shared-port case: both servers
+		// bind the same port and must therefore agree on the host.
+		if server == node.http && node.config.RPC.WSHost != node.config.RPC.HTTPHost {
+			return fmt.Errorf("RPC: HTTP and WebSocket share port %d but bind different hosts (%q vs %q); "+
+				"set both hosts to the same value or use different ports",
+				node.config.RPC.WSPort, node.config.RPC.HTTPHost, node.config.RPC.WSHost)
+		}
 		config := wsConfig{
 			Modules:             node.config.RPC.Endpoints,
 			Origins:             node.config.RPC.WSOrigins,
