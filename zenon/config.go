@@ -16,6 +16,9 @@ type Config struct {
 	DataDir           string
 	ProducingKeyPair  *wallet.KeyPair
 	GenesisConfig     store.Genesis
+	// MaxSubscriptions bounds live ledger subscriptions across all RPC
+	// connections; zero selects the subscribe server's default.
+	MaxSubscriptions int
 }
 
 func (c *Config) NewDBManager(inside string) db.Manager {

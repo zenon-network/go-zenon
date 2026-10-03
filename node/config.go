@@ -122,6 +122,15 @@ type RPCConfig struct {
 	HTTPCors         []string
 	WSOrigins        []string
 
+	// MaxSubscriptionsPerConn bounds the subscriptions one RPC connection may
+	// hold; a further subscribe on that connection fails with "too many
+	// subscriptions on this connection". MaxSubscriptions bounds live
+	// subscriptions across all connections, IPC and in-process included;
+	// once reached, every new subscribe fails with "subscribe server
+	// subscription limit reached" until a slot is released. Zero selects
+	// the built-in default for either.
+	MaxSubscriptionsPerConn int
+	MaxSubscriptions        int
 	// MaxWSConnectionsPerIP bounds concurrent WebSocket connections from a
 	// single remote IP address; connections in excess are refused with HTTP
 	// 429. Zero means no per-IP limit. This composes with the per-connection
@@ -234,6 +243,7 @@ func (c *Config) makeZenonConfig(walletManager *wallet.Manager) (*zenon.Config, 
 		ProducingKeyPair:  pillarCoinbase,
 		GenesisConfig:     c.makeGenesisConfig(),
 		DataDir:           c.DataPath,
+		MaxSubscriptions:  c.RPC.MaxSubscriptions,
 	}, nil
 }
 func (c *Config) makeGenesisConfig() (genesisConfig store.Genesis) {
