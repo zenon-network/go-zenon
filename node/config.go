@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -341,15 +343,59 @@ func (c *Config) makeNetConfig() *p2p.Net {
 		ListenPort:        c.Net.ListenPort,
 	}
 }
+
+// joinHostPort builds a host:port listen address, handling IPv6 literals
+// in both raw and pre-bracketed form.
+//
+// Malformed bracketed input (e.g. "[[]]", "[[::]]", "[0.0.0.0", "0.0.0.0]")
+// is returned unchanged so that downstream validation rejects it instead of
+// silently producing a wildcard (all-interface) listener.
+func joinHostPort(host string, port int) string {
+	normalized, ok := normalizeListenHost(host)
+	if !ok {
+		// Leave the malformed host untouched so that net.Listen /
+		// ResolveTCPAddr fails closed instead of binding all interfaces.
+		return host + ":" + strconv.Itoa(port)
+	}
+	return net.JoinHostPort(normalized, strconv.Itoa(port))
+}
+
+// normalizeListenHost strips at most one enclosing bracket pair from a
+// pre-bracketed IPv6 literal. It reports ok=false for empty-but-non-empty,
+// unbalanced or nested bracketed input, so that such configuration is
+// rejected rather than silently repaired into a valid address.
+func normalizeListenHost(host string) (string, bool) {
+	if host == "" {
+		return "", true
+	}
+	if strings.HasPrefix(host, "[") {
+		if !strings.HasSuffix(host, "]") {
+			return "", false
+		}
+		inner := host[1 : len(host)-1]
+		// "[]" and "[[]]" strip to an empty or bracket-bearing interior.
+		// Returning "" would join to ":port", which net.Listen resolves as
+		// a wildcard bind on every interface, so both must fail closed.
+		if inner == "" || strings.ContainsAny(inner, "[]") {
+			return "", false
+		}
+		return inner, true
+	}
+	if strings.ContainsAny(host, "[]") {
+		return "", false
+	}
+	return host, true
+}
+
 func (c *Config) HTTPEndpoint() string {
 	if c.RPC.HTTPHost == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s:%d", c.RPC.HTTPHost, c.RPC.HTTPPort)
+	return joinHostPort(c.RPC.HTTPHost, c.RPC.HTTPPort)
 }
 func (c *Config) WSEndpoint() string {
 	if c.RPC.WSHost == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s:%d", c.RPC.WSHost, c.RPC.WSPort)
+	return joinHostPort(c.RPC.WSHost, c.RPC.WSPort)
 }
