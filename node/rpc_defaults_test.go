@@ -144,12 +144,11 @@ func wsServerOf(t *testing.T, n *Node) *httpServer {
 
 func listenerIP(t *testing.T, h *httpServer) net.IP {
 	t.Helper()
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.listener == nil {
+	addr := defaultsBoundAddr(h)
+	if addr == nil {
 		t.Fatal("server has no listener")
 	}
-	return h.listener.Addr().(*net.TCPAddr).IP
+	return addr.IP
 }
 
 // postJSONRPC sends a ping over HTTP with the given extra headers; a "Host"
@@ -435,6 +434,7 @@ const (
 	httpOriginWarning = "HTTP-RPC accepts any browser origin"
 	wsBindWarning     = "WS-RPC listens on a non-loopback address"
 	wsOriginWarning   = "WS-RPC accepts any browser origin"
+	httpVhostWarning  = "HTTP-RPC answers any Host header"
 )
 
 func countWarnings(msgs []warning, substr string) int {
@@ -447,10 +447,10 @@ func countWarnings(msgs []warning, substr string) int {
 	return n
 }
 
-// exposureWarnings is the number of bind and wildcard-origin warnings a
-// configuration is expected to produce for each protocol.
+// exposureWarnings is the number of bind, wildcard-origin and wildcard-vhost
+// warnings a configuration is expected to produce for each protocol.
 type exposureWarnings struct {
-	httpBind, httpOrigin, wsBind, wsOrigin int
+	httpBind, httpOrigin, httpVhost, wsBind, wsOrigin int
 }
 
 func requireExposureWarnings(t *testing.T, msgs []warning, want exposureWarnings) {
@@ -458,13 +458,14 @@ func requireExposureWarnings(t *testing.T, msgs []warning, want exposureWarnings
 	got := exposureWarnings{
 		httpBind:   countWarnings(msgs, httpBindWarning),
 		httpOrigin: countWarnings(msgs, httpOriginWarning),
+		httpVhost:  countWarnings(msgs, httpVhostWarning),
 		wsBind:     countWarnings(msgs, wsBindWarning),
 		wsOrigin:   countWarnings(msgs, wsOriginWarning),
 	}
 	if got != want {
 		t.Fatalf("exposure warnings = %+v, want %+v; messages: %v", got, want, msgs)
 	}
-	if extra := len(msgs) - (got.httpBind + got.httpOrigin + got.wsBind + got.wsOrigin); extra != 0 {
+	if extra := len(msgs) - (got.httpBind + got.httpOrigin + got.httpVhost + got.wsBind + got.wsOrigin); extra != 0 {
 		t.Fatalf("%d unexpected warnings in %v", extra, msgs)
 	}
 }
@@ -472,13 +473,7 @@ func requireExposureWarnings(t *testing.T, msgs []warning, want exposureWarnings
 // defaultsBoundAddr returns the server's live listener address, or nil when it is
 // not listening.
 func defaultsBoundAddr(h *httpServer) *net.TCPAddr {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.listener == nil {
-		return nil
-	}
-	addr, _ := h.listener.Addr().(*net.TCPAddr)
-	return addr
+	return h.exposure().addr
 }
 
 // requireBindEndpoints asserts that each bind warning names the listener of
@@ -568,6 +563,21 @@ func TestRPCExposureWarning(t *testing.T) {
 		{"a non-loopback WS bind beside a loopback HTTP bind warns for WS only",
 			func(cfg *RPCConfig) { cfg.WSHost = "0.0.0.0" },
 			exposureWarnings{wsBind: 1}, true},
+		{"a wildcard virtual-host list warns on a loopback bind",
+			func(cfg *RPCConfig) { cfg.HTTPVirtualHosts = []string{"*"} },
+			exposureWarnings{httpVhost: 1}, false},
+		{"a wildcard virtual-host list warns once beside the other wildcards",
+			both(public, wildcard, func(cfg *RPCConfig) { cfg.HTTPVirtualHosts = []string{"*"} }),
+			exposureWarnings{httpBind: 1, httpOrigin: 1, httpVhost: 1, wsBind: 1, wsOrigin: 1}, false},
+		{"a wildcard beside an explicit virtual host still warns once",
+			func(cfg *RPCConfig) { cfg.HTTPVirtualHosts = []string{"localhost", "*"} },
+			exposureWarnings{httpVhost: 1}, false},
+		{"an explicit virtual-host list does not warn",
+			func(cfg *RPCConfig) { cfg.HTTPVirtualHosts = []string{"localhost", "node.example"} },
+			exposureWarnings{}, false},
+		{"a wildcard virtual-host list does not warn when HTTP is off",
+			both(func(cfg *RPCConfig) { cfg.HTTPHost = ""; cfg.HTTPVirtualHosts = []string{"*"} }),
+			exposureWarnings{}, false},
 	}
 	for _, layout := range listenerLayouts {
 		for _, c := range cases {
@@ -619,7 +629,7 @@ func TestRPCExposureWarning(t *testing.T) {
 			if server.rpcAllowed() {
 				t.Fatal("an HTTP handler is installed although the HTTP host is empty")
 			}
-			if addr, _, _ := server.exposure(); addr != nil {
+			if server.exposure().addr != nil {
 				listeners++
 			}
 		}
@@ -641,13 +651,17 @@ func TestRPCExposureWarning(t *testing.T) {
 		msgs := got()
 		// Whether these listeners exist depends on whether startRPC honors
 		// the enable flags; the warning must track the listener either way.
+		// bound is derived from the listener and the handler slots, not from
+		// exposure(), which is part of what is under test here.
 		bound := map[string]bool{}
 		for _, server := range []*httpServer{n.http, n.ws} {
-			addr, cors, origins := server.exposure()
-			if addr != nil && cors != nil {
+			if defaultsBoundAddr(server) == nil {
+				continue
+			}
+			if server.rpcAllowed() {
 				bound["HTTP-RPC"] = true
 			}
-			if addr != nil && origins != nil {
+			if server.wsAllowed() {
 				bound["WS-RPC"] = true
 			}
 		}
@@ -655,6 +669,33 @@ func TestRPCExposureWarning(t *testing.T) {
 			if bound[proto] != (countWarnings(msgs, proto+" listens on a non-loopback address") == 1) {
 				t.Errorf("%s: listener bound=%v but warnings were %v", proto, bound[proto], msgs)
 			}
+		}
+	})
+
+	t.Run("the console lines are the logged warnings, in order", func(t *testing.T) {
+		got := captureWarnings(t)
+		n := startDefaultsNode(t, distinctListeners, both(public, wildcard, func(cfg *RPCConfig) { cfg.HTTPVirtualHosts = []string{"*"} }))
+		n.warnRPCExposure()
+		msgs := got()
+		lines := n.RPCExposureWarnings()
+		if len(lines) != len(msgs) || len(lines) != 5 {
+			t.Fatalf("%d console lines for %d warnings: %v", len(lines), len(msgs), lines)
+		}
+		for i, m := range msgs {
+			if !strings.HasPrefix(lines[i], m.msg) {
+				t.Fatalf("line %d %q does not start with warning %q", i, lines[i], m.msg)
+			}
+			for k, v := range m.ctx {
+				if k == "module" {
+					continue // the logger's own context, not part of the warning
+				}
+				if !strings.Contains(lines[i], k+" "+v) {
+					t.Fatalf("line %d %q lacks %s %s", i, lines[i], k, v)
+				}
+			}
+		}
+		if lines := startDefaultsNode(t, distinctListeners, nil).RPCExposureWarnings(); len(lines) != 0 {
+			t.Fatalf("defaults produce console lines: %v", lines)
 		}
 	})
 }
