@@ -115,9 +115,30 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 	// Process calls on a goroutine because they may block indefinitely:
 	h.startCallProc(func(cp *callProc) {
 		answers := make([]*jsonrpcMessage, 0, len(msgs))
-		for _, msg := range calls {
+		responseBytes := 0
+		for i, msg := range calls {
 			if answer := h.handleCallMsg(cp, msg); answer != nil {
 				answers = append(answers, answer)
+				responseBytes += answer.payloadSize()
+			}
+			// The answer that crosses the budget is still delivered; the
+			// elements after it are answered the way handleCallMsg would
+			// have answered them, except that a call is not executed and
+			// gets the budget error instead of its result.
+			if responseBytes > maxBatchResponseBytes {
+				h.log.Warn("Batch response too large", "responseBytes", responseBytes, "skipped", len(calls)-i-1)
+				for _, rest := range calls[i+1:] {
+					switch {
+					case rest.isNotification():
+					case rest.isCall():
+						answers = append(answers, rest.errorResponse(new(batchResponseTooLargeError)))
+					case rest.hasValidID():
+						answers = append(answers, rest.errorResponse(&invalidRequestError{"invalid request"}))
+					default:
+						answers = append(answers, errorMessage(&invalidRequestError{"invalid request"}))
+					}
+				}
+				break
 			}
 		}
 		h.addSubscriptions(cp.notifiers)
