@@ -78,6 +78,40 @@ func NewMemDBManager(rawDB DB) Manager {
 	}
 }
 
+// Cloneable is implemented by managers whose uncommitted state can be captured
+// as an independent manager sharing the same stable base.
+type Cloneable interface {
+	Clone() Manager
+}
+
+// Clone returns a manager with the same stable base and the same uncommitted
+// versions and patches. Stored versions and patches are never modified after
+// insertion, and Pop only drops map entries, so the two managers can share
+// them and diverge independently from here on.
+func (m *memdbManager) Clone() Manager {
+	m.changes.Lock()
+	defer m.changes.Unlock()
+
+	clone := &memdbManager{
+		stableDB:           m.stableDB,
+		stableIdentifier:   m.stableIdentifier,
+		frontierIdentifier: m.frontierIdentifier,
+		previous:           make(map[types.HashHeight]types.HashHeight, len(m.previous)),
+		versions:           make(map[types.HashHeight]DB, len(m.versions)),
+		patches:            make(map[types.HashHeight]Patch, len(m.patches)),
+	}
+	for k, v := range m.previous {
+		clone.previous[k] = v
+	}
+	for k, v := range m.versions {
+		clone.versions[k] = v
+	}
+	for k, v := range m.patches {
+		clone.patches[k] = v
+	}
+	return clone
+}
+
 func (m *memdbManager) Frontier() DB {
 	m.changes.Lock()
 	frontierIdentifier := m.frontierIdentifier
