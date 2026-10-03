@@ -130,8 +130,40 @@ func (pa *patchApplierWO) Delete(key []byte) {
 	if ok, err := pa.db.Has(key); err != nil {
 		pa.err = err
 	} else if !ok {
-		pa.err = pa.db.Put(key, []byte{0})
+		// A deleted key is an empty value, the same encoding the on-disk
+		// frontier uses, so the delete-aware view reports it as absent.
+		// A one-byte value would read as present with an empty payload.
+		pa.err = pa.db.Put(key, []byte{})
 	}
+}
+
+// keyFilter replays a patch into another one, dropping the listed keys.
+type keyFilter struct {
+	out  Patch
+	skip map[string]struct{}
+}
+
+func (kf *keyFilter) Put(key []byte, value []byte) {
+	if _, drop := kf.skip[string(key)]; !drop {
+		kf.out.Put(key, value)
+	}
+}
+func (kf *keyFilter) Delete(key []byte) {
+	if _, drop := kf.skip[string(key)]; !drop {
+		kf.out.Delete(key)
+	}
+}
+
+// RemoveKeys returns a copy of patch without any operation on the given keys.
+func RemoveKeys(patch Patch, keys [][]byte) (Patch, error) {
+	filter := &keyFilter{out: NewPatch(), skip: make(map[string]struct{}, len(keys))}
+	for _, key := range keys {
+		filter.skip[string(key)] = struct{}{}
+	}
+	if err := patch.Replay(filter); err != nil {
+		return nil, err
+	}
+	return filter.out, nil
 }
 
 func DebugPatch(patch Patch) string {
