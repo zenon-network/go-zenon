@@ -301,16 +301,21 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 			blocks []*nom.DetailedMomentum
 		)
 		for {
+			// Every requested hash costs a store lookup whether or not the
+			// block exists, so bound the lookups, not only the hits: after
+			// MaxBlocksRequest of them, answer with what was found and leave
+			// the rest of the message unread and undecoded, the way the
+			// reply cap below does. Disconnecting instead would cost the
+			// same lookups and only cut off peers on releases that do not
+			// split requests.
+			if len(hashes) >= MaxBlocksRequest {
+				break
+			}
 			err := msgStream.Decode(&hash)
 			if err == rlp.EOL {
 				break
 			} else if err != nil {
 				return errResp(ErrDecode, "msg %v: %v", msg, err)
-			}
-			// Every requested hash costs a store lookup whether or not the
-			// block exists, so bound the request itself, not only the hits.
-			if len(hashes) >= MaxBlocksRequest {
-				return errResp(ErrMsgTooLarge, "msg %v: more than %d block hashes requested", msg, MaxBlocksRequest)
 			}
 			hashes = append(hashes, hash)
 

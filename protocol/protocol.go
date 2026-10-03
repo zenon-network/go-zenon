@@ -18,7 +18,6 @@ package protocol
 
 import (
 	"github.com/zenon-network/go-zenon/common/types"
-	"github.com/zenon-network/go-zenon/protocol/fetcher"
 )
 
 // Supported versions of the eth protocol (first is primary).
@@ -30,22 +29,22 @@ var ProtocolLengths = []uint64{9}
 const (
 	ProtocolMaxMsgSize = 10 * 1024 * 1024 // Maximum cap on the size of a protocol message
 
-	// MaxBlocksRequest is the most hashes a peer may name in one GetBlocksMsg.
-	// Every named hash costs the receiver a store lookup whether or not the
-	// block exists, so the bound is on the request rather than on the hits:
-	// the receiver looks up at most this many hashes, and a request that
-	// names more is treated as a protocol violation when the lookups reach
-	// it. A request that fills the reply cap of downloader.MaxBlockFetch
-	// found blocks within the first MaxBlocksRequest hashes is answered
-	// before the excess is seen, as it was before the bound existed.
+	// MaxBlocksRequest is the most hashes the receiver of one GetBlocksMsg
+	// looks up. It bounds hash lookups only: every named hash costs one
+	// store lookup whether or not the block exists, and the receiver stops
+	// looking after this many and answers with what it found, as it already
+	// does once the reply holds downloader.MaxBlockFetch blocks. It does not
+	// bound the work a found block costs (a momentum read plus one read per
+	// account block) or the size of the reply.
 	//
-	// The value is the larger of the two batch sizes honest requesters use:
-	// the downloader asks for at most downloader.MaxBlockFetch blocks per
-	// request and the fetcher for up to fetcher.HashLimit announced hashes
-	// per peer. peer.RequestBlocks, the only sender, splits anything larger
-	// into requests of this size, so a node running this code never exceeds
-	// it whatever its callers hand it.
-	MaxBlocksRequest = fetcher.HashLimit
+	// The value is twice the reply cap downloader.MaxBlockFetch, which
+	// TestMaxBlocksRequest_CoversEveryHonestRequester pins, so a request
+	// that mixes misses and hits can still fill a reply. It is independent
+	// of the fetcher's per-peer announce limit, which happens to be the same
+	// number. peer.RequestBlocks, the only sender, splits larger batches
+	// into requests of downloader.MaxBlockFetch hashes, so a node running
+	// this code never names more than the reply cap in one message.
+	MaxBlocksRequest = 256
 )
 
 // eth protocol message codes
