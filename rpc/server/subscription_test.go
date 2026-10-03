@@ -83,7 +83,7 @@ func assertLimitError(t *testing.T, err error) {
 	}
 }
 
-// One connection may hold at most maxSubscriptionsPerConn server
+// One connection may hold at most DefaultMaxSubscriptionsPerConn server
 // subscriptions. Unsubscribing frees a slot and other connections keep their
 // own budget.
 func TestSubscriptionLimitPerConnection(t *testing.T) {
@@ -91,7 +91,7 @@ func TestSubscriptionLimitPerConnection(t *testing.T) {
 	client := DialInProc(server)
 	defer client.Close()
 
-	subs := subscribeN(t, client, maxSubscriptionsPerConn)
+	subs := subscribeN(t, client, DefaultMaxSubscriptionsPerConn)
 
 	_, err := client.Subscribe(context.Background(), "test", make(chan int, 1), "events")
 	assertLimitError(t, err)
@@ -101,7 +101,40 @@ func TestSubscriptionLimitPerConnection(t *testing.T) {
 
 	other := DialInProc(server)
 	defer other.Close()
-	subscribeN(t, other, maxSubscriptionsPerConn)
+	subscribeN(t, other, DefaultMaxSubscriptionsPerConn)
+}
+
+// The per-connection limit is configurable: a server set to two refuses the
+// third subscription on a connection, each connection gets its own two, and a
+// value below one restores the default.
+func TestConfiguredSubscriptionLimitPerConnection(t *testing.T) {
+	server := newSubscriptionTestServer(t, &subscriptionTestService{})
+	server.SetMaxSubscriptionsPerConn(2)
+	if got := server.MaxSubscriptionsPerConn(); got != 2 {
+		t.Fatalf("limit is %d, want 2", got)
+	}
+
+	client := DialInProc(server)
+	defer client.Close()
+	subscribeN(t, client, 2)
+	_, err := client.Subscribe(context.Background(), "test", make(chan int, 1), "events")
+	assertLimitError(t, err)
+
+	other := DialInProc(server)
+	defer other.Close()
+	subscribeN(t, other, 2)
+	_, err = other.Subscribe(context.Background(), "test", make(chan int, 1), "events")
+	assertLimitError(t, err)
+
+	server.SetMaxSubscriptionsPerConn(0)
+	if got := server.MaxSubscriptionsPerConn(); got != DefaultMaxSubscriptionsPerConn {
+		t.Fatalf("limit after reset is %d, want %d", got, DefaultMaxSubscriptionsPerConn)
+	}
+	// The reset applies to connections served from now on: a third
+	// subscription, refused above, is admitted on a new connection.
+	reset := DialInProc(server)
+	defer reset.Close()
+	subscribeN(t, reset, 3)
 }
 
 // A batch cannot exceed the limit either: the reservation is taken per call
@@ -113,7 +146,7 @@ func TestSubscriptionLimitCoversBatches(t *testing.T) {
 	defer client.Close()
 
 	const extra = 5
-	batch := make([]BatchElem, maxSubscriptionsPerConn+extra)
+	batch := make([]BatchElem, DefaultMaxSubscriptionsPerConn+extra)
 	ids := make([]string, len(batch))
 	for i := range batch {
 		batch[i] = BatchElem{
@@ -139,8 +172,8 @@ func TestSubscriptionLimitCoversBatches(t *testing.T) {
 			t.Fatalf("batch element %d: unexpected error %v", i, elem.Error)
 		}
 	}
-	if accepted != maxSubscriptionsPerConn || rejected != extra {
-		t.Fatalf("accepted %d rejected %d, want %d and %d", accepted, rejected, maxSubscriptionsPerConn, extra)
+	if accepted != DefaultMaxSubscriptionsPerConn || rejected != extra {
+		t.Fatalf("accepted %d rejected %d, want %d and %d", accepted, rejected, DefaultMaxSubscriptionsPerConn, extra)
 	}
 
 	// The connection is full now.
@@ -163,7 +196,7 @@ func TestRejectedSubscriptionReleasesReservation(t *testing.T) {
 	client := DialInProc(server)
 	defer client.Close()
 
-	for i := 0; i < maxSubscriptionsPerConn+1; i++ {
+	for i := 0; i < DefaultMaxSubscriptionsPerConn+1; i++ {
 		_, err := client.Subscribe(context.Background(), "test", make(chan int, 1), "events")
 		if err == nil || !strings.Contains(err.Error(), errServiceRejected.Error()) {
 			t.Fatalf("attempt %d: expected the service error, got %v", i, err)
@@ -171,20 +204,20 @@ func TestRejectedSubscriptionReleasesReservation(t *testing.T) {
 	}
 
 	svc.failBeforeCreate = false
-	subscribeN(t, client, maxSubscriptionsPerConn)
+	subscribeN(t, client, DefaultMaxSubscriptionsPerConn)
 }
 
 // Within one batch, a request the service rejected must not hold its
 // reservation against later elements of the same batch: a batch of
-// maxSubscriptionsPerConn rejections followed by one accepted request must
+// DefaultMaxSubscriptionsPerConn rejections followed by one accepted request must
 // accept that last request.
 func TestRejectedSubscriptionInBatchFreesSlotForLaterElement(t *testing.T) {
-	svc := &subscriptionTestService{rejectFirst: maxSubscriptionsPerConn}
+	svc := &subscriptionTestService{rejectFirst: DefaultMaxSubscriptionsPerConn}
 	server := newSubscriptionTestServer(t, svc)
 	client := DialInProc(server)
 	defer client.Close()
 
-	batch := make([]BatchElem, maxSubscriptionsPerConn+1)
+	batch := make([]BatchElem, DefaultMaxSubscriptionsPerConn+1)
 	ids := make([]string, len(batch))
 	for i := range batch {
 		batch[i] = BatchElem{
@@ -196,21 +229,21 @@ func TestRejectedSubscriptionInBatchFreesSlotForLaterElement(t *testing.T) {
 	if err := client.BatchCall(batch); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < maxSubscriptionsPerConn; i++ {
+	for i := 0; i < DefaultMaxSubscriptionsPerConn; i++ {
 		if batch[i].Error == nil || !strings.Contains(batch[i].Error.Error(), errServiceRejected.Error()) {
 			t.Fatalf("batch element %d: expected the service error, got %v", i, batch[i].Error)
 		}
 	}
-	last := batch[maxSubscriptionsPerConn]
+	last := batch[DefaultMaxSubscriptionsPerConn]
 	if last.Error != nil {
 		t.Fatalf("last batch element: expected success after rejected elements, got %v", last.Error)
 	}
-	if ids[maxSubscriptionsPerConn] == "" {
+	if ids[DefaultMaxSubscriptionsPerConn] == "" {
 		t.Fatal("last batch element has no subscription ID")
 	}
 
 	// Exactly one slot is in use afterwards.
-	subscribeN(t, client, maxSubscriptionsPerConn-1)
+	subscribeN(t, client, DefaultMaxSubscriptionsPerConn-1)
 	_, err := client.Subscribe(context.Background(), "test", make(chan int, 1), "events")
 	assertLimitError(t, err)
 }
@@ -224,7 +257,7 @@ func TestSubscriptionCreatedBeforeErrorHoldsSlot(t *testing.T) {
 	client := DialInProc(server)
 	defer client.Close()
 
-	for i := 0; i < maxSubscriptionsPerConn; i++ {
+	for i := 0; i < DefaultMaxSubscriptionsPerConn; i++ {
 		_, err := client.Subscribe(context.Background(), "test", make(chan int, 1), "events")
 		if err == nil || !strings.Contains(err.Error(), errServiceRejected.Error()) {
 			t.Fatalf("attempt %d: expected the service error, got %v", i, err)
@@ -237,7 +270,7 @@ func TestSubscriptionCreatedBeforeErrorHoldsSlot(t *testing.T) {
 	other := DialInProc(server)
 	defer other.Close()
 	svc.failAfterCreate = false
-	subscribeN(t, other, maxSubscriptionsPerConn)
+	subscribeN(t, other, DefaultMaxSubscriptionsPerConn)
 }
 
 // Requests that fail argument validation are answered with their own errors,
@@ -247,13 +280,13 @@ func TestSubscriptionLimitCheckedAfterValidation(t *testing.T) {
 	client := DialInProc(server)
 	defer client.Close()
 
-	for i := 0; i < maxSubscriptionsPerConn+1; i++ {
+	for i := 0; i < DefaultMaxSubscriptionsPerConn+1; i++ {
 		_, err := client.Subscribe(context.Background(), "test", make(chan int, 1), "missing")
 		if err == nil || err.Error() == ErrTooManySubscriptions.Error() {
 			t.Fatalf("attempt %d: expected a not-found error, got %v", i, err)
 		}
 	}
-	subscribeN(t, client, maxSubscriptionsPerConn)
+	subscribeN(t, client, DefaultMaxSubscriptionsPerConn)
 }
 
 // Closing the connection releases everything, so a server that has seen many
@@ -262,7 +295,7 @@ func TestSubscriptionLimitResetsPerConnection(t *testing.T) {
 	server := newSubscriptionTestServer(t, &subscriptionTestService{})
 	for round := 0; round < 3; round++ {
 		client := DialInProc(server)
-		subscribeN(t, client, maxSubscriptionsPerConn)
+		subscribeN(t, client, DefaultMaxSubscriptionsPerConn)
 		_, err := client.Subscribe(context.Background(), "test", make(chan int, 1), "events")
 		assertLimitError(t, err)
 		client.Close()
@@ -281,14 +314,14 @@ func TestPanickingSubscriptionCallbackKeepsBudgetExact(t *testing.T) {
 		client := DialInProc(server)
 		defer client.Close()
 
-		for i := 0; i < maxSubscriptionsPerConn+1; i++ {
+		for i := 0; i < DefaultMaxSubscriptionsPerConn+1; i++ {
 			_, err := client.Subscribe(context.Background(), "test", make(chan int, 1), "events")
 			if err == nil || !strings.Contains(err.Error(), "crashed") {
 				t.Fatalf("attempt %d: expected the crash error, got %v", i, err)
 			}
 		}
 		svc.panicBeforeCreate = false
-		subscribeN(t, client, maxSubscriptionsPerConn)
+		subscribeN(t, client, DefaultMaxSubscriptionsPerConn)
 	})
 	t.Run("after create", func(t *testing.T) {
 		svc := &subscriptionTestService{panicAfterCreate: true}
@@ -296,7 +329,7 @@ func TestPanickingSubscriptionCallbackKeepsBudgetExact(t *testing.T) {
 		client := DialInProc(server)
 		defer client.Close()
 
-		for i := 0; i < maxSubscriptionsPerConn; i++ {
+		for i := 0; i < DefaultMaxSubscriptionsPerConn; i++ {
 			_, err := client.Subscribe(context.Background(), "test", make(chan int, 1), "events")
 			if err == nil || !strings.Contains(err.Error(), "crashed") {
 				t.Fatalf("attempt %d: expected the crash error, got %v", i, err)
@@ -310,14 +343,14 @@ func TestPanickingSubscriptionCallbackKeepsBudgetExact(t *testing.T) {
 
 // Single requests sent concurrently on one connection each run on their own
 // call goroutine; the reservation is taken under subLock and counts calls in
-// flight, so exactly maxSubscriptionsPerConn of them are accepted and every
+// flight, so exactly DefaultMaxSubscriptionsPerConn of them are accepted and every
 // other one is answered with the limit error.
 func TestConcurrentSubscribesRespectPerConnectionLimit(t *testing.T) {
 	server := newSubscriptionTestServer(t, &subscriptionTestService{})
 	client := DialInProc(server)
 	defer client.Close()
 
-	const attempts = 3 * maxSubscriptionsPerConn
+	const attempts = 3 * DefaultMaxSubscriptionsPerConn
 	results := make(chan error, attempts)
 	for i := 0; i < attempts; i++ {
 		go func() {
@@ -339,12 +372,12 @@ func TestConcurrentSubscribesRespectPerConnectionLimit(t *testing.T) {
 			t.Fatalf("unexpected subscribe error: %v", err)
 		}
 	}
-	if accepted > maxSubscriptionsPerConn {
-		t.Fatalf("accepted %d concurrent subscriptions, limit is %d", accepted, maxSubscriptionsPerConn)
+	if accepted > DefaultMaxSubscriptionsPerConn {
+		t.Fatalf("accepted %d concurrent subscriptions, limit is %d", accepted, DefaultMaxSubscriptionsPerConn)
 	}
 	// Whatever the burst left, the limit is reached at exactly
-	// maxSubscriptionsPerConn and not before.
-	for accepted < maxSubscriptionsPerConn {
+	// DefaultMaxSubscriptionsPerConn and not before.
+	for accepted < DefaultMaxSubscriptionsPerConn {
 		if _, err := client.Subscribe(context.Background(), "test", make(chan int, 1), "events"); err != nil {
 			t.Fatalf("subscription %d after the burst failed: %v", accepted+1, err)
 		}

@@ -19,8 +19,9 @@ import (
 // full; the caller should retry.
 var ErrSubscribeBacklogFull = errors.New("subscribe server backlog is full")
 
-// ErrSubscriptionLimitReached is returned when the server already serves
-// maxSubscriptions live subscriptions across all connections.
+// ErrSubscriptionLimitReached is returned when the server already serves its
+// configured number of live subscriptions across all connections; see
+// Server.SetMaxSubscriptions.
 var ErrSubscriptionLimitReached = errors.New("subscribe server subscription limit reached")
 
 const (
@@ -28,12 +29,12 @@ const (
 	mChanSize   = 100
 	installSize = 100
 
-	// maxSubscriptions bounds the subscriptions kept installed across all
-	// connections. Every matching chain event is delivered to each of them
-	// from the single worker goroutine, so this also bounds the work one
-	// event can cost. Each connection is separately limited by the RPC
-	// server.
-	maxSubscriptions = 4096
+	// DefaultMaxSubscriptions bounds the subscriptions kept installed across
+	// all connections unless Server.SetMaxSubscriptions configures another
+	// limit. Every matching chain event is delivered to each of them from the
+	// single worker goroutine, so this also bounds the work one event can
+	// cost. Each connection is separately limited by the RPC server.
+	DefaultMaxSubscriptions = 4096
 )
 
 var (
@@ -83,6 +84,9 @@ type Api struct {
 	installCh chan *Subscription // add subscription
 	stopped   chan struct{}
 
+	// maxSubscriptions is the global limit live is checked against; see
+	// Server.SetMaxSubscriptions.
+	maxSubscriptions atomic.Int64
 	// live counts subscriptions that hold a slot of maxSubscriptions: those
 	// waiting in installCh plus those installed. Only subscribe increments
 	// it, serialized by stopLock, and only uninstall decrements it, under
@@ -124,8 +128,34 @@ func GetSubscribeServer(chain chain.Chain) *Server {
 			mCh:           make(chan *Momentum, mChanSize),
 			subscriptions: make(map[SubscriptionType]map[rpc.ID]*Subscription),
 		}
+		singleton.maxSubscriptions.Store(DefaultMaxSubscriptions)
 	}
 	return singleton
+}
+
+// SetMaxSubscriptions sets how many live subscriptions the server keeps
+// across all connections. Subscriptions already installed are kept when the
+// limit is lowered; only new ones are refused. A value below one restores
+// DefaultMaxSubscriptions.
+func (s *Server) SetMaxSubscriptions(n int) {
+	if n < 1 {
+		n = DefaultMaxSubscriptions
+	}
+	s.maxSubscriptions.Store(int64(n))
+}
+
+// MaxSubscriptions reports the global limit on live subscriptions.
+func (s *Server) MaxSubscriptions() int {
+	return int(s.maxSubscriptionsLimit())
+}
+
+// maxSubscriptionsLimit is the configured limit, or the default while none
+// has been set, so an Api built without GetSubscribeServer is bounded too.
+func (a *Api) maxSubscriptionsLimit() int64 {
+	if limit := a.maxSubscriptions.Load(); limit > 0 {
+		return limit
+	}
+	return DefaultMaxSubscriptions
 }
 func GetSubscribeApi() *Api {
 	oneSingleton.Lock()
@@ -228,7 +258,7 @@ type BroadcastStats struct {
 }
 
 func (s *Server) install(subscription *Subscription) {
-	s.log.Info("install", "id", subscription.rpc.ID)
+	s.log.Debug("install", "id", subscription.rpc.ID)
 	// The watcher's signals are read here, on the worker, which owns
 	// subscription.notifier: the next broadcast may find the client gone and
 	// clear that field in Closed before the goroutine launched below has
@@ -264,7 +294,7 @@ func (s *Server) uninstall(subscription *Subscription) {
 	if _, ok := installed[subscription.rpc.ID]; !ok {
 		return
 	}
-	s.log.Info("uninstall", "id", subscription.rpc.ID)
+	s.log.Debug("uninstall", "id", subscription.rpc.ID)
 	delete(installed, subscription.rpc.ID)
 	// Released exactly once, together with the map entry the slot was held for.
 	s.live.Add(-1)
@@ -379,7 +409,7 @@ func (s *Api) subscribe(ctx context.Context, options *subscriptionOptions) (*rpc
 	// the count covers queued and installed subscriptions alike; it is
 	// returned when the entry is uninstalled, which the entry's watcher does
 	// as soon as the client unsubscribes or disconnects.
-	if s.live.Load() >= maxSubscriptions {
+	if s.live.Load() >= s.maxSubscriptionsLimit() {
 		return nil, ErrSubscriptionLimitReached
 	}
 	if len(s.installCh) == cap(s.installCh) {
@@ -392,18 +422,18 @@ func (s *Api) subscribe(ctx context.Context, options *subscriptionOptions) (*rpc
 }
 
 func (s *Api) Momentums(ctx context.Context) (*rpc.Subscription, error) {
-	s.log.Info("new subscription", "type", "Momentums")
+	s.log.Debug("new subscription", "type", "Momentums")
 	return s.subscribe(ctx, NewMomentumsSubscription())
 }
 func (s *Api) AllAccountBlocks(ctx context.Context) (*rpc.Subscription, error) {
-	s.log.Info("new subscription", "type", "AllAccountBlocks")
+	s.log.Debug("new subscription", "type", "AllAccountBlocks")
 	return s.subscribe(ctx, NewBlocksSubscription())
 }
 func (s *Api) AccountBlocksByAddress(ctx context.Context, address types.Address) (*rpc.Subscription, error) {
-	s.log.Info("new subscription", "type", "AccountBlocksByAddress")
+	s.log.Debug("new subscription", "type", "AccountBlocksByAddress")
 	return s.subscribe(ctx, NewBlocksByAddressSubscription(address))
 }
 func (s *Api) UnreceivedAccountBlocksByAddress(ctx context.Context, address types.Address) (*rpc.Subscription, error) {
-	s.log.Info("new subscription", "type", "UnreceivedAccountBlocksByAddress")
+	s.log.Debug("new subscription", "type", "UnreceivedAccountBlocksByAddress")
 	return s.subscribe(ctx, NewToUnreceivedBlocksSubscription(address))
 }

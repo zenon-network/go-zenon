@@ -68,6 +68,9 @@ type handler struct {
 	// per-connection limit but whose notifier has not been collected by
 	// addSubscriptions yet. Guarded by subLock together with serverSubs.
 	pendingSubs int
+	// maxServerSubs is the connection's subscription budget, taken from the
+	// Server that created the handler.
+	maxServerSubs int
 }
 
 type callProc struct {
@@ -75,11 +78,15 @@ type callProc struct {
 	notifiers []*Notifier
 }
 
-func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *serviceRegistry) *handler {
+func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *serviceRegistry, maxServerSubs int) *handler {
+	if maxServerSubs < 1 {
+		maxServerSubs = DefaultMaxSubscriptionsPerConn
+	}
 	rootCtx, cancelRoot := context.WithCancel(connCtx)
 	h := &handler{
 		reg:            reg,
 		idgen:          idgen,
+		maxServerSubs:  maxServerSubs,
 		conn:           conn,
 		respWait:       make(map[string]*requestOp),
 		clientSubs:     make(map[string]*ClientSubscription),
@@ -222,7 +229,7 @@ func (h *handler) releaseSubscription() {
 // reserveSubscription claims one slot of the connection's subscription budget
 // for a subscribe call that is about to run. Slots held by calls still in
 // flight count as well, so neither a batch nor concurrent single requests can
-// exceed maxSubscriptionsPerConn. The slot is released by releaseSubscription
+// exceed the connection's limit. The slot is released by releaseSubscription
 // if the call creates no subscription, converted by addSubscriptions when
 // the call's notifier is collected, and the installed subscription's slot is
 // released by unsubscribe or cancelServerSubscriptions.
@@ -230,7 +237,7 @@ func (h *handler) reserveSubscription() error {
 	h.subLock.Lock()
 	defer h.subLock.Unlock()
 
-	if len(h.serverSubs)+h.pendingSubs >= maxSubscriptionsPerConn {
+	if len(h.serverSubs)+h.pendingSubs >= h.maxServerSubs {
 		return ErrTooManySubscriptions
 	}
 	h.pendingSubs++
@@ -431,7 +438,7 @@ func (h *handler) handleSubscribe(cp *callProc, msg *jsonrpcMessage) *jsonrpcMes
 	// install, so its reservation is returned now rather than when the whole
 	// batch has run: later elements of the same batch must not be rejected
 	// on behalf of slots that nothing holds.
-	if !n.hasSubscription() {
+	if n.takeSubscription() == nil {
 		h.releaseSubscription()
 		return answer
 	}

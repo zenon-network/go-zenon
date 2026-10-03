@@ -46,16 +46,36 @@ type Server struct {
 	idgen    func() ID
 	run      int32
 	codecs   mapset.Set
+	// maxSubscriptionsPerConn is the subscription budget given to each
+	// connection served after it was set; see SetMaxSubscriptionsPerConn.
+	maxSubscriptionsPerConn int
 }
 
 // NewServer creates a new server instance with no registered handlers.
 func NewServer() *Server {
-	server := &Server{idgen: randomIDGenerator(), codecs: mapset.NewSet(), run: 1}
+	server := &Server{idgen: randomIDGenerator(), codecs: mapset.NewSet(), run: 1, maxSubscriptionsPerConn: DefaultMaxSubscriptionsPerConn}
 	// Register the default service providing meta information about the RPC service such
 	// as the services and methods it offers.
 	rpcService := &RPCService{server}
 	server.RegisterName(MetadataApi, rpcService)
 	return server
+}
+
+// SetMaxSubscriptionsPerConn sets how many server subscriptions one connection
+// may hold at a time. It applies to connections served after the call, so it
+// is meant to be called once, before the server is handed to a transport. A
+// value below one restores DefaultMaxSubscriptionsPerConn.
+func (s *Server) SetMaxSubscriptionsPerConn(n int) {
+	if n < 1 {
+		n = DefaultMaxSubscriptionsPerConn
+	}
+	s.maxSubscriptionsPerConn = n
+}
+
+// MaxSubscriptionsPerConn reports the subscription budget given to each
+// connection.
+func (s *Server) MaxSubscriptionsPerConn() int {
+	return s.maxSubscriptionsPerConn
 }
 
 // RegisterName creates a service for the given receiver type under the given name. When no
@@ -83,7 +103,7 @@ func (s *Server) ServeCodec(codec ServerCodec, options CodecOption) {
 	s.codecs.Add(codec)
 	defer s.codecs.Remove(codec)
 
-	c := initClient(codec, s.idgen, &s.services)
+	c := initClient(codec, s.idgen, &s.services, s.maxSubscriptionsPerConn)
 	<-codec.closed()
 	c.Close()
 }
@@ -97,7 +117,7 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 		return
 	}
 
-	h := newHandler(ctx, codec, s.idgen, &s.services)
+	h := newHandler(ctx, codec, s.idgen, &s.services, s.maxSubscriptionsPerConn)
 	h.allowSubscribe = false
 	defer h.close(io.EOF, nil)
 

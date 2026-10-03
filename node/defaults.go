@@ -7,6 +7,8 @@ import (
 	"runtime"
 
 	"github.com/zenon-network/go-zenon/p2p"
+	"github.com/zenon-network/go-zenon/rpc/api/subscribe"
+	rpc "github.com/zenon-network/go-zenon/rpc/server"
 )
 
 const (
@@ -30,6 +32,9 @@ var DefaultNodeConfig = Config{
 
 		HTTPCors:  []string{"*"},
 		WSOrigins: []string{"*"},
+
+		MaxSubscriptionsPerConn: rpc.DefaultMaxSubscriptionsPerConn,
+		MaxSubscriptions:        subscribe.DefaultMaxSubscriptions,
 	},
 	Net: NetConfig{
 		ListenHost:        p2p.DefaultListenHost,

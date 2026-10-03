@@ -36,6 +36,16 @@ type RPCConfig struct {
 	HTTPVirtualHosts []string
 	HTTPCors         []string
 	WSOrigins        []string
+
+	// MaxSubscriptionsPerConn bounds the subscriptions one RPC connection may
+	// hold; a further subscribe on that connection fails with "too many
+	// subscriptions on this connection". MaxSubscriptions bounds live
+	// subscriptions across all connections, IPC and in-process included;
+	// once reached, every new subscribe fails with "subscribe server
+	// subscription limit reached" until a slot is released. Zero selects
+	// the built-in default for either.
+	MaxSubscriptionsPerConn int
+	MaxSubscriptions        int
 }
 type NetConfig struct {
 	ListenHost string
@@ -134,6 +144,7 @@ func (c *Config) makeZenonConfig(walletManager *wallet.Manager) (*zenon.Config, 
 		ProducingKeyPair:  pillarCoinbase,
 		GenesisConfig:     c.makeGenesisConfig(),
 		DataDir:           c.DataPath,
+		MaxSubscriptions:  c.RPC.MaxSubscriptions,
 	}, nil
 }
 func (c *Config) makeGenesisConfig() (genesisConfig store.Genesis) {

@@ -37,13 +37,14 @@ var (
 	// ErrNotificationNotFound is returned when the notification for the given id is not found
 	ErrSubscriptionNotFound = errors.New("subscription not found")
 	// ErrTooManySubscriptions is returned when a connection already holds
-	// maxSubscriptionsPerConn server subscriptions.
+	// DefaultMaxSubscriptionsPerConn server subscriptions unless the
+	// server configures another limit; see Server.SetMaxSubscriptionsPerConn.
 	ErrTooManySubscriptions = errors.New("too many subscriptions on this connection")
 )
 
-// maxSubscriptionsPerConn bounds the server subscriptions one connection can
+// DefaultMaxSubscriptionsPerConn bounds the server subscriptions one connection can
 // hold at a time; a client that needs more must unsubscribe first.
-const maxSubscriptionsPerConn = 64
+const DefaultMaxSubscriptionsPerConn = 64
 
 var globalGen = randomIDGenerator()
 
@@ -161,15 +162,6 @@ func (n *Notifier) takeSubscription() *Subscription {
 	defer n.mu.Unlock()
 	n.callReturned = true
 	return n.sub
-}
-
-// hasSubscription reports whether the subscribe call created a subscription.
-// It marks the call as returned, so no subscription can be created afterwards.
-func (n *Notifier) hasSubscription() bool {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.callReturned = true
-	return n.sub != nil
 }
 
 // activate is called after the subscription ID was sent to client. Notifications are

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/zenon-network/go-zenon/chain"
-	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	rpc "github.com/zenon-network/go-zenon/rpc/server"
@@ -166,7 +165,7 @@ func fillSubscriptions(t *testing.T, rpcServer *rpc.Server, args ...interface{})
 			}
 			break
 		}
-		if len(clients) > maxSubscriptions {
+		if len(clients) > DefaultMaxSubscriptions {
 			t.Fatalf("opened %d connections without reaching the global limit", len(clients))
 		}
 	}
@@ -203,7 +202,7 @@ func waitForCapacity(t *testing.T, rpcServer *rpc.Server, args ...interface{}) *
 	}
 }
 
-// The server accepts exactly maxSubscriptions live subscriptions across all
+// The server accepts exactly DefaultMaxSubscriptions live subscriptions across all
 // connections; reservations are taken synchronously in subscribe, so the
 // count is exact even though installation is asynchronous.
 func TestGlobalSubscriptionLimit(t *testing.T) {
@@ -211,8 +210,8 @@ func TestGlobalSubscriptionLimit(t *testing.T) {
 
 	clients, accepted := fillSubscriptions(t, rpcServer, "momentums")
 	defer closeAll(clients)
-	if accepted != maxSubscriptions {
-		t.Fatalf("accepted %d subscriptions, want %d", accepted, maxSubscriptions)
+	if accepted != DefaultMaxSubscriptions {
+		t.Fatalf("accepted %d subscriptions, want %d", accepted, DefaultMaxSubscriptions)
 	}
 
 	// Still full on a fresh connection.
@@ -224,10 +223,46 @@ func TestGlobalSubscriptionLimit(t *testing.T) {
 	}
 }
 
-// Unsubscribing returns capacity once the worker visits the subscription
-// during a broadcast of its event type.
-func TestUnsubscribeReturnsGlobalCapacity(t *testing.T) {
+// The global limit is configurable: set to three, the fourth subscription is
+// refused whichever connection it arrives on, and a value below one restores
+// the default. The limit is restored afterwards because the server is a
+// singleton shared by every test in the package.
+func TestConfiguredGlobalSubscriptionLimit(t *testing.T) {
 	server, rpcServer := startTestServer(t)
+	server.SetMaxSubscriptions(3)
+	t.Cleanup(func() { server.SetMaxSubscriptions(0) })
+	if got := server.MaxSubscriptions(); got != 3 {
+		t.Fatalf("limit is %d, want 3", got)
+	}
+
+	clients, accepted := fillSubscriptions(t, rpcServer, "momentums")
+	defer closeAll(clients)
+	if accepted != 3 {
+		t.Fatalf("accepted %d subscriptions, want 3", accepted)
+	}
+
+	extra := rpc.DialInProc(rpcServer)
+	defer extra.Close()
+	_, err := extra.Subscribe(context.Background(), "ledger", make(chan interface{}, 1), "momentums")
+	if err == nil || err.Error() != ErrSubscriptionLimitReached.Error() {
+		t.Fatalf("expected %v, got %v", ErrSubscriptionLimitReached, err)
+	}
+
+	server.SetMaxSubscriptions(0)
+	if got := server.MaxSubscriptions(); got != DefaultMaxSubscriptions {
+		t.Fatalf("limit after reset is %d, want %d", got, DefaultMaxSubscriptions)
+	}
+	// The reset applies to the next admission: the fourth subscription,
+	// refused above, is accepted now that the limit is back to the default.
+	if _, err := extra.Subscribe(context.Background(), "ledger", make(chan interface{}, 1), "momentums"); err != nil {
+		t.Fatalf("subscribe after reset: %v", err)
+	}
+}
+
+// Unsubscribing returns capacity as soon as the subscription's watcher sees
+// the client let go; no broadcast of its event type is needed.
+func TestUnsubscribeReturnsGlobalCapacity(t *testing.T) {
+	_, rpcServer := startTestServer(t)
 
 	first := rpc.DialInProc(rpcServer)
 	defer first.Close()
@@ -240,7 +275,6 @@ func TestUnsubscribeReturnsGlobalCapacity(t *testing.T) {
 	defer closeAll(clients)
 
 	sub.Unsubscribe()
-	server.InsertMomentum(&nom.DetailedMomentum{Momentum: &nom.Momentum{Height: 1}})
 
 	client := waitForCapacity(t, rpcServer, "momentums")
 	defer client.Close()
@@ -255,8 +289,8 @@ func TestClosedConnectionsReturnGlobalCapacity(t *testing.T) {
 
 	address := types.PillarContract
 	clients, accepted := fillSubscriptions(t, rpcServer, "accountBlocksByAddress", address)
-	if accepted != maxSubscriptions {
-		t.Fatalf("accepted %d subscriptions, want %d", accepted, maxSubscriptions)
+	if accepted != DefaultMaxSubscriptions {
+		t.Fatalf("accepted %d subscriptions, want %d", accepted, DefaultMaxSubscriptions)
 	}
 	closeAll(clients)
 
@@ -275,7 +309,7 @@ func TestUnsubscribeChurnDoesNotStarveGlobalCapacity(t *testing.T) {
 	churner := rpc.DialInProc(rpcServer)
 	defer churner.Close()
 	const perRound = 64
-	for round := 0; round*perRound < maxSubscriptions; round++ {
+	for round := 0; round*perRound < DefaultMaxSubscriptions; round++ {
 		subs := make([]*rpc.ClientSubscription, 0, perRound)
 		for len(subs) < perRound {
 			sub, err := churner.Subscribe(context.Background(), "ledger", make(chan interface{}, 1), "accountBlocksByAddress", address)
@@ -427,11 +461,11 @@ func TestWatcherIgnoresWorkerCleanupOfLeftEntry(t *testing.T) {
 // Connections racing for the last slots cannot overshoot the global limit:
 // the check and the increment in subscribe are serialized by stopLock, so
 // concurrent subscribe calls from many connections are accepted exactly
-// maxSubscriptions times in total and the next request is rejected.
+// DefaultMaxSubscriptions times in total and the next request is rejected.
 func TestGlobalSubscriptionLimitUnderConcurrentAdmission(t *testing.T) {
 	_, rpcServer := startTestServer(t)
 
-	const connections = 2 * maxSubscriptions / 64
+	const connections = 2 * DefaultMaxSubscriptions / 64
 	var (
 		wg       sync.WaitGroup
 		mu       sync.Mutex
@@ -473,8 +507,8 @@ func TestGlobalSubscriptionLimitUnderConcurrentAdmission(t *testing.T) {
 	if failure != nil {
 		t.Fatalf("unexpected subscribe error: %v", failure)
 	}
-	if accepted != maxSubscriptions {
-		t.Fatalf("accepted %d subscriptions concurrently, want %d", accepted, maxSubscriptions)
+	if accepted != DefaultMaxSubscriptions {
+		t.Fatalf("accepted %d subscriptions concurrently, want %d", accepted, DefaultMaxSubscriptions)
 	}
 
 	extra := rpc.DialInProc(rpcServer)
