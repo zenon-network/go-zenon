@@ -369,14 +369,103 @@ func (ap *accountPool) InsertMomentum(detailed *nom.DetailedMomentum) {
 		common.ChainLogger.Error("failed to handle InsertMomentum in AccountPool", "reason", err)
 	}
 }
-func (ap *accountPool) DeleteMomentum(*nom.DetailedMomentum) {
+func (ap *accountPool) DeleteMomentum(detailed *nom.DetailedMomentum) {
 	ap.refreshDynamicPlasma()
 
 	ap.changes.Lock()
 	defer ap.changes.Unlock()
 
-	ap.managers = make(map[types.Address]*accountManager)
+	// Only remove managers for addresses whose account blocks were included
+	// in the deleted momentum.  Wiping every manager discards pending blocks
+	// that are unrelated to the rollback and leaves the subsequent rebuild
+	// with nothing to iterate over.
+	if detailed == nil {
+		return
+	}
+	touched := make(map[types.Address]struct{})
+	rolledBackSends := make(map[types.Hash]struct{})
+	for _, block := range detailed.AccountBlocks {
+		touched[block.Address] = struct{}{}
+		if block.IsSendBlock() {
+			rolledBackSends[block.Hash] = struct{}{}
+		}
+	}
+	for address := range touched {
+		delete(ap.managers, address)
+	}
+
+	// Evict managers holding pending receives whose from-block (send) was
+	// rolled back.  Such receives are orphaned: their from-block no longer
+	// exists on the committed chain, so including them in the next momentum
+	// would fail with "Can't find from-block in store" and stall block
+	// production.
+	if len(rolledBackSends) > 0 {
+		for address, manager := range ap.managers {
+			for _, block := range manager.blocks {
+				if block.IsReceiveBlock() && block.BlockType != nom.BlockTypeGenesisReceive {
+					if _, ok := rolledBackSends[block.FromBlockHash]; ok {
+						delete(ap.managers, address)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Evict blocks whose MomentumAcknowledged is no longer canonical after
+	// the rollback.  Rollback pops from the top, so at DeleteMomentum(popped)
+	// every pending block with MA.Height >= popped.Height acknowledges a
+	// momentum that is no longer canonical.  After the last pop every retained
+	// block acknowledges a height at or below the target, where the chain is
+	// byte-identical by construction (RollbackTo verifies the target hash).
+	// A height-only suffix truncation closes the window without a store
+	// lookup.  This runs during DeleteMomentum (not just during rebuild) so
+	// that stale-acknowledged blocks are removed BEFORE momentum selection
+	// can pick them up.
+	poppedHeight := detailed.Momentum.Height
+	for address, manager := range ap.managers {
+		// Find the lowest height whose block acknowledges a stale momentum.
+		// Blocks form a chain and MA is non-decreasing along it, so stale
+		// blocks are a contiguous suffix: truncate from the cutoff, keep
+		// everything below it.
+		cutoff := uint64(0)
+		for height, block := range manager.blocks {
+			if block.MomentumAcknowledged.Height > 0 && block.MomentumAcknowledged.Height >= poppedHeight {
+				if cutoff == 0 || height < cutoff {
+					cutoff = height
+				}
+			}
+		}
+		if cutoff == 0 {
+			continue
+		}
+		ap.log.Info("truncating stale momentum-acknowledged suffix",
+			"address", address,
+			"cutoff-height", cutoff,
+			"popped-height", poppedHeight)
+		// Pop versions until the frontier is below the cutoff.  Each Pop
+		// removes one block (and its descendants) from the manager.
+		for {
+			frontier := db.GetFrontierIdentifier(manager.db.Frontier())
+			if frontier.Height < cutoff {
+				break
+			}
+			if err := manager.Pop(); err != nil {
+				ap.log.Error("failed to pop stale block during truncation",
+					"address", address,
+					"frontier", frontier,
+					"reason", err)
+				delete(ap.managers, address)
+				break
+			}
+		}
+		// If every block was stale the manager is now empty; drop it.
+		if len(manager.blocks) == 0 {
+			delete(ap.managers, address)
+		}
+	}
 }
+
 func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 	addresses := make([]types.Address, 0, len(ap.managers))
 	for address := range ap.managers {
@@ -384,6 +473,13 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 	}
 
 	ap.log.Debug("started rebuilding account-pool", "momentum-identifier", detailed.Momentum.Identifier())
+	// Rebuild must not abandon the remaining addresses when one of them fails.
+	// Returning mid-loop leaves the addresses already processed bound to the
+	// new stable DB and the rest still bound to the previous one, with no
+	// indication which is which.  Fail each address independently instead:
+	// the address whose rebuild failed keeps no manager, and every other
+	// address is rebuilt consistently.
+	var firstErr error
 	for _, address := range addresses {
 		log := ap.log.New("address", address)
 		log.Debug("start rebuilding")
@@ -412,22 +508,51 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 			blocks: make(map[uint64]*nom.AccountBlock),
 		}
 		for _, block := range uncommitted {
+			// After a rollback the frontier may be lower than when the block
+			// was accepted.  A block whose MomentumAcknowledged is above the
+			// current frontier is invalid against the new chain state; drop
+			// it and every subsequent block on this account chain, since they
+			// build on it.
+			if block.MomentumAcknowledged.Height > detailed.Momentum.Height {
+				log.Info("dropping block with momentum-acknowledged above frontier",
+					"block", block.Header(),
+					"ma-height", block.MomentumAcknowledged.Height,
+					"frontier-height", detailed.Momentum.Height)
+				break
+			}
+			// DeleteMomentum's eviction keeps every retained acknowledgement
+			// at or below the frontier, so no hash re-check is needed here.
 			patch := oldManager.db.GetPatch(block.Identifier())
 			err := manager.Add(&nom.AccountBlockTransaction{
 				Block:   block,
 				Changes: patch,
 			})
 			if err != nil {
-				return errors.Errorf("account pool rebuild error. Unable to re-apply block %v. Reason %v", block.Header(), err)
+				// Drop this address's manager entirely and carry on with the
+				// others.  Re-applying the rest of the chain from a manager
+				// whose state is already inconsistent is not safe.
+				log.Error("rebuild failed, dropping pending blocks for address",
+					"block", block.Header(),
+					"reason", err)
+				if firstErr == nil {
+					firstErr = errors.Errorf("account pool rebuild error. Unable to re-apply block %v. Reason %v", block.Header(), err)
+				}
+				manager = nil
+				break
 			}
 		}
-		ap.managers[address] = manager
-
-		log.Debug("successfully rebuild", "num-uncommitted", len(uncommitted))
+		// An empty manager is a map entry with nothing in it until the next
+		// rebuild.  Only re-register the address when blocks survived.
+		if manager != nil && len(manager.blocks) > 0 {
+			ap.managers[address] = manager
+			log.Debug("successfully rebuild", "num-uncommitted", len(uncommitted))
+		} else {
+			log.Debug("rebuild produced no blocks, dropping manager")
+		}
 	}
 
 	ap.log.Debug("finished rebuilding account-pool")
-	return nil
+	return firstErr
 }
 
 func (ap *accountPool) GetNewMomentumContent() []*nom.AccountBlock {
