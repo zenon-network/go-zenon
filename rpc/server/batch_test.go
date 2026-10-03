@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,9 +20,7 @@ import (
 // block until released, so the tests can observe execution rather than
 // only responses.
 type batchTestService struct {
-	calls   int32
-	inside  int32
-	release chan struct{}
+	calls int32
 }
 
 func (s *batchTestService) Echo(v string) string {
@@ -34,22 +31,6 @@ func (s *batchTestService) Echo(v string) string {
 func (s *batchTestService) Big(n int) string {
 	atomic.AddInt32(&s.calls, 1)
 	return strings.Repeat("x", n)
-}
-
-// Reverse calls back into the client on the same connection; the reply
-// can only be delivered if the connection's dispatch loop keeps running.
-func (s *batchTestService) Reverse(ctx context.Context) (string, error) {
-	atomic.AddInt32(&s.calls, 1)
-	client, ok := ClientFromContext(ctx)
-	if !ok {
-		return "", fmt.Errorf("no client in context")
-	}
-	<-s.release
-	var res string
-	if err := client.CallContext(ctx, &res, "peer.echo", "back"); err != nil {
-		return "", err
-	}
-	return res, nil
 }
 
 // Fail returns an error carrying n bytes of data.
@@ -63,21 +44,9 @@ type bigDataError struct{ data string }
 func (e *bigDataError) Error() string          { return "failed with data" }
 func (e *bigDataError) ErrorData() interface{} { return e.data }
 
-type peerService struct{}
-
-func (peerService) Echo(v string) string { return v }
-
-func (s *batchTestService) Block() string {
-	atomic.AddInt32(&s.calls, 1)
-	atomic.AddInt32(&s.inside, 1)
-	defer atomic.AddInt32(&s.inside, -1)
-	<-s.release
-	return "released"
-}
-
 func newBatchTestServer(t *testing.T) (*Server, *batchTestService) {
 	t.Helper()
-	svc := &batchTestService{release: make(chan struct{})}
+	svc := &batchTestService{}
 	server := NewServer()
 	if err := server.RegisterName("test", svc); err != nil {
 		t.Fatal(err)
@@ -313,105 +282,52 @@ func TestClientRefusesOversizedBatch(t *testing.T) {
 	}
 }
 
-// Every accepted call may call back into the client on the same
-// connection; the replies are delivered by the connection's dispatch loop,
-// which therefore must never wait on a call. A full connection of such
-// calls completes.
-func TestReverseCallsAtCapacityComplete(t *testing.T) {
+// Once a batch's response budget is exhausted, the remaining elements are
+// answered the way they would have been if executed: invalid ones with the
+// invalid-request error, calls with the budget error, notifications not at
+// all.
+func TestBudgetFallbackAnswersInvalidElements(t *testing.T) {
 	server, svc := newBatchTestServer(t)
-	client := DialInProc(server)
-	defer client.Close()
-	if err := client.RegisterName("peer", peerService{}); err != nil {
-		t.Fatal(err)
-	}
+	ts := httptest.NewServer(server)
+	defer ts.Close()
 
-	n := maxPendingCalls
-	var wg sync.WaitGroup
-	errs := make(chan error, n)
+	const each = 4 * 1000 * 1000
+	n := maxBatchResponseBytes/each + 1 // the n-th result crosses the budget
+	var b bytes.Buffer
+	b.WriteByte('[')
 	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			var res string
-			errs <- client.CallContext(ctx, &res, "test.reverse")
-		}()
+		fmt.Fprintf(&b, `{"jsonrpc":"2.0","id":%d,"method":"test.big","params":[%d]},`, i+1, each)
 	}
-	// Let every request reach the server before the callbacks proceed.
-	deadline := time.Now().Add(5 * time.Second)
-	for atomic.LoadInt32(&svc.calls) < int32(n) {
-		if time.Now().After(deadline) {
-			t.Fatalf("only %d calls reached the service", atomic.LoadInt32(&svc.calls))
-		}
-		time.Sleep(time.Millisecond)
+	b.WriteString(`1,`)
+	b.WriteString(`{"jsonrpc":"2.0","id":"i"},`)
+	b.WriteString(`{"jsonrpc":"2.0","method":"test.echo","params":["n"]},`)
+	b.WriteString(`{"jsonrpc":"2.0","id":"c","method":"test.echo","params":["x"]}`)
+	b.WriteByte(']')
+
+	out := postHTTP(t, ts.URL, b.Bytes())
+	var answers []jsonrpcMessage
+	if err := json.Unmarshal(out, &answers); err != nil {
+		t.Fatalf("undecodable batch reply: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
-	close(svc.release)
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatalf("reverse call failed: %v", err)
+	if len(answers) != n+3 {
+		t.Fatalf("%d answers, want %d (%d results and 3 errors)", len(answers), n+3, n)
+	}
+	for i := 0; i < n; i++ {
+		if answers[i].Error != nil || len(answers[i].Result) != each+2 {
+			t.Fatalf("result %d: %.100s", i+1, answers[i].String())
 		}
+	}
+	requireErrorReply(t, "bare number", answers[n], "null", -32600, "invalid request")
+	requireErrorReply(t, "id without method", answers[n+1], `"i"`, -32600, "invalid request")
+	requireErrorReply(t, "call after the budget", answers[n+2], `"c"`, -32003, "batch response too large")
+	if got := atomic.LoadInt32(&svc.calls); got != int32(n) {
+		t.Fatalf("%d calls executed, want %d", got, n)
 	}
 }
 
-// Beyond the outstanding-message cap, a message is answered at once with an
-// overload error instead of being queued; earlier calls still complete.
-func TestPendingCallsOverloadIsRejected(t *testing.T) {
-	server, svc := newBatchTestServer(t)
-	client := DialInProc(server)
-	defer client.Close()
-
-	const extra = 5
-	n := maxPendingCalls + extra
-	var wg sync.WaitGroup
-	errs := make(chan error, n)
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var res string
-			errs <- client.CallContext(context.Background(), &res, "test.block")
-		}()
-	}
-	// Wait until the rejections have come back, which happens while the
-	// accepted calls are still blocked.
-	deadline := time.Now().Add(5 * time.Second)
-	var rejected []error
-	for len(rejected) < extra {
-		if time.Now().After(deadline) {
-			t.Fatalf("only %d messages were rejected", len(rejected))
-		}
-		select {
-		case err := <-errs:
-			if err == nil || !strings.Contains(err.Error(), "too many pending requests") {
-				t.Fatalf("unexpected early result: %v", err)
-			}
-			rejected = append(rejected, err)
-		default:
-			time.Sleep(time.Millisecond)
-		}
-	}
-	// Every accepted call runs at once; the last may still be on its way
-	// into the service when the rejections come back.
-	deadline = time.Now().Add(5 * time.Second)
-	for atomic.LoadInt32(&svc.inside) != maxPendingCalls {
-		if time.Now().After(deadline) {
-			t.Fatalf("%d calls executing, want every accepted one (%d)", atomic.LoadInt32(&svc.inside), maxPendingCalls)
-		}
-		time.Sleep(time.Millisecond)
-	}
-	close(svc.release)
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatalf("accepted call failed: %v", err)
-		}
-	}
-	if got := atomic.LoadInt32(&svc.calls); got != maxPendingCalls {
-		t.Fatalf("%d calls executed, want %d", got, maxPendingCalls)
+func requireErrorReply(t *testing.T, what string, msg jsonrpcMessage, wantID string, wantCode int, wantText string) {
+	t.Helper()
+	if string(msg.ID) != wantID || msg.Error == nil || msg.Error.Code != wantCode || !strings.Contains(msg.Error.Message, wantText) {
+		t.Fatalf("%s: got %s, want id %s, code %d, message containing %q", what, msg.String(), wantID, wantCode, wantText)
 	}
 }

@@ -99,13 +99,12 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 
 	h := newHandler(ctx, codec, s.idgen, &s.services)
 	h.allowSubscribe = false
-	h.directAnswers = true
 	defer h.close(io.EOF, nil)
 
 	reqs, batch, err := codec.readBatch()
 	if err != nil {
 		if err == errBatchTooLarge {
-			codec.writeJSON(ctx, errorMessage(err))
+			_ = codec.writeJSON(ctx, errorMessage(err))
 		} else if err != io.EOF {
 			codec.writeJSON(ctx, errorMessage(&invalidMessageError{"parse error"}))
 		}

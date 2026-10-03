@@ -23,7 +23,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
@@ -57,14 +56,6 @@ type handler struct {
 	respWait       map[string]*requestOp          // active client requests
 	clientSubs     map[string]*ClientSubscription // active client subscriptions
 	callWG         sync.WaitGroup                 // pending call goroutines
-	callsPending   int32                          // accepted but unfinished messages, see startCallProc
-	answers        chan interface{}               // answers produced on the dispatch loop, see writeAnswer
-	answerBytes    int64                          // bytes retained by queued and in-flight answers
-	answerOnce     sync.Once                      // starts the answer writer
-	directAnswers  bool                           // write answers on the caller instead; see writeAnswer
-	writerDone     chan struct{}                  // closed when the answer writer has exited; nil if never started
-	closing        chan struct{}                  // closed by close(); stops the answer writer
-	closeAt        int64                          // unix nanoseconds; set by close() before closing is closed
 	rootCtx        context.Context                // canceled by close()
 	cancelRoot     func()                         // cancel function for rootCtx
 	conn           jsonWriter                     // where responses will be sent
@@ -91,8 +82,6 @@ func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *
 		rootCtx:        rootCtx,
 		cancelRoot:     cancelRoot,
 		allowSubscribe: true,
-		answers:        make(chan interface{}, maxQueuedAnswers),
-		closing:        make(chan struct{}),
 		serverSubs:     make(map[ID]*Subscription),
 		log:            log.Root(),
 	}
@@ -107,41 +96,25 @@ func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *
 func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 	// Emit error response for empty batches:
 	if len(msgs) == 0 {
-		started := h.startCallProc(func(cp *callProc) {
+		h.startCallProc(func(cp *callProc) {
 			h.conn.writeJSON(cp.ctx, errorMessage(&invalidRequestError{"empty batch"}))
 		})
-		if !started {
-			h.writeAnswer(errorMessage(&invalidRequestError{"empty batch"}))
-		}
 		return
 	}
 
-	// Handle non-call messages first. Unsubscribe requests are answered
-	// here as well, without going through admission; see handleTeardown.
+	// Handle non-call messages first:
 	calls := make([]*jsonrpcMessage, 0, len(msgs))
-	var immediate []*jsonrpcMessage
 	for _, msg := range msgs {
-		if handled := h.handleImmediate(msg); handled {
-			continue
+		if handled := h.handleImmediate(msg); !handled {
+			calls = append(calls, msg)
 		}
-		if answer, handled := h.handleTeardown(msg); handled {
-			if answer != nil {
-				immediate = append(immediate, answer)
-			}
-			continue
-		}
-		calls = append(calls, msg)
 	}
 	if len(calls) == 0 {
-		if len(immediate) > 0 {
-			h.writeAnswer(immediate)
-		}
 		return
 	}
 	// Process calls on a goroutine because they may block indefinitely:
-	started := h.startCallProc(func(cp *callProc) {
+	h.startCallProc(func(cp *callProc) {
 		answers := make([]*jsonrpcMessage, 0, len(msgs))
-		answers = append(answers, immediate...)
 		responseBytes := 0
 		for i, msg := range calls {
 			if answer := h.handleCallMsg(cp, msg); answer != nil {
@@ -149,12 +122,20 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 				responseBytes += answer.payloadSize()
 			}
 			// The answer that crosses the budget is still delivered; the
-			// calls after it are answered without being executed.
+			// elements after it are answered the way handleCallMsg would
+			// have answered them, except that a call is not executed and
+			// gets the budget error instead of its result.
 			if responseBytes > maxBatchResponseBytes {
 				h.log.Warn("Batch response too large", "responseBytes", responseBytes, "skipped", len(calls)-i-1)
 				for _, rest := range calls[i+1:] {
-					if answer := skippedAnswer(rest, new(batchResponseTooLargeError)); answer != nil {
-						answers = append(answers, answer)
+					switch {
+					case rest.isNotification():
+					case rest.isCall():
+						answers = append(answers, rest.errorResponse(new(batchResponseTooLargeError)))
+					case rest.hasValidID():
+						answers = append(answers, rest.errorResponse(&invalidRequestError{"invalid request"}))
+					default:
+						answers = append(answers, errorMessage(&invalidRequestError{"invalid request"}))
 					}
 				}
 				break
@@ -168,18 +149,6 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 			n.activate()
 		}
 	})
-	if !started {
-		answers := make([]*jsonrpcMessage, 0, len(calls)+len(immediate))
-		answers = append(answers, immediate...)
-		for _, msg := range calls {
-			if answer := skippedAnswer(msg, new(tooManyPendingError)); answer != nil {
-				answers = append(answers, answer)
-			}
-		}
-		if len(answers) > 0 {
-			h.writeAnswer(answers)
-		}
-	}
 }
 
 // handleMsg handles a single message.
@@ -187,13 +156,7 @@ func (h *handler) handleMsg(msg *jsonrpcMessage) {
 	if ok := h.handleImmediate(msg); ok {
 		return
 	}
-	if answer, handled := h.handleTeardown(msg); handled {
-		if answer != nil {
-			h.writeAnswer(answer)
-		}
-		return
-	}
-	started := h.startCallProc(func(cp *callProc) {
+	h.startCallProc(func(cp *callProc) {
 		answer := h.handleCallMsg(cp, msg)
 		h.addSubscriptions(cp.notifiers)
 		if answer != nil {
@@ -203,61 +166,13 @@ func (h *handler) handleMsg(msg *jsonrpcMessage) {
 			n.activate()
 		}
 	})
-	if !started {
-		if answer := skippedAnswer(msg, new(tooManyPendingError)); answer != nil {
-			h.writeAnswer(answer)
-		}
-	}
-}
-
-// handleBatchTooLarge answers a batch the codec refused to decode because it
-// carried more than maxBatchRequests elements. The whole value has been
-// consumed from the stream, so the connection keeps serving.
-func (h *handler) handleBatchTooLarge() {
-	h.writeAnswer(errorMessage(errBatchTooLarge))
-}
-
-// handleTeardown runs an unsubscribe request on the caller's goroutine and
-// returns its answer (nil for the notification form). Unsubscribe does not
-// count against the pending-message limit and, inside a batch, is not
-// subject to the response budget either: it only removes an entry from
-// this connection's own subscription table, so it is bounded work, and a
-// client must be able to release subscriptions from a connection it has
-// saturated. The connection's subscription table bounds how much such work
-// there is to do. handled is false for every other message, which the
-// caller then submits to startCallProc.
-func (h *handler) handleTeardown(msg *jsonrpcMessage) (answer *jsonrpcMessage, handled bool) {
-	if !msg.isUnsubscribe() || (!msg.isCall() && !msg.isNotification()) {
-		return nil, false
-	}
-	return h.handleCallMsg(&callProc{ctx: h.rootCtx}, msg), true
-}
-
-// skippedAnswer is the answer for a message of a batch or connection that
-// is not going to be executed: a call is answered with err, a message that
-// is not a call gets the invalid-request answer handleCallMsg would have
-// given it, and a notification gets none.
-func skippedAnswer(msg *jsonrpcMessage, err error) *jsonrpcMessage {
-	switch {
-	case msg.isNotification():
-		return nil
-	case msg.isCall():
-		return msg.errorResponse(err)
-	case msg.hasValidID():
-		return msg.errorResponse(&invalidRequestError{"invalid request"})
-	default:
-		return errorMessage(&invalidRequestError{"invalid request"})
-	}
 }
 
 // close cancels all requests except for inflightReq and waits for
 // call goroutines to shut down.
 func (h *handler) close(err error, inflightReq *requestOp) {
 	h.cancelAllRequests(err, inflightReq)
-	atomic.StoreInt64(&h.closeAt, time.Now().Add(defaultWriteTimeout).UnixNano())
-	close(h.closing)
 	h.callWG.Wait()
-	h.waitAnswerWriter()
 	h.cancelRoot()
 	h.cancelServerSubscriptions(err)
 }
@@ -323,137 +238,14 @@ func (h *handler) cancelServerSubscriptions(err error) {
 }
 
 // startCallProc runs fn in a new goroutine and starts tracking it in the h.calls wait group.
-//
-// The connection may have at most maxPendingCalls messages accepted but not
-// finished; beyond that startCallProc returns false without starting
-// anything and the caller answers the message with an overload error. An
-// accepted message runs at once rather than waiting in a queue: a call that
-// waited for a call awaiting a reply from the peer could wait forever when
-// the peer's calls are in the same state (mutual recursion through reverse
-// calls), whereas a rejected message returns an error the chain unwinds
-// on. The caller is the connection's dispatch loop, which running calls
-// need to deliver replies to their reverse calls, so nothing here blocks.
-func (h *handler) startCallProc(fn func(*callProc)) bool {
-	if atomic.AddInt32(&h.callsPending, 1) > maxPendingCalls {
-		atomic.AddInt32(&h.callsPending, -1)
-		return false
-	}
+func (h *handler) startCallProc(fn func(*callProc)) {
 	h.callWG.Add(1)
 	go func() {
-		defer h.callWG.Done()
-		defer atomic.AddInt32(&h.callsPending, -1)
 		ctx, cancel := context.WithCancel(h.rootCtx)
+		defer h.callWG.Done()
 		defer cancel()
 		fn(&callProc{ctx: ctx})
 	}()
-	return true
-}
-
-// writeAnswer queues an answer produced on the dispatch loop itself (an
-// overload rejection, an oversized-batch rejection, an unsubscribe result)
-// for the connection's answer writer, so the loop never waits on the
-// transport: call goroutines need it to deliver the replies to their
-// reverse calls. The queue is bounded by count and by the bytes it
-// retains, since an answer echoes the request's id. It never blocks: a peer
-// whose answers overflow either bound keeps sending while not reading, and
-// its connection is closed instead. The first answer is queued whatever its
-// size, so a single oversized id costs the peer nothing but its own bytes.
-//
-// A single-request handler (HTTP) writes on the caller instead: its codec
-// belongs to the request, whose handler must not return while the answer
-// is still being written, and there is no dispatch loop to keep free.
-func (h *handler) writeAnswer(v interface{}) {
-	if h.directAnswers {
-		h.writeOne(v)
-		return
-	}
-	h.answerOnce.Do(func() {
-		h.writerDone = make(chan struct{})
-		go h.writeAnswers()
-	})
-	size := answerSize(v)
-	if queued := atomic.AddInt64(&h.answerBytes, size); queued > maxQueuedAnswerBytes && queued != size {
-		atomic.AddInt64(&h.answerBytes, -size)
-		h.shed("bytes", queued)
-		return
-	}
-	select {
-	case h.answers <- v:
-	default:
-		atomic.AddInt64(&h.answerBytes, -size)
-		h.shed("answers", int64(len(h.answers)))
-	}
-}
-
-// shed closes the connection of a peer that keeps sending while not
-// reading its answers. Waiting would not serve the peer, and the answers it
-// leaves unread would otherwise accumulate without bound.
-func (h *handler) shed(what string, queued int64) {
-	h.log.Warn("Closing RPC connection, peer is not reading its answers", "queued"+what, queued)
-	h.conn.close()
-}
-
-// writeAnswers is the connection's answer writer. When the handler closes
-// it writes what is still queued and exits.
-func (h *handler) writeAnswers() {
-	defer close(h.writerDone)
-	for {
-		select {
-		case v := <-h.answers:
-			h.writeOne(v)
-		case <-h.closing:
-			for {
-				select {
-				case v := <-h.answers:
-					h.writeOne(v)
-				default:
-					return
-				}
-			}
-		}
-	}
-}
-
-// writeOne writes one answer. Once close() has recorded its deadline, every
-// write uses that deadline instead of a fresh one, whether the write was
-// picked before or after the close signal; on a transport that honours
-// deadlines the only write that can outlast it is one that was already in
-// progress, and on one that does not, waitAnswerWriter bounds the close
-// instead. A failed write means the transport is gone or the peer has
-// stopped reading, and closes the connection.
-func (h *handler) writeOne(v interface{}) {
-	ctx := h.rootCtx
-	if at := atomic.LoadInt64(&h.closeAt); at != 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(context.Background(), time.Unix(0, at))
-		defer cancel()
-	}
-	err := h.conn.writeJSON(ctx, v)
-	atomic.AddInt64(&h.answerBytes, -answerSize(v))
-	if err != nil {
-		h.log.Debug("Closing RPC connection, failed to write answer", "err", err)
-		h.conn.close()
-	}
-}
-
-// waitAnswerWriter waits for the answer writer to finish, until the
-// deadline close() recorded. A transport that ignores write deadlines can
-// keep the writer inside a write past that point; the connection is then
-// closed under it, which interrupts the write on every transport whose
-// close does that, and the writer is left to exit on its own so that close
-// itself stays bounded whatever the transport.
-func (h *handler) waitAnswerWriter() {
-	if h.writerDone == nil {
-		return
-	}
-	timer := time.NewTimer(time.Until(time.Unix(0, atomic.LoadInt64(&h.closeAt))))
-	defer timer.Stop()
-	select {
-	case <-h.writerDone:
-	case <-timer.C:
-		h.log.Warn("Closing RPC connection under an answer write that did not finish in time")
-		h.conn.close()
-	}
 }
 
 // handleImmediate executes non-call messages. It returns false if the message is a
