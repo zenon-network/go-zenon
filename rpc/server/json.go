@@ -164,13 +164,15 @@ type ConnRemoteAddr interface {
 // jsonCodec reads and writes JSON-RPC messages to the underlying connection. It also has
 // support for parsing arguments and serializing (result) objects.
 type jsonCodec struct {
-	remote  string
-	closer  sync.Once                 // close closed channel once
-	closeCh chan interface{}          // closed on Close
-	decode  func(v interface{}) error // decoder to allow multiple transports
-	encMu   sync.Mutex                // guards the encoder
-	encode  func(v interface{}) error // encoder to allow multiple transports
-	conn    deadlineCloser
+	remote     string
+	closer     sync.Once                 // close closed channel once
+	closeCh    chan interface{}          // closed on Close
+	decode     func(v interface{}) error // decoder to allow multiple transports
+	encMu      sync.Mutex                // guards the encoder
+	encode     func(v interface{}) error // encoder to allow multiple transports
+	conn       deadlineCloser
+	connMu     sync.Mutex                // guards connClosed
+	connClosed bool                      // true after conn.Close has been called
 }
 
 // NewFuncCodec creates a codec which uses the given functions to read and write. If conn
@@ -235,8 +237,20 @@ func (c *jsonCodec) writeJSON(ctx context.Context, v interface{}) error {
 func (c *jsonCodec) close() {
 	c.closer.Do(func() {
 		close(c.closeCh)
-		c.conn.Close()
 	})
+	// conn.Close is intentionally outside the Once: if the embedding's Close
+	// calls Server.Stop, Stop re-enters close on every codec in its snapshot.
+	// Calling conn.Close inside closer.Do would deadlock on the same Once.
+	// Setting connClosed before the call lets the re-entrant close return
+	// immediately instead of blocking.
+	c.connMu.Lock()
+	if c.connClosed {
+		c.connMu.Unlock()
+		return
+	}
+	c.connClosed = true
+	c.connMu.Unlock()
+	c.conn.Close()
 }
 
 // Closed returns a channel which will be closed when Close is called

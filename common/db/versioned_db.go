@@ -520,7 +520,17 @@ func (m *ldbManager) Pop() error {
 	}
 	batch.Delete(common.JoinBytes(patchByte, common.Uint64ToBytes(frontierIdentifier.Height)))
 	batch.Delete(common.JoinBytes(rollbackByte, common.Uint64ToBytes(frontierIdentifier.Height)))
-	return m.write(batch)
+	if err := m.write(batch); err != nil {
+		return err
+	}
+	// Each cached overlay records the frontier it was built against and Get
+	// replays only the rollbacks above that height. The frontier now sits
+	// below every cached one and the next Add reuses the popped height, so
+	// an overlay kept here would skip the rollbacks of whatever is added
+	// there and show that branch's writes at its identifier.
+	m.l1Cache.Purge()
+	m.l2Cache.Purge()
+	return nil
 }
 func (m *ldbManager) Rebase(_ DB) {
 	// ldbManager IS the stable store; there is nothing to rebase.

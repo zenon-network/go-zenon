@@ -1195,3 +1195,130 @@ func TestRebase_RepeatedReplacementBatches(t *testing.T) {
 		t.Fatalf("stable-floor key value = %x, want %x", val, floorVal)
 	}
 }
+
+// height, so two branches at the same height get distinct identifiers.
+func keyedTransaction(db DB, key, value string) *mockTransaction {
+	frontier := GetFrontierIdentifier(db)
+	patch := NewPatch()
+	patch.Put([]byte(key), []byte(value))
+	commit := &mockCommit{
+		prevHash:    frontier.Hash,
+		height:      frontier.Height + 1,
+		changesHash: PatchHash(patch),
+	}
+	commit.hash = types.NewHash(common.JoinBytes(commit.changesHash.Bytes(), common.Uint64ToBytes(commit.height), []byte(key), []byte(value)))
+	return &mockTransaction{patch: patch, commit: commit}
+}
+
+func expectValue(t *testing.T, db DB, key, expected string) {
+	t.Helper()
+	value, err := db.Get([]byte(key))
+	common.FailIfErr(t, err)
+	common.Expect(t, string(value), expected)
+}
+
+func expectMissing(t *testing.T, db DB, key string) {
+	t.Helper()
+	has, err := db.Has([]byte(key))
+	common.FailIfErr(t, err)
+	if has {
+		t.Fatalf("key %q is visible but must not be", key)
+	}
+}
+
+// TestLevelDBManagerHistoricalViewHidesLaterKeys pins that a view at a past
+// identifier reports a key first written above that identifier as absent,
+// through Has and Get as well as through iteration. The rollback overlay
+// records such a key as deleted; that record has to use the encoding the
+// delete-aware view understands, or the key reads as present and empty.
+func TestLevelDBManagerHistoricalViewHidesLaterKeys(t *testing.T) {
+	m := NewLevelDBManager(t.TempDir())
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "k1", "v1")))
+	identifier := GetFrontierIdentifier(m.Frontier())
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "k2", "v2")))
+
+	view := m.Get(identifier)
+	expectValue(t, view, "k1", "v1")
+	expectMissing(t, view, "k2")
+	if _, err := view.Get([]byte("k2")); err != leveldb.ErrNotFound {
+		t.Fatalf("expected ErrNotFound for a key written above the identifier, got %v", err)
+	}
+	iterator := view.NewIterator([]byte("k"))
+	defer iterator.Release()
+	keys := []string{}
+	for iterator.Next() {
+		keys = append(keys, string(iterator.Key()))
+	}
+	common.FailIfErr(t, iterator.Error())
+	common.Expect(t, len(keys), 1)
+	common.Expect(t, keys[0], "k1")
+}
+
+// TestLevelDBManagerPopInvalidatesRollbackCaches covers the rollback overlay
+// Get keeps per identifier. The overlay records the frontier it was built
+// against so that later calls replay only the rollbacks above it. Pop moves
+// the frontier back and later Adds reuse the popped heights, so an overlay
+// kept across a Pop would skip the rollbacks of the momentums added at those
+// heights and show their writes at the old identifier. Both cache tiers are
+// covered: identifiers within maximumCacheHeightDifference of the frontier
+// and those further below it. A Get between the Pops and the Adds rebuilds
+// the overlay against the lower frontier and caches that instead, which is
+// correct on its own and would hide a missing purge, so it is a separate
+// case rather than part of the first two.
+func TestLevelDBManagerPopInvalidatesRollbackCaches(t *testing.T) {
+	cases := []struct {
+		name        string
+		above       int
+		readBetween bool
+	}{
+		{"identifier within the near cache window", 2, false},
+		{"identifier beyond the near cache window", maximumCacheHeightDifference + 1, false},
+		{"view read between the pops and the adds", 3, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewLevelDBManager(t.TempDir())
+			t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+
+			common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "shared", "at-1")))
+			identifier := GetFrontierIdentifier(m.Frontier())
+			for i := 1; i < tc.above-1; i++ {
+				common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), fmt.Sprintf("kept-%d", i), "kept")))
+			}
+			common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "shared", "old-top-1")))
+			common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "old-top", "old-top")))
+			common.Expect(t, GetFrontierIdentifier(m.Frontier()).Height, identifier.Height+uint64(tc.above))
+
+			// Warm the overlay for identifier while the frontier is above it.
+			expectValue(t, m.Get(identifier), "shared", "at-1")
+			expectMissing(t, m.Get(identifier), "old-top")
+
+			// Remove the top two momentums.
+			common.FailIfErr(t, m.Pop())
+			common.FailIfErr(t, m.Pop())
+			if tc.readBetween {
+				view := m.Get(identifier)
+				expectMissing(t, view, "old-top")
+				expectValue(t, view, "shared", "at-1")
+			}
+
+			// Replace them with a branch that writes a key the removed
+			// momentums never touched.
+			common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "new-top-1", "new-top-1")))
+			common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "shared", "new-top")))
+			expectValue(t, m.Frontier(), "new-top-1", "new-top-1")
+			expectValue(t, m.Frontier(), "shared", "new-top")
+
+			// The view at identifier predates both branches.
+			view := m.Get(identifier)
+			expectMissing(t, view, "new-top-1")
+			expectMissing(t, view, "old-top")
+			expectValue(t, view, "shared", "at-1")
+			if tc.above > 2 {
+				expectMissing(t, view, "kept-1")
+			}
+		})
+	}
+}

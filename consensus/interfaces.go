@@ -10,7 +10,16 @@ import (
 
 // Verifier is the interface that can verify block consensus.
 type Verifier interface {
+	// VerifyMomentumProducer checks the momentum against the election the
+	// current frontier implies.
 	VerifyMomentumProducer(momentum *nom.Momentum) (bool, error)
+	// VerifyMomentumProducerAt checks the momentum against the election a
+	// chain ending at frontier implies. The election for a slot is seeded
+	// by the last momentum before a proof time two ticks earlier, so a
+	// momentum that extends a momentum below the current frontier has to be
+	// judged by the chain it belongs to, which ends at its previous
+	// momentum, not by the momentums above that fork point.
+	VerifyMomentumProducerAt(frontier types.HashHeight, momentum *nom.Momentum) (bool, error)
 }
 
 type ProducerEvent struct {
