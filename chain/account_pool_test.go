@@ -269,3 +269,294 @@ func TestAccountPool_MomentumEventsRefreshDynamicPlasma(t *testing.T) {
 	ap.DeleteMomentum(nil)
 	common.Expect(t, ap.plasma == nil, true)
 }
+
+// DeleteMomentum must only evict managers for addresses whose blocks were in
+// the deleted momentum, not wipe the entire pool.  A full wipe discards
+// pending blocks that are unrelated to the rollback and leaves the
+// subsequent rebuild (which iterates ap.managers) with nothing to do.
+func TestAccountPool_DeleteMomentumOnlyEvictsTouchedAddresses(t *testing.T) {
+	ap := newAccountPool(fakeStable{})
+
+	addrA := types.Address{0, 1}
+	addrB := types.Address{0, 2}
+	addrC := types.Address{0, 3}
+
+	// Seed three managers by inserting one block each.
+	for _, addr := range []types.Address{addrA, addrB, addrC} {
+		manager := ap.getAccountManager(addr)
+		block := &nom.AccountBlock{
+			Address:      addr,
+			BlockType:    nom.BlockTypeUserSend,
+			Height:       1,
+			PreviousHash: types.ZeroHash,
+		}
+		block.Hash = block.ComputeHash()
+		common.FailIfErr(t, manager.Add(&nom.AccountBlockTransaction{
+			Block:   block,
+			Changes: db.NewPatch(),
+		}))
+	}
+
+	common.Expect(t, len(ap.managers), 3)
+
+	// Delete a momentum that carried blocks for addrA and addrC only.
+	ap.DeleteMomentum(&nom.DetailedMomentum{
+		Momentum: &nom.Momentum{},
+		AccountBlocks: []*nom.AccountBlock{
+			{Address: addrA},
+			{Address: addrC},
+		},
+	})
+
+	common.Expect(t, len(ap.managers), 1)
+	if _, ok := ap.managers[addrB]; !ok {
+		t.Fatal("addrB manager was evicted but its blocks were not in the deleted momentum")
+	}
+}
+
+// A momentum with no account blocks must not evict any manager.
+func TestAccountPool_DeleteMomentumEmptyMomentumKeepsAll(t *testing.T) {
+	ap := newAccountPool(fakeStable{})
+
+	addrA := types.Address{0, 1}
+	manager := ap.getAccountManager(addrA)
+	block := &nom.AccountBlock{
+		Address:      addrA,
+		BlockType:    nom.BlockTypeUserSend,
+		Height:       1,
+		PreviousHash: types.ZeroHash,
+	}
+	block.Hash = block.ComputeHash()
+	common.FailIfErr(t, manager.Add(&nom.AccountBlockTransaction{
+		Block:   block,
+		Changes: db.NewPatch(),
+	}))
+
+	ap.DeleteMomentum(&nom.DetailedMomentum{
+		Momentum:      &nom.Momentum{},
+		AccountBlocks: nil,
+	})
+
+	common.Expect(t, len(ap.managers), 1)
+}
+
+// Nil detailed (as the plasma-refresh test uses) must not panic and must not
+// evict any manager.
+func TestAccountPool_DeleteMomentumNilDetailedKeepsAll(t *testing.T) {
+	ap := newAccountPool(fakeStable{})
+
+	addrA := types.Address{0, 1}
+	ap.getAccountManager(addrA)
+
+	ap.DeleteMomentum(nil)
+
+	common.Expect(t, len(ap.managers), 1)
+}
+
+// DeleteMomentum must evict managers holding pending receives whose
+// from-block (send) was in the deleted momentum.  Such receives are
+// orphaned — their from-block no longer exists on the committed chain —
+// and would cause "Can't find from-block in store" during the next
+// momentum production, stalling the pillar.
+func TestAccountPool_DeleteMomentumEvictsOrphanedReceives(t *testing.T) {
+	ap := newAccountPool(fakeStable{})
+
+	sender := types.Address{0, 1}
+	receiver := types.Address{0, 2}
+	bystander := types.Address{0, 3}
+
+	// Sender has a pending send.
+	senderManager := ap.getAccountManager(sender)
+	sendBlock := &nom.AccountBlock{
+		Address:      sender,
+		BlockType:    nom.BlockTypeUserSend,
+		Height:       1,
+		PreviousHash: types.ZeroHash,
+		ToAddress:    receiver,
+	}
+	sendBlock.Hash = sendBlock.ComputeHash()
+	common.FailIfErr(t, senderManager.Add(&nom.AccountBlockTransaction{
+		Block:   sendBlock,
+		Changes: db.NewPatch(),
+	}))
+
+	// Receiver has a pending receive of that send.
+	receiverManager := ap.getAccountManager(receiver)
+	receiveBlock := &nom.AccountBlock{
+		Address:       receiver,
+		BlockType:     nom.BlockTypeUserReceive,
+		Height:        1,
+		PreviousHash:  types.ZeroHash,
+		FromBlockHash: sendBlock.Hash,
+	}
+	receiveBlock.Hash = receiveBlock.ComputeHash()
+	common.FailIfErr(t, receiverManager.Add(&nom.AccountBlockTransaction{
+		Block:   receiveBlock,
+		Changes: db.NewPatch(),
+	}))
+
+	// Bystander has an unrelated pending send.
+	bystanderManager := ap.getAccountManager(bystander)
+	bystanderBlock := &nom.AccountBlock{
+		Address:      bystander,
+		BlockType:    nom.BlockTypeUserSend,
+		Height:       1,
+		PreviousHash: types.ZeroHash,
+	}
+	bystanderBlock.Hash = bystanderBlock.ComputeHash()
+	common.FailIfErr(t, bystanderManager.Add(&nom.AccountBlockTransaction{
+		Block:   bystanderBlock,
+		Changes: db.NewPatch(),
+	}))
+
+	common.Expect(t, len(ap.managers), 3)
+
+	// Delete a momentum that carried only the sender's send block.
+	ap.DeleteMomentum(&nom.DetailedMomentum{
+		Momentum: &nom.Momentum{},
+		AccountBlocks: []*nom.AccountBlock{
+			sendBlock,
+		},
+	})
+
+	// Sender evicted (touched), receiver evicted (orphaned receive),
+	// bystander survives.
+	common.Expect(t, len(ap.managers), 1)
+	if _, ok := ap.managers[bystander]; !ok {
+		t.Fatal("bystander manager was evicted but its blocks were not in the deleted momentum")
+	}
+	if _, ok := ap.managers[receiver]; ok {
+		t.Fatal("receiver manager was not evicted despite holding a receive of a rolled-back send")
+	}
+}
+
+// DeleteMomentum must NOT evict managers whose pending receives reference
+// sends that were NOT in the deleted momentum.
+func TestAccountPool_DeleteMomentumKeepsValidReceives(t *testing.T) {
+	ap := newAccountPool(fakeStable{})
+
+	sender := types.Address{0, 1}
+	receiver := types.Address{0, 2}
+
+	// Sender has a pending send.
+	senderManager := ap.getAccountManager(sender)
+	sendBlock := &nom.AccountBlock{
+		Address:      sender,
+		BlockType:    nom.BlockTypeUserSend,
+		Height:       1,
+		PreviousHash: types.ZeroHash,
+		ToAddress:    receiver,
+	}
+	sendBlock.Hash = sendBlock.ComputeHash()
+	common.FailIfErr(t, senderManager.Add(&nom.AccountBlockTransaction{
+		Block:   sendBlock,
+		Changes: db.NewPatch(),
+	}))
+
+	// Receiver has a pending receive of that send.
+	receiverManager := ap.getAccountManager(receiver)
+	receiveBlock := &nom.AccountBlock{
+		Address:       receiver,
+		BlockType:     nom.BlockTypeUserReceive,
+		Height:        1,
+		PreviousHash:  types.ZeroHash,
+		FromBlockHash: sendBlock.Hash,
+	}
+	receiveBlock.Hash = receiveBlock.ComputeHash()
+	common.FailIfErr(t, receiverManager.Add(&nom.AccountBlockTransaction{
+		Block:   receiveBlock,
+		Changes: db.NewPatch(),
+	}))
+
+	common.Expect(t, len(ap.managers), 2)
+
+	// Delete a momentum that carried an unrelated block.
+	other := types.Address{0, 9}
+	ap.DeleteMomentum(&nom.DetailedMomentum{
+		Momentum: &nom.Momentum{},
+		AccountBlocks: []*nom.AccountBlock{
+			{Address: other, BlockType: nom.BlockTypeUserSend, Hash: types.Hash{9}},
+		},
+	})
+
+	// Neither sender nor receiver should be evicted.
+	common.Expect(t, len(ap.managers), 2)
+	if _, ok := ap.managers[receiver]; !ok {
+		t.Fatal("receiver manager was evicted but its receive's from-block was not rolled back")
+	}
+}
+
+// Rebuild must drop blocks whose MomentumAcknowledged is above the new
+// frontier (can happen after a deep rollback) and all subsequent blocks
+// on the same account chain.
+func TestAccountPool_RebuildDropsBlocksAboveFrontier(t *testing.T) {
+	ap := newAccountPool(fakeStable{})
+
+	addr := types.Address{0, 1}
+	manager := ap.getAccountManager(addr)
+
+	// Insert three blocks: block1 has MA=5 (valid), block2 has MA=10
+	// (above the new frontier of 7), block3 builds on block2.
+	block1 := &nom.AccountBlock{
+		Address:              addr,
+		BlockType:            nom.BlockTypeUserSend,
+		Height:               1,
+		PreviousHash:         types.ZeroHash,
+		MomentumAcknowledged: types.HashHeight{Hash: types.Hash{1}, Height: 5},
+	}
+	block1.Hash = block1.ComputeHash()
+
+	block2 := &nom.AccountBlock{
+		Address:              addr,
+		BlockType:            nom.BlockTypeUserSend,
+		Height:               2,
+		PreviousHash:         block1.Hash,
+		MomentumAcknowledged: types.HashHeight{Hash: types.Hash{2}, Height: 10},
+	}
+	block2.Hash = block2.ComputeHash()
+
+	block3 := &nom.AccountBlock{
+		Address:              addr,
+		BlockType:            nom.BlockTypeUserSend,
+		Height:               3,
+		PreviousHash:         block2.Hash,
+		MomentumAcknowledged: types.HashHeight{Hash: types.Hash{3}, Height: 10},
+	}
+	block3.Hash = block3.ComputeHash()
+
+	for _, block := range []*nom.AccountBlock{block1, block2, block3} {
+		common.FailIfErr(t, manager.Add(&nom.AccountBlockTransaction{
+			Block:   block,
+			Changes: db.NewPatch(),
+		}))
+	}
+
+	common.Expect(t, len(ap.managers), 1)
+
+	// Simulate a rebuild after rollback: new momentum at height 7.
+	// block1 (MA=5) is valid; block2 (MA=10 > 7) must be dropped,
+	// and block3 (which builds on block2) must also be dropped.
+	ap.InsertMomentum(&nom.DetailedMomentum{
+		Momentum: &nom.Momentum{
+			Height: 7,
+			Hash:   types.Hash{7},
+		},
+	})
+
+	common.Expect(t, len(ap.managers), 1)
+	surviving := ap.managers[addr]
+	if surviving == nil {
+		t.Fatal("manager should survive rebuild with valid prefix")
+	}
+
+	// Only block1 should survive.
+	_, err := surviving.BlockByHeight(1)
+	common.FailIfErr(t, err)
+
+	if _, err := surviving.BlockByHeight(2); err == nil {
+		t.Fatal("block2 should have been dropped (MA above frontier)")
+	}
+	if _, err := surviving.BlockByHeight(3); err == nil {
+		t.Fatal("block3 should have been dropped (builds on dropped block2)")
+	}
+}

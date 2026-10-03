@@ -6,8 +6,19 @@ import "fmt"
 // startup. It's not meant to be called at any time afterwards as it makes certain
 // assumptions about the state of the node.
 func (node *Node) startRPC() error {
+	// A protocol runs only when its enable flag is set and a host is
+	// configured: the flag is the policy, the host says where to listen.
+	httpEnabled := node.config.RPC.EnableHTTP && node.config.RPC.HTTPHost != ""
+	wsEnabled := node.config.RPC.EnableWS && node.config.RPC.WSHost != ""
+	if !node.config.RPC.EnableHTTP && node.config.RPC.HTTPHost != "" {
+		log.Info("HTTP-RPC server disabled by configuration", "ignored-host", node.config.RPC.HTTPHost)
+	}
+	if !node.config.RPC.EnableWS && node.config.RPC.WSHost != "" {
+		log.Info("WS-RPC server disabled by configuration", "ignored-host", node.config.RPC.WSHost)
+	}
+
 	// Configure HTTP.
-	if node.config.RPC.HTTPHost != "" {
+	if httpEnabled {
 		config := httpConfig{
 			CorsAllowedOrigins: node.config.RPC.HTTPCors,
 			Vhosts:             node.config.RPC.HTTPVirtualHosts,
@@ -23,9 +34,12 @@ func (node *Node) startRPC() error {
 	}
 
 	// Configure WebSocket.
-	if node.config.RPC.WSHost != "" {
-		server := node.wsServerForPort(node.config.RPC.WSPort)
-		if server == node.http && node.config.RPC.HTTPHost != "" && node.config.RPC.WSHost != node.config.RPC.HTTPHost {
+	if wsEnabled {
+		server := node.wsServerForPort(httpEnabled, node.config.RPC.WSPort)
+		// wsServerForPort returns node.http only when HTTP is enabled and
+		// shares this port, so that is the shared-port case: both servers
+		// bind the same port and must therefore agree on the host.
+		if server == node.http && node.config.RPC.WSHost != node.config.RPC.HTTPHost {
 			return fmt.Errorf("RPC: HTTP and WebSocket share port %d but bind different hosts (%q vs %q); "+
 				"set both hosts to the same value or use different ports",
 				node.config.RPC.WSPort, node.config.RPC.HTTPHost, node.config.RPC.WSHost)
@@ -49,8 +63,11 @@ func (node *Node) startRPC() error {
 	return node.ws.start()
 }
 
-func (node *Node) wsServerForPort(port int) *httpServer {
-	if node.config.RPC.HTTPHost == "" || node.http.port == port {
+// wsServerForPort returns the server WebSocket should be enabled on: the HTTP
+// server when it is enabled and listens on the same port, otherwise the
+// dedicated WebSocket server.
+func (node *Node) wsServerForPort(httpEnabled bool, port int) *httpServer {
+	if httpEnabled && node.http.port == port {
 		return node.http
 	}
 	return node.ws

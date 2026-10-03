@@ -240,7 +240,7 @@ func (h *httpServer) doStop() {
 
 	// Shut down the server.
 	httpHandler := h.httpHandler.Load().(*rpcHandler)
-	wsHandler := h.httpHandler.Load().(*rpcHandler)
+	wsHandler := h.wsHandler.Load().(*rpcHandler)
 	if httpHandler != nil {
 		h.httpHandler.Store((*rpcHandler)(nil))
 		httpHandler.server.Stop()
@@ -412,7 +412,7 @@ func (h *virtualHostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.next.ServeHTTP(w, r)
 		return
 	}
-	if _, exist := h.vhosts[host]; exist {
+	if _, exist := h.vhosts[strings.ToLower(host)]; exist {
 		h.next.ServeHTTP(w, r)
 		return
 	}
