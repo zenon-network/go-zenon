@@ -158,7 +158,9 @@ func (srv *Server) Start() error {
 
 	// Explicit override: start legacy, never swap.
 	if srv.P2PBackend == p2p.P2PBackendLegacy {
-		common.P2PLogger.Info("P2PBackend=legacy; starting legacy backend (will not swap to libp2p)")
+		// Warn, not Info: a node pinned to legacy drops off the network when
+		// the spork oracle activates libp2p, and nothing else says so.
+		common.P2PLogger.Warn("P2PBackend=legacy; starting legacy backend (will not swap to libp2p)")
 		return srv.startLegacyLocked()
 	}
 
