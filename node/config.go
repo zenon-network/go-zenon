@@ -353,11 +353,14 @@ func normalizeListenHost(host string) (string, bool) {
 		return "", true
 	}
 	if strings.HasPrefix(host, "[") {
-		if !strings.HasSuffix(host, "]") || len(host) < 2 {
+		if !strings.HasSuffix(host, "]") {
 			return "", false
 		}
 		inner := host[1 : len(host)-1]
-		if strings.ContainsAny(inner, "[]") {
+		// "[]" and "[[]]" strip to an empty or bracket-bearing interior.
+		// Returning "" would join to ":port", which net.Listen resolves as
+		// a wildcard bind on every interface, so both must fail closed.
+		if inner == "" || strings.ContainsAny(inner, "[]") {
 			return "", false
 		}
 		return inner, true

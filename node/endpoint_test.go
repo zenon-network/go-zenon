@@ -121,6 +121,7 @@ func TestSetListenAddr_MalformedBrackets(t *testing.T) {
 		{"truncated IPv4 wildcard", "[0.0.0.0", 35997},
 		{"trailing bracket on IPv4 wildcard", "0.0.0.0]", 35997},
 		{"double-nested brackets", "[[]]", 35997},
+		{"empty brackets", "[]", 35997},
 	}
 
 	for _, tt := range tests {
@@ -129,9 +130,56 @@ func TestSetListenAddr_MalformedBrackets(t *testing.T) {
 			if err := h.setListenAddr(tt.host, tt.port); err != nil {
 				t.Fatalf("setListenAddr(%q, %d) unexpected error: %v", tt.host, tt.port, err)
 			}
+			// A bare ":port" is the shape net.Listen resolves to every
+			// interface. IsUnspecified() does not catch it: ResolveTCPAddr
+			// reports a nil IP there, for which IsUnspecified() is false.
+			if h.endpoint == ":"+strconv.Itoa(tt.port) {
+				t.Errorf("setListenAddr(%q, %d) endpoint %q is a wildcard bind on all interfaces",
+					tt.host, tt.port, h.endpoint)
+			}
 			if addr, err := net.ResolveTCPAddr("tcp", h.endpoint); err == nil && addr.IP.IsUnspecified() {
 				t.Errorf("setListenAddr(%q, %d) endpoint %q must not become a wildcard listener",
 					tt.host, tt.port, h.endpoint)
+			}
+		})
+	}
+}
+
+// TestNormalizeListenHost covers the helper directly. setListenAddr-level
+// assertions alone did not catch the empty-bracket case, because the bad
+// value only becomes visible as the shape ":port" further down.
+func TestNormalizeListenHost(t *testing.T) {
+	rejected := []string{"[]", "[[]]", "[[::]]", "[", "]]", "[[", "[::", "[0.0.0.0", "0.0.0.0]"}
+	for _, host := range rejected {
+		t.Run("reject "+host, func(t *testing.T) {
+			got, ok := normalizeListenHost(host)
+			if ok {
+				t.Errorf("normalizeListenHost(%q) = (%q, true), want rejected", host, got)
+			}
+			if got != "" {
+				t.Errorf("normalizeListenHost(%q) = %q on failure, want empty string", host, got)
+			}
+		})
+	}
+
+	accepted := map[string]string{
+		"":          "",
+		"127.0.0.1": "127.0.0.1",
+		"localhost": "localhost",
+		"::1":       "::1",
+		"[::1]":     "::1",
+		"::":        "::",
+		"[::]":      "::",
+		"0.0.0.0":   "0.0.0.0",
+	}
+	for host, want := range accepted {
+		t.Run("accept "+host, func(t *testing.T) {
+			got, ok := normalizeListenHost(host)
+			if !ok {
+				t.Fatalf("normalizeListenHost(%q) rejected, want accepted", host)
+			}
+			if got != want {
+				t.Errorf("normalizeListenHost(%q) = %q, want %q", host, got, want)
 			}
 		})
 	}
