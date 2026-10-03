@@ -3,8 +3,13 @@ package node
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
+
+	rpc "github.com/zenon-network/go-zenon/rpc/server"
 )
 
 func TestVirtualHostHandler_CaseSensitivity(t *testing.T) {
@@ -189,6 +194,42 @@ func TestMaxWSConnectionsPerIP_RefusesExcess(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("excess connection: got %d, want %d", rec.Code, http.StatusTooManyRequests)
+	}
+}
+
+// TestEnableWS_AppliesPerIPLimit pins the config->handler hop in enableWS.
+// The limiter tests above call maxWSConnectionsPerIP directly, so without
+// this test the `if config.MaxConnectionsPerIP > 0` wrap in rpcstack.go
+// could be dropped and every other test would still pass.
+func TestEnableWS_AppliesPerIPLimit(t *testing.T) {
+	h := newHTTPServer(rpc.DefaultHTTPTimeouts)
+	if err := h.enableWS(nil, wsConfig{MaxConnectionsPerIP: 1}); err != nil {
+		t.Fatalf("enableWS: %v", err)
+	}
+	handler := h.wsHandler.Load().(*rpcHandler)
+	defer handler.server.Stop()
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	// The first handshake succeeds and stays open, holding the only slot.
+	first, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("first handshake: %v", err)
+	}
+	defer first.Close()
+
+	// The second handshake from the same remote IP must be refused.
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		t.Fatal("second handshake succeeded, want refusal")
+	}
+	if resp == nil {
+		t.Fatalf("second handshake: no HTTP response: %v", err)
+	}
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("second handshake: got %d, want %d", resp.StatusCode, http.StatusTooManyRequests)
 	}
 }
 
