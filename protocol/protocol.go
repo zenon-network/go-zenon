@@ -45,6 +45,13 @@ const (
 	// into requests of downloader.MaxBlockFetch hashes, so a node running
 	// this code never names more than the reply cap in one message.
 	MaxBlocksRequest = 256
+
+	// softResponseLimit is the target maximum cumulative size of a GetBlocks
+	// reply. The handler stops appending blocks once the encoded reply
+	// exceeds this limit, so a single request cannot force the node to
+	// read, encode, and attempt to send a reply that the transport's frame
+	// cap would reject anyway.
+	softResponseLimit = 2 * 1024 * 1024 // 2 MB, matching go-ethereum
 )
 
 // eth protocol message codes
