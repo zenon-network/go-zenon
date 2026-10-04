@@ -46,6 +46,7 @@ func (t *heldTransport) doEncHandshake(*ecdsa.PrivateKey, *discover.Node) (disco
 	return discover.NodeID{}, nil
 }
 func (t *heldTransport) doProtoHandshake(*protoHandshake) (*protoHandshake, error) { return nil, nil }
+func (t *heldTransport) raiseFrameLimit()                                          {}
 
 func (t *heldTransport) ReadMsg() (p2p.Msg, error) {
 	select {
@@ -403,6 +404,7 @@ func (t *lockedTransport) doEncHandshake(*ecdsa.PrivateKey, *discover.Node) (dis
 func (t *lockedTransport) doProtoHandshake(*protoHandshake) (*protoHandshake, error) {
 	return nil, nil
 }
+func (t *lockedTransport) raiseFrameLimit() {}
 
 func (t *lockedTransport) ReadMsg() (p2p.Msg, error) {
 	select {

@@ -54,6 +54,15 @@ const (
 	maxMessageSize = 10 * 1024 * 1024
 	maxFrameSize   = maxMessageSize + 9
 
+	// handshakeFrameSize is the frame bound during the handshake phase,
+	// before the peer is admitted. It mirrors maxFrameSize's relationship
+	// to maxMessageSize: the protocol handshake payload bound
+	// (baseProtocolMaxMsgSize, 2 KiB) plus the same 9-byte code allowance,
+	// so a maximal handshake always fits its frame. The message-level check
+	// in readProtocolHandshake still owns the payload bound; this only stops
+	// an unauthenticated peer from forcing a large allocation (issue #108).
+	handshakeFrameSize = baseProtocolMaxMsgSize + 9
+
 	sskLen = 16 // ecies.MaxSharedKeyLength(pubKey) / 2
 	sigLen = 65 // elliptic S256
 	pubLen = 64 // 512 bit pubkey in uncompressed representation without format byte
@@ -183,6 +192,14 @@ func readProtocolHandshake(rw p2p.MsgReader, our *protoHandshake) (*protoHandsha
 		return nil, p2p.DiscInvalidIdentity
 	}
 	return &hs, nil
+}
+
+// raiseFrameLimit promotes the frame size limit from the handshake-phase
+// bound to the steady-state bound. It is called by setupConn after the
+// protocol handshake and identity checks succeed, before the addpeer
+// checkpoint.
+func (t *rlpx) raiseFrameLimit() {
+	t.rw.raiseFrameLimit()
 }
 
 func (t *rlpx) doEncHandshake(prv *ecdsa.PrivateKey, dial *discover.Node) (discover.NodeID, error) {
@@ -513,6 +530,14 @@ type rlpxFrameRW struct {
 	macCipher  cipher.Block
 	egressMAC  hash.Hash
 	ingressMAC hash.Hash
+
+	// maxFrameSize bounds the frame size accepted by ReadMsg and WriteMsg.
+	// It starts at handshakeFrameSize (2 KiB payload + code) for the
+	// handshake phase and is raised to the package-level maxFrameSize
+	// constant once the protocol handshake completes, so that an
+	// unauthenticated peer cannot force a large allocation before
+	// admission (issue #108).
+	maxFrameSize uint32
 }
 
 func newRLPXFrameRW(conn io.ReadWriter, s secrets) *rlpxFrameRW {
@@ -528,25 +553,42 @@ func newRLPXFrameRW(conn io.ReadWriter, s secrets) *rlpxFrameRW {
 	// for encryption is ephemeral.
 	iv := make([]byte, encc.BlockSize())
 	return &rlpxFrameRW{
-		conn:       conn,
-		enc:        cipher.NewCTR(encc, iv),
-		dec:        cipher.NewCTR(encc, iv),
-		macCipher:  macc,
-		egressMAC:  s.EgressMAC,
-		ingressMAC: s.IngressMAC,
+		conn:         conn,
+		enc:          cipher.NewCTR(encc, iv),
+		dec:          cipher.NewCTR(encc, iv),
+		macCipher:    macc,
+		egressMAC:    s.EgressMAC,
+		ingressMAC:   s.IngressMAC,
+		maxFrameSize: handshakeFrameSize,
 	}
+}
+
+// raiseFrameLimit transitions the frame reader from the handshake-phase
+// bound (handshakeFrameSize) to the steady-state bound (the
+// package-level maxFrameSize constant, 10 MiB + code).  It must be called
+// after the protocol handshake completes, before the peer read loop starts.
+func (rw *rlpxFrameRW) raiseFrameLimit() {
+	rw.maxFrameSize = maxFrameSize
 }
 
 func (rw *rlpxFrameRW) WriteMsg(msg p2p.Msg) error {
 	ptype, _ := rlp.EncodeToBytes(msg.Code)
 
-	// write header
-	headbuf := make([]byte, 32)
-	fsize := uint32(len(ptype)) + msg.Size
-	if fsize > maxUint24 {
+	// Compute the frame size in uint64 so the addition cannot wrap.
+	// Reject before writing bytes or advancing cipher/MAC state.
+	fsize64 := uint64(len(ptype)) + uint64(msg.Size)
+	if fsize64 > uint64(maxUint24) {
 		return errors.New("message size overflows uint24")
 	}
-	putInt24(fsize, headbuf) // TODO: check overflow
+	if fsize64 > uint64(rw.maxFrameSize) {
+		return fmt.Errorf("frame size %d exceeds limit %d", fsize64, rw.maxFrameSize)
+	}
+	fsize := uint32(fsize64)
+
+	// write header
+	headbuf := make([]byte, 32)
+	// fsize is bounded by maxUint24 above, so putInt24 cannot truncate.
+	putInt24(fsize, headbuf)
 	copy(headbuf[3:], zeroHeader)
 	rw.enc.XORKeyStream(headbuf[:16], headbuf[:16]) // first half is now encrypted
 
@@ -595,9 +637,13 @@ func (rw *rlpxFrameRW) ReadMsg() (msg p2p.Msg, err error) {
 	// ignore protocol type for now
 
 	// The header is authenticated but its length is the sender's choice;
-	// bound it before sizing anything by it.
-	if fsize > maxFrameSize {
-		return msg, fmt.Errorf("frame size %d exceeds maximum %d", fsize, maxFrameSize)
+	// bound it before sizing anything by it.  During the handshake phase
+	// rw.maxFrameSize is handshakeFrameSize (2 KiB payload + code); after
+	// the protocol handshake raiseFrameLimit sets it to the package-level
+	// maxFrameSize (10 MiB + code), so this check always subsumes the
+	// static bound.
+	if fsize > rw.maxFrameSize {
+		return msg, fmt.Errorf("frame size %d exceeds limit %d", fsize, rw.maxFrameSize)
 	}
 
 	// read the frame content

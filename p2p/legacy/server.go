@@ -181,6 +181,10 @@ type transport interface {
 	// The two handshakes.
 	doEncHandshake(prv *ecdsa.PrivateKey, dialDest *discover.Node) (discover.NodeID, error)
 	doProtoHandshake(our *protoHandshake) (*protoHandshake, error)
+	// raiseFrameLimit transitions the frame reader from the handshake-phase
+	// bound to the steady-state bound. It must be called after the protocol
+	// handshake completes and before the peer read loop starts.
+	raiseFrameLimit()
 	// The p2p.MsgReadWriter can only be used after the encryption
 	// handshake has completed. The code uses conn.id to track this
 	// by setting it to a non-nil value after the encryption handshake.
@@ -655,6 +659,13 @@ func (srv *Server) setupConn(fd net.Conn, flags connFlag, dialDest *discover.Nod
 		return
 	}
 	c.caps, c.name = phs.Caps, phs.Name
+	// The handshakes and identity checks succeeded. Promote the frame
+	// size limit before the server starts runPeer: the addpeer checkpoint
+	// launches runPeer before acknowledging, so raising the limit after
+	// it returns would be too late. doProtoHandshake has already waited
+	// for the concurrent protocol-handshake writer, so no write is in
+	// flight on the frame pair.
+	c.raiseFrameLimit()
 	if err := srv.checkpoint(c, srv.addpeer); err != nil {
 		common.P2PLogger.Debug(fmt.Sprintf("%v failed checkpoint addpeer: %v", c, err))
 		c.close(err)
