@@ -48,9 +48,10 @@ const (
 
 	// softResponseLimit is the target maximum cumulative size of a GetBlocks
 	// reply. The handler stops appending blocks once the encoded reply
-	// exceeds this limit, so a single request cannot force the node to
-	// read, encode, and attempt to send a reply that the transport's frame
-	// cap would reject anyway.
+	// exceeds this limit, which bounds the read and encode work a single
+	// request can cause. It is not a hard wire cap: the reply is one message,
+	// and both transports reject frames above their own limit (10 MiB in
+	// libp2p; 10 MiB plus a frame header on legacy RLPx).
 	softResponseLimit = 2 * 1024 * 1024 // 2 MB, matching go-ethereum
 )
 

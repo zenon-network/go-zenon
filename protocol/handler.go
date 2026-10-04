@@ -211,9 +211,12 @@ func (pm *ProtocolManager) handle(p *peer) error {
 // every named hash costs the receiver a store lookup whether or not the block
 // exists and whether or not the hash repeats (issue #84). The dedup skips the
 // redundant lookup but not the budget. The soft reply cap stops the loop once
-// the encoded reply exceeds softResponseLimit, so a single request cannot
-// force the node to read, encode, and attempt to send an oversized reply
-// (issue #124).
+// the encoded reply exceeds softResponseLimit, which bounds the read and
+// encode work a single request can cause (issue #124). It is a soft bound on
+// this handler's work, not a guarantee that the transport accepts what
+// follows: the reply is still one message, and both transports reject frames
+// above their own cap (10 MiB in libp2p; 10 MiB plus a frame header on legacy
+// RLPx).
 func gatherBlocksForReply(msgStream *rlp.Stream, getBlock func(types.Hash) *nom.DetailedMomentum) (blocks []*nom.DetailedMomentum, hashCount int, err error) {
 	var (
 		hash      types.Hash

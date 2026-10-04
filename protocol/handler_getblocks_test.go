@@ -656,8 +656,11 @@ func TestGatherBlocks_ReplySizeCap(t *testing.T) {
 	}
 	t.Logf("large block encodes to %d bytes (soft limit %d)", len(encoded), softResponseLimit)
 
+	// A fixture that no longer crosses the limit means this test stopped
+	// testing anything. Skip would report that as a pass, so fail instead:
+	// whoever changed the fixture or the limit has to look.
 	if len(encoded) <= softResponseLimit {
-		t.Skipf("test block (%d bytes) does not exceed soft limit (%d), adjust test data",
+		t.Fatalf("test block (%d bytes) does not exceed soft limit (%d), adjust test data",
 			len(encoded), softResponseLimit)
 	}
 
@@ -709,7 +712,8 @@ func TestGatherBlocks_CapAccumulates(t *testing.T) {
 	t.Logf("small=%d bytes, medium=%d bytes, soft limit=%d", len(smallEncoded), len(mediumEncoded), softResponseLimit)
 
 	if len(smallEncoded)+len(mediumEncoded) <= softResponseLimit {
-		t.Skip("combined size does not exceed soft limit, adjust test data")
+		t.Fatalf("combined size (%d bytes) does not exceed soft limit (%d), adjust test data",
+			len(smallEncoded)+len(mediumEncoded), softResponseLimit)
 	}
 
 	// Trailing hash: if the loop did not stop after the medium block, this
@@ -742,49 +746,6 @@ func TestGatherBlocks_CapAccumulates(t *testing.T) {
 	}
 	if lookupCount != 2 {
 		t.Errorf("lookupCount = %d, want 2 (trailing hash never looked up)", lookupCount)
-	}
-}
-
-func TestGatherBlocks_StopsAfterLimitExceeded(t *testing.T) {
-	// Three blocks: small, medium (pushes over), large (never reached).
-	smallHash := types.HexToHashPanic("0100000000000000000000000000000000000000000000000000000000000000")
-	smallBlock := makeTestMomentum(smallHash)
-
-	mediumHash := types.HexToHashPanic("0200000000000000000000000000000000000000000000000000000000000000")
-	mediumBlock := makeLargeMomentum(mediumHash, 2*1024*1024)
-
-	largeHash := types.HexToHashPanic("0300000000000000000000000000000000000000000000000000000000000000")
-	largeBlock := makeLargeMomentum(largeHash, 3*1024*1024)
-
-	hashes := []types.Hash{smallHash, mediumHash, largeHash}
-	stream := streamFromHashes(t, hashes)
-
-	lookupCount := 0
-	blocks, hashCount, err := gatherBlocksForReply(stream, func(h types.Hash) *nom.DetailedMomentum {
-		lookupCount++
-		switch h {
-		case smallHash:
-			return smallBlock
-		case mediumHash:
-			return mediumBlock
-		default:
-			return largeBlock
-		}
-	})
-	if err != nil {
-		t.Fatalf("gatherBlocksForReply: %v", err)
-	}
-
-	// small + medium are included (medium pushes over the limit),
-	// then the loop stops. large is never looked up.
-	if len(blocks) != 2 {
-		t.Errorf("len(blocks) = %d, want 2 (small + medium, stops before large)", len(blocks))
-	}
-	if hashCount != 2 {
-		t.Errorf("hashCount = %d, want 2 (stops decoding after limit)", hashCount)
-	}
-	if lookupCount != 2 {
-		t.Errorf("lookupCount = %d, want 2 (large block never looked up)", lookupCount)
 	}
 }
 
