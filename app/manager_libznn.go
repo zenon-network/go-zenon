@@ -53,6 +53,9 @@ func (nodeManager *Manager) Start() error {
 		} else {
 			fmt.Printf("* Producer address detected: %v\n", address)
 		}
+		for _, warning := range nodeManager.node.RPCExposureWarnings() {
+			fmt.Printf("* WARNING: %s\n", warning)
+		}
 	}
 
 	return nil

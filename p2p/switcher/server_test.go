@@ -811,6 +811,96 @@ func TestSporkAlreadyActive_Mock(t *testing.T) {
 	}
 }
 
+// TestP2PBackendLibp2pOverride verifies that setting P2PBackend to
+// "libp2p" starts the libp2p backend directly, skipping the oracle check
+// and the activation watcher (issue #105, Option C).
+func TestP2PBackendLibp2pOverride(t *testing.T) {
+	oracle := &fakeOracle{active: false} // spork NOT active
+	srv, legacyMock, libp2pMock := newMockServer(t, oracle)
+	srv.P2PBackend = p2p.P2PBackendLibp2p
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer srv.Stop()
+
+	if legacyMock.isStarted() {
+		t.Fatal("legacy should not be started when P2PBackend=libp2p")
+	}
+	if !libp2pMock.isStarted() {
+		t.Fatal("libp2p should be started when P2PBackend=libp2p")
+	}
+
+	// Even if the oracle later reports active, the watcher should not
+	// have been launched (no swap should occur).
+	oracle.setActive(true)
+	time.Sleep(1500 * time.Millisecond) // > sporkPollInterval
+	if legacyMock.isStarted() {
+		t.Fatal("legacy should not start even after oracle goes active with P2PBackend=libp2p")
+	}
+}
+
+// TestP2PBackendLegacyOverride verifies that setting P2PBackend to
+// "legacy" starts the legacy backend and never swaps, even when the
+// oracle reports active.
+func TestP2PBackendLegacyOverride(t *testing.T) {
+	oracle := &fakeOracle{active: true} // spork IS active
+	srv, legacyMock, libp2pMock := newMockServer(t, oracle)
+	srv.P2PBackend = p2p.P2PBackendLegacy
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer srv.Stop()
+
+	if !legacyMock.isStarted() {
+		t.Fatal("legacy should be started when P2PBackend=legacy")
+	}
+	if libp2pMock.isStarted() {
+		t.Fatal("libp2p should not be started when P2PBackend=legacy")
+	}
+}
+
+// TestP2PBackendInvalidRejected verifies that an unknown P2PBackend
+// value is rejected at startup.
+func TestP2PBackendInvalidRejected(t *testing.T) {
+	oracle := &fakeOracle{active: false}
+	srv, legacyMock, libp2pMock := newMockServer(t, oracle)
+	srv.P2PBackend = "invalid"
+
+	if err := srv.Start(); err == nil {
+		t.Fatal("Start() should return error for invalid P2PBackend")
+	}
+
+	if legacyMock.isStarted() {
+		t.Fatal("legacy should not be started when P2PBackend is invalid")
+	}
+	if libp2pMock.isStarted() {
+		t.Fatal("libp2p should not be started when P2PBackend is invalid")
+	}
+}
+
+// TestP2PBackendEmptyDefaultsToAuto verifies that an empty P2PBackend
+// value defaults to auto (spork-gated) behavior.
+func TestP2PBackendEmptyDefaultsToAuto(t *testing.T) {
+	oracle := &fakeOracle{active: false}
+	srv, legacyMock, libp2pMock := newMockServer(t, oracle)
+	srv.P2PBackend = "" // empty = auto
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer srv.Stop()
+
+	// Should start legacy (spork not active).
+	if !legacyMock.isStarted() {
+		t.Fatal("legacy should be started in auto mode when spork is not active")
+	}
+	if libp2pMock.isStarted() {
+		t.Fatal("libp2p should not be started in auto mode when spork is not active")
+	}
+}
+
 // TestDelegationNilBackend verifies that delegation methods return
 // zero values when no backend is active (before Start or after Stop).
 func TestDelegationNilBackend(t *testing.T) {
