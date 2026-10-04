@@ -2,7 +2,6 @@ package node
 
 import (
 	"net"
-	"strconv"
 	"testing"
 
 	rpc "github.com/zenon-network/go-zenon/rpc/server"
@@ -66,8 +65,13 @@ func TestWSEndpoint_JoinHostPort(t *testing.T) {
 	}
 }
 
-// TestJoinHostPort_MalformedBrackets verifies that malformed bracketed
-// input does not silently produce a wildcard (all-interface) listener.
+// TestJoinHostPort_MalformedBrackets verifies that malformed bracketed input
+// is rejected with an error rather than returned for the caller to bind.
+//
+// The earlier version asserted on the returned string. That could not catch
+// "[]": net.SplitHostPort parses "[]:35997" as host "" with a nil error, and
+// net.Listen then binds the all-interface wildcard. Checking the string was
+// checking the wrong thing -- the shape ":port" never appears.
 func TestJoinHostPort_MalformedBrackets(t *testing.T) {
 	tests := []struct {
 		name string
@@ -81,27 +85,20 @@ func TestJoinHostPort_MalformedBrackets(t *testing.T) {
 		{"unclosed IPv6 wildcard", "[::", 35997},
 		{"truncated IPv4 wildcard", "[0.0.0.0", 35997},
 		{"trailing bracket on IPv4 wildcard", "0.0.0.0]", 35997},
+		{"empty brackets", "[]", 35997},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := joinHostPort(tt.host, tt.port)
-			// The malformed host should be preserved (not trimmed to
-			// empty), so the result is not a bare ":port" wildcard.
-			if got == ":"+strconv.Itoa(tt.port) {
-				t.Errorf("joinHostPort(%q, %d) = %q, must not produce wildcard address",
+			got, err := joinHostPort(tt.host, tt.port)
+			if err == nil {
+				t.Fatalf("joinHostPort(%q, %d) = %q, nil error; want rejection",
 					tt.host, tt.port, got)
 			}
-			// Malformed input must never be silently repaired into an
-			// all-interface address, i.e. IPv4 0.0.0.0 or IPv6 ::.
-			if addr, err := net.ResolveTCPAddr("tcp", got); err == nil && addr.IP.IsUnspecified() {
-				t.Errorf("joinHostPort(%q, %d) = %q, must not become a wildcard listener",
-					tt.host, tt.port, got)
-			}
-			// The malformed result must fail TCP resolution so that
-			// downstream validation rejects it.
-			if _, err := net.ResolveTCPAddr("tcp", got); err == nil {
-				t.Errorf("joinHostPort(%q, %d) = %q, expected ResolveTCPAddr error for malformed input",
+			// No address may be handed back alongside the error, so a
+			// caller that ignores the error still cannot bind a wildcard.
+			if got != "" {
+				t.Errorf("joinHostPort(%q, %d) returned %q with an error; want empty",
 					tt.host, tt.port, got)
 			}
 		})
@@ -109,8 +106,8 @@ func TestJoinHostPort_MalformedBrackets(t *testing.T) {
 }
 
 // TestSetListenAddr_MalformedBrackets verifies that the runtime HTTP/WS
-// listener builder preserves malformed bracketed hosts instead of repairing
-// them into wildcard (all-interface) bind addresses.
+// listener builder rejects a malformed host outright and leaves the server
+// unconfigured, instead of storing an address that binds every interface.
 func TestSetListenAddr_MalformedBrackets(t *testing.T) {
 	tests := []struct {
 		name string
@@ -127,21 +124,36 @@ func TestSetListenAddr_MalformedBrackets(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := &httpServer{}
-			if err := h.setListenAddr(tt.host, tt.port); err != nil {
-				t.Fatalf("setListenAddr(%q, %d) unexpected error: %v", tt.host, tt.port, err)
-			}
-			// A bare ":port" is the shape net.Listen resolves to every
-			// interface. IsUnspecified() does not catch it: ResolveTCPAddr
-			// reports a nil IP there, for which IsUnspecified() is false.
-			if h.endpoint == ":"+strconv.Itoa(tt.port) {
-				t.Errorf("setListenAddr(%q, %d) endpoint %q is a wildcard bind on all interfaces",
+			if err := h.setListenAddr(tt.host, tt.port); err == nil {
+				t.Fatalf("setListenAddr(%q, %d) = nil error, endpoint %q; want rejection",
 					tt.host, tt.port, h.endpoint)
 			}
-			if addr, err := net.ResolveTCPAddr("tcp", h.endpoint); err == nil && addr.IP.IsUnspecified() {
-				t.Errorf("setListenAddr(%q, %d) endpoint %q must not become a wildcard listener",
+			// A rejected host must not leave a usable address behind.
+			if h.endpoint != "" {
+				t.Errorf("setListenAddr(%q, %d) left endpoint %q after rejecting the host",
 					tt.host, tt.port, h.endpoint)
 			}
 		})
+	}
+}
+
+// TestSetListenAddr_MalformedHostKeepsPreviousEndpoint verifies that a rejected
+// host does not partially apply: a server already pointed somewhere keeps that
+// address.
+func TestSetListenAddr_MalformedHostKeepsPreviousEndpoint(t *testing.T) {
+	h := newHTTPServer(rpc.DefaultHTTPTimeouts)
+	if err := h.setListenAddr("127.0.0.1", 35997); err != nil {
+		t.Fatalf("setListenAddr(good) error: %v", err)
+	}
+	if err := h.setListenAddr("[]", 35998); err == nil {
+		t.Fatal("setListenAddr(\"[]\") = nil error; want rejection")
+	}
+	if h.endpoint != "127.0.0.1:35997" {
+		t.Errorf("endpoint = %q after a rejected host, want the previous %q",
+			h.endpoint, "127.0.0.1:35997")
+	}
+	if h.host != "127.0.0.1" || h.port != 35997 {
+		t.Errorf("host/port = %q/%d after a rejected host, want 127.0.0.1/35997", h.host, h.port)
 	}
 }
 
@@ -240,7 +252,10 @@ func TestListenAddr_JoinHostPort(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// We test the JoinHostPort logic directly since the full
 			// makeNetConfig path requires a full Config.
-			got := joinHostPort(tt.host, tt.port)
+			got, err := joinHostPort(tt.host, tt.port)
+			if err != nil {
+				t.Fatalf("joinHostPort(%q, %d) unexpected error: %v", tt.host, tt.port, err)
+			}
 			if got != tt.want {
 				t.Errorf("joinHostPort(%q, %d) = %q, want %q", tt.host, tt.port, got, tt.want)
 			}

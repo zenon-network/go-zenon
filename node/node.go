@@ -98,13 +98,18 @@ func NewNode(conf *Config) (*Node, error) {
 		return nil, fmt.Errorf("parse libp2p bootstrap peers: %w", err)
 	}
 
+	listenAddr, err := joinHostPort(netConfig.ListenAddr, netConfig.ListenPort)
+	if err != nil {
+		return nil, fmt.Errorf("invalid p2p listen address: %w", err)
+	}
+
 	node.server = &switcher.Server{
 		PrivateKey:        netConfig.PrivateKey(),
 		Name:              netConfig.Name,
 		MaxPeers:          netConfig.MaxPeers,
 		MinConnectedPeers: netConfig.MinConnectedPeers,
 		MaxPendingPeers:   netConfig.MaxPendingPeers,
-		ListenAddr:        joinHostPort(netConfig.ListenAddr, netConfig.ListenPort),
+		ListenAddr:        listenAddr,
 		Protocols:         node.z.Protocol().SubProtocols,
 
 		// Per-backend bootstrap material — the switcher uses whichever

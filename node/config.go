@@ -331,17 +331,17 @@ func (c *Config) makeNetConfig() *p2p.Net {
 // joinHostPort builds a host:port listen address, handling IPv6 literals
 // in both raw and pre-bracketed form.
 //
-// Malformed bracketed input (e.g. "[[]]", "[[::]]", "[0.0.0.0", "0.0.0.0]")
-// is returned unchanged so that downstream validation rejects it instead of
-// silently producing a wildcard (all-interface) listener.
-func joinHostPort(host string, port int) string {
+// Malformed bracketed input (e.g. "[]", "[[]]", "[[::]]", "[0.0.0.0",
+// "0.0.0.0]") is rejected with an error. Returning it unchanged did not fail
+// closed: net.SplitHostPort parses "[]:35997" as host "" with a nil error,
+// and net.Listen then binds the all-interface wildcard. An explicit error is
+// the only thing callers can act on.
+func joinHostPort(host string, port int) (string, error) {
 	normalized, ok := normalizeListenHost(host)
 	if !ok {
-		// Leave the malformed host untouched so that net.Listen /
-		// ResolveTCPAddr fails closed instead of binding all interfaces.
-		return host + ":" + strconv.Itoa(port)
+		return "", fmt.Errorf("malformed listen host %q", host)
 	}
-	return net.JoinHostPort(normalized, strconv.Itoa(port))
+	return net.JoinHostPort(normalized, strconv.Itoa(port)), nil
 }
 
 // normalizeListenHost strips at most one enclosing bracket pair from a
@@ -375,11 +375,22 @@ func (c *Config) HTTPEndpoint() string {
 	if c.RPC.HTTPHost == "" {
 		return ""
 	}
-	return joinHostPort(c.RPC.HTTPHost, c.RPC.HTTPPort)
+	endpoint, err := joinHostPort(c.RPC.HTTPHost, c.RPC.HTTPPort)
+	if err != nil {
+		// Display helper with no error path. A malformed host yields no
+		// endpoint rather than a wrong one; callers that must not accept a
+		// bad configuration use setListenAddr, which propagates.
+		return ""
+	}
+	return endpoint
 }
 func (c *Config) WSEndpoint() string {
 	if c.RPC.WSHost == "" {
 		return ""
 	}
-	return joinHostPort(c.RPC.WSHost, c.RPC.WSPort)
+	endpoint, err := joinHostPort(c.RPC.WSHost, c.RPC.WSPort)
+	if err != nil {
+		return ""
+	}
+	return endpoint
 }
