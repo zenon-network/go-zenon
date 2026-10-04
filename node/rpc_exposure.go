@@ -1,60 +1,114 @@
 package node
 
-import "net"
+import (
+	"fmt"
+	"net"
+)
 
-// warnRPCExposure logs, once after the RPC servers are started, every live
-// listener that reaches beyond the local machine and every wildcard browser
-// origin list installed on it, so an operator running a public endpoint has
-// made that choice knowingly. It reads the servers' actual state rather than
-// the configuration, so it reports exactly what is bound. The shipped
-// defaults are silent.
-func (node *Node) warnRPCExposure() {
+// rpcExposureWarning is one thing an operator running an RPC endpoint should
+// know about: the message, and the listener or list it refers to.
+type rpcExposureWarning struct {
+	msg      string
+	key, val string
+}
+
+// String renders the warning as one line for the console.
+func (w rpcExposureWarning) String() string {
+	return fmt.Sprintf("%s (%s %s)", w.msg, w.key, w.val)
+}
+
+// rpcExposureWarnings lists, for every live RPC listener, what reaches beyond
+// the local machine and which browser checks are disabled: one entry per
+// protocol per non-loopback bind, one per wildcard origin list, and one for a
+// wildcard HTTP virtual-host list. It reads the servers' actual state rather
+// than the configuration, so it reports exactly what is bound. The shipped
+// defaults produce none.
+func (node *Node) rpcExposureWarnings() []rpcExposureWarning {
+	var warnings []rpcExposureWarning
 	for _, server := range []*httpServer{node.http, node.ws} {
-		addr, cors, origins := server.exposure()
-		if addr == nil {
+		e := server.exposure()
+		if e.addr == nil {
 			continue
 		}
-		public := !addr.IP.IsLoopback()
-		if cors != nil {
+		public := !e.addr.IP.IsLoopback()
+		if e.httpOn {
 			if public {
-				log.Warn("HTTP-RPC listens on a non-loopback address and is reachable from other hosts", "endpoint", addr)
+				warnings = append(warnings, rpcExposureWarning{"HTTP-RPC listens on a non-loopback address and is reachable from other hosts", "endpoint", e.addr.String()})
 			}
-			if hasWildcard(cors) {
-				log.Warn("HTTP-RPC accepts any browser origin", "cors", "*")
+			if hasWildcard(e.cors) {
+				warnings = append(warnings, rpcExposureWarning{"HTTP-RPC accepts any browser origin", "cors", "*"})
+			}
+			if hasWildcard(e.vhosts) {
+				warnings = append(warnings, rpcExposureWarning{"HTTP-RPC answers any Host header, so a page that rebinds a DNS name to this address is same-origin with it", "vhosts", "*"})
 			}
 		}
-		if origins != nil {
+		if e.wsOn {
 			if public {
-				log.Warn("WS-RPC listens on a non-loopback address and is reachable from other hosts", "endpoint", addr)
+				warnings = append(warnings, rpcExposureWarning{"WS-RPC listens on a non-loopback address and is reachable from other hosts", "endpoint", e.addr.String()})
 			}
-			if hasWildcard(origins) {
-				log.Warn("WS-RPC accepts any browser origin", "origins", "*")
+			if hasWildcard(e.origins) {
+				warnings = append(warnings, rpcExposureWarning{"WS-RPC accepts any browser origin", "origins", "*"})
 			}
 		}
+	}
+	return warnings
+}
+
+// warnRPCExposure logs every exposure warning once, after the RPC servers
+// are started, so an operator running a public endpoint has made that choice
+// knowingly. The same lines are available to the console through
+// RPCExposureWarnings.
+func (node *Node) warnRPCExposure() {
+	for _, w := range node.rpcExposureWarnings() {
+		log.Warn(w.msg, w.key, w.val)
 	}
 }
 
-// exposure returns the bound address (nil when not listening) and, for each
-// protocol served on it, its origin allow-list. A protocol that is not
-// enabled on this server yields a nil slice; an enabled one with no
-// configured origins yields an empty, non-nil slice.
-func (h *httpServer) exposure() (addr *net.TCPAddr, cors []string, origins []string) {
+// RPCExposureWarnings returns the exposure warnings as console lines, in the
+// order they are logged, for the startup status output. The log file is not
+// the console, and an operator watching the terminal should see them too.
+func (node *Node) RPCExposureWarnings() []string {
+	warnings := node.rpcExposureWarnings()
+	lines := make([]string, 0, len(warnings))
+	for _, w := range warnings {
+		lines = append(lines, w.String())
+	}
+	return lines
+}
+
+// listenerExposure is what one server exposes: its bound address, which
+// protocols it serves, and the browser allow-lists installed for them.
+type listenerExposure struct {
+	addr         *net.TCPAddr
+	httpOn, wsOn bool
+	cors, vhosts []string
+	origins      []string
+}
+
+// exposure reads the server's live state under its lock. addr is nil when the
+// server is not listening; httpOn and wsOn say which protocols are served on
+// it, and the lists are copies of the installed configuration for those.
+func (h *httpServer) exposure() listenerExposure {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	var e listenerExposure
 	if h.listener == nil {
-		return nil, nil, nil
+		return e
 	}
-	addr, _ = h.listener.Addr().(*net.TCPAddr)
-	if addr == nil {
-		return nil, nil, nil
+	e.addr, _ = h.listener.Addr().(*net.TCPAddr)
+	if e.addr == nil {
+		return e
 	}
 	if h.rpcAllowed() {
-		cors = append([]string{}, h.httpConfig.CorsAllowedOrigins...)
+		e.httpOn = true
+		e.cors = append([]string{}, h.httpConfig.CorsAllowedOrigins...)
+		e.vhosts = append([]string{}, h.httpConfig.Vhosts...)
 	}
 	if h.wsAllowed() {
-		origins = append([]string{}, h.wsConfig.Origins...)
+		e.wsOn = true
+		e.origins = append([]string{}, h.wsConfig.Origins...)
 	}
-	return addr, cors, origins
+	return e
 }
 
 func hasWildcard(list []string) bool {

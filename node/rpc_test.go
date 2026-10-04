@@ -525,3 +525,139 @@ func TestDisabledProtocolLeavesPortFree(t *testing.T) {
 		})
 	}
 }
+
+// TestStartRPC_SharedPortHostMismatch verifies that startRPC rejects a config
+// where HTTP and WebSocket are both enabled on the same port but bind
+// different hosts, and stays quiet when only one of the two is actually
+// enabled. See go-zenon issue #99.
+//
+// The second half is what #87 changed: startRPC now keys off the enable
+// flags rather than host presence, so a configured-but-disabled HTTPHost must
+// not be treated as a shared-port conflict. That is the WS-only false error.
+func TestStartRPC_SharedPortHostMismatch(t *testing.T) {
+	tests := []struct {
+		name    string
+		build   func(t *testing.T) RPCConfig
+		wantErr bool
+	}{
+		{
+			name: "both enabled, shared port, different hosts is rejected",
+			build: func(t *testing.T) RPCConfig {
+				p := freePort(t)
+				return RPCConfig{EnableHTTP: true, EnableWS: true,
+					HTTPHost: "127.0.0.1", HTTPPort: p, WSHost: "0.0.0.0", WSPort: p}
+			},
+			wantErr: true,
+		},
+		{
+			name: "mismatch is rejected whichever side is wildcard",
+			build: func(t *testing.T) RPCConfig {
+				p := freePort(t)
+				return RPCConfig{EnableHTTP: true, EnableWS: true,
+					HTTPHost: "0.0.0.0", HTTPPort: p, WSHost: "127.0.0.1", WSPort: p}
+			},
+			wantErr: true,
+		},
+		{
+			name: "both enabled, shared port, same host is accepted",
+			build: func(t *testing.T) RPCConfig {
+				p := freePort(t)
+				return RPCConfig{EnableHTTP: true, EnableWS: true,
+					HTTPHost: "127.0.0.1", HTTPPort: p, WSHost: "127.0.0.1", WSPort: p}
+			},
+		},
+		{
+			name: "both enabled, separate ports, different hosts is accepted",
+			build: func(t *testing.T) RPCConfig {
+				return RPCConfig{EnableHTTP: true, EnableWS: true,
+					HTTPHost: "127.0.0.1", HTTPPort: freePort(t),
+					WSHost: "0.0.0.0", WSPort: freePort(t)}
+			},
+		},
+		{
+			// The regression #87 introduced if the guard keeps using the
+			// old "HTTPHost != ''" test: HTTP is off, so the two servers do
+			// not share anything and must not be compared.
+			name: "HTTP disabled by flag, conflicting host is not a conflict",
+			build: func(t *testing.T) RPCConfig {
+				p := freePort(t)
+				// Hosts deliberately differ and the port is shared: the
+				// pre-#87 guard compared the two host strings and rejected
+				// this. Only 127.0.0.1 is ever bound.
+				return RPCConfig{EnableHTTP: false, EnableWS: true,
+					HTTPHost: "0.0.0.0", HTTPPort: p, WSHost: "127.0.0.1", WSPort: p}
+			},
+		},
+		{
+			name: "WS-only with empty HTTP host is accepted",
+			build: func(t *testing.T) RPCConfig {
+				return RPCConfig{EnableHTTP: true, EnableWS: true,
+					HTTPHost: "", WSHost: "127.0.0.1", WSPort: freePort(t)}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := newRPCTestNode(tt.build(t))
+			t.Cleanup(node.stopRPC)
+
+			err := node.startRPC()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("startRPC() = nil, want error mentioning shared port")
+				}
+				if !strings.Contains(err.Error(), "share port") {
+					t.Fatalf("startRPC() = %q, want substring %q", err, "share port")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("startRPC() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestWsServerForPort verifies the server selection startRPC relies on after
+// #87 gave it the httpEnabled flag.
+func TestWsServerForPort(t *testing.T) {
+	tests := []struct {
+		name        string
+		httpEnabled bool
+		httpPort    int
+		wsPort      int
+		wantHTTP    bool
+	}{
+		{name: "http enabled and ports equal picks the http server",
+			httpEnabled: true, httpPort: 35997, wsPort: 35997, wantHTTP: true},
+		{name: "http enabled and ports differ picks the ws server",
+			httpEnabled: true, httpPort: 35997, wsPort: 35998, wantHTTP: false},
+		{name: "http disabled never picks the http server even on equal ports",
+			httpEnabled: false, httpPort: 35997, wsPort: 35997, wantHTTP: false},
+		{name: "http disabled and ports differ picks the ws server",
+			httpEnabled: false, httpPort: 35997, wsPort: 35998, wantHTTP: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &Node{
+				http: newHTTPServer(rpc.DefaultHTTPTimeouts),
+				ws:   newHTTPServer(rpc.DefaultHTTPTimeouts),
+			}
+			if err := node.http.setListenAddr("127.0.0.1", tt.httpPort); err != nil {
+				t.Fatalf("setListenAddr: %v", err)
+			}
+
+			got := node.wsServerForPort(tt.httpEnabled, tt.wsPort)
+			if tt.wantHTTP && got != node.http {
+				t.Errorf("wsServerForPort(%v, %d) = ws server, want http server",
+					tt.httpEnabled, tt.wsPort)
+			}
+			if !tt.wantHTTP && got != node.ws {
+				t.Errorf("wsServerForPort(%v, %d) = http server, want ws server",
+					tt.httpEnabled, tt.wsPort)
+			}
+		})
+	}
+}
