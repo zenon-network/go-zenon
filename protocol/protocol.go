@@ -28,6 +28,23 @@ var ProtocolLengths = []uint64{9}
 
 const (
 	ProtocolMaxMsgSize = 10 * 1024 * 1024 // Maximum cap on the size of a protocol message
+
+	// MaxBlocksRequest is the most hashes the receiver of one GetBlocksMsg
+	// looks up. It bounds hash lookups only: every named hash costs one
+	// store lookup whether or not the block exists, and the receiver stops
+	// looking after this many and answers with what it found, as it already
+	// does once the reply holds downloader.MaxBlockFetch blocks. It does not
+	// bound the work a found block costs (a momentum read plus one read per
+	// account block) or the size of the reply.
+	//
+	// The value is twice the reply cap downloader.MaxBlockFetch, which
+	// TestMaxBlocksRequest_CoversEveryHonestRequester pins, so a request
+	// that mixes misses and hits can still fill a reply. It is independent
+	// of the fetcher's per-peer announce limit, which happens to be the same
+	// number. peer.RequestBlocks, the only sender, splits larger batches
+	// into requests of downloader.MaxBlockFetch hashes, so a node running
+	// this code never names more than the reply cap in one message.
+	MaxBlocksRequest = 256
 )
 
 // eth protocol message codes
