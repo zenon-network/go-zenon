@@ -57,7 +57,12 @@ type Manager interface {
 	// above it are preserved.  This lets a caller advance the stable
 	// reference without re-creating the manager and re-applying patches.
 	// It is a no-op for managers that are their own stable store.
-	Rebase(newStableDB DB)
+	//
+	// Rebase returns an error if the new stable DB is not on the same
+	// chain as the manager's current state (i.e. its frontier hash does
+	// not match the manager's version at that height), or if any pending
+	// version cannot be rebuilt on the new stable.
+	Rebase(newStableDB DB) error
 
 	Stop() error
 	Location() string
@@ -198,11 +203,30 @@ func (m *memdbManager) Pop() error {
 // reference to the deleted committed overlay as its read-through base,
 // so the overlay chain would grow by one level per committed block and
 // never shrink, causing unbounded memory growth across momentums.
-func (m *memdbManager) Rebase(newStableDB DB) {
+func (m *memdbManager) Rebase(newStableDB DB) error {
 	m.changes.Lock()
 	defer m.changes.Unlock()
 	newStableIdentifier := GetFrontierIdentifier(newStableDB)
 	newStableHeight := newStableIdentifier.Height
+
+	// Validate that the new stable DB is on the same chain: if the manager
+	// already has any version at the new stable height, its hash must match.
+	// A forked stable at the same height with a different hash would
+	// silently re-parent pending heads onto a different chain.
+	for id := range m.versions {
+		if id.Height == newStableHeight && id != newStableIdentifier {
+			return errors.Errorf(
+				"rebase: new stable frontier %v conflicts with existing version %v at same height",
+				newStableIdentifier, id)
+		}
+	}
+
+	// Advance the frontier identifier if the current frontier is at or
+	// below the new stable height.  Without this, a manager whose frontier
+	// was discarded by the rebase would return nil from Frontier().
+	if m.frontierIdentifier.Height <= newStableHeight {
+		m.frontierIdentifier = newStableIdentifier
+	}
 
 	// Capture pending versions before mutating maps.  A pending version is
 	// any version above the new stable height.  Head commits carry a
@@ -258,8 +282,16 @@ func (m *memdbManager) Rebase(newStableDB DB) {
 		var base DB
 		if p.prev.Height <= newStableHeight {
 			base = newStableDB
+			// The head is being re-parented onto the new stable; record
+			// the link so a later Pop() does not land on a deleted id.
+			m.previous[p.id] = newStableIdentifier
 		} else {
 			base = rebuilt[p.prev]
+			if base == nil {
+				return errors.Errorf(
+					"rebase: pending version %v previous %v not rebuilt",
+					p.id, p.prev)
+			}
 		}
 		newDB := base.Snapshot()
 		if p.patch != nil {
@@ -282,9 +314,15 @@ func (m *memdbManager) Rebase(newStableDB DB) {
 		}
 	}
 
+	// A fresh manager has no previous or patch for its stable; delete any
+	// stale entries so GetPatch(stable) returns nil as it does on dev.
+	delete(m.previous, newStableIdentifier)
+	delete(m.patches, newStableIdentifier)
+
 	m.stableDB = newStableDB
 	m.stableIdentifier = newStableIdentifier
 	m.versions[newStableIdentifier] = newStableDB
+	return nil
 }
 
 func (m *memdbManager) Stop() error {
@@ -532,8 +570,9 @@ func (m *ldbManager) Pop() error {
 	m.l2Cache.Purge()
 	return nil
 }
-func (m *ldbManager) Rebase(_ DB) {
+func (m *ldbManager) Rebase(_ DB) error {
 	// ldbManager IS the stable store; there is nothing to rebase.
+	return nil
 }
 
 func (m *ldbManager) Stop() error {

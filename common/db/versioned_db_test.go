@@ -370,10 +370,10 @@ func rawOverlayDepth(d db) int {
 	return 0
 }
 
-// TestRebase_SevensOverlayChain verifies that after Rebase the pending
+// TestRebase_SeveresOverlayChain verifies that after Rebase the pending
 // versions' mergedDb chains are rebuilt directly on the new stable DB and
 // no longer reference deleted committed overlays.
-func TestRebase_SevensOverlayChain(t *testing.T) {
+func TestRebase_SeveresOverlayChain(t *testing.T) {
 	// Build: stable(h0) → A(h1) → B(h2) → C(h3)
 	// Rebase to h1: B and C are pending; their chains must sit on the new
 	// stable DB, not on A's overlay.
@@ -406,7 +406,7 @@ func TestRebase_SevensOverlayChain(t *testing.T) {
 	common.DealWithErr(ApplyPatch(newStable, patchA))
 	common.DealWithErr(SetFrontier(newStable, idA, []byte("block-A")))
 
-	m.Rebase(newStable)
+	common.DealWithErr(m.Rebase(newStable))
 
 	// After Rebase: C's overlay chain must have depth 2
 	// (C' → newStable), not 3.
@@ -447,7 +447,7 @@ func TestRebase_PreservesPendingData(t *testing.T) {
 	common.DealWithErr(ApplyPatch(newStable, patchA))
 	common.DealWithErr(SetFrontier(newStable, idA, blockAData))
 
-	m.Rebase(newStable)
+	common.DealWithErr(m.Rebase(newStable))
 
 	// After Rebase, Get(idC) must return the same visible data.
 	fullCAfter := DebugDB(m.Get(idC))
@@ -475,7 +475,7 @@ func TestRebase_PopAfterRebase(t *testing.T) {
 	newStable := NewMemDB()
 	common.DealWithErr(ApplyPatch(newStable, patchA))
 	common.DealWithErr(SetFrontier(newStable, idA, []byte("block-A")))
-	m.Rebase(newStable)
+	common.DealWithErr(m.Rebase(newStable))
 
 	// Pop C (h3).
 	common.DealWithErr(m.Pop())
@@ -512,7 +512,7 @@ func TestRebase_AddAfterRebase(t *testing.T) {
 	newStable := NewMemDB()
 	common.DealWithErr(ApplyPatch(newStable, patchA))
 	common.DealWithErr(SetFrontier(newStable, idA, []byte("block-A")))
-	m.Rebase(newStable)
+	common.DealWithErr(m.Rebase(newStable))
 
 	// Add a new block at height 3 (on top of B at height 2).
 	tC := newMockTransaction(3, m.Frontier())
@@ -551,7 +551,7 @@ func TestRebase_RollingCommitBoundedDepth(t *testing.T) {
 		data := ids[rebaseTo-1].Serialize()
 		common.DealWithErr(SetFrontier(newStable, ids[rebaseTo-1], data))
 
-		m.Rebase(newStable)
+		common.DealWithErr(m.Rebase(newStable))
 
 		// Check frontier overlay depth.
 		frontierID := GetFrontierIdentifier(m.Frontier())
@@ -618,7 +618,7 @@ func TestRebase_DeletesInPendingPatch(t *testing.T) {
 	newStable := NewMemDB()
 	common.DealWithErr(ApplyPatch(newStable, patchA))
 	common.DealWithErr(SetFrontier(newStable, idA, []byte("block-A")))
-	m.Rebase(newStable)
+	common.DealWithErr(m.Rebase(newStable))
 
 	// After Rebase, B's view must still show the key as deleted.
 	dbAfter := m.Get(idB)
@@ -735,7 +735,7 @@ func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 		data := rebaseTo.Serialize()
 		common.DealWithErr(SetFrontier(stableDB, rebaseTo, data))
 
-		m.Rebase(stableDB)
+		common.DealWithErr(m.Rebase(stableDB))
 
 		// After rebase, exactly one block should be pending (the one that was
 		// at height rebaseTo+1).  Add a replacement to keep the chain going.
@@ -869,7 +869,7 @@ func TestRebase_NonEmptyWritesAndDeletes(t *testing.T) {
 	newStable := NewMemDB()
 	common.DealWithErr(ApplyPatch(newStable, patchA))
 	common.DealWithErr(SetFrontier(newStable, idA, blockAData))
-	m.Rebase(newStable)
+	common.DealWithErr(m.Rebase(newStable))
 
 	// After Rebase:
 	// 1. B's pending-suffix effects must still be visible (delete + new write).
@@ -1006,7 +1006,7 @@ func TestRebase_PoppedBatchIntermediateCleaned(t *testing.T) {
 	newStable := NewMemDB()
 	common.DealWithErr(ApplyPatch(newStable, patch1))
 	common.DealWithErr(SetFrontier(newStable, id1, block1Data))
-	m.Rebase(newStable)
+	common.DealWithErr(m.Rebase(newStable))
 
 	// The orphaned intermediate must not be in versions anymore.
 	m.changes.Lock()
@@ -1090,7 +1090,7 @@ func TestRebase_LiveBatchIntermediatePreserved(t *testing.T) {
 	newStable := NewMemDB()
 	common.DealWithErr(ApplyPatch(newStable, patch1))
 	common.DealWithErr(SetFrontier(newStable, id1, block1Data))
-	m.Rebase(newStable)
+	common.DealWithErr(m.Rebase(newStable))
 
 	// The intermediate must still be accessible (its batch head survived).
 	dbIntermediate := m.Get(intermediateID)
@@ -1156,7 +1156,7 @@ func TestRebase_RepeatedReplacementBatches(t *testing.T) {
 	newStable := NewMemDB()
 	common.DealWithErr(ApplyPatch(newStable, patch1))
 	common.DealWithErr(SetFrontier(newStable, id1, block1Data))
-	m.Rebase(newStable)
+	common.DealWithErr(m.Rebase(newStable))
 
 	// Assert: orphaned intermediates from BOTH popped batches are absent.
 	m.changes.Lock()

@@ -52,7 +52,7 @@ func (m *fakeMomentumManagerDB) Pop() error {
 	}
 	return nil
 }
-func (m *fakeMomentumManagerDB) Rebase(db.DB) {}
+func (m *fakeMomentumManagerDB) Rebase(db.DB) error { return nil }
 func (m *fakeMomentumManagerDB) Stop() error {
 	return nil
 }
