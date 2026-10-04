@@ -64,6 +64,13 @@ type handler struct {
 
 	subLock    sync.Mutex
 	serverSubs map[ID]*Subscription
+	// pendingSubs counts subscribe calls that have been accepted against the
+	// per-connection limit but whose notifier has not been collected by
+	// addSubscriptions yet. Guarded by subLock together with serverSubs.
+	pendingSubs int
+	// maxServerSubs is the connection's subscription budget, taken from the
+	// Server that created the handler.
+	maxServerSubs int
 }
 
 type callProc struct {
@@ -71,11 +78,15 @@ type callProc struct {
 	notifiers []*Notifier
 }
 
-func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *serviceRegistry) *handler {
+func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *serviceRegistry, maxServerSubs int) *handler {
+	if maxServerSubs < 1 {
+		maxServerSubs = DefaultMaxSubscriptionsPerConn
+	}
 	rootCtx, cancelRoot := context.WithCancel(connCtx)
 	h := &handler{
 		reg:            reg,
 		idgen:          idgen,
+		maxServerSubs:  maxServerSubs,
 		conn:           conn,
 		respWait:       make(map[string]*requestOp),
 		clientSubs:     make(map[string]*ClientSubscription),
@@ -115,9 +126,30 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 	// Process calls on a goroutine because they may block indefinitely:
 	h.startCallProc(func(cp *callProc) {
 		answers := make([]*jsonrpcMessage, 0, len(msgs))
-		for _, msg := range calls {
+		responseBytes := 0
+		for i, msg := range calls {
 			if answer := h.handleCallMsg(cp, msg); answer != nil {
 				answers = append(answers, answer)
+				responseBytes += answer.payloadSize()
+			}
+			// The answer that crosses the budget is still delivered; the
+			// elements after it are answered the way handleCallMsg would
+			// have answered them, except that a call is not executed and
+			// gets the budget error instead of its result.
+			if responseBytes > maxBatchResponseBytes {
+				h.log.Warn("Batch response too large", "responseBytes", responseBytes, "skipped", len(calls)-i-1)
+				for _, rest := range calls[i+1:] {
+					switch {
+					case rest.isNotification():
+					case rest.isCall():
+						answers = append(answers, rest.errorResponse(new(batchResponseTooLargeError)))
+					case rest.hasValidID():
+						answers = append(answers, rest.errorResponse(&invalidRequestError{"invalid request"}))
+					default:
+						answers = append(answers, errorMessage(&invalidRequestError{"invalid request"}))
+					}
+				}
+				break
 			}
 		}
 		h.addSubscriptions(cp.notifiers)
@@ -198,10 +230,39 @@ func (h *handler) addSubscriptions(nn []*Notifier) {
 	defer h.subLock.Unlock()
 
 	for _, n := range nn {
+		// Every notifier collected by handleSubscribe holds one reservation
+		// and a subscription to convert it into.
+		h.pendingSubs--
 		if sub := n.takeSubscription(); sub != nil {
 			h.serverSubs[sub.ID] = sub
 		}
 	}
+}
+
+// releaseSubscription returns a reservation taken by reserveSubscription for
+// a call that ended without creating a subscription.
+func (h *handler) releaseSubscription() {
+	h.subLock.Lock()
+	defer h.subLock.Unlock()
+	h.pendingSubs--
+}
+
+// reserveSubscription claims one slot of the connection's subscription budget
+// for a subscribe call that is about to run. Slots held by calls still in
+// flight count as well, so neither a batch nor concurrent single requests can
+// exceed the connection's limit. The slot is released by releaseSubscription
+// if the call creates no subscription, converted by addSubscriptions when
+// the call's notifier is collected, and the installed subscription's slot is
+// released by unsubscribe or cancelServerSubscriptions.
+func (h *handler) reserveSubscription() error {
+	h.subLock.Lock()
+	defer h.subLock.Unlock()
+
+	if len(h.serverSubs)+h.pendingSubs >= h.maxServerSubs {
+		return ErrTooManySubscriptions
+	}
+	h.pendingSubs++
+	return nil
 }
 
 // cancelServerSubscriptions removes all subscriptions and closes their error channels.
@@ -380,12 +441,30 @@ func (h *handler) handleSubscribe(cp *callProc, msg *jsonrpcMessage) *jsonrpcMes
 	}
 	args = args[1:]
 
+	// Reserve the connection's budget only for well-formed requests, and
+	// before the notifier exists: the notifier is collected by
+	// addSubscriptions unconditionally, so a reservation and a notifier must
+	// always be created together.
+	if err := h.reserveSubscription(); err != nil {
+		return msg.errorResponse(err)
+	}
+
 	// Install notifier in context so the subscription handler can find it.
 	n := &Notifier{h: h, namespace: namespace}
-	cp.notifiers = append(cp.notifiers, n)
 	ctx := context.WithValue(cp.ctx, notifierKey{}, n)
 
-	return h.runMethod(ctx, msg, callb, args)
+	answer := h.runMethod(ctx, msg, callb, args)
+
+	// A call that returned without creating a subscription has nothing to
+	// install, so its reservation is returned now rather than when the whole
+	// batch has run: later elements of the same batch must not be rejected
+	// on behalf of slots that nothing holds.
+	if n.takeSubscription() == nil {
+		h.releaseSubscription()
+		return answer
+	}
+	cp.notifiers = append(cp.notifiers, n)
+	return answer
 }
 
 // runMethod runs the Go callback for an RPC method.

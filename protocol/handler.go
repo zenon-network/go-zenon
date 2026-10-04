@@ -301,6 +301,16 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 			blocks []*nom.DetailedMomentum
 		)
 		for {
+			// Every requested hash costs a store lookup whether or not the
+			// block exists, so bound the lookups, not only the hits: after
+			// MaxBlocksRequest of them, answer with what was found and leave
+			// the rest of the message unread and undecoded, the way the
+			// reply cap below does. Disconnecting instead would cost the
+			// same lookups and only cut off peers on releases that do not
+			// split requests.
+			if len(hashes) >= MaxBlocksRequest {
+				break
+			}
 			err := msgStream.Decode(&hash)
 			if err == rlp.EOL {
 				break
@@ -319,13 +329,7 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		}
 
 		if len(blocks) == 0 && len(hashes) > 0 {
-			list := "["
-			for _, hash := range hashes {
-				list += fmt.Sprintf("%x, ", hash[:4])
-			}
-			list = list[:len(list)-2] + "]"
-
-			log.Debug("no blocks found for requested hashes", "peer-id", p.id, "hashes", list)
+			log.Debug("no blocks found for requested hashes", "peer-id", p.id, "count", len(hashes), "first-hash", fmt.Sprintf("%x", hashes[0][:4]))
 		}
 		return p.SendBlocks(blocks)
 

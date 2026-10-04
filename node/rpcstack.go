@@ -21,16 +21,18 @@ import (
 
 // httpConfig is the JSON-RPC/HTTP configuration.
 type httpConfig struct {
-	Modules            []string
-	CorsAllowedOrigins []string
-	Vhosts             []string
-	prefix             string // path prefix on which to mount http handler
+	Modules                 []string
+	CorsAllowedOrigins      []string
+	Vhosts                  []string
+	MaxSubscriptionsPerConn int
+	prefix                  string // path prefix on which to mount http handler
 }
 
 // wsConfig is the JSON-RPC/Websocket configuration
 type wsConfig struct {
-	Origins []string
-	Modules []string
+	Origins                 []string
+	Modules                 []string
+	MaxSubscriptionsPerConn int
 	// MaxConnectionsPerIP bounds concurrent WebSocket connections from a
 	// single remote IP address. Zero means no per-IP limit.
 	MaxConnectionsPerIP int
@@ -272,6 +274,7 @@ func (h *httpServer) enableRPC(apis []rpc.API, config httpConfig) error {
 
 	// Create RPC server and handler.
 	srv := rpc.NewServer()
+	srv.SetMaxSubscriptionsPerConn(config.MaxSubscriptionsPerConn)
 	if err := RegisterApisFromWhitelist(apis, config.Modules, srv, false); err != nil {
 		return err
 	}
@@ -304,6 +307,7 @@ func (h *httpServer) enableWS(apis []rpc.API, config wsConfig) error {
 
 	// Create RPC server and handler.
 	srv := rpc.NewServer()
+	srv.SetMaxSubscriptionsPerConn(config.MaxSubscriptionsPerConn)
 	if err := RegisterApisFromWhitelist(apis, config.Modules, srv, false); err != nil {
 		return err
 	}
