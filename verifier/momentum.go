@@ -346,10 +346,7 @@ func (mv *momentumTransactionVerifier) all() error {
 	if err := mv.changesHash(mv.transaction); err != nil {
 		return err
 	}
-	if err := mv.hash(mv.transaction); err != nil {
-		return err
-	}
-	if err := mv.signature(mv.transaction); err != nil {
+	if err := MomentumStatic(mv.transaction.Momentum); err != nil {
 		return err
 	}
 	if err := mv.producer(mv.transaction); err != nil {
@@ -357,9 +354,18 @@ func (mv *momentumTransactionVerifier) all() error {
 	}
 	return nil
 }
-func (mv *momentumTransactionVerifier) signature(transaction *nom.MomentumTransaction) error {
-	momentum := transaction.Momentum
 
+// MomentumStatic runs the checks that need no chain state: the advertised
+// hash matches the content, and the signature verifies under the public key
+// the momentum carries. Whether that key belongs to the producer elected for
+// the momentum's slot depends on chain state and is checked separately.
+func MomentumStatic(momentum *nom.Momentum) error {
+	if momentum == nil {
+		return errors.Errorf("missing momentum")
+	}
+	if momentum.ComputeHash() != momentum.Hash {
+		return ErrMHashInvalid
+	}
 	if len(momentum.Signature) == 0 {
 		return ErrMSignatureMissing
 	}
@@ -380,14 +386,6 @@ func (mv *momentumTransactionVerifier) changesHash(transaction *nom.MomentumTran
 	if computedHash != transaction.Momentum.ChangesHash {
 		log.Info("changes-hash differ", "expected", computedHash, "got-instead", transaction.Momentum.ChangesHash)
 		return ErrMChangesHashInvalid
-	}
-	return nil
-}
-func (mv *momentumTransactionVerifier) hash(transaction *nom.MomentumTransaction) error {
-	momentum := transaction.Momentum
-	computedHash := momentum.ComputeHash()
-	if computedHash != momentum.Hash {
-		return ErrMHashInvalid
 	}
 	return nil
 }

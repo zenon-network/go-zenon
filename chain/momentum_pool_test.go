@@ -1,6 +1,7 @@
 package chain
 
 import (
+	"bytes"
 	"errors"
 	"sync"
 	"testing"
@@ -254,4 +255,33 @@ func TestRollbackToFirstPopFailureLeavesCanonicalStateCertain(t *testing.T) {
 	common.Expect(t, listener.inserts, 0)
 	common.Expect(t, listener.deletes, 0)
 	common.Expect(t, db.GetFrontierIdentifier(manager.Frontier()), testHashHeight(2))
+}
+
+// TestGetMomentumPatchReturnsIndependentCopy checks that altering the bytes of
+// a returned patch can't reach the stored one. The in-memory manager hands out
+// the patch it holds, and a leveldb batch's Dump is its own buffer, so a
+// shallow copy would still alias the stored history.
+func TestGetMomentumPatchReturnsIndependentCopy(t *testing.T) {
+	manager := db.NewMemDBManager(db.NewMemDB())
+	pool, _ := newTestMomentumPool(manager)
+
+	changes := db.NewPatch()
+	changes.Put([]byte("key"), []byte("value"))
+	transaction := testTransaction(nil)
+	transaction.Changes = changes
+	common.FailIfErr(t, manager.Add(transaction))
+	identifier := transaction.Momentum.Identifier()
+	stored := append([]byte(nil), manager.GetPatch(identifier).Dump()...)
+
+	returned := pool.GetMomentumPatch(identifier).Dump()
+	for i := range returned {
+		returned[i] ^= 0xff
+	}
+
+	if !bytes.Equal(manager.GetPatch(identifier).Dump(), stored) {
+		t.Fatal("altering the returned patch changed the stored patch")
+	}
+	if !bytes.Equal(pool.GetMomentumPatch(identifier).Dump(), stored) {
+		t.Fatal("altering the returned patch changed what is returned next")
+	}
 }

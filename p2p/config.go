@@ -173,6 +173,22 @@ var (
 	}
 )
 
+// P2PBackend selects which transport backend the switcher starts.
+type P2PBackend string
+
+const (
+	// P2PBackendAuto is the default: the switcher picks legacy or libp2p
+	// based on the spork oracle, and swaps when activation fires.
+	P2PBackendAuto P2PBackend = "auto"
+	// P2PBackendLibp2p starts the libp2p backend directly, skipping the
+	// oracle check and the activation watcher. Used by fresh nodes joining
+	// a network where the libp2p spork has already activated (issue #105).
+	P2PBackendLibp2p P2PBackend = "libp2p"
+	// P2PBackendLegacy starts the legacy backend and never swaps. Used
+	// on networks where the libp2p spork has not been scheduled.
+	P2PBackendLegacy P2PBackend = "legacy"
+)
+
 type Net struct {
 	// This field must be set to a valid secp256k1 private key.
 	privateKey *ecdsa.PrivateKey
@@ -237,6 +253,15 @@ type Net struct {
 	// NodeDatabase is the path to the database containing the previously seen
 	// live nodes in the network.
 	NodeDatabase string
+
+	// P2PBackend overrides the spork-oracle backend selection.
+	// "auto" (default) keeps the current behavior: legacy before
+	// activation, swap to libp2p when the spork enforces.
+	// "libp2p" starts libp2p unconditionally — used by fresh nodes
+	// joining a post-activation network (issue #105).
+	// "legacy" starts legacy and never swaps.
+	// Unknown values are rejected at startup.
+	P2PBackend P2PBackend
 
 	// If ListenAddr is set to a non-nil address, the server
 	// will listen for incoming connections.

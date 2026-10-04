@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/types"
 )
 
 func TestRollbackPatch(t *testing.T) {
@@ -32,4 +33,52 @@ func TestRollbackPatch(t *testing.T) {
 010203 - c8
 040102 - DELETE
 071f - DELETE`)
+}
+
+func TestRemoveKeys(t *testing.T) {
+	skipped := []byte{9, 9}
+	kept := []byte{1, 2, 3}
+
+	p := NewPatch()
+	p.Put(skipped, []byte{1})
+	p.Put(kept, []byte{100})
+	p.Delete(skipped)
+	p.Delete(kept)
+	p.Put(kept, []byte{200})
+	p.Put(skipped, []byte{2})
+
+	filtered, err := RemoveKeys(p, [][]byte{skipped})
+	common.FailIfErr(t, err)
+
+	// Every put and delete on the skipped key is gone; the rest keeps its
+	// order.
+	common.ExpectString(t, DebugPatch(filtered), `
+010203 - 64
+010203 - DELETE
+010203 - c8`)
+	// The source patch is untouched.
+	common.ExpectString(t, DebugPatch(p), `
+0909 - 01
+010203 - 64
+0909 - DELETE
+010203 - DELETE
+010203 - c8
+0909 - 02`)
+
+	// Removing nothing yields an identical copy.
+	same, err := RemoveKeys(p, nil)
+	common.FailIfErr(t, err)
+	common.ExpectString(t, string(same.Dump()), string(p.Dump()))
+}
+
+func TestFrontierWriteKeysAreCopies(t *testing.T) {
+	version := types.HashHeight{Hash: types.NewHash([]byte("frontier")), Height: 7}
+	keys := FrontierWriteKeys(version)
+	common.Expect(t, len(keys), 3)
+	keys[0][0] ^= 0xff
+	again := FrontierWriteKeys(version)
+	if string(again[0]) == string(keys[0]) {
+		t.Fatal("modifying a returned key altered the key returned next time")
+	}
+	common.ExpectString(t, string(again[0]), string(frontierIdentifierKey))
 }

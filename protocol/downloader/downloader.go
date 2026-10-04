@@ -405,13 +405,40 @@ func (d *Downloader) findAncestor(p *peer) (uint64, error) {
 				log.Info("%v: empty head hash set", "peer", p)
 				return 0, errEmptyHashSet
 			}
-			// Check if a common ancestor was found
+			if len(hashes) > MaxHashFetch {
+				log.Info("oversized head hash set", "peer", p, "num-hashes", len(hashes))
+				return 0, errBadPeer
+			}
+			// Check if a common ancestor was found. Peers reply newest first, so
+			// the first hash we have is the highest common one. Take its height
+			// from our own chain rather than its position in the reply: momentums
+			// start at height 1, and the reply layout is peer-controlled.
 			finished = true
-			for i := len(hashes) - 1; i >= 0; i-- {
-				if d.hasBlock(hashes[i]) {
-					number, hash = uint64(from)+uint64(i), hashes[i]
-					break
+			for i := 0; i < len(hashes); i++ {
+				if !d.hasBlock(hashes[i]) {
+					continue
 				}
+				detailed := d.getBlock(hashes[i])
+				if detailed == nil {
+					continue
+				}
+				// A reply covers a contiguous descending range inside the
+				// requested window. Derive the range this match implies and
+				// reject the reply if it does not fit, so a reply cannot move
+				// the ancestor outside the window we asked for.
+				height := detailed.Momentum.Height
+				top := height + uint64(i)
+				span := uint64(len(hashes) - 1)
+				low := uint64(from)
+				if low == 0 {
+					low = 1
+				}
+				if height < low || top > uint64(from)+uint64(MaxHashFetch)-1 || top < span || top-span < low {
+					log.Info("head hash set outside requested range", "peer", p, "momentum-height", height, "index", i, "num-hashes", len(hashes), "from", from)
+					return 0, errBadPeer
+				}
+				number, hash = height, hashes[i]
+				break
 			}
 
 		case <-d.blockCh:
