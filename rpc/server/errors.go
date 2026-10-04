@@ -54,9 +54,18 @@ var (
 	_ Error = new(invalidRequestError)
 	_ Error = new(invalidMessageError)
 	_ Error = new(invalidParamsError)
+	_ Error = new(batchResponseTooLargeError)
 )
 
 const defaultErrorCode = -32000
+
+// batchResponseTooLargeError answers the calls of a batch that are skipped
+// once the batch's accumulated results exceed maxBatchResponseBytes.
+type batchResponseTooLargeError struct{}
+
+func (e *batchResponseTooLargeError) ErrorCode() int { return -32003 }
+
+func (e *batchResponseTooLargeError) Error() string { return "batch response too large" }
 
 type methodNotFoundError struct{ method string }
 

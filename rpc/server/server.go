@@ -47,6 +47,9 @@ type Server struct {
 	idgen    func() ID
 	run      int32
 	codecs   mapset.Set
+	// maxSubscriptionsPerConn is the subscription budget given to each
+	// connection served after it was set; see SetMaxSubscriptionsPerConn.
+	maxSubscriptionsPerConn int
 
 	// mu orders codec registration against Stop. A codec that passes the
 	// running check is registered before Stop can take its view of the set,
@@ -62,12 +65,29 @@ type Server struct {
 
 // NewServer creates a new server instance with no registered handlers.
 func NewServer() *Server {
-	server := &Server{idgen: randomIDGenerator(), codecs: mapset.NewSet(), run: 1}
+	server := &Server{idgen: randomIDGenerator(), codecs: mapset.NewSet(), run: 1, maxSubscriptionsPerConn: DefaultMaxSubscriptionsPerConn}
 	// Register the default service providing meta information about the RPC service such
 	// as the services and methods it offers.
 	rpcService := &RPCService{server}
 	server.RegisterName(MetadataApi, rpcService)
 	return server
+}
+
+// SetMaxSubscriptionsPerConn sets how many server subscriptions one connection
+// may hold at a time. It applies to connections served after the call, so it
+// is meant to be called once, before the server is handed to a transport. A
+// value below one restores DefaultMaxSubscriptionsPerConn.
+func (s *Server) SetMaxSubscriptionsPerConn(n int) {
+	if n < 1 {
+		n = DefaultMaxSubscriptionsPerConn
+	}
+	s.maxSubscriptionsPerConn = n
+}
+
+// MaxSubscriptionsPerConn reports the subscription budget given to each
+// connection.
+func (s *Server) MaxSubscriptionsPerConn() int {
+	return s.maxSubscriptionsPerConn
 }
 
 // RegisterName creates a service for the given receiver type under the given name. When no
@@ -94,7 +114,7 @@ func (s *Server) ServeCodec(codec ServerCodec, options CodecOption) {
 	defer s.untrackCodec(codec)
 	defer codec.close()
 
-	c := initClient(codec, s.idgen, &s.services)
+	c := initClient(codec, s.idgen, &s.services, s.maxSubscriptionsPerConn)
 	<-codec.closed()
 	c.Close()
 }
@@ -134,13 +154,15 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 		return
 	}
 
-	h := newHandler(ctx, codec, s.idgen, &s.services)
+	h := newHandler(ctx, codec, s.idgen, &s.services, s.maxSubscriptionsPerConn)
 	h.allowSubscribe = false
 	defer h.close(io.EOF, nil)
 
 	reqs, batch, err := codec.readBatch()
 	if err != nil {
-		if err != io.EOF {
+		if err == errBatchTooLarge {
+			_ = codec.writeJSON(ctx, errorMessage(err))
+		} else if err != io.EOF {
 			codec.writeJSON(ctx, errorMessage(&invalidMessageError{"parse error"}))
 		}
 		return

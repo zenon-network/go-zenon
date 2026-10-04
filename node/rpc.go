@@ -20,10 +20,11 @@ func (node *Node) startRPC() error {
 	// Configure HTTP.
 	if httpEnabled {
 		config := httpConfig{
-			CorsAllowedOrigins: node.config.RPC.HTTPCors,
-			Vhosts:             node.config.RPC.HTTPVirtualHosts,
-			Modules:            node.config.RPC.Endpoints,
-			prefix:             "",
+			CorsAllowedOrigins:      node.config.RPC.HTTPCors,
+			Vhosts:                  node.config.RPC.HTTPVirtualHosts,
+			Modules:                 node.config.RPC.Endpoints,
+			MaxSubscriptionsPerConn: node.config.RPC.MaxSubscriptionsPerConn,
+			prefix:                  "",
 		}
 		if err := node.http.setListenAddr(node.config.RPC.HTTPHost, node.config.RPC.HTTPPort); err != nil {
 			return err
@@ -45,10 +46,11 @@ func (node *Node) startRPC() error {
 				node.config.RPC.WSPort, node.config.RPC.HTTPHost, node.config.RPC.WSHost)
 		}
 		config := wsConfig{
-			Modules:             node.config.RPC.Endpoints,
-			Origins:             node.config.RPC.WSOrigins,
-			MaxConnectionsPerIP: node.config.RPC.MaxWSConnectionsPerIP,
-			prefix:              "",
+			Modules:                 node.config.RPC.Endpoints,
+			Origins:                 node.config.RPC.WSOrigins,
+			MaxSubscriptionsPerConn: node.config.RPC.MaxSubscriptionsPerConn,
+			MaxConnectionsPerIP:     node.config.RPC.MaxWSConnectionsPerIP,
+			prefix:                  "",
 		}
 		if err := server.setListenAddr(node.config.RPC.WSHost, node.config.RPC.WSPort); err != nil {
 			return err

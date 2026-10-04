@@ -78,6 +78,9 @@ type Client struct {
 	idgen    func() ID // for subscriptions
 	isHTTP   bool
 	services *serviceRegistry
+	// maxServerSubs is the subscription budget of the connection this client
+	// serves; it only matters on the server side of a connection.
+	maxServerSubs int
 
 	idCounter uint32
 
@@ -114,7 +117,7 @@ type clientConn struct {
 
 func (c *Client) newClientConn(conn ServerCodec) *clientConn {
 	ctx := context.WithValue(context.Background(), clientContextKey{}, c)
-	handler := newHandler(ctx, conn, c.idgen, c.services)
+	handler := newHandler(ctx, conn, c.idgen, c.services, c.maxServerSubs)
 	return &clientConn{conn, handler}
 }
 
@@ -200,27 +203,28 @@ func newClient(initctx context.Context, connect reconnectFunc) (*Client, error) 
 	if err != nil {
 		return nil, err
 	}
-	c := initClient(conn, randomIDGenerator(), new(serviceRegistry))
+	c := initClient(conn, randomIDGenerator(), new(serviceRegistry), DefaultMaxSubscriptionsPerConn)
 	c.reconnectFunc = connect
 	return c, nil
 }
 
-func initClient(conn ServerCodec, idgen func() ID, services *serviceRegistry) *Client {
+func initClient(conn ServerCodec, idgen func() ID, services *serviceRegistry, maxServerSubs int) *Client {
 	_, isHTTP := conn.(*httpConn)
 	c := &Client{
-		idgen:       idgen,
-		isHTTP:      isHTTP,
-		services:    services,
-		writeConn:   conn,
-		close:       make(chan struct{}),
-		closing:     make(chan struct{}),
-		didClose:    make(chan struct{}),
-		reconnected: make(chan ServerCodec),
-		readOp:      make(chan readOp),
-		readErr:     make(chan error),
-		reqInit:     make(chan *requestOp),
-		reqSent:     make(chan error, 1),
-		reqTimeout:  make(chan *requestOp),
+		idgen:         idgen,
+		isHTTP:        isHTTP,
+		services:      services,
+		maxServerSubs: maxServerSubs,
+		writeConn:     conn,
+		close:         make(chan struct{}),
+		closing:       make(chan struct{}),
+		didClose:      make(chan struct{}),
+		reconnected:   make(chan ServerCodec),
+		readOp:        make(chan readOp),
+		readErr:       make(chan error),
+		reqInit:       make(chan *requestOp),
+		reqSent:       make(chan error, 1),
+		reqTimeout:    make(chan *requestOp),
 	}
 	if !isHTTP {
 		go c.dispatch(conn)
@@ -345,6 +349,12 @@ func (c *Client) BatchCall(b []BatchElem) error {
 //
 // Note that batch calls may not be executed atomically on the server side.
 func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
+	// The server answers a batch beyond its limit with a single error that
+	// carries no IDs, which this client could not resolve against b; refuse
+	// it here instead of waiting for replies that will not come.
+	if len(b) > maxBatchRequests {
+		return errBatchTooLarge
+	}
 	msgs := make([]*jsonrpcMessage, len(b))
 	op := &requestOp{
 		ids:  make([]json.RawMessage, len(b)),
@@ -635,6 +645,12 @@ func (c *Client) drainRead() {
 func (c *Client) read(codec ServerCodec) {
 	for {
 		msgs, batch, err := codec.readBatch()
+		if err == errBatchTooLarge {
+			// The value was consumed whole; answer it and keep serving the
+			// connection.
+			_ = codec.writeJSON(context.Background(), errorMessage(err))
+			continue
+		}
 		if _, ok := err.(*json.SyntaxError); ok {
 			codec.writeJSON(context.Background(), errorMessage(&parseError{err.Error()}))
 		}

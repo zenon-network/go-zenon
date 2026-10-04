@@ -39,6 +39,19 @@ const (
 	defaultWriteTimeout = 10 * time.Second // used if context has no deadline
 )
 
+// Bounds on the work one batch can hand the server.
+const (
+	// maxBatchRequests bounds the number of calls one batch may carry. A
+	// larger batch is rejected while parsing, once this many elements have
+	// been decoded and before any is executed; the elements past the limit
+	// are never allocated.
+	maxBatchRequests = 1000
+	// maxBatchResponseBytes bounds the result bytes accumulated for one
+	// batch; once exceeded, the remaining calls are answered with an error
+	// instead of being executed.
+	maxBatchResponseBytes = 25 * 1000 * 1000
+)
+
 var null = json.RawMessage("null")
 
 type subscriptionResult struct {
@@ -89,6 +102,18 @@ func (msg *jsonrpcMessage) namespace() string {
 func (msg *jsonrpcMessage) String() string {
 	b, _ := json.Marshal(msg)
 	return string(b)
+}
+
+// payloadSize is the size of the message's result or error as it will be
+// encoded, used to account a batch's responses against maxBatchResponseBytes.
+func (msg *jsonrpcMessage) payloadSize() int {
+	size := len(msg.Result)
+	if msg.Error != nil {
+		if enc, err := json.Marshal(msg.Error); err == nil {
+			size += len(enc)
+		}
+	}
+	return size
 }
 
 func (msg *jsonrpcMessage) errorResponse(err error) *jsonrpcMessage {
@@ -204,6 +229,11 @@ func (c *jsonCodec) remoteAddr() string {
 	return c.remote
 }
 
+// errBatchTooLarge is returned by readBatch for a batch with more than
+// maxBatchRequests elements. The whole JSON value has been consumed from
+// the stream by then, so the caller can answer it and keep reading.
+var errBatchTooLarge = &invalidRequestError{"batch too large"}
+
 func (c *jsonCodec) readBatch() (messages []*jsonrpcMessage, batch bool, err error) {
 	// Decode the next JSON object in the input stream.
 	// This verifies basic syntax, etc.
@@ -211,7 +241,10 @@ func (c *jsonCodec) readBatch() (messages []*jsonrpcMessage, batch bool, err err
 	if err := c.decode(&rawmsg); err != nil {
 		return nil, false, err
 	}
-	messages, batch = parseMessage(rawmsg)
+	messages, batch, err = parseMessage(rawmsg)
+	if err != nil {
+		return nil, batch, err
+	}
 	for i, msg := range messages {
 		if msg == nil {
 			// Message is JSON 'null'. Replace with zero value so it
@@ -262,20 +295,25 @@ func (c *jsonCodec) closed() <-chan interface{} {
 // checks in this function because the raw message has already been syntax-checked when it
 // is called. Any non-JSON-RPC messages in the input return the zero value of
 // jsonrpcMessage.
-func parseMessage(raw json.RawMessage) ([]*jsonrpcMessage, bool) {
+func parseMessage(raw json.RawMessage) ([]*jsonrpcMessage, bool, error) {
 	if !isBatch(raw) {
 		msgs := []*jsonrpcMessage{{}}
 		json.Unmarshal(raw, &msgs[0])
-		return msgs, false
+		return msgs, false, nil
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.Token() // skip '['
 	var msgs []*jsonrpcMessage
 	for dec.More() {
+		// Counted before the element is allocated, so a batch beyond the
+		// limit costs nothing per element past it.
+		if len(msgs) == maxBatchRequests {
+			return nil, true, errBatchTooLarge
+		}
 		msgs = append(msgs, new(jsonrpcMessage))
 		dec.Decode(&msgs[len(msgs)-1])
 	}
-	return msgs, true
+	return msgs, true, nil
 }
 
 // isBatch returns true when the first non-whitespace characters is '['

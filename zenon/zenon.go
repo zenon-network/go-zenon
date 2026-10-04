@@ -43,6 +43,7 @@ func NewZenon(cfg *Config) (Zenon, error) {
 
 	z.evPrinter = NewEventPrinter(z.chain, z.broadcaster)
 	z.subscribe = subscribe.GetSubscribeServer(z.chain)
+	z.subscribe.SetMaxSubscriptions(cfg.MaxSubscriptions)
 	z.pillar = pillar.NewPillar(z.chain, z.consensus, z.broadcaster)
 
 	if cfg.ProducingKeyPair != nil {
