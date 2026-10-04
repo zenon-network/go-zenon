@@ -62,4 +62,9 @@ type AccountPool interface {
 	GetNewMomentumContent() []*nom.AccountBlock
 	GetAllUncommittedAccountBlocks() []*nom.AccountBlock
 	GetUncommittedAccountBlocksByAddress(address types.Address) []*nom.AccountBlock
+
+	// SnapshotUncommitted and RestoreUncommitted bracket a sequence of pool
+	// mutations so they can be undone if a later validation step fails.
+	SnapshotUncommitted(insertLocker sync.Locker, addresses []types.Address) *UncommittedSnapshot
+	RestoreUncommitted(insertLocker sync.Locker, snapshot *UncommittedSnapshot) error
 }
