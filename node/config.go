@@ -348,10 +348,9 @@ func (c *Config) makeNetConfig() *p2p.Net {
 // in both raw and pre-bracketed form.
 //
 // Malformed bracketed input (e.g. "[]", "[[]]", "[[::]]", "[0.0.0.0",
-// "0.0.0.0]") is rejected with an error. Returning it unchanged did not fail
-// closed: net.SplitHostPort parses "[]:35997" as host "" with a nil error,
-// and net.Listen then binds the all-interface wildcard. An explicit error is
-// the only thing callers can act on.
+// "0.0.0.0]") is rejected with an error.
+// net.SplitHostPort("[]:35997") returns host "" with a nil error, so an
+// explicit error is the only thing callers can act on.
 func joinHostPort(host string, port int) (string, error) {
 	normalized, ok := normalizeListenHost(host)
 	if !ok {
@@ -361,9 +360,9 @@ func joinHostPort(host string, port int) (string, error) {
 }
 
 // normalizeListenHost strips at most one enclosing bracket pair from a
-// pre-bracketed IPv6 literal. It reports ok=false for empty-but-non-empty,
-// unbalanced or nested bracketed input, so that such configuration is
-// rejected rather than silently repaired into a valid address.
+// pre-bracketed IPv6 literal. It reports ok=false for empty bracketed ("[]"),
+// unbalanced or nested input, so that such configuration is rejected rather
+// than silently repaired into a valid address.
 func normalizeListenHost(host string) (string, bool) {
 	if host == "" {
 		return "", true

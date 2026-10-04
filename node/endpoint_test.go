@@ -9,7 +9,7 @@ import (
 
 // TestHTTPEndpoint_JoinHostPort verifies that HTTPEndpoint builds valid
 // listen addresses for IPv4, hostnames, and IPv6 literals (both raw and
-// pre-bracketed). See go-zenon issue #109.
+// pre-bracketed).
 func TestHTTPEndpoint_JoinHostPort(t *testing.T) {
 	tests := []struct {
 		name string
@@ -67,11 +67,6 @@ func TestWSEndpoint_JoinHostPort(t *testing.T) {
 
 // TestJoinHostPort_MalformedBrackets verifies that malformed bracketed input
 // is rejected with an error rather than returned for the caller to bind.
-//
-// The earlier version asserted on the returned string. That could not catch
-// "[]": net.SplitHostPort parses "[]:35997" as host "" with a nil error, and
-// net.Listen then binds the all-interface wildcard. Checking the string was
-// checking the wrong thing -- the shape ":port" never appears.
 func TestJoinHostPort_MalformedBrackets(t *testing.T) {
 	tests := []struct {
 		name string
@@ -157,9 +152,7 @@ func TestSetListenAddr_MalformedHostKeepsPreviousEndpoint(t *testing.T) {
 	}
 }
 
-// TestNormalizeListenHost covers the helper directly. setListenAddr-level
-// assertions alone did not catch the empty-bracket case, because the bad
-// value only becomes visible as the shape ":port" further down.
+// TestNormalizeListenHost covers the helper directly.
 func TestNormalizeListenHost(t *testing.T) {
 	rejected := []string{"[]", "[[]]", "[[::]]", "[", "]]", "[[", "[::", "[0.0.0.0", "0.0.0.0]"}
 	for _, host := range rejected {
@@ -227,37 +220,6 @@ func TestSetListenAddr_JoinHostPort(t *testing.T) {
 			if _, err := net.ResolveTCPAddr("tcp", h.endpoint); err != nil {
 				t.Errorf("setListenAddr(%q, %d) endpoint = %q, ResolveTCPAddr error: %v",
 					tt.host, tt.port, h.endpoint, err)
-			}
-		})
-	}
-}
-
-// TestListenAddr_JoinHostPort verifies the P2P listen address is built
-// correctly for all host forms.
-func TestListenAddr_JoinHostPort(t *testing.T) {
-	tests := []struct {
-		name string
-		host string
-		port int
-		want string
-	}{
-		{"IPv4", "0.0.0.0", 35995, "0.0.0.0:35995"},
-		{"hostname", "localhost", 35995, "localhost:35995"},
-		{"raw IPv6", "::", 35995, "[::]:35995"},
-		{"raw IPv6 loopback", "::1", 35995, "[::1]:35995"},
-		{"bracketed IPv6", "[::]", 35995, "[::]:35995"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// We test the JoinHostPort logic directly since the full
-			// makeNetConfig path requires a full Config.
-			got, err := joinHostPort(tt.host, tt.port)
-			if err != nil {
-				t.Fatalf("joinHostPort(%q, %d) unexpected error: %v", tt.host, tt.port, err)
-			}
-			if got != tt.want {
-				t.Errorf("joinHostPort(%q, %d) = %q, want %q", tt.host, tt.port, got, tt.want)
 			}
 		})
 	}
