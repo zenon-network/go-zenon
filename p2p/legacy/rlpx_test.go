@@ -3,8 +3,6 @@ package legacy
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"crypto/rand"
-	"crypto/sha256"
 	"errors"
 	"io"
 	"net"
@@ -332,20 +330,6 @@ func TestReadMsgConsecutiveFrames(t *testing.T) {
 
 // --- Handshake-phase dynamic bound tests (issue #108) ---
 
-// testSecrets returns random AES and MAC keys for testing.
-func testSecrets(t *testing.T) (aesKey, macKey []byte) {
-	t.Helper()
-	aesKey = make([]byte, 32)
-	macKey = make([]byte, 32)
-	if _, err := rand.Read(aesKey); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := rand.Read(macKey); err != nil {
-		t.Fatal(err)
-	}
-	return aesKey, macKey
-}
-
 // newHandshakePair returns two rlpx transports connected by a pipe, with
 // the encryption handshake already completed on both sides. The caller
 // drives the protocol handshake.
@@ -583,8 +567,7 @@ func TestSetupConnPromotesFrameLimit(t *testing.T) {
 // handshake phase, WriteMsg rejects frames larger than
 // baseProtocolMaxMsgSize.
 func TestHandshakeBoundWriteRejectsOversized(t *testing.T) {
-	_, responder := newHandshakePair(t)
-	defer responder.fd.Close()
+	writer, _, _ := newHandshakePhasePair()
 
 	largePayload := make([]byte, baseProtocolMaxMsgSize+100)
 	msg := p2p.Msg{
@@ -592,9 +575,12 @@ func TestHandshakeBoundWriteRejectsOversized(t *testing.T) {
 		Size:    uint32(len(largePayload)),
 		Payload: bytesReader(largePayload),
 	}
-	err := responder.WriteMsg(msg)
+	err := writer.WriteMsg(msg)
 	if err == nil {
-		t.Error("expected WriteMsg to reject oversized frame during handshake phase")
+		t.Fatal("expected WriteMsg to reject oversized frame during handshake phase")
+	}
+	if !strings.Contains(err.Error(), "frame size") {
+		t.Fatalf("expected frame size error, got: %v", err)
 	}
 }
 
@@ -706,17 +692,7 @@ func TestWriteOverflowRejected(t *testing.T) {
 // TestFrameRWWriteBoundAfterRaise verifies that even after raiseFrameLimit,
 // WriteMsg still rejects frames above the steady-state maxFrameSize.
 func TestFrameRWWriteBoundAfterRaise(t *testing.T) {
-	aesKey, macKey := testSecrets(t)
-	c1, _ := net.Pipe()
-	defer c1.Close()
-
-	rw := newRLPXFrameRW(c1, secrets{
-		AES:        aesKey,
-		MAC:        macKey,
-		EgressMAC:  sha256.New(),
-		IngressMAC: sha256.New(),
-	})
-	rw.raiseFrameLimit()
+	writer, _, _ := newFramePair()
 
 	// A frame larger than maxFrameSize (10 MiB + 9) must be rejected.
 	// We don't actually allocate 10 MiB — just set the Size field.
@@ -725,9 +701,12 @@ func TestFrameRWWriteBoundAfterRaise(t *testing.T) {
 		Size:    maxFrameSize + 1,
 		Payload: bytesReader(nil),
 	}
-	err := rw.WriteMsg(msg)
+	err := writer.WriteMsg(msg)
 	if err == nil {
-		t.Error("expected WriteMsg to reject frame above maxFrameSize")
+		t.Fatal("expected WriteMsg to reject frame above maxFrameSize")
+	}
+	if !strings.Contains(err.Error(), "frame size") {
+		t.Fatalf("expected frame size error, got: %v", err)
 	}
 }
 
