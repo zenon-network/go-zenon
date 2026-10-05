@@ -53,9 +53,11 @@ type Manager interface {
 	Pop() error
 
 	// Rebase moves the stable floor of the manager to a new stable DB.
-	// Versions below the new stable height are discarded; versions
+	// Versions at or below the new stable height are discarded; versions
 	// above it are preserved but their overlay chains are rebuilt directly
 	// on top of the new stable DB by re-applying every pending patch.
+	// Rebasing onto the height the manager is already on is a fast path:
+	// only the stable DB is swapped, every version is left untouched.
 	// It is a no-op for managers that are their own stable store.
 	//
 	// Rebase returns an error if the new stable height is below the
