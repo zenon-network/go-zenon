@@ -250,18 +250,10 @@ func (m *memdbManager) Rebase(newStableDB DB) error {
 		}
 	}
 
-	// Advance the frontier identifier if the current frontier is at or
-	// below the new stable height.  Without this, a manager whose frontier
-	// was discarded by the rebase would return nil from Frontier().
-	if m.frontierIdentifier.Height <= newStableHeight {
-		m.frontierIdentifier = newStableIdentifier
-	}
-
-	// Capture pending versions before mutating maps.  A pending version is
-	// any version above the new stable height.  Head commits carry a
-	// m.previous link to the preceding head (or the old stable); intermediate
-	// batched commits share the same DB object as their batch's head and
-	// have no m.previous entry.
+	// Capture pending versions.  A pending version is any version above
+	// the new stable height.  Head commits carry a m.previous link to the
+	// preceding head (or the old stable); intermediate batched commits share
+	// the same DB object as their batch's head and have no m.previous entry.
 	type pendingVersion struct {
 		id      types.HashHeight
 		origDB  DB
@@ -284,20 +276,12 @@ func (m *memdbManager) Rebase(newStableDB DB) error {
 	}
 	sort.Slice(pending, func(i, j int) bool { return pending[i].id.Height < pending[j].id.Height })
 
-	// Discard committed versions; they are now served from the stable store.
-	for id := range m.versions {
-		if id.Height <= newStableHeight && id != newStableIdentifier {
-			delete(m.versions, id)
-			delete(m.previous, id)
-			delete(m.patches, id)
-		}
-	}
-
-	// Rebuild each pending version's overlay chain on top of the new stable
-	// DB.  Head commits are rebuilt by snapshotting from their (already
-	// rebuilt) previous version and replaying their stored patch.  Versions
-	// that shared the same original DB (batched commits) continue to share
-	// the same rebuilt DB, preserving the invariant established by Add.
+	// Phase 1: Validate and rebuild every pending version's overlay chain
+	// on top of the new stable DB without mutating the manager.  Head
+	// commits are rebuilt by snapshotting from their (already rebuilt)
+	// previous version and replaying their stored patch.  Versions that
+	// shared the same original DB (batched commits) continue to share the
+	// same rebuilt DB, preserving the invariant established by Add.
 	rebuilt := make(map[types.HashHeight]DB, len(pending))
 	rebuiltByOrig := make(map[DB]DB, len(pending))
 	var deferred []pendingVersion
@@ -311,9 +295,6 @@ func (m *memdbManager) Rebase(newStableDB DB) error {
 		var base DB
 		if p.prev.Height <= newStableHeight {
 			base = newStableDB
-			// The head is being re-parented onto the new stable; record
-			// the link so a later Pop() does not land on a deleted id.
-			m.previous[p.id] = newStableIdentifier
 		} else {
 			base = rebuilt[p.prev]
 			if base == nil {
@@ -332,19 +313,51 @@ func (m *memdbManager) Rebase(newStableDB DB) error {
 		}
 		rebuilt[p.id] = newDB
 		rebuiltByOrig[p.origDB] = newDB
-		m.versions[p.id] = newDB
 	}
 
+	// Validate deferred intermediates before any mutation.
 	for _, p := range deferred {
-		if newDB, ok := rebuiltByOrig[p.origDB]; ok {
-			m.versions[p.id] = newDB
-		} else {
+		if _, ok := rebuiltByOrig[p.origDB]; !ok {
 			// The batch head that shared this DB was popped before Rebase;
-			// the intermediate is orphaned.  Remove it so no stale reference
-			// to the old DB survives.
-			delete(m.versions, p.id)
-			delete(m.patches, p.id)
+			// the intermediate is orphaned.  This is unreachable in
+			// practice because Pop already removes every intermediate
+			// that shares the popped DB.
+			return errors.Errorf(
+				"rebase: orphaned intermediate %v (batch head popped); no mutation has occurred",
+				p.id)
 		}
+	}
+
+	// Phase 2: All validation passed.  Mutate the manager.
+
+	// Advance the frontier identifier if the current frontier is at or
+	// below the new stable height.
+	if m.frontierIdentifier.Height <= newStableHeight {
+		m.frontierIdentifier = newStableIdentifier
+	}
+
+	// Discard committed versions; they are now served from the stable store.
+	for id := range m.versions {
+		if id.Height <= newStableHeight && id != newStableIdentifier {
+			delete(m.versions, id)
+			delete(m.previous, id)
+			delete(m.patches, id)
+		}
+	}
+
+	// Install rebuilt versions.
+	for id, newDB := range rebuilt {
+		m.versions[id] = newDB
+	}
+	for _, p := range pending {
+		if p.prev.Height <= newStableHeight && p.hasPrev {
+			// The head is being re-parented onto the new stable; record
+			// the link so a later Pop() does not land on a deleted id.
+			m.previous[p.id] = newStableIdentifier
+		}
+	}
+	for _, p := range deferred {
+		m.versions[p.id] = rebuiltByOrig[p.origDB]
 	}
 
 	// A fresh manager has no previous or patch for its stable; delete any
