@@ -35,7 +35,9 @@ const (
 	// looking after this many and answers with what it found, as it already
 	// does once the reply holds downloader.MaxBlockFetch blocks. It does not
 	// bound the work a found block costs (a momentum read plus one read per
-	// account block) or the size of the reply.
+	// account block). The size of the reply is capped separately by
+	// softResponseLimit (2 MB), which stops the handler once the encoded
+	// reply exceeds that limit.
 	//
 	// The value is twice the reply cap downloader.MaxBlockFetch, which
 	// TestMaxBlocksRequest_CoversEveryHonestRequester pins, so a request

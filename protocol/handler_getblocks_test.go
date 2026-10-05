@@ -304,9 +304,9 @@ func TestHandleGetBlocks_MixedRequestPastLimitIsAnsweredWithTheHitsSeen(t *testi
 // decoded, not distinct hashes, because every entry costs a store lookup
 // budget slot whether or not the hash repeats. With dedup (issue #124), the
 // repeat lookups are skipped but the budget is still consumed: a request that
-// names the same unknown hash MaxBlocksRequest+1 times is answered after
-// exactly MaxBlocksRequest decodes like any other oversized request, and the
-// single distinct hash is looked up once.
+// names the same unknown hash MaxBlocksRequest+1 times is still answered (not
+// dropped) with an empty reply, and the single distinct hash is looked up
+// exactly once.
 func TestHandleGetBlocks_DuplicateHashesCountTowardLimit(t *testing.T) {
 	chain := &lookupCountingChain{}
 
