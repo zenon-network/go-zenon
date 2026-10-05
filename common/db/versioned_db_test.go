@@ -698,8 +698,11 @@ func newMockBatchTransaction(seed int64, db DB, count int) *mockBatchTransaction
 // with commits, keeping exactly one pending block after each commit, and
 // asserts bounded retained overlay depth.
 //
-// Each cycle builds a fresh cumulative stable DB from all committed patches
-// so that earlier committed application state is carried forward.
+// Each cycle builds a fresh cumulative stable DB from only the actually
+// committed prefix so that committed and pending state are faithfully
+// separated: the stable DB never contains writes from a still-pending
+// patch.  A one-time Pop assertion verifies that pending-only writes
+// disappear after Pop.
 func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 	m := NewMemDBManager(NewMemDB()).(*memdbManager)
 
@@ -714,18 +717,77 @@ func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 	id2 := t2.commit.Identifier()
 	patch2 := m.GetPatch(id2)
 
-	// Interleaved pattern: commit one block, add one new block, repeat.
-	// After each commit there is exactly one pending block.
-	committedPatches := []Patch{patch1, patch2}
-	committedIDs := []types.HashHeight{id1, id2}
-	allCommitted := []Patch{patch1, patch2}
+	// committedPrefix accumulates only actually committed patches, used to
+	// build the cumulative stable DB.  The still-pending patch is tracked
+	// separately so it is never replayed into stable state.
+	committedPrefix := []Patch{patch1}
+	committedIDs := []types.HashHeight{id1}
+	pendingPatch := patch2
+
+	// One-time Pop assertion: after the first Rebase, pending-only writes
+	// must be visible before Pop and absent after it.
+	{
+		stableDB := NewMemDB()
+		common.DealWithErr(ApplyPatch(stableDB, patch1))
+		data := id1.Serialize()
+		common.DealWithErr(SetFrontier(stableDB, id1, data))
+		common.DealWithErr(m.Rebase(stableDB))
+
+		// Collect keys written exclusively by the pending patch.
+		committedPR := &patchRecorder{}
+		common.DealWithErr(patch1.Replay(committedPR))
+		committedKeys := make(map[string]bool)
+		for _, kv := range committedPR.puts {
+			committedKeys[string(kv.key)] = true
+		}
+		pendingPR := &patchRecorder{}
+		common.DealWithErr(patch2.Replay(pendingPR))
+
+		frontier := m.Frontier()
+		for _, kv := range pendingPR.puts {
+			if committedKeys[string(kv.key)] {
+				continue
+			}
+			val, err := frontier.Get(kv.key)
+			if err != nil {
+				t.Fatalf("pending-only key %x missing before Pop: %v", kv.key, err)
+			}
+			if !bytes.Equal(val, kv.value) {
+				t.Fatalf("pending-only key %x = %x before Pop, want %x",
+					kv.key, val, kv.value)
+			}
+		}
+
+		// Pop the pending block; pending-only writes must disappear.
+		common.DealWithErr(m.Pop())
+		poppedView := m.Frontier()
+		for _, kv := range pendingPR.puts {
+			if committedKeys[string(kv.key)] {
+				continue
+			}
+			has, err := poppedView.Has(kv.key)
+			if err != nil {
+				t.Fatalf("Has(%x) after Pop: %v", kv.key, err)
+			}
+			if has {
+				t.Fatalf("pending-only key %x still present after Pop", kv.key)
+			}
+		}
+
+		// Re-add a replacement pending block so the interleaved cycle can
+		// continue from the same state the original fixture produced.
+		tx := newMockTransaction(50, m.Frontier())
+		common.DealWithErr(m.Add(tx))
+		pendingPatch = m.GetPatch(tx.commit.Identifier())
+	}
 
 	for cycle := 0; cycle < 5; cycle++ {
 		// Commit the oldest pending block by building a fresh cumulative
-		// stable DB from all committed patches and rebasing to its height.
-		rebaseTo := committedIDs[0]
+		// stable DB from only the actually committed prefix.  The
+		// still-pending patch must NOT be replayed into the stable DB.
+		rebaseTo := committedIDs[len(committedIDs)-1]
 		stableDB := NewMemDB()
-		for _, p := range allCommitted {
+		for _, p := range committedPrefix {
 			common.DealWithErr(ApplyPatch(stableDB, p))
 		}
 		data := rebaseTo.Serialize()
@@ -734,7 +796,7 @@ func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 		common.DealWithErr(m.Rebase(stableDB))
 
 		// After rebase, exactly one block should be pending (the one that was
-		// at height rebaseTo+1).  Add a replacement to keep the chain going.
+		// at height rebaseTo+1).
 		frontierID := GetFrontierIdentifier(m.Frontier())
 		depth := overlayChainDepth(m.versions[frontierID])
 
@@ -746,14 +808,12 @@ func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 		}
 
 		// Verify representative committed key/value bytes are present in the
-		// frontier DB.  Replay the committed patch to pick keys that were
-		// written by the block we just committed and are NOT overwritten by
-		// the pending block (the pending overlay may legitimately replace
-		// values for keys it also writes).
+		// frontier DB.  Replay the last committed patch to pick keys that are
+		// NOT overwritten by the pending block.
 		pr := &patchRecorder{}
-		common.DealWithErr(committedPatches[0].Replay(pr))
+		common.DealWithErr(committedPrefix[len(committedPrefix)-1].Replay(pr))
 		pendingPR := &patchRecorder{}
-		common.DealWithErr(committedPatches[1].Replay(pendingPR))
+		common.DealWithErr(pendingPatch.Replay(pendingPR))
 		pendingKeys := make(map[string]bool)
 		for _, kv := range pendingPR.puts {
 			pendingKeys[string(kv.key)] = true
@@ -784,17 +844,20 @@ func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 			}
 		}
 
-		// Add a new block on top of the current frontier.
+		// Add a new block on top of the current frontier.  The pending patch
+		// becomes part of the committed prefix for the next cycle; the new
+		// block is the new pending one.
+		pendingID := GetFrontierIdentifier(m.Frontier())
 		tx := newMockTransaction(int64(100+cycle), m.Frontier())
 		common.DealWithErr(m.Add(tx))
 		newPatch := m.GetPatch(tx.commit.Identifier())
-		committedPatches = append(committedPatches, newPatch)
-		allCommitted = append(allCommitted, newPatch)
-		committedIDs = append(committedIDs, tx.commit.Identifier())
 
-		// Remove the committed entry from our tracking.
-		committedPatches = committedPatches[1:]
-		committedIDs = committedIDs[1:]
+		// The currently pending patch is now committed.
+		committedPrefix = append(committedPrefix, pendingPatch)
+		committedIDs = append(committedIDs, pendingID)
+
+		// The newly added block is the new pending patch.
+		pendingPatch = newPatch
 	}
 }
 
@@ -1218,6 +1281,81 @@ func TestRebase_RepeatedReplacementBatches(t *testing.T) {
 	}
 }
 
+// managerSnapshot captures the internal state of a memdbManager for
+// no-mutation assertions after an erroring Rebase.
+type managerSnapshot struct {
+	versions           map[types.HashHeight]DB
+	previous           map[types.HashHeight]types.HashHeight
+	patches            map[types.HashHeight]Patch
+	frontierIdentifier types.HashHeight
+	stableIdentifier   types.HashHeight
+}
+
+func snapshotManager(m *memdbManager) *managerSnapshot {
+	m.changes.Lock()
+	defer m.changes.Unlock()
+	snap := &managerSnapshot{
+		versions:           make(map[types.HashHeight]DB, len(m.versions)),
+		previous:           make(map[types.HashHeight]types.HashHeight, len(m.previous)),
+		patches:            make(map[types.HashHeight]Patch, len(m.patches)),
+		frontierIdentifier: m.frontierIdentifier,
+		stableIdentifier:   m.stableIdentifier,
+	}
+	for k, v := range m.versions {
+		snap.versions[k] = v
+	}
+	for k, v := range m.previous {
+		snap.previous[k] = v
+	}
+	for k, v := range m.patches {
+		snap.patches[k] = v
+	}
+	return snap
+}
+
+// assertNoMutation verifies that the manager's internal state is identical
+// to the snapshot taken before an erroring Rebase.
+func assertNoMutation(t *testing.T, m *memdbManager, snap *managerSnapshot) {
+	t.Helper()
+	m.changes.Lock()
+	defer m.changes.Unlock()
+	if m.frontierIdentifier != snap.frontierIdentifier {
+		t.Fatalf("frontierIdentifier changed: %v before, %v after",
+			snap.frontierIdentifier, m.frontierIdentifier)
+	}
+	if m.stableIdentifier != snap.stableIdentifier {
+		t.Fatalf("stableIdentifier changed: %v before, %v after",
+			snap.stableIdentifier, m.stableIdentifier)
+	}
+	if len(m.versions) != len(snap.versions) {
+		t.Fatalf("versions map changed: %d entries before, %d after",
+			len(snap.versions), len(m.versions))
+	}
+	for k, v := range snap.versions {
+		if m.versions[k] != v {
+			t.Fatalf("versions[%v] changed: %p before, %p after", k, v, m.versions[k])
+		}
+	}
+	if len(m.previous) != len(snap.previous) {
+		t.Fatalf("previous map changed: %d entries before, %d after",
+			len(snap.previous), len(m.previous))
+	}
+	for k, v := range snap.previous {
+		if m.previous[k] != v {
+			t.Fatalf("previous[%v] changed: %v before, %v after", k, v, m.previous[k])
+		}
+	}
+	if len(m.patches) != len(snap.patches) {
+		t.Fatalf("patches map changed: %d entries before, %d after",
+			len(snap.patches), len(m.patches))
+	}
+	for k, v := range snap.patches {
+		if m.patches[k] != v {
+			t.Fatalf("patches[%v] changed: %p before, %p after", k, v, m.patches[k])
+		}
+	}
+}
+
 // TestRebase_Table covers six discriminating scenarios for Rebase.  Each
 // sub-test asserts the specific outcome for its scenario; not every guard
 // in Rebase has a unique sub-test that fails only when that guard is
@@ -1418,6 +1556,26 @@ func TestRebase_Table(t *testing.T) {
 		if m.Frontier() == nil {
 			t.Fatal("Frontier() returned nil after rejected rebase — manager is wedged")
 		}
+	})
+
+	t.Run("rebase to unknown height above frontier with pending block", func(t *testing.T) {
+		m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+		// Add one pending block at h1.
+		tA := newMockTransaction(1, m.Frontier())
+		common.DealWithErr(m.Add(tA))
+
+		// Build a stable DB at h5 — above the frontier (h1) and not a
+		// known version.  Rebase must reject it.
+		highStable := NewMemDB()
+		highID := types.HashHeight{Height: 5, Hash: types.NewHash([]byte("unknown-height-5-000000000000000"))}
+		common.DealWithErr(SetFrontier(highStable, highID, []byte("unknown")))
+
+		snap := snapshotManager(m)
+		if err := m.Rebase(highStable); err == nil {
+			t.Fatal("expected error for rebase to unknown height above frontier with pending block")
+		}
+		assertNoMutation(t, m, snap)
 	})
 }
 

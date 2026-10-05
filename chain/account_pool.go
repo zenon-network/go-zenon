@@ -530,6 +530,31 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 			}
 		}
 
+		// Pop the DB manager so its frontier matches the pruned blocks map.
+		// Without this the map can end at height 1 while the DB frontier
+		// remains at height 3, leaving orphaned versions whose application
+		// writes are still visible through Frontier().
+		if invalidFrom != 0 {
+			for {
+				frontier := db.GetFrontierIdentifier(oldManager.db.Frontier())
+				if frontier.Height < invalidFrom {
+					break
+				}
+				if err := oldManager.db.Pop(); err != nil {
+					log.Error("failed to pop invalid-MA suffix from DB manager",
+						"address", address,
+						"frontier", frontier,
+						"invalid-from", invalidFrom,
+						"reason", err)
+					delete(ap.managers, address)
+					break
+				}
+			}
+			if _, ok := ap.managers[address]; !ok {
+				continue // Pop failed; manager was dropped above
+			}
+		}
+
 		// Rebase left the DB manager reusable but this address's manager still
 		// describes the pre-rollback state, so publish a fresh one over the
 		// rebased DB. Rebuilt addresses therefore hold a different manager
