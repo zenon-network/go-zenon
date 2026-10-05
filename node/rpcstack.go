@@ -92,8 +92,15 @@ func (h *httpServer) setListenAddr(host string, port int) error {
 		return fmt.Errorf("HTTP server already running on %s", h.endpoint)
 	}
 
+	// Build before mutating: on a malformed host the server must keep its
+	// previous address rather than end up half-configured.
+	endpoint, err := joinHostPort(host, port)
+	if err != nil {
+		return fmt.Errorf("invalid listen address: %w", err)
+	}
+
 	h.host, h.port = host, port
-	h.endpoint = fmt.Sprintf("%s:%d", host, port)
+	h.endpoint = endpoint
 	return nil
 }
 

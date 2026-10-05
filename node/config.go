@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -351,15 +353,69 @@ func (c *Config) makeNetConfig() *p2p.Net {
 		ListenPort:        c.Net.ListenPort,
 	}
 }
+
+// joinHostPort builds a host:port listen address, handling IPv6 literals
+// in both raw and pre-bracketed form.
+//
+// Malformed bracketed input (e.g. "[]", "[[]]", "[[::]]", "[0.0.0.0",
+// "0.0.0.0]") is rejected with an error.
+// net.SplitHostPort("[]:35997") returns host "" with a nil error, so an
+// explicit error is the only thing callers can act on.
+func joinHostPort(host string, port int) (string, error) {
+	normalized, ok := normalizeListenHost(host)
+	if !ok {
+		return "", fmt.Errorf("malformed listen host %q", host)
+	}
+	return net.JoinHostPort(normalized, strconv.Itoa(port)), nil
+}
+
+// normalizeListenHost strips at most one enclosing bracket pair from a
+// pre-bracketed IPv6 literal. It reports ok=false for empty bracketed ("[]"),
+// unbalanced or nested input, so that such configuration is rejected rather
+// than silently repaired into a valid address.
+func normalizeListenHost(host string) (string, bool) {
+	if host == "" {
+		return "", true
+	}
+	if strings.HasPrefix(host, "[") {
+		if !strings.HasSuffix(host, "]") {
+			return "", false
+		}
+		inner := host[1 : len(host)-1]
+		// "[]" and "[[]]" strip to an empty or bracket-bearing interior.
+		// Returning "" would join to ":port", which net.Listen resolves as
+		// a wildcard bind on every interface, so both must fail closed.
+		if inner == "" || strings.ContainsAny(inner, "[]") {
+			return "", false
+		}
+		return inner, true
+	}
+	if strings.ContainsAny(host, "[]") {
+		return "", false
+	}
+	return host, true
+}
+
 func (c *Config) HTTPEndpoint() string {
 	if c.RPC.HTTPHost == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s:%d", c.RPC.HTTPHost, c.RPC.HTTPPort)
+	endpoint, err := joinHostPort(c.RPC.HTTPHost, c.RPC.HTTPPort)
+	if err != nil {
+		// Display helper with no error path. A malformed host yields no
+		// endpoint rather than a wrong one; callers that must not accept a
+		// bad configuration use setListenAddr, which propagates.
+		return ""
+	}
+	return endpoint
 }
 func (c *Config) WSEndpoint() string {
 	if c.RPC.WSHost == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s:%d", c.RPC.WSHost, c.RPC.WSPort)
+	endpoint, err := joinHostPort(c.RPC.WSHost, c.RPC.WSPort)
+	if err != nil {
+		return ""
+	}
+	return endpoint
 }
