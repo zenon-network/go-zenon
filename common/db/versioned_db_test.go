@@ -370,10 +370,10 @@ func rawOverlayDepth(d db) int {
 	return 0
 }
 
-// TestRebase_SevensOverlayChain verifies that after Rebase the pending
+// TestRebase_SeversOverlayChain verifies that after Rebase the pending
 // versions' mergedDb chains are rebuilt directly on the new stable DB and
 // no longer reference deleted committed overlays.
-func TestRebase_SevensOverlayChain(t *testing.T) {
+func TestRebase_SeversOverlayChain(t *testing.T) {
 	// Build: stable(h0) → A(h1) → B(h2) → C(h3)
 	// Rebase to h1: B and C are pending; their chains must sit on the new
 	// stable DB, not on A's overlay.
