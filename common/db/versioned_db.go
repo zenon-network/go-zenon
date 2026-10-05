@@ -54,14 +54,17 @@ type Manager interface {
 
 	// Rebase moves the stable floor of the manager to a new stable DB.
 	// Versions at or below the new stable height are discarded; versions
-	// above it are preserved.  This lets a caller advance the stable
-	// reference without re-creating the manager and re-applying patches.
+	// above it are preserved but their overlay chains are rebuilt directly
+	// on top of the new stable DB by re-applying every pending patch.
 	// It is a no-op for managers that are their own stable store.
 	//
 	// Rebase returns an error if the new stable DB is not on the same
 	// chain as the manager's current state (i.e. its frontier hash does
-	// not match the manager's version at that height), or if any pending
-	// version cannot be rebuilt on the new stable.
+	// not match the manager's version at that height), if the new stable
+	// height is below the current stable height, or if any pending
+	// version cannot be rebuilt on the new stable.  No mutation has
+	// occurred on error; the caller should replace the address's manager
+	// with NewMemDBManager(stable) and re-apply patches from that point.
 	Rebase(newStableDB DB) error
 
 	Stop() error
@@ -197,26 +200,52 @@ func (m *memdbManager) Pop() error {
 // Rebase moves the stable floor of the manager to a new stable DB.
 // Versions at or below the new stable height are discarded; versions
 // above it are preserved but their overlay chains are rebuilt directly
-// on top of the new stable DB.
+// on top of the new stable DB by re-applying every pending patch.
 //
 // Without the rebuild, each pending version's mergedDb would retain a
 // reference to the deleted committed overlay as its read-through base,
 // so the overlay chain would grow by one level per committed block and
 // never shrink, causing unbounded memory growth across momentums.
+//
+// m.stableDB is write-only: it is never read by any manager method.
 func (m *memdbManager) Rebase(newStableDB DB) error {
 	m.changes.Lock()
 	defer m.changes.Unlock()
+
+	if newStableDB == nil {
+		return errors.Errorf("rebase: new stable DB is nil; no mutation has occurred")
+	}
+
 	newStableIdentifier := GetFrontierIdentifier(newStableDB)
 	newStableHeight := newStableIdentifier.Height
+
+	// Reject a rebase below the current stable height.  Without this guard
+	// the frontier stays at the old (higher) height while stable is now
+	// lower, so Frontier() returns nil, Add fails, and Pop fails.
+	// No mutation has occurred.
+	if newStableHeight < m.stableIdentifier.Height {
+		return errors.Errorf(
+			"rebase: new stable height %d is below current stable height %d; no mutation has occurred",
+			newStableHeight, m.stableIdentifier.Height)
+	}
+
+	// Fast path: the new stable is the same as the current stable.  Just
+	// update stableDB and return; no need to re-snapshot and re-apply all
+	// pending patches.
+	if newStableIdentifier == m.stableIdentifier {
+		m.stableDB = newStableDB
+		return nil
+	}
 
 	// Validate that the new stable DB is on the same chain: if the manager
 	// already has any version at the new stable height, its hash must match.
 	// A forked stable at the same height with a different hash would
 	// silently re-parent pending heads onto a different chain.
+	// No mutation has occurred.
 	for id := range m.versions {
 		if id.Height == newStableHeight && id != newStableIdentifier {
 			return errors.Errorf(
-				"rebase: new stable frontier %v conflicts with existing version %v at same height",
+				"rebase: new stable frontier %v conflicts with existing version %v at same height; no mutation has occurred",
 				newStableIdentifier, id)
 		}
 	}
@@ -289,13 +318,17 @@ func (m *memdbManager) Rebase(newStableDB DB) error {
 			base = rebuilt[p.prev]
 			if base == nil {
 				return errors.Errorf(
-					"rebase: pending version %v previous %v not rebuilt",
+					"rebase: pending version %v previous %v not rebuilt; no mutation has occurred",
 					p.id, p.prev)
 			}
 		}
 		newDB := base.Snapshot()
 		if p.patch != nil {
-			common.DealWithErr(newDB.Apply(p.patch))
+			if err := newDB.Apply(p.patch); err != nil {
+				return errors.Errorf(
+					"rebase: failed to apply patch for pending version %v: %v; no mutation has occurred",
+					p.id, err)
+			}
 		}
 		rebuilt[p.id] = newDB
 		rebuiltByOrig[p.origDB] = newDB

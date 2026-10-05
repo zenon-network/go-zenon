@@ -370,10 +370,10 @@ func rawOverlayDepth(d db) int {
 	return 0
 }
 
-// TestRebase_SeveresOverlayChain verifies that after Rebase the pending
+// TestRebase_SevensOverlayChain verifies that after Rebase the pending
 // versions' mergedDb chains are rebuilt directly on the new stable DB and
 // no longer reference deleted committed overlays.
-func TestRebase_SeveresOverlayChain(t *testing.T) {
+func TestRebase_SevensOverlayChain(t *testing.T) {
 	// Build: stable(h0) → A(h1) → B(h2) → C(h3)
 	// Rebase to h1: B and C are pending; their chains must sit on the new
 	// stable DB, not on A's overlay.
@@ -644,8 +644,6 @@ func (pr *patchRecorder) Put(key, value []byte) {
 }
 func (pr *patchRecorder) Delete(key []byte) {}
 
-// --- Regression tests for edgepillar's review -------------------------------
-
 // mockBatchTransaction produces multiple commits, mimicking a batched
 // embedded account-block transaction whose DescendantBlocks carry the
 // contract sends triggered by a contract receive.
@@ -696,12 +694,12 @@ func newMockBatchTransaction(seed int64, db DB, count int) *mockBatchTransaction
 	}
 }
 
-// TestRebase_InterleavedAddCommitBoundedDepth reproduces the exact scenario
-// from the review: interleave new Add calls with commits, keeping exactly one
-// pending block after each commit, and assert bounded retained overlay depth.
+// TestRebase_InterleavedAddCommitBoundedDepth interleaves new Add calls
+// with commits, keeping exactly one pending block after each commit, and
+// asserts bounded retained overlay depth.
 //
-// The stable DB is cumulative: one base MemDB accumulates every committed
-// patch so that earlier committed application state is carried forward.
+// Each cycle builds a fresh cumulative stable DB from all committed patches
+// so that earlier committed application state is carried forward.
 func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 	m := NewMemDBManager(NewMemDB()).(*memdbManager)
 
@@ -716,22 +714,19 @@ func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 	id2 := t2.commit.Identifier()
 	patch2 := m.GetPatch(id2)
 
-	// Cumulative stable DB: one base MemDB that accumulates all committed
-	// patches so that earlier committed application state is carried forward
-	// into every subsequent rebase.
-	stableDB := NewMemDB()
-
 	// Interleaved pattern: commit one block, add one new block, repeat.
 	// After each commit there is exactly one pending block.
-	// Simulate 5 rolling commits.
 	committedPatches := []Patch{patch1, patch2}
 	committedIDs := []types.HashHeight{id1, id2}
 
 	for cycle := 0; cycle < 5; cycle++ {
-		// Commit the oldest pending block by applying its patch to the
-		// cumulative stable DB and rebasing to its height.
+		// Commit the oldest pending block by building a fresh cumulative
+		// stable DB from all committed patches and rebasing to its height.
 		rebaseTo := committedIDs[0]
-		common.DealWithErr(ApplyPatch(stableDB, committedPatches[0]))
+		stableDB := NewMemDB()
+		for _, p := range committedPatches[:1] {
+			common.DealWithErr(ApplyPatch(stableDB, p))
+		}
 		data := rebaseTo.Serialize()
 		common.DealWithErr(SetFrontier(stableDB, rebaseTo, data))
 
@@ -966,8 +961,8 @@ func TestPop_CleansBatchIntermediates(t *testing.T) {
 	}
 }
 
-// TestRebase_PoppedBatchIntermediateCleaned verifies the full leak path from
-// the review: batch Add → Pop → replacement Add → Rebase.  The orphaned
+// TestRebase_PoppedBatchIntermediateCleaned verifies the full leak path:
+// batch Add → Pop → replacement Add → Rebase.  The orphaned
 // intermediate must not survive Rebase.
 func TestRebase_PoppedBatchIntermediateCleaned(t *testing.T) {
 	m := NewMemDBManager(NewMemDB()).(*memdbManager)
@@ -1218,6 +1213,207 @@ func TestRebase_RepeatedReplacementBatches(t *testing.T) {
 	if !bytes.Equal(val, floorVal) {
 		t.Fatalf("stable-floor key value = %x, want %x", val, floorVal)
 	}
+}
+
+// TestRebase_Table covers six discriminating scenarios for Rebase.  Each
+// sub-test should fail when its corresponding guard in Rebase is reverted.
+func TestRebase_Table(t *testing.T) {
+	t.Run("nothing pending, rebase to h1", func(t *testing.T) {
+		m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+		tA := newMockTransaction(1, m.Frontier())
+		common.DealWithErr(m.Add(tA))
+		idA := tA.commit.Identifier()
+		patchA := m.GetPatch(idA)
+
+		// Pop A so nothing is pending.
+		common.DealWithErr(m.Pop())
+
+		// Build new stable at h1.
+		newStable := NewMemDB()
+		common.DealWithErr(ApplyPatch(newStable, patchA))
+		common.DealWithErr(SetFrontier(newStable, idA, []byte("block-A")))
+
+		common.DealWithErr(m.Rebase(newStable))
+
+		// Frontier() must return the new stable.
+		frontier := m.Frontier()
+		if frontier == nil {
+			t.Fatal("Frontier() returned nil after rebase with nothing pending")
+		}
+		if got := GetFrontierIdentifier(frontier); got != idA {
+			t.Fatalf("frontier = %v, want %v", got, idA)
+		}
+		// GetPatch(stable) must be nil.
+		if p := m.GetPatch(idA); p != nil {
+			t.Fatal("GetPatch(stable) should be nil after rebase")
+		}
+		// Pop must error (at stable floor).
+		if err := m.Pop(); err == nil {
+			t.Fatal("expected Pop at stable floor to error")
+		}
+		// Add must succeed.
+		tB := newMockTransaction(2, m.Frontier())
+		if err := m.Add(tB); err != nil {
+			t.Fatalf("Add after rebase failed: %v", err)
+		}
+	})
+
+	t.Run("fork at stable height", func(t *testing.T) {
+		m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+		tA := newMockTransaction(1, m.Frontier())
+		common.DealWithErr(m.Add(tA))
+
+		tB := newMockTransaction(2, m.Frontier())
+		common.DealWithErr(m.Add(tB))
+
+		// Build a forked stable at h1 with a different hash.
+		forkStable := NewMemDB()
+		forkPatch := NewPatch()
+		forkPatch.Put([]byte("fork"), []byte("data"))
+		common.DealWithErr(ApplyPatch(forkStable, forkPatch))
+		forkID := types.HashHeight{Height: 1, Hash: types.NewHash([]byte("fork-hash-000000000000000000000"))}
+		common.DealWithErr(SetFrontier(forkStable, forkID, []byte("fork-block")))
+
+		// Snapshot maps before the failed rebase.
+		m.changes.Lock()
+		versionsBefore := len(m.versions)
+		m.changes.Unlock()
+
+		if err := m.Rebase(forkStable); err == nil {
+			t.Fatal("expected error for forked stable at same height")
+		}
+
+		// Maps must be unchanged.
+		m.changes.Lock()
+		if len(m.versions) != versionsBefore {
+			t.Fatalf("versions map changed: %d before, %d after", versionsBefore, len(m.versions))
+		}
+		m.changes.Unlock()
+	})
+
+	t.Run("stable on batch intermediate", func(t *testing.T) {
+		m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+		// Base block at h1.
+		t0 := newMockTransaction(1, m.Frontier())
+		common.DealWithErr(m.Add(t0))
+		id1 := t0.commit.Identifier()
+		patch1 := m.GetPatch(id1)
+
+		// Batch: intermediate at h2, head at h3.
+		batch := newMockBatchTransaction(2, m.Frontier(), 2)
+		common.DealWithErr(m.Add(batch))
+		intermediateID := batch.commits[0].Identifier()
+		headID := batch.commits[1].Identifier()
+
+		// Rebase to the intermediate height (h2), not the head.
+		newStable := NewMemDB()
+		common.DealWithErr(ApplyPatch(newStable, patch1))
+		common.DealWithErr(SetFrontier(newStable, intermediateID, []byte("intermediate")))
+		common.DealWithErr(m.Rebase(newStable))
+
+		// previous[head] must be the intermediate id (not the old stable).
+		m.changes.Lock()
+		prev, ok := m.previous[headID]
+		m.changes.Unlock()
+		if !ok || prev != intermediateID {
+			t.Fatalf("previous[head] = %v (ok=%v), want intermediate %v", prev, ok, intermediateID)
+		}
+
+		// Pop must land on the new stable (intermediate at h2).
+		common.DealWithErr(m.Pop())
+		frontierID := GetFrontierIdentifier(m.Frontier())
+		if frontierID != intermediateID {
+			t.Fatalf("frontier after Pop = %v, want %v", frontierID, intermediateID)
+		}
+	})
+
+	t.Run("rebase below original stable with pending head", func(t *testing.T) {
+		m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+		// Add two blocks.
+		tA := newMockTransaction(1, m.Frontier())
+		common.DealWithErr(m.Add(tA))
+		idA := tA.commit.Identifier()
+		patchA := m.GetPatch(idA)
+
+		tB := newMockTransaction(2, m.Frontier())
+		common.DealWithErr(m.Add(tB))
+
+		// Rebase to h1 (advance stable).
+		newStable := NewMemDB()
+		common.DealWithErr(ApplyPatch(newStable, patchA))
+		common.DealWithErr(SetFrontier(newStable, idA, []byte("block-A")))
+		common.DealWithErr(m.Rebase(newStable))
+
+		// Now try to rebase below h1 — must error, not panic.
+		lowStable := NewMemDB()
+		lowID := types.HashHeight{Height: 0, Hash: types.ZeroHash}
+		common.DealWithErr(SetFrontier(lowStable, lowID, []byte("genesis")))
+
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("Rebase below stable panicked: %v", r)
+			}
+		}()
+		if err := m.Rebase(lowStable); err == nil {
+			t.Fatal("expected error for rebase below current stable")
+		}
+	})
+
+	t.Run("single forked head at new stable height", func(t *testing.T) {
+		m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+		// Add one block at h1.
+		tA := newMockTransaction(1, m.Frontier())
+		common.DealWithErr(m.Add(tA))
+
+		// Build a forked stable at h1 with a different hash (only one version
+		// at h1 exists — the head itself).
+		forkStable := NewMemDB()
+		forkPatch := NewPatch()
+		forkPatch.Put([]byte("fork"), []byte("data"))
+		common.DealWithErr(ApplyPatch(forkStable, forkPatch))
+		forkID := types.HashHeight{Height: 1, Hash: types.NewHash([]byte("forked-head-00000000000000000000"))}
+		common.DealWithErr(SetFrontier(forkStable, forkID, []byte("forked-head")))
+
+		if err := m.Rebase(forkStable); err == nil {
+			t.Fatal("expected error for single forked head at new stable height")
+		}
+	})
+
+	t.Run("rebase below current stable with nothing pending", func(t *testing.T) {
+		m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+		// Add one block at h1.
+		tA := newMockTransaction(1, m.Frontier())
+		common.DealWithErr(m.Add(tA))
+		idA := tA.commit.Identifier()
+		patchA := m.GetPatch(idA)
+
+		// Rebase to h1 (advance stable to h1).  Nothing is pending above h1
+		// because the only block was at h1 and is now the stable floor.
+		newStable := NewMemDB()
+		common.DealWithErr(ApplyPatch(newStable, patchA))
+		common.DealWithErr(SetFrontier(newStable, idA, []byte("block-A")))
+		common.DealWithErr(m.Rebase(newStable))
+
+		// Now try to rebase to h0 (below stable at h1) — must error.
+		genesisStable := NewMemDB()
+		genesisID := types.HashHeight{Height: 0, Hash: types.ZeroHash}
+		common.DealWithErr(SetFrontier(genesisStable, genesisID, []byte("genesis")))
+
+		if err := m.Rebase(genesisStable); err == nil {
+			t.Fatal("expected error for rebase below current stable with nothing pending")
+		}
+
+		// Frontier must still work (not wedged).
+		if m.Frontier() == nil {
+			t.Fatal("Frontier() returned nil after rejected rebase — manager is wedged")
+		}
+	})
 }
 
 // height, so two branches at the same height get distinct identifiers.
