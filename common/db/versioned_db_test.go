@@ -718,13 +718,14 @@ func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 	// After each commit there is exactly one pending block.
 	committedPatches := []Patch{patch1, patch2}
 	committedIDs := []types.HashHeight{id1, id2}
+	allCommitted := []Patch{patch1, patch2}
 
 	for cycle := 0; cycle < 5; cycle++ {
 		// Commit the oldest pending block by building a fresh cumulative
 		// stable DB from all committed patches and rebasing to its height.
 		rebaseTo := committedIDs[0]
 		stableDB := NewMemDB()
-		for _, p := range committedPatches[:1] {
+		for _, p := range allCommitted {
 			common.DealWithErr(ApplyPatch(stableDB, p))
 		}
 		data := rebaseTo.Serialize()
@@ -786,7 +787,9 @@ func TestRebase_InterleavedAddCommitBoundedDepth(t *testing.T) {
 		// Add a new block on top of the current frontier.
 		tx := newMockTransaction(int64(100+cycle), m.Frontier())
 		common.DealWithErr(m.Add(tx))
-		committedPatches = append(committedPatches, m.GetPatch(tx.commit.Identifier()))
+		newPatch := m.GetPatch(tx.commit.Identifier())
+		committedPatches = append(committedPatches, newPatch)
+		allCommitted = append(allCommitted, newPatch)
 		committedIDs = append(committedIDs, tx.commit.Identifier())
 
 		// Remove the committed entry from our tracking.
@@ -1216,7 +1219,9 @@ func TestRebase_RepeatedReplacementBatches(t *testing.T) {
 }
 
 // TestRebase_Table covers six discriminating scenarios for Rebase.  Each
-// sub-test should fail when its corresponding guard in Rebase is reverted.
+// sub-test asserts the specific outcome for its scenario; not every guard
+// in Rebase has a unique sub-test that fails only when that guard is
+// reverted (some error paths overlap).
 func TestRebase_Table(t *testing.T) {
 	t.Run("nothing pending, rebase to h1", func(t *testing.T) {
 		m := NewMemDBManager(NewMemDB()).(*memdbManager)
@@ -1416,6 +1421,68 @@ func TestRebase_Table(t *testing.T) {
 	})
 }
 
+// TestRebase_AllPendingCommitted covers the most common Rebase: every
+// pending block committed with the new stable equal to the frontier.
+func TestRebase_AllPendingCommitted(t *testing.T) {
+	m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+	// Add three blocks.
+	t1 := newMockTransaction(1, m.Frontier())
+	common.DealWithErr(m.Add(t1))
+	id1 := t1.commit.Identifier()
+	patch1 := m.GetPatch(id1)
+
+	t2 := newMockTransaction(2, m.Frontier())
+	common.DealWithErr(m.Add(t2))
+	id2 := t2.commit.Identifier()
+	patch2 := m.GetPatch(id2)
+
+	t3 := newMockTransaction(3, m.Frontier())
+	common.DealWithErr(m.Add(t3))
+	id3 := t3.commit.Identifier()
+	patch3 := m.GetPatch(id3)
+
+	// Build a new stable DB that includes all three blocks.
+	newStable := NewMemDB()
+	common.DealWithErr(ApplyPatch(newStable, patch1))
+	common.DealWithErr(ApplyPatch(newStable, patch2))
+	common.DealWithErr(ApplyPatch(newStable, patch3))
+	common.DealWithErr(SetFrontier(newStable, id3, []byte("block-3")))
+
+	common.DealWithErr(m.Rebase(newStable))
+
+	// Frontier() must return the new stable identifier.
+	frontier := m.Frontier()
+	if frontier == nil {
+		t.Fatal("Frontier() returned nil after rebase with all pending committed")
+	}
+	if got := GetFrontierIdentifier(frontier); got != id3 {
+		t.Fatalf("frontier = %v, want %v", got, id3)
+	}
+
+	// Pop() must return an error (nothing to pop).
+	if err := m.Pop(); err == nil {
+		t.Fatal("Pop() should return error after rebase with all pending committed")
+	}
+
+	// GetPatch(stable) must return nil.
+	if p := m.GetPatch(id3); p != nil {
+		t.Fatal("GetPatch(stable) should be nil after rebase")
+	}
+
+	// Add on top of the new stable must succeed.
+	t4 := newMockTransaction(4, m.Frontier())
+	if err := m.Add(t4); err != nil {
+		t.Fatalf("Add on top of new stable failed: %v", err)
+	}
+	id4 := t4.commit.Identifier()
+	if got := GetFrontierIdentifier(m.Frontier()); got != id4 {
+		t.Fatalf("frontier after Add = %v, want %v", got, id4)
+	}
+}
+
+// keyedTransaction builds a one-commit transaction on top of the frontier of
+// db that writes a single key. The commit hash covers the write and the
 // height, so two branches at the same height get distinct identifiers.
 func keyedTransaction(db DB, key, value string) *mockTransaction {
 	frontier := GetFrontierIdentifier(db)

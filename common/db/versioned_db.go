@@ -53,18 +53,18 @@ type Manager interface {
 	Pop() error
 
 	// Rebase moves the stable floor of the manager to a new stable DB.
-	// Versions at or below the new stable height are discarded; versions
+	// Versions below the new stable height are discarded; versions
 	// above it are preserved but their overlay chains are rebuilt directly
 	// on top of the new stable DB by re-applying every pending patch.
 	// It is a no-op for managers that are their own stable store.
 	//
-	// Rebase returns an error if the new stable DB is not on the same
-	// chain as the manager's current state (i.e. its frontier hash does
-	// not match the manager's version at that height), if the new stable
-	// height is below the current stable height, or if any pending
-	// version cannot be rebuilt on the new stable.  No mutation has
-	// occurred on error; the caller should replace the address's manager
-	// with NewMemDBManager(stable) and re-apply patches from that point.
+	// Rebase returns an error if the new stable height is below the
+	// current stable height, if a different version exists at the new
+	// stable height (fork), if the new stable is above the frontier and
+	// is not a known version, or if any pending version cannot be rebuilt
+	// on the new stable.  No mutation has occurred on error; the caller
+	// should replace the address's manager with NewMemDBManager(stable)
+	// and re-apply patches from that point.
 	Rebase(newStableDB DB) error
 
 	Stop() error
@@ -247,6 +247,22 @@ func (m *memdbManager) Rebase(newStableDB DB) error {
 			return errors.Errorf(
 				"rebase: new stable frontier %v conflicts with existing version %v at same height; no mutation has occurred",
 				newStableIdentifier, id)
+		}
+	}
+
+	// Reject a rebase to an unknown height above the frontier when
+	// pending state exists.  Without this check any DB can be installed
+	// as stable, silently discarding all pending versions.  At or below
+	// the frontier the same-height conflict check above already guards
+	// the chain; above the frontier with pending state (frontier !=
+	// stable) the new stable must be a version the manager already
+	// knows.  When frontier == stable there is no pending state to lose
+	// and the rebase is safe.
+	if newStableHeight > m.frontierIdentifier.Height && m.frontierIdentifier != m.stableIdentifier {
+		if _, ok := m.versions[newStableIdentifier]; !ok {
+			return errors.Errorf(
+				"rebase: new stable %v is above the frontier %v and is not a known version; no mutation has occurred",
+				newStableIdentifier, m.frontierIdentifier)
 		}
 	}
 
