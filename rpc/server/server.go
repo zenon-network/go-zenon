@@ -168,7 +168,8 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 		return
 	}
 	if batch {
-		h.handleBatch(reqs)
+		// HTTP path: no call-slot semaphore, so no batch-level slot was acquired.
+		h.handleBatch(reqs, false)
 	} else {
 		h.handleMsg(reqs[0])
 	}
