@@ -704,21 +704,22 @@ func (c *Client) read(codec ServerCodec) {
 		// needs a slot if handleImmediate would return false for it (i.e.
 		// it is not a response and not a subscription notification).
 		//
-		// A batch acquires a slot only when every message in it needs one.
-		// If any message bypasses admission (response or subscription
-		// notification), the batch is dispatched without acquiring a slot,
-		// because the handler's per-message slotHeld tracking will release
-		// exactly the slots that were acquired.
+		// A batch acquires a slot when at least one message in it needs
+		// one. If every message bypasses admission (responses and
+		// subscription notifications only), the batch is dispatched without
+		// acquiring a slot. This ensures that a mixed batch — one that
+		// contains both calls and bypassing messages — still acquires a
+		// slot and is subject to the concurrency bound.
 		slotsNeeded := 0
 		if batch {
-			allNeedSlot := true
+			anyNeedSlot := false
 			for _, msg := range msgs {
-				if !msgNeedsCallSlot(msg) {
-					allNeedSlot = false
+				if msgNeedsCallSlot(msg) {
+					anyNeedSlot = true
 					break
 				}
 			}
-			if allNeedSlot && len(msgs) > 0 {
+			if anyNeedSlot {
 				slotsNeeded = 1
 			}
 		} else {
@@ -730,6 +731,12 @@ func (c *Client) read(codec ServerCodec) {
 			select {
 			case c.callSlots <- struct{}{}:
 			case <-c.closing:
+				// Send a read error so drainRead can complete.
+				// This is a blocking send: dispatch has already
+				// returned (closing is closed in its defer), so
+				// drainRead is the only receiver and will consume
+				// this value.
+				c.readErr <- ErrClientQuit
 				return
 			}
 		}
