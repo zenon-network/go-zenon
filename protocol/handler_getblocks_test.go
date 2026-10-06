@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -300,9 +301,12 @@ func TestHandleGetBlocks_MixedRequestPastLimitIsAnsweredWithTheHitsSeen(t *testi
 }
 
 // Repeating one hash does not shrink the request: the bound counts entries as
-// decoded, not distinct hashes, because every entry costs a lookup. A request
-// that names the same unknown hash once more than the limit is answered after
-// exactly MaxBlocksRequest lookups like any other oversized request.
+// decoded, not distinct hashes, because every entry costs a store lookup
+// budget slot whether or not the hash repeats. With dedup (issue #124), the
+// repeat lookups are skipped but the budget is still consumed: a request that
+// names the same unknown hash MaxBlocksRequest+1 times is still answered (not
+// dropped) with an empty reply, and the single distinct hash is looked up
+// exactly once.
 func TestHandleGetBlocks_DuplicateHashesCountTowardLimit(t *testing.T) {
 	chain := &lookupCountingChain{}
 
@@ -318,8 +322,9 @@ func TestHandleGetBlocks_DuplicateHashesCountTowardLimit(t *testing.T) {
 	if !result.answered || len(result.blocks) != 0 {
 		t.Fatalf("answered=%v with %d blocks, want an empty reply", result.answered, len(result.blocks))
 	}
-	if chain.lookups != MaxBlocksRequest {
-		t.Fatalf("%d lookups, want exactly %d", chain.lookups, MaxBlocksRequest)
+	// Dedup skips the redundant lookups, but only one distinct hash exists.
+	if chain.lookups != 1 {
+		t.Fatalf("%d lookups, want 1 (dedup skips repeats of the same hash)", chain.lookups)
 	}
 }
 
@@ -566,5 +571,278 @@ func TestRequestBlocks_StopsAtFirstFailedChunk(t *testing.T) {
 	// One successful chunk, one failed chunk, and nothing after the failure.
 	if rw.attempts != 2 {
 		t.Fatalf("%d write attempts, want 2 (one success, one failure)", rw.attempts)
+	}
+}
+
+// --- issue #124: hash dedup and reply-size cap ---
+
+// makeTestMomentum returns a minimal DetailedMomentum with the given hash.
+func makeTestMomentum(hash types.Hash) *nom.DetailedMomentum {
+	return &nom.DetailedMomentum{
+		Momentum: &nom.Momentum{
+			Hash:   hash,
+			Height: 100,
+		},
+		AccountBlocks: []*nom.AccountBlock{},
+	}
+}
+
+// makeLargeMomentum returns a DetailedMomentum with a large Data field.
+// The Data field is the simplest way to inflate the RLP-encoded size.
+func makeLargeMomentum(hash types.Hash, dataSize int) *nom.DetailedMomentum {
+	return &nom.DetailedMomentum{
+		Momentum: &nom.Momentum{
+			Hash:   hash,
+			Height: 100,
+			Data:   make([]byte, dataSize),
+		},
+		AccountBlocks: []*nom.AccountBlock{},
+	}
+}
+
+// streamFromHashes creates an RLP stream from a list of hashes, as a
+// GetBlocksMsg payload would carry.
+func streamFromHashes(t *testing.T, hashes []types.Hash) *rlp.Stream {
+	t.Helper()
+	encoded, err := rlp.EncodeToBytes(hashes)
+	if err != nil {
+		t.Fatalf("encode hashes: %v", err)
+	}
+	stream := rlp.NewStream(bytes.NewReader(encoded), uint64(len(encoded)))
+	if _, err := stream.List(); err != nil {
+		t.Fatalf("open list: %v", err)
+	}
+	return stream
+}
+
+func TestGatherBlocks_DeduplicatesHashes(t *testing.T) {
+	hash1 := types.HexToHashPanic("0100000000000000000000000000000000000000000000000000000000000000")
+	hash2 := types.HexToHashPanic("0200000000000000000000000000000000000000000000000000000000000000")
+
+	// Request: [hash1, hash1, hash1, hash2] — hash1 repeated 3 times.
+	hashes := []types.Hash{hash1, hash1, hash1, hash2}
+	stream := streamFromHashes(t, hashes)
+
+	lookupCount := 0
+	blocks, hashCount, err := gatherBlocksForReply(stream, func(h types.Hash) *nom.DetailedMomentum {
+		lookupCount++
+		return makeTestMomentum(h)
+	})
+	if err != nil {
+		t.Fatalf("gatherBlocksForReply: %v", err)
+	}
+
+	// All 4 hashes counted (MaxBlocksRequest counts decoded hashes, not
+	// distinct ones), but only 2 unique lookups.
+	if hashCount != 4 {
+		t.Errorf("hashCount = %d, want 4", hashCount)
+	}
+	if lookupCount != 2 {
+		t.Errorf("lookupCount = %d, want 2 (dedup should skip repeats)", lookupCount)
+	}
+	if len(blocks) != 2 {
+		t.Errorf("len(blocks) = %d, want 2", len(blocks))
+	}
+}
+
+func TestGatherBlocks_ReplySizeCap(t *testing.T) {
+	largeHash := types.HexToHashPanic("ff00000000000000000000000000000000000000000000000000000000000000")
+	largeBlock := makeLargeMomentum(largeHash, 3*1024*1024) // 3 MB Data field
+
+	// Verify this block exceeds the soft limit when encoded.
+	encoded, err := rlp.EncodeToBytes(largeBlock)
+	if err != nil {
+		t.Fatalf("encode large block: %v", err)
+	}
+	t.Logf("large block encodes to %d bytes (soft limit %d)", len(encoded), softResponseLimit)
+
+	// A fixture that no longer crosses the limit means this test stopped
+	// testing anything. Skip would report that as a pass, so fail instead:
+	// whoever changed the fixture or the limit has to look.
+	if len(encoded) <= softResponseLimit {
+		t.Fatalf("test block (%d bytes) does not exceed soft limit (%d), adjust test data",
+			len(encoded), softResponseLimit)
+	}
+
+	// Trailing hash: if the loop did not stop after the large block, this
+	// hash would be looked up and its block included. Its absence from the
+	// reply pins the stop.
+	trailingHash := types.HexToHashPanic("ee00000000000000000000000000000000000000000000000000000000000000")
+	hashes := []types.Hash{largeHash, trailingHash}
+	stream := streamFromHashes(t, hashes)
+
+	lookupCount := 0
+	blocks, hashCount, err := gatherBlocksForReply(stream, func(h types.Hash) *nom.DetailedMomentum {
+		lookupCount++
+		return largeBlock
+	})
+	if err != nil {
+		t.Fatalf("gatherBlocksForReply: %v", err)
+	}
+
+	// The large block is included (always return at least one), but the
+	// loop stops after it because the reply exceeds the soft limit. The
+	// trailing hash is never looked up.
+	if len(blocks) != 1 {
+		t.Errorf("len(blocks) = %d, want 1 (block included but stops after)", len(blocks))
+	}
+	if hashCount != 1 {
+		t.Errorf("hashCount = %d, want 1 (trailing hash never decoded)", hashCount)
+	}
+	if lookupCount != 1 {
+		t.Errorf("lookupCount = %d, want 1 (trailing hash never looked up)", lookupCount)
+	}
+}
+
+func TestGatherBlocks_CapAccumulates(t *testing.T) {
+	smallHash := types.HexToHashPanic("0100000000000000000000000000000000000000000000000000000000000000")
+	smallBlock := makeTestMomentum(smallHash)
+
+	smallEncoded, err := rlp.EncodeToBytes(smallBlock)
+	if err != nil {
+		t.Fatalf("encode small block: %v", err)
+	}
+
+	mediumHash := types.HexToHashPanic("0200000000000000000000000000000000000000000000000000000000000000")
+	mediumBlock := makeLargeMomentum(mediumHash, 2*1024*1024) // 2 MB Data field
+	mediumEncoded, err := rlp.EncodeToBytes(mediumBlock)
+	if err != nil {
+		t.Fatalf("encode medium block: %v", err)
+	}
+	t.Logf("small=%d bytes, medium=%d bytes, soft limit=%d", len(smallEncoded), len(mediumEncoded), softResponseLimit)
+
+	if len(smallEncoded)+len(mediumEncoded) <= softResponseLimit {
+		t.Fatalf("combined size (%d bytes) does not exceed soft limit (%d), adjust test data",
+			len(smallEncoded)+len(mediumEncoded), softResponseLimit)
+	}
+
+	// Trailing hash: if the loop did not stop after the medium block, this
+	// hash would be looked up and its block included. Its absence pins the
+	// stop.
+	trailingHash := types.HexToHashPanic("0300000000000000000000000000000000000000000000000000000000000000")
+	hashes := []types.Hash{smallHash, mediumHash, trailingHash}
+	stream := streamFromHashes(t, hashes)
+
+	lookupCount := 0
+	blocks, hashCount, err := gatherBlocksForReply(stream, func(h types.Hash) *nom.DetailedMomentum {
+		lookupCount++
+		if h == smallHash {
+			return smallBlock
+		}
+		return mediumBlock
+	})
+	if err != nil {
+		t.Fatalf("gatherBlocksForReply: %v", err)
+	}
+
+	// Both blocks are included: small fits, medium is appended (pushing
+	// the total over the limit), then the loop stops. The trailing hash is
+	// never looked up.
+	if len(blocks) != 2 {
+		t.Errorf("len(blocks) = %d, want 2 (small + medium, stops after medium)", len(blocks))
+	}
+	if hashCount != 2 {
+		t.Errorf("hashCount = %d, want 2 (trailing hash never decoded)", hashCount)
+	}
+	if lookupCount != 2 {
+		t.Errorf("lookupCount = %d, want 2 (trailing hash never looked up)", lookupCount)
+	}
+}
+
+func TestGatherBlocks_MaxBlockFetchLimit(t *testing.T) {
+	// Request more unique hashes than MaxBlockFetch (128).
+	var hashes []types.Hash
+	for i := 0; i < 200; i++ {
+		var h types.Hash
+		h[0] = byte(i)
+		h[1] = byte(i >> 8)
+		hashes = append(hashes, h)
+	}
+	stream := streamFromHashes(t, hashes)
+
+	blocks, hashCount, err := gatherBlocksForReply(stream, func(h types.Hash) *nom.DetailedMomentum {
+		return makeTestMomentum(h)
+	})
+	if err != nil {
+		t.Fatalf("gatherBlocksForReply: %v", err)
+	}
+
+	if len(blocks) != 128 {
+		t.Errorf("len(blocks) = %d, want 128 (MaxBlockFetch)", len(blocks))
+	}
+	if hashCount != 128 {
+		t.Errorf("hashCount = %d, want 128", hashCount)
+	}
+}
+
+func TestGatherBlocks_MaxBlocksRequestBound(t *testing.T) {
+	// Request more hashes than MaxBlocksRequest (256) to verify the
+	// lookup bound from issue #84 is preserved after the rebase. Use
+	// unknown hashes so the lookup bound (not the reply cap) is what
+	// stops the loop.
+	hashes := unknownHashes(MaxBlocksRequest + 10)
+	stream := streamFromHashes(t, hashes)
+
+	lookupCount := 0
+	blocks, hashCount, err := gatherBlocksForReply(stream, func(h types.Hash) *nom.DetailedMomentum {
+		lookupCount++
+		return nil // all unknown
+	})
+	if err != nil {
+		t.Fatalf("gatherBlocksForReply: %v", err)
+	}
+
+	if hashCount != MaxBlocksRequest {
+		t.Errorf("hashCount = %d, want %d (MaxBlocksRequest)", hashCount, MaxBlocksRequest)
+	}
+	if lookupCount != MaxBlocksRequest {
+		t.Errorf("lookupCount = %d, want %d (MaxBlocksRequest)", lookupCount, MaxBlocksRequest)
+	}
+	if len(blocks) != 0 {
+		t.Errorf("len(blocks) = %d, want 0 (all unknown)", len(blocks))
+	}
+}
+
+func TestGatherBlocks_EmptyRequest(t *testing.T) {
+	stream := streamFromHashes(t, nil)
+
+	blocks, hashCount, err := gatherBlocksForReply(stream, func(h types.Hash) *nom.DetailedMomentum {
+		t.Error("GetBlock called for empty request")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("gatherBlocksForReply: %v", err)
+	}
+	if len(blocks) != 0 {
+		t.Errorf("len(blocks) = %d, want 0", len(blocks))
+	}
+	if hashCount != 0 {
+		t.Errorf("hashCount = %d, want 0", hashCount)
+	}
+}
+
+func TestGatherBlocks_MissingBlocksSkipped(t *testing.T) {
+	hash1 := types.HexToHashPanic("0100000000000000000000000000000000000000000000000000000000000000")
+	hash2 := types.HexToHashPanic("0200000000000000000000000000000000000000000000000000000000000000")
+	hash3 := types.HexToHashPanic("0300000000000000000000000000000000000000000000000000000000000000")
+
+	hashes := []types.Hash{hash1, hash2, hash3}
+	stream := streamFromHashes(t, hashes)
+
+	blocks, hashCount, err := gatherBlocksForReply(stream, func(h types.Hash) *nom.DetailedMomentum {
+		if h == hash2 {
+			return nil // not found
+		}
+		return makeTestMomentum(h)
+	})
+	if err != nil {
+		t.Fatalf("gatherBlocksForReply: %v", err)
+	}
+
+	if len(blocks) != 2 {
+		t.Errorf("len(blocks) = %d, want 2 (hash2 not found)", len(blocks))
+	}
+	if hashCount != 3 {
+		t.Errorf("hashCount = %d, want 3", hashCount)
 	}
 }
