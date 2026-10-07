@@ -417,6 +417,10 @@ func (m *ldbManager) Pop() error {
 func (m *ldbManager) Stop() error {
 	m.changes.Lock()
 	defer m.changes.Unlock()
+	// A second Stop is a no-op: the handle is already closed and nil.
+	if m.stopped {
+		return nil
+	}
 	if err := m.ldb.Close(); err != nil {
 		return err
 	}
