@@ -591,7 +591,7 @@ func (c *Client) dispatch(codec ServerCodec) {
 			if op.batch {
 				conn.handler.handleBatch(op.msgs, op.slotAcquired)
 			} else {
-				conn.handler.handleMsg(op.msgs[0])
+				conn.handler.handleMsg(op.msgs[0], op.slotAcquired)
 			}
 
 		case err := <-c.readErr:
@@ -645,7 +645,10 @@ func (c *Client) dispatch(codec ServerCodec) {
 func (c *Client) drainRead() {
 	for {
 		select {
-		case <-c.readOp:
+		case op := <-c.readOp:
+			if op.slotAcquired {
+				<-c.callSlots
+			}
 		case <-c.readErr:
 			return
 		}
@@ -654,8 +657,8 @@ func (c *Client) drainRead() {
 
 // msgNeedsCallSlot reports whether a message will be processed as a call by
 // the handler (i.e. handleImmediate returns false for it). Responses and
-// subscription notifications are handled inline; everything else — regular
-// calls, unsubscribes, and regular notifications — goes through the call
+// subscription notifications are handled inline; everything else (regular
+// calls, unsubscribes, and regular notifications) goes through the call
 // processing path and needs a call slot.
 func msgNeedsCallSlot(msg *jsonrpcMessage) bool {
 	if msg.isResponse() {
@@ -669,15 +672,15 @@ func msgNeedsCallSlot(msg *jsonrpcMessage) bool {
 
 // read decodes RPC messages from a codec, feeding them into dispatch.
 //
-// Before dispatching call messages, read acquires a slot from the
-// call-slots semaphore for each call in the batch. When all slots are
-// taken, read blocks on acquisition, which stops reading from the
-// network and applies TCP backpressure to the peer. Responses and
-// notifications bypass the semaphore and are dispatched immediately.
+// Before dispatching call messages, read acquires one slot from the
+// call-slots semaphore for the batch. When all slots are taken, read
+// blocks on acquisition, which stops reading from the network and applies
+// TCP backpressure to the peer. Responses and subscription notifications
+// bypass the semaphore and are dispatched immediately.
 //
-// Known limitation: while read is blocked waiting for a slot, it cannot
-// read subsequent messages (including eth_unsubscribe). See the
-// maxConcurrentCallsPerConn documentation in handler.go.
+// An empty batch is answered synchronously (it needs no slot and no
+// handler goroutine). The read goroutine blocks on its own write, which
+// applies backpressure to a peer that sends empty frames.
 func (c *Client) read(codec ServerCodec) {
 	for {
 		msgs, batch, err := codec.readBatch()
@@ -694,22 +697,26 @@ func (c *Client) read(codec ServerCodec) {
 			c.readErr <- err
 			return
 		}
-		// Acquire call slots before dispatching. A batch holds one slot
-		// for its entire duration because the handler processes batch
-		// calls sequentially in a single goroutine. A single call message
-		// holds one slot. This blocks the read goroutine (backpressure)
-		// without blocking the dispatch loop.
-		//
-		// The classification must match handleBatch/handleMsg: a message
-		// needs a slot if handleImmediate would return false for it (i.e.
-		// it is not a response and not a subscription notification).
+		// Answer empty batches synchronously: they need no slot and
+		// starting a handler goroutine for the error reply is wasteful.
+		// The read goroutine blocks on its own write, which applies
+		// backpressure without consuming a call slot.
+		if batch && len(msgs) == 0 {
+			_ = codec.writeJSON(context.Background(), errorMessage(&invalidRequestError{"empty batch"}))
+			continue
+		}
+		// A batch holds one slot for its entire duration because the
+		// handler processes batch calls sequentially in a single
+		// goroutine. A single call message holds one slot. This blocks
+		// the read goroutine (backpressure) without blocking the dispatch
+		// loop.
 		//
 		// A batch acquires a slot when at least one message in it needs
 		// one. If every message bypasses admission (responses and
-		// subscription notifications only), the batch is dispatched without
-		// acquiring a slot. This ensures that a mixed batch — one that
-		// contains both calls and bypassing messages — still acquires a
-		// slot and is subject to the concurrency bound.
+		// subscription notifications only), the batch is dispatched
+		// without acquiring a slot. This ensures that a mixed batch —
+		// containing both calls and bypassing messages — is subject to
+		// the concurrency bound.
 		slotsNeeded := 0
 		if batch {
 			anyNeedSlot := false

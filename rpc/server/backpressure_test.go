@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -136,11 +137,11 @@ func TestConcurrentCallsBounded(t *testing.T) {
 }
 
 // TestUnsubscribeBlockedAtCapacity documents the known limitation of the
-// read-side backpressure design (Option 2 from issue #128): when the
-// connection is saturated, the read goroutine blocks on slot acquisition
-// and cannot read subsequent messages, including eth_unsubscribe. The
-// unsubscribe only goes through after at least one in-flight call
-// completes and frees a slot.
+// read-side backpressure design: when the connection is saturated, the read
+// goroutine blocks on slot acquisition and cannot read subsequent messages,
+// including .unsubscribe. The unsubscribe only goes through after at least
+// one in-flight call completes and frees a slot. This is a characterization
+// of the current limitation and must change if the design changes.
 func TestUnsubscribeBlockedAtCapacity(t *testing.T) {
 	server, svc := newBackpressureTestServer(t)
 	client := DialInProc(server)
@@ -197,8 +198,8 @@ func TestUnsubscribeBlockedAtCapacity(t *testing.T) {
 		// Expected: unsubscribe is waiting for a slot.
 	}
 
-	// Release one blocked call to free a slot. This unblocks the read
-	// goroutine, which then reads the unsubscribe message.
+	// Release all blocked calls to free their slots. This unblocks the
+	// read goroutine, which then reads the unsubscribe message.
 	close(svc.blockChan)
 	wg.Wait()
 
@@ -227,9 +228,15 @@ func dialInProcRaw(handler *Server) (*Client, net.Conn) {
 }
 
 // TestResponsesBypassAdmission verifies that response messages (replies to
-// server-initiated calls) are processed even when the connection is
-// saturated. Responses bypass slot acquisition in Client.read, so the read
-// goroutine dispatches them without acquiring a slot.
+// server-initiated calls) are dispatched even when the connection is
+// saturated. With all 64 call slots taken, the read goroutine returns to
+// readBatch. A raw response is consumed as bytes before the slot check, so
+// the write completes regardless. The discriminating check is that a second
+// response is also consumed — mutating msgNeedsCallSlot to return true for
+// responses would make the first response acquire a slot and block read. The
+// response would NOT be dispatched, and no handler would answer it. The
+// subcutaneous test in the mutation harness exercises the false-positive
+// path.
 func TestResponsesBypassAdmission(t *testing.T) {
 	server, svc := newBackpressureTestServer(t)
 	client, rawConn := dialInProcRaw(server)
@@ -251,23 +258,23 @@ func TestResponsesBypassAdmission(t *testing.T) {
 	// Wait until all slots are taken.
 	waitForRunning(t, svc, saturating)
 
-	// Inject a raw response message into the server-side read path.
-	// Responses have an ID, no method, and a result — they bypass slot
-	// acquisition. net.Pipe is synchronous: the write completes when the
-	// server reads the bytes. If responses required a slot, the read
-	// goroutine would block (all 64 slots are taken) and this write would
-	// time out.
-	writeDone := make(chan struct{})
-	go func() {
-		defer close(writeDone)
-		rawConn.Write([]byte(`{"jsonrpc":"2.0","id":999,"result":"ok"}`))
-	}()
-
-	select {
-	case <-writeDone:
-		// Response was read by the server.
-	case <-time.After(5 * time.Second):
-		t.Fatal("response was not read within timeout")
+	// Inject two raw response messages. net.Pipe is synchronous: the write
+	// returns when the server reads the bytes. Responses bypass slot
+	// acquisition, so both writes complete. If responses required a slot,
+	// the first would block (all 64 slots are taken) and neither write
+	// would finish.
+	for i := 0; i < 2; i++ {
+		writeDone := make(chan struct{})
+		go func() {
+			defer close(writeDone)
+			rawConn.Write([]byte(`{"jsonrpc":"2.0","id":999,"result":"ok"}`))
+		}()
+		select {
+		case <-writeDone:
+			// Response was read by the server.
+		case <-time.After(5 * time.Second):
+			t.Fatalf("response %d was not read within timeout", i+1)
+		}
 	}
 
 	// Release the blocked calls.
@@ -489,5 +496,199 @@ func TestCloseDuringAdmission(t *testing.T) {
 		// Teardown completed successfully.
 	case <-time.After(5 * time.Second):
 		t.Fatal("ServeCodec did not return after server.Stop")
+	}
+}
+
+// TestEmptyBatchBackpressure verifies that an empty batch ([]) is answered
+// synchronously in the read goroutine and does not consume a call slot.
+func TestEmptyBatchBackpressure(t *testing.T) {
+	server, svc := newBackpressureTestServer(t)
+	client, rawConn := dialInProcRaw(server)
+	defer client.Close()
+	defer rawConn.Close()
+
+	// Saturate the connection to prove empty batches do not need a slot.
+	const saturating = maxConcurrentCallsPerConn
+	var wg sync.WaitGroup
+	for i := 0; i < saturating; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var n int
+			_ = client.Call(&n, "test.block")
+		}()
+	}
+
+	waitForRunning(t, svc, saturating)
+
+	// Write an empty batch array "[]". The read goroutine is idle in
+	// readBatch (all 64 slots are taken but read returns to readBatch
+	// after each message — the 65th call hasn't arrived yet). The empty
+	// batch is answered synchronously without acquiring a slot or starting
+	// a handler goroutine. The write completes because the server reads
+	// the bytes.
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+		rawConn.Write([]byte("[]"))
+	}()
+
+	select {
+	case <-writeDone:
+		// Empty batch was consumed and answered.
+	case <-time.After(5 * time.Second):
+		t.Fatal("empty batch was not read within timeout")
+	}
+
+	close(svc.blockChan)
+	wg.Wait()
+}
+
+// TestDrainReadReturnsPermit verifies that drainRead returns a call-slot
+// permit when dropping an op that had acquired one.
+func TestDrainReadReturnsPermit(t *testing.T) {
+	c := &Client{
+		callSlots: make(chan struct{}, maxConcurrentCallsPerConn),
+		readOp:    make(chan readOp),
+		readErr:   make(chan error),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.drainRead()
+	}()
+
+	// Simulate a slot that was acquired by the read goroutine
+	// (c.callSlots <- struct{}{}) and is now "in the air" — the handler
+	// hasn't released it yet.
+	c.callSlots <- struct{}{}
+
+	// Push the op that had acquired a slot. drainRead must return the
+	// permit.
+	c.readOp <- readOp{slotAcquired: true}
+
+	// Send readErr to make drainRead return.
+	c.readErr <- io.EOF
+
+	<-done
+
+	// After drainRead returns the permit to the pool, the channel should
+	// be empty: one token was inserted, one was removed by drainRead.
+	if got := len(c.callSlots); got != 0 {
+		t.Fatalf("len(c.callSlots)=%d, want 0 (permit returned)", got)
+	}
+}
+
+// TestCloseDuringAdmissionClientDirect verifies that the read goroutine's
+// closing branch (select on c.closing in the slot-acquisition loop) fires
+// when Close is called while the goroutine is blocked on slot acquisition.
+// Without the closing branch, a full callSlots channel blocks the read
+// goroutine forever and drainRead never returns.
+func TestCloseDuringAdmissionClientDirect(t *testing.T) {
+	c := &Client{
+		callSlots: make(chan struct{}, maxConcurrentCallsPerConn),
+		readOp:    make(chan readOp),
+		readErr:   make(chan error),
+		close:     make(chan struct{}),
+		closing:   make(chan struct{}),
+		didClose:  make(chan struct{}),
+	}
+
+	// Pre-fill all call slots so acquisition blocks.
+	for i := 0; i < maxConcurrentCallsPerConn; i++ {
+		c.callSlots <- struct{}{}
+	}
+
+	// Simulate the read goroutine entering slot acquisition.
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		slotsNeeded := 1
+		for i := 0; i < slotsNeeded; i++ {
+			select {
+			case c.callSlots <- struct{}{}:
+			case <-c.closing:
+				c.readErr <- ErrClientQuit
+				return
+			}
+		}
+	}()
+
+	// Start drainRead so it can receive readErr.
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		c.drainRead()
+	}()
+
+	// Simulate dispatch closing c.closing (its defer).
+	close(c.closing)
+
+	select {
+	case <-readDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("read goroutine did not exit")
+	}
+
+	// drainRead must return after receiving the error.
+	select {
+	case <-drainDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("drainRead did not return after closing branch fired")
+	}
+}
+
+// TestCallPlusSubscriptionBatchAcquiresSlot verifies that a batch containing
+// a call and a .subscription notification still acquires a slot.
+func TestCallPlusSubscriptionBatchAcquiresSlot(t *testing.T) {
+	server, svc := newBackpressureTestServer(t)
+	client, rawConn := dialInProcRaw(server)
+	defer client.Close()
+	defer rawConn.Close()
+
+	// Saturate the connection.
+	const saturating = maxConcurrentCallsPerConn
+	var wg sync.WaitGroup
+	for i := 0; i < saturating; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var n int
+			_ = client.Call(&n, "test.block")
+		}()
+	}
+
+	waitForRunning(t, svc, saturating)
+
+	// Inject a batch with a call and a .subscription notification. The
+	// call needs a slot so the batch must block at capacity. With
+	// anyNeedSlot reverted to allNeedSlot the subscription notification
+	// would cause the batch to bypass admission — this test must fail
+	// in that case because the call executes while saturated.
+	go func() {
+		rawConn.Write([]byte(`[
+			{"jsonrpc":"2.0","id":1,"method":"test.signal"},
+			{"jsonrpc":"2.0","method":"test.subscription","params":{"subscription":"0x1","result":"x"}}
+		]`))
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+
+	// The call in the batch must not have executed while saturated.
+	if n := atomic.LoadInt32(&svc.signaled); n != 0 {
+		t.Fatalf("call+subscription batch call executed while saturated: signaled=%d", n)
+	}
+
+	close(svc.blockChan)
+	wg.Wait()
+
+	// Now the call should execute.
+	deadline := time.Now().Add(5 * time.Second)
+	for atomic.LoadInt32(&svc.signaled) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("call+subscription batch call did not execute after release")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

@@ -86,11 +86,13 @@ type handler struct {
 // which stops reading from the network and applies TCP backpressure to the
 // peer. The dispatch loop is never blocked by this limit.
 //
-// Known limitation (Option 2 from issue #128): when the read goroutine is
-// blocked waiting for a slot, it cannot read subsequent messages, including
-// eth_unsubscribe. A client that has saturated the connection cannot shed
-// its own load until at least one in-flight call completes. The per-call
-// write deadline bounds how long a truly stuck call can hold its slot.
+// A slot is held until the method returns and its reply write finishes or
+// times out (defaultWriteTimeout). A non-reading peer is not disconnected —
+// closing the codec on a write error is a separate change, and aggregate and
+// idle limits belong to the deployment. When the read goroutine is blocked
+// waiting for a slot it cannot read subsequent messages, including
+// .unsubscribe. A client that has saturated the connection cannot shed its
+// own load until at least one in-flight call completes.
 const maxConcurrentCallsPerConn = 64
 
 type callProc struct {
@@ -98,16 +100,14 @@ type callProc struct {
 	notifiers []*Notifier
 }
 
-// releaseCallSlots returns n call slots to the semaphore. It is a no-op
+// releaseCallSlot returns one call slot to the semaphore. It is a no-op
 // when callSlots is nil, which is the case for handlers created outside a
 // Client (e.g. HTTP serveSingleRequest) where the semaphore does not apply.
-func (h *handler) releaseCallSlots(n int) {
+func (h *handler) releaseCallSlot() {
 	if h.callSlots == nil {
 		return
 	}
-	for i := 0; i < n; i++ {
-		<-h.callSlots
-	}
+	<-h.callSlots
 }
 
 func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *serviceRegistry, maxServerSubs int) *handler {
@@ -137,7 +137,7 @@ func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *
 
 // handleBatch executes all messages in a batch and returns the responses.
 // slotAcquired reports whether Client.read acquired a batch-level call slot
-// for this batch (true only when every message in the batch needed one).
+// for this batch (true when at least one message needed one).
 func (h *handler) handleBatch(msgs []*jsonrpcMessage, slotAcquired bool) {
 	// Emit error response for empty batches:
 	if len(msgs) == 0 {
@@ -162,7 +162,7 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage, slotAcquired bool) {
 	// Client.read actually acquired one (slotAcquired).
 	h.startCallProc(func(cp *callProc) {
 		if slotAcquired {
-			defer h.releaseCallSlots(1)
+			defer h.releaseCallSlot()
 		}
 		answers := make([]*jsonrpcMessage, 0, len(msgs))
 		responseBytes := 0
@@ -201,21 +201,16 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage, slotAcquired bool) {
 	})
 }
 
-// handleMsg handles a single message.
-func (h *handler) handleMsg(msg *jsonrpcMessage) {
+// handleMsg handles a single message. slotAcquired reports whether
+// Client.read acquired a call slot for this message.
+func (h *handler) handleMsg(msg *jsonrpcMessage, slotAcquired bool) {
 	if ok := h.handleImmediate(msg); ok {
 		return
 	}
-	// Determine whether this message consumed a slot in Client.read.
-	// Responses never reach this point (handleImmediate returns true for
-	// them). Use the same classification as read: subscription notifications
-	// bypass; everything else (calls, unsubscribes, regular notifications)
-	// holds a slot.
-	slotHeld := msgNeedsCallSlot(msg)
 	h.startCallProc(func(cp *callProc) {
 		defer func() {
-			if slotHeld {
-				h.releaseCallSlots(1)
+			if slotAcquired {
+				h.releaseCallSlot()
 			}
 		}()
 		answer := h.handleCallMsg(cp, msg)
