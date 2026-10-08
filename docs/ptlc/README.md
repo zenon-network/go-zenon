@@ -15,7 +15,7 @@ types.PtlcContract
 Methods:
 
 ```txt
-Create(expirationTime, pointType, pointLock)
+Create(expirationTime, pointType, pointLock, destination)
 Unlock(id, signature)
 ProxyUnlock(id, destination, signature)
 Reclaim(id)
@@ -24,14 +24,30 @@ Reclaim(id)
 Supported point types:
 
 ```txt
-PointTypeED25519
-PointTypeBIP340
+PointTypeED25519        32-byte key,  opened by a 64-byte signature over the unlock message
+PointTypeBIP340         32-byte key,  opened by a 64-byte signature over the unlock message
+PointTypeSecp256k1Point 33-byte compressed point T, opened by the 32-byte scalar t with t*G == T
 ```
+
+The `signature` argument of `Unlock` and `ProxyUnlock` carries the witness: a
+signature for the key types, the scalar for the point type. The point type is the
+lock Lightning's PTLC design describes; this VM can multiply a point, so it offers
+the lock directly instead of through an adaptor signature.
+
+## Destination
+
+`Create` names the only address an unlock may pay. The zero address means any
+address the witness binds, and is allowed for the key types only. A point lock must
+name a destination: its witness is a bare scalar that binds nothing, and anyone who
+read it from the claim's send block could otherwise submit a `ProxyUnlock` to
+themselves first. An entry with a fixed destination refuses every unlock to another
+address with `ErrPermissionDenied`, whoever submits it. An embedded contract is never a
+valid fixed destination.
 
 ## Lifecycle
 
 1. A user sends tokens to `types.PtlcContract` with `Create`.
-2. The contract stores the creating address, token standard, amount, expiration time, point type, and point lock.
+2. The contract stores the creating address, token standard, amount, expiration time, point type, point lock, and destination.
 3. Before expiration, a valid signature over the PTLC unlock message releases funds to the signed destination.
 4. At or after expiration, only the original locker can reclaim.
 5. Unlock and reclaim delete the stored PTLC entry before sending funds.

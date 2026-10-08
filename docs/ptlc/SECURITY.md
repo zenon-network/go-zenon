@@ -66,3 +66,15 @@ Protocols that rely on adaptor-signature properties must document:
 ## Dependency review
 
 BIP340 support requires `github.com/btcsuite/btcd/btcec/v2/schnorr`. This dependency is consensus-critical after PTLC activation, so upgrades require dedicated BIP340 vector review. Avoid unrelated dependency upgrades in PTLC changes, and review `go.mod` and `go.sum` separately from contract logic.
+
+## Point locks and the fixed destination
+
+A scalar is a bearer secret. A send block that carries it is public one momentum
+before the contract acts on it, so a point lock without a fixed destination would be
+claimable by whoever reads the scalar first. `Create` therefore refuses a point lock
+with the zero destination, and an unlock of an entry with a fixed destination pays
+only that address. Key locks may use the same restriction; with the zero destination
+the signature's destination binding is the only protection, as before.
+
+The scalar check is one fixed-base scalar multiplication per unlock, charged as
+`EmbeddedWWithdraw` like every other unlock.

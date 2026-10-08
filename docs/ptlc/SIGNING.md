@@ -64,3 +64,11 @@ signature = Sign(pointLockPrivateKey, PTLCUnlockMessage(chainIdentifier, pointTy
 ```
 
 A valid signature for destination A cannot unlock funds to destination B.
+
+## Point mode
+
+`PointTypeSecp256k1Point` stores a 33-byte compressed secp256k1 point `T` and expects
+the 32-byte scalar `t` with `t·G = T` as the witness. The scalar must be canonical:
+nonzero and below the group order, so that one secret has exactly one encoding. No
+message is signed; the entry's fixed destination does the binding that the unlock
+message does for the key types.

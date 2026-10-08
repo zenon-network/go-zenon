@@ -13,3 +13,10 @@ Activate sporks in chronological order. `PtlcSpork` assumes the prior HTLC and b
 ## Signing compatibility
 
 Wallets and SDKs must sign the exact domain-separated message in [Signing](SIGNING.md). Signatures over the old `Hash(id || destination)` format are invalid.
+
+## Point type and destination (zenon-ptlc, 2026-10)
+
+`Create` takes a fourth argument, `destination`, and a third point type,
+`PointTypeSecp256k1Point`, opened by the scalar behind the point. `Create`'s ABI id
+changes to `22cec8ee`; `Unlock`, `ProxyUnlock` and `Reclaim` are unchanged. The RPC
+`getById` returns `amount` as a decimal string and includes `destination`.
