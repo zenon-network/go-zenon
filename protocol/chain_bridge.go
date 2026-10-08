@@ -125,6 +125,16 @@ func (c chainBridge) Status() (td uint64, currentBlock types.Hash, genesisBlock 
 }
 
 func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error) {
+	// Refuse malformed input before anything below indexes or dereferences
+	// it. The wire decoder never yields these shapes; this guards callers.
+	if len(momentums) == 0 {
+		return 0, errors.Errorf("no momentums to insert")
+	}
+	for index, detailed := range momentums {
+		if detailed == nil || detailed.Momentum == nil {
+			return index, errors.Errorf("missing momentum at index %v", index)
+		}
+	}
 	a := momentums[0]
 	b := momentums[len(momentums)-1]
 	log.Info("start inserting chain", "num-momentums", len(momentums), "start-identifier", a.Momentum.Identifier(), "end-identifier", b.Momentum.Identifier())

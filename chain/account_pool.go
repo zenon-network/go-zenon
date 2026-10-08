@@ -63,8 +63,18 @@ func (ap *accountPool) canRollback(block *nom.AccountBlock) error {
 	frontier := ap.getFrontierAccountStore(address)
 	frontierIdentifier := frontier.Identifier()
 
-	// previous doesn't match
-	truePrevious, err := frontier.ByHeight(identifier.Height - 1)
+	// previous doesn't match. A block that carries descendants reports the
+	// batch's previous, which sits below the first descendant rather than one
+	// height under the block itself, so the lookup goes by the previous' own
+	// height. The zero identifier opens an account and has no block to match.
+	if previous.Height == 0 {
+		if previous != types.ZeroHashHeight {
+			log.Info("failed to insert account-block-transaction", "reason", "previous mismatch", "frontier-identifier", frontierIdentifier)
+			return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "missing previous", frontierIdentifier, identifier)
+		}
+		return nil
+	}
+	truePrevious, err := frontier.ByHeight(previous.Height)
 	if err != nil {
 		log.Info("failed to insert account-block-transaction", "reason", err, "frontier-identifier", frontierIdentifier)
 		return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, err, frontierIdentifier, identifier)
@@ -151,8 +161,54 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 		return err
 	}
 
-	// rollback blocks and insert this one
 	manager := ap.getAccountManager(address)
+
+	// A same-identifier replacement leaves the hash the later uncommitted
+	// blocks chain onto unchanged, so they stay valid: keep them with their
+	// patches and put them back after the replacement. A different block at
+	// this height invalidates them and they are dropped as before.
+	var keep []*nom.AccountBlockTransaction
+	if trueBlock != nil && trueBlock.Identifier() == identifier {
+		// A batch is stored as its descendants at their own heights plus the
+		// head carrying them in its record, so the head alone, with its
+		// patch, puts the whole batch back. Collect first: the descendants
+		// sit below their head and are only known to be covered once the
+		// head is read.
+		above := make([]*nom.AccountBlock, 0, frontierIdentifier.Height-identifier.Height)
+		covered := make(map[uint64]bool)
+		for height := identifier.Height + 1; height <= frontierIdentifier.Height; height++ {
+			later, err := frontier.ByHeight(height)
+			if err != nil || later == nil {
+				log.Info("failed to insert account-block-transaction", "reason", "can't read later pending block", "height", height, "err", err)
+				return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "can't read later pending block", frontierIdentifier, identifier)
+			}
+			for _, descendant := range later.DescendantBlocks {
+				covered[descendant.Height] = true
+			}
+			above = append(above, later)
+		}
+		for _, later := range above {
+			if covered[later.Height] {
+				continue
+			}
+			// Add appends to the patch it is given and stores it, and a
+			// snapshot clone shares the stored patch objects, so the
+			// re-add works on a copy. Dump aliases the patch buffer and
+			// Load aliases its input, hence the explicit byte copy.
+			patch := db.NewPatch()
+			if stored := manager.GetPatch(later.Identifier()); stored != nil {
+				copied, err := db.NewPatchFromDump(append([]byte(nil), stored.Dump()...))
+				if err != nil {
+					log.Info("failed to insert account-block-transaction", "reason", "can't copy later pending patch", "height", later.Height, "err", err)
+					return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "can't copy later pending patch", frontierIdentifier, identifier)
+				}
+				patch = copied
+			}
+			keep = append(keep, &nom.AccountBlockTransaction{Block: later, Changes: patch})
+		}
+	}
+
+	// rollback blocks and insert this one
 	for {
 		currentIdentifier := db.GetFrontierIdentifier(manager.Frontier())
 		if currentIdentifier == previous {
@@ -167,7 +223,18 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	}
 
 	log.Info("inserting account-block after rollback")
-	return ap.getAccountManager(address).Add(transaction)
+	if err := manager.Add(transaction); err != nil {
+		return err
+	}
+	for _, later := range keep {
+		if err := manager.Add(later); err != nil {
+			// The replacement itself is in place; the blocks above it are
+			// lost the way they were before they were kept at all.
+			log.Warn("dropping later pending account-blocks after replacement", "reason", err, "header", later.Block.Header())
+			break
+		}
+	}
+	return nil
 }
 
 func (ap *accountPool) GetPatch(address types.Address, identifier types.HashHeight) db.Patch {

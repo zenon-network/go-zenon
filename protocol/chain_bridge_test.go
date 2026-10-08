@@ -86,3 +86,41 @@ func TestInsertChain_MomentumBytesReplacePoolCopyOfSameBlock(t *testing.T) {
 		t.Fatal("committed block does not match the momentum's copy")
 	}
 }
+
+// TestInsertChain_RejectsEmptyAndNilInput pins that malformed input is
+// answered with an error before anything is indexed or dereferenced. The
+// wire decoder never produces these shapes, so this is API hardening: a
+// caller mistake must not take the node down from the import goroutine.
+func TestInsertChain_RejectsEmptyAndNilInput(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	bridge := protocol.NewChainBridge(z.Chain(), z.Consensus(), z.Verifier(), vm.NewSupervisor(z.Chain(), z.Consensus()))
+
+	frontier := z.Chain().GetFrontierMomentumStore().Identifier()
+	valid := func() *nom.DetailedMomentum {
+		momentum, err := z.Chain().GetFrontierMomentumStore().GetFrontierMomentum()
+		common.FailIfErr(t, err)
+		detailed, err := z.Chain().GetFrontierMomentumStore().PrefetchMomentum(momentum)
+		common.FailIfErr(t, err)
+		return detailed
+	}
+	cases := []struct {
+		name  string
+		input []*nom.DetailedMomentum
+	}{
+		{"nil slice", nil},
+		{"empty slice", []*nom.DetailedMomentum{}},
+		{"nil first entry", []*nom.DetailedMomentum{nil}},
+		{"nil last entry", []*nom.DetailedMomentum{valid(), nil}},
+		{"nil momentum", []*nom.DetailedMomentum{{Momentum: nil}}},
+		{"nil momentum after a valid one", []*nom.DetailedMomentum{valid(), {Momentum: nil}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := bridge.InsertChain(tc.input); err == nil {
+				t.Fatalf("expected an error for %s", tc.name)
+			}
+			common.Expect(t, z.Chain().GetFrontierMomentumStore().Identifier(), frontier)
+		})
+	}
+}
