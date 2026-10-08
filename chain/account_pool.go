@@ -243,8 +243,10 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	}
 	for _, later := range keep {
 		if err := manager.Add(later); err != nil {
-			// The replacement itself is in place; the blocks above it are
-			// lost the way they were before they were kept at all.
+			// The replacement itself is in place, which is what the caller
+			// asked for, so this returns nil: the blocks above it are lost
+			// the way they were before they were kept at all, and only the
+			// log says so.
 			log.Warn("dropping later pending account-blocks after replacement", "reason", err, "header", later.Block.Header())
 			break
 		}

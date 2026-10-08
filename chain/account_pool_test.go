@@ -541,16 +541,17 @@ func TestAccountPool_BatchedReceiveAgainstCompetingChain(t *testing.T) {
 		common.Expect(t, ap.GetFrontierAccountStore(base.Address).Identifier(), receive.Identifier())
 	})
 	t.Run("not forced", func(t *testing.T) {
+		// Both blocks carry zero plasma, so the priority check comes down
+		// to the hash tie-break, which these fixtures lose: the batch must
+		// be refused with that error and the competitor must stay.
+		common.FailIfErr(t, higherPriority(competitor, receive))
+		common.Expect(t, higherPriority(receive, competitor), ErrHashTieBreak)
+
 		ap := newAccountPool(&memStable{})
 		locker := &sync.Mutex{}
 		common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
 		common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(competitor)))
-		err := ap.AddAccountBlockTransaction(locker, poolTransaction(receive))
-		frontier := ap.GetFrontierAccountStore(base.Address).Identifier()
-		if err == nil {
-			common.Expect(t, frontier, receive.Identifier())
-		} else {
-			common.Expect(t, frontier, competitor.Identifier())
-		}
+		common.Expect(t, ap.AddAccountBlockTransaction(locker, poolTransaction(receive)), ErrHashTieBreak)
+		common.Expect(t, ap.GetFrontierAccountStore(base.Address).Identifier(), competitor.Identifier())
 	})
 }
