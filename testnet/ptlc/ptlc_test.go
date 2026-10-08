@@ -439,6 +439,7 @@ func (h *harness) createPtlc(locker *wallet.KeyPair, leg ptlcSwapLeg) types.Hash
 		leg.ExpirationTime,
 		leg.PointType,
 		leg.PointLock,
+			types.ZeroAddress,
 	)
 	ptlcID := h.mustPublishSend(locker, types.PtlcContract, leg.Amount, leg.TokenStandard, createData)
 	if status := h.waitContractStatus(ptlcID); status != contractSuccess {
@@ -543,6 +544,7 @@ func TestPtlcCreateValidationViaRPC(t *testing.T) {
 		expiration,
 		definition.PointTypeED25519,
 		recipient.Public,
+			types.ZeroAddress,
 	)
 
 	if _, err := h.publishSend(locker, types.PtlcContract, big.NewInt(0), types.ZnnTokenStandard, validCreate); err == nil {
@@ -554,6 +556,7 @@ func TestPtlcCreateValidationViaRPC(t *testing.T) {
 		expiration,
 		uint8(99),
 		recipient.Public,
+			types.ZeroAddress,
 	)
 	if _, err := h.publishSend(locker, types.PtlcContract, oneZNN(1), types.ZnnTokenStandard, badPointType); err == nil {
 		t.Fatalf("bad point type create unexpectedly succeeded")
@@ -564,6 +567,7 @@ func TestPtlcCreateValidationViaRPC(t *testing.T) {
 		expiration,
 		definition.PointTypeED25519,
 		recipient.Public[:31],
+			types.ZeroAddress,
 	)
 	if _, err := h.publishSend(locker, types.PtlcContract, oneZNN(1), types.ZnnTokenStandard, badPointLock); err == nil {
 		t.Fatalf("bad point lock create unexpectedly succeeded")
@@ -574,6 +578,7 @@ func TestPtlcCreateValidationViaRPC(t *testing.T) {
 		h.currentTimestamp()-1,
 		definition.PointTypeED25519,
 		recipient.Public,
+			types.ZeroAddress,
 	)
 	expiredHash := h.mustPublishSend(locker, types.PtlcContract, oneZNN(1), types.ZnnTokenStandard, expiredCreate)
 	if status := h.waitContractStatus(expiredHash); status != contractFail {
@@ -595,6 +600,7 @@ func TestPtlcED25519DomainSeparatedUnlockViaRPC(t *testing.T) {
 		h.currentTimestamp()+600,
 		definition.PointTypeED25519,
 		recipient.Public,
+			types.ZeroAddress,
 	)
 	ptlcID := h.mustPublishSend(locker, types.PtlcContract, amount, types.ZnnTokenStandard, createData)
 	if status := h.waitContractStatus(ptlcID); status != contractSuccess {
@@ -656,6 +662,7 @@ func TestPtlcBIP340ProxyDestinationBindingViaRPC(t *testing.T) {
 		h.currentTimestamp()+600,
 		definition.PointTypeBIP340,
 		pointLock,
+			types.ZeroAddress,
 	)
 	ptlcID := h.mustPublishSend(locker, types.PtlcContract, amount, types.ZnnTokenStandard, createData)
 	if status := h.waitContractStatus(ptlcID); status != contractSuccess {
@@ -851,6 +858,7 @@ func TestPtlcExpirationAndReclaimViaRPC(t *testing.T) {
 		expiration,
 		definition.PointTypeED25519,
 		recipient.Public,
+			types.ZeroAddress,
 	)
 	ptlcID := h.mustPublishSend(locker, types.PtlcContract, amount, types.ZnnTokenStandard, createData)
 	if status := h.waitContractStatus(ptlcID); status != contractSuccess {

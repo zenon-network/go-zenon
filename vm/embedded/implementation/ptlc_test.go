@@ -41,7 +41,7 @@ func TestPtlc_PointType(t *testing.T) {
 	ptlc.PointType = definition.PointTypeBIP340
 	ptlc.PointLock = schnorr.SerializePubKey(bip340PubKey)
 	common.ExpectError(t, checkPtlc(ptlc), nil)
-	ptlc.PointType = 2
+	ptlc.PointType = 3
 	common.ExpectError(t, checkPtlc(ptlc), constants.ErrInvalidPointType)
 }
 
@@ -60,6 +60,7 @@ func TestPtlc_CreateRejectsInvalidBIP340Point(t *testing.T) {
 		defaultPtlc.ExpirationTime,
 		definition.PointTypeBIP340,
 		invalidPoint,
+			types.ZeroAddress,
 	)
 
 	common.ExpectError(t, checkPtlc(definition.CreatePtlcParam{
@@ -292,7 +293,7 @@ func TestPtlc_ValidateAmountGuards(t *testing.T) {
 			name:   "create nil amount",
 			method: &CreatePtlcMethod{definition.CreatePtlcMethodName},
 			data: func() []byte {
-				return definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName, defaultPtlc.ExpirationTime, defaultPtlc.PointType, defaultPtlc.PointLock)
+				return definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName, defaultPtlc.ExpirationTime, defaultPtlc.PointType, defaultPtlc.PointLock, types.ZeroAddress)
 			},
 			amount: nil,
 			want:   constants.ErrInvalidTokenOrAmount,
@@ -301,7 +302,7 @@ func TestPtlc_ValidateAmountGuards(t *testing.T) {
 			name:   "create negative amount",
 			method: &CreatePtlcMethod{definition.CreatePtlcMethodName},
 			data: func() []byte {
-				return definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName, defaultPtlc.ExpirationTime, defaultPtlc.PointType, defaultPtlc.PointLock)
+				return definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName, defaultPtlc.ExpirationTime, defaultPtlc.PointType, defaultPtlc.PointLock, types.ZeroAddress)
 			},
 			amount: big.NewInt(-1),
 			want:   constants.ErrInvalidTokenOrAmount,
@@ -310,7 +311,7 @@ func TestPtlc_ValidateAmountGuards(t *testing.T) {
 			name:   "create positive amount",
 			method: &CreatePtlcMethod{definition.CreatePtlcMethodName},
 			data: func() []byte {
-				return definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName, defaultPtlc.ExpirationTime, defaultPtlc.PointType, defaultPtlc.PointLock)
+				return definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName, defaultPtlc.ExpirationTime, defaultPtlc.PointType, defaultPtlc.PointLock, types.ZeroAddress)
 			},
 			amount: big.NewInt(1),
 			want:   nil,
@@ -714,6 +715,7 @@ func TestPtlc_CreateExpirationBoundary(t *testing.T) {
 					test.expiration,
 					definition.PointTypeED25519,
 					User1.Public,
+			types.ZeroAddress,
 				),
 			}
 
@@ -778,7 +780,7 @@ func FuzzPtlc_CheckAndVerify(f *testing.F) {
 
 func FuzzPtlcValidateSendBlockNoPanic(f *testing.F) {
 	validID := types.NewHash([]byte("fuzz-id"))
-	f.Add(uint8(0), definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName, defaultPtlc.ExpirationTime, defaultPtlc.PointType, defaultPtlc.PointLock), int64(2))
+	f.Add(uint8(0), definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName, defaultPtlc.ExpirationTime, defaultPtlc.PointType, defaultPtlc.PointLock, types.ZeroAddress), int64(2))
 	f.Add(uint8(1), definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName, validID), int64(1))
 	f.Add(uint8(2), definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName, validID, bytes.Repeat([]byte{1}, 64)), int64(1))
 	f.Add(uint8(3), definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName, validID, User1.Address, bytes.Repeat([]byte{1}, 64)), int64(1))

@@ -1,10 +1,12 @@
 package implementation
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"math/big"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
@@ -20,10 +22,18 @@ var (
 	ptlcLog = common.EmbeddedLogger.New("contract", "ptlc")
 )
 
-// This embedded contract is a PTLC-compatible signature time-lock primitive.
-// It verifies ordinary ED25519 or BIP340 signatures over domain-separated
-// unlock messages; adaptor-signature scalar extraction and full cross-chain
-// swap protocol semantics must be specified by higher-level protocols.
+// The SEC 1 prefixes of a compressed point, by the parity of its y coordinate.
+const (
+	compressedPointEven = byte(0x02)
+	compressedPointOdd  = byte(0x03)
+)
+
+// This embedded contract locks funds to a point on a curve until a time. Two
+// point types lock to a public key and are opened by an ordinary ED25519 or
+// BIP-340 signature over a domain-separated unlock message; one locks to a
+// secp256k1 point and is opened by the scalar behind it. Which of the two
+// shapes a swap uses, and how the secret moves between chains inside an
+// adaptor signature, is the swap protocol's business, not the contract's.
 func isPositiveAmount(amount *big.Int) bool {
 	return amount != nil && amount.Sign() > 0
 }
@@ -34,6 +44,15 @@ func isZeroAmount(amount *big.Int) bool {
 
 func signatureHashForLog(signature []byte) string {
 	return base64.StdEncoding.EncodeToString(crypto.Hash(signature))
+}
+
+func isEmbeddedDestination(address types.Address) bool {
+	for _, contract := range types.EmbeddedContracts {
+		if address == contract {
+			return true
+		}
+	}
+	return false
 }
 
 func verifyBIP340Signature(message, pointLock, signature []byte) error {
@@ -51,20 +70,67 @@ func verifyBIP340Signature(message, pointLock, signature []byte) error {
 	return nil
 }
 
-func checkPtlc(param definition.CreatePtlcParam) error {
+// verifyPointScalar reports whether scalar is the discrete logarithm of the
+// compressed point lock. The scalar must be canonical: 32 bytes, nonzero and
+// below the group order, so that one secret has exactly one encoding and a
+// witness seen on chain is the same bytes everywhere.
+func verifyPointScalar(pointLock, scalar []byte) error {
+	if len(scalar) != int(definition.PointTypeWitnessSizes[definition.PointTypeSecp256k1Point]) {
+		return constants.ErrInvalidPointScalar
+	}
+	var k btcec.ModNScalar
+	if overflow := k.SetByteSlice(scalar); overflow || k.IsZero() {
+		return constants.ErrInvalidPointScalar
+	}
+	var point btcec.JacobianPoint
+	btcec.ScalarBaseMultNonConst(&k, &point)
+	point.ToAffine()
+	if !bytes.Equal(btcec.NewPublicKey(&point.X, &point.Y).SerializeCompressed(), pointLock) {
+		return constants.ErrInvalidPointScalar
+	}
+	return nil
+}
 
-	if param.PointType != definition.PointTypeED25519 && param.PointType != definition.PointTypeBIP340 {
+func checkPointLock(pointType uint8, pointLock []byte) error {
+	size, ok := definition.PointTypePubKeySizes[pointType]
+	if !ok {
 		return constants.ErrInvalidPointType
 	}
-
-	if len(param.PointLock) != int(definition.PointTypePubKeySizes[param.PointType]) {
+	if len(pointLock) != int(size) {
 		return constants.ErrInvalidPointLock
 	}
 
-	if param.PointType == definition.PointTypeBIP340 {
-		if _, err := schnorr.ParsePubKey(param.PointLock); err != nil {
+	switch pointType {
+	case definition.PointTypeBIP340:
+		if _, err := schnorr.ParsePubKey(pointLock); err != nil {
 			return constants.ErrInvalidPointLock
 		}
+	case definition.PointTypeSecp256k1Point:
+		// Compressed encoding only: two encodings of one point would be two
+		// locks, and a point not on the curve can never be opened.
+		if pointLock[0] != compressedPointEven && pointLock[0] != compressedPointOdd {
+			return constants.ErrInvalidPointLock
+		}
+		if _, err := btcec.ParsePubKey(pointLock); err != nil {
+			return constants.ErrInvalidPointLock
+		}
+	}
+	return nil
+}
+
+func checkPtlc(param definition.CreatePtlcParam) error {
+	if err := checkPointLock(param.PointType, param.PointLock); err != nil {
+		return err
+	}
+
+	// A point lock's witness binds nothing, so the entry has to.
+	if param.PointType == definition.PointTypeSecp256k1Point && param.Destination.IsZero() {
+		return constants.ErrInvalidDestination
+	}
+	// A fixed destination is where the funds will go, with no data; an
+	// embedded contract cannot take such a send, and the funds would be lost.
+	if !param.Destination.IsZero() && isEmbeddedDestination(param.Destination) {
+		return constants.ErrInvalidDestination
 	}
 
 	return nil
@@ -95,6 +161,7 @@ func checkStoredPtlcInfo(ptlcInfo *definition.PtlcInfo) error {
 		ExpirationTime: ptlcInfo.ExpirationTime,
 		PointType:      ptlcInfo.PointType,
 		PointLock:      ptlcInfo.PointLock,
+		Destination:    ptlcInfo.Destination,
 	}); err != nil {
 		return err
 	}
@@ -102,20 +169,27 @@ func checkStoredPtlcInfo(ptlcInfo *definition.PtlcInfo) error {
 	return nil
 }
 
-func verifyPtlcSignature(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, id types.Hash, destination types.Address, signature []byte) error {
-	signatureSize, ok := definition.PointTypeSignatureSizes[ptlcInfo.PointType]
+// verifyPtlcWitness checks the witness of an unlock against the stored lock:
+// a signature over the unlock message for the key types, the scalar for the
+// point type. Every failure is one of the contract's own errors.
+func verifyPtlcWitness(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, id types.Hash, destination types.Address, witness []byte) error {
+	witnessSize, ok := definition.PointTypeWitnessSizes[ptlcInfo.PointType]
 	if !ok {
 		return constants.ErrInvalidPointType
 	}
 
-	if len(signature) != int(signatureSize) {
-		ptlcLog.Debug("invalid unlock - signature is wrong size", "id", ptlcInfo.Id, "received-size", len(signature), "expected-size", signatureSize)
+	if len(witness) != int(witnessSize) {
+		ptlcLog.Debug("invalid unlock - witness is wrong size", "id", ptlcInfo.Id, "received-size", len(witness), "expected-size", witnessSize)
+		if ptlcInfo.PointType == definition.PointTypeSecp256k1Point {
+			return constants.ErrInvalidPointScalar
+		}
 		return constants.ErrInvalidPointSignature
 	}
 
-	unlockMessage := definition.GetPtlcUnlockMessage(chainIdentifier, ptlcInfo.PointType, id, destination)
-	if ptlcInfo.PointType == definition.PointTypeED25519 {
-		valid, err := wallet.VerifySignature(ed25519.PublicKey(ptlcInfo.PointLock), unlockMessage, signature)
+	switch ptlcInfo.PointType {
+	case definition.PointTypeED25519:
+		unlockMessage := definition.GetPtlcUnlockMessage(chainIdentifier, ptlcInfo.PointType, id, destination)
+		valid, err := wallet.VerifySignature(ed25519.PublicKey(ptlcInfo.PointLock), unlockMessage, witness)
 		if err != nil {
 			// Stored-state validation already checks ED25519 point-lock length;
 			// keep this mapping as defense in depth for direct verifier callers.
@@ -125,13 +199,20 @@ func verifyPtlcSignature(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, 
 			return constants.ErrInvalidPointSignature
 		}
 		return nil
-	}
-
-	if ptlcInfo.PointType == definition.PointTypeBIP340 {
-		return verifyBIP340Signature(unlockMessage, ptlcInfo.PointLock, signature)
+	case definition.PointTypeBIP340:
+		unlockMessage := definition.GetPtlcUnlockMessage(chainIdentifier, ptlcInfo.PointType, id, destination)
+		return verifyBIP340Signature(unlockMessage, ptlcInfo.PointLock, witness)
+	case definition.PointTypeSecp256k1Point:
+		return verifyPointScalar(ptlcInfo.PointLock, witness)
 	}
 
 	return constants.ErrInvalidPointType
+}
+
+// verifyPtlcSignature is the name the key-type verifier had before the point
+// type existed. Kept for the tests and tools that call it directly.
+func verifyPtlcSignature(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, id types.Hash, destination types.Address, signature []byte) error {
+	return verifyPtlcWitness(ptlcInfo, chainIdentifier, id, destination, signature)
 }
 
 type CreatePtlcMethod struct {
@@ -163,6 +244,7 @@ func (p *CreatePtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		param.ExpirationTime,
 		param.PointType,
 		param.PointLock,
+		param.Destination,
 	)
 	return err
 }
@@ -193,6 +275,7 @@ func (p *CreatePtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 		ExpirationTime: param.ExpirationTime,
 		PointType:      param.PointType,
 		PointLock:      param.PointLock,
+		Destination:    param.Destination,
 	}
 
 	common.DealWithErr(ptlcInfo.Save(context.Storage()))
@@ -275,7 +358,7 @@ func (p *ReclaimPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 }
 
 // helper for Unlock and ProxyUnlock
-func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock, id types.Hash, destination types.Address, signature []byte) ([]*nom.AccountBlock, error) {
+func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock, id types.Hash, destination types.Address, witness []byte) ([]*nom.AccountBlock, error) {
 	ptlcInfo, err := definition.GetPtlcInfo(context.Storage(), id)
 	if err == constants.ErrDataNonExistent {
 		ptlcLog.Debug("invalid unlock - entry does not exist", "id", id, "address", sendBlock.Address)
@@ -288,6 +371,12 @@ func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock
 		return nil, err
 	}
 
+	// An entry with a fixed destination pays nowhere else, whoever asks.
+	if !ptlcInfo.Destination.IsZero() && destination != ptlcInfo.Destination {
+		ptlcLog.Debug("invalid unlock - wrong destination", "id", ptlcInfo.Id, "address", sendBlock.Address, "destination", destination, "expected", ptlcInfo.Destination)
+		return nil, constants.ErrPermissionDenied
+	}
+
 	momentum, err := context.GetFrontierMomentum()
 	common.DealWithErr(err)
 
@@ -297,13 +386,13 @@ func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock
 		return nil, constants.ErrExpired
 	}
 
-	if err := verifyPtlcSignature(ptlcInfo, momentum.ChainIdentifier, id, destination, signature); err != nil {
-		ptlcLog.Debug("invalid unlock - invalid signature", "id", ptlcInfo.Id, "address", sendBlock.Address, "destination", destination, "signature-hash", signatureHashForLog(signature), "reason", err)
+	if err := verifyPtlcWitness(ptlcInfo, momentum.ChainIdentifier, id, destination, witness); err != nil {
+		ptlcLog.Debug("invalid unlock - invalid witness", "id", ptlcInfo.Id, "address", sendBlock.Address, "destination", destination, "witness-hash", signatureHashForLog(witness), "reason", err)
 		return nil, err
 	}
 
 	common.DealWithErr(ptlcInfo.Delete(context.Storage()))
-	ptlcLog.Debug("unlocked", "ptlcInfo", ptlcInfo, "destination", destination, "signature-hash", signatureHashForLog(signature))
+	ptlcLog.Debug("unlocked", "ptlcInfo", ptlcInfo, "destination", destination, "witness-hash", signatureHashForLog(witness))
 
 	return []*nom.AccountBlock{
 		{

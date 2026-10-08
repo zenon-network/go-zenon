@@ -79,7 +79,7 @@ func TestDumpContractsABIMethods(t *testing.T) {
 {"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"Update", "id":"20093ea6", "signature":"Update()"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"CancelFuse", "id":"f9ca9dc3", "signature":"CancelFuse(hash)"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"Fuse", "id":"5ac942e8", "signature":"Fuse(address)"}
-{"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"Create", "id":"ae0f7164", "signature":"Create(int64,uint8,bytes)"}
+{"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"Create", "id":"22cec8ee", "signature":"Create(int64,uint8,bytes,address)"}
 {"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"ProxyUnlock", "id":"8bffc216", "signature":"ProxyUnlock(hash,address,bytes)"}
 {"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"Reclaim", "id":"7e003c8d", "signature":"Reclaim(hash)"}
 {"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"Unlock", "id":"d33791d3", "signature":"Unlock(hash,bytes)"}

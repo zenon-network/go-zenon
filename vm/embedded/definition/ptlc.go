@@ -2,6 +2,7 @@ package definition
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"strings"
@@ -22,7 +23,8 @@ const (
 		{"type":"function","name":"Create", "inputs":[
 			{"name":"expirationTime","type":"int64"},
 			{"name":"pointType","type":"uint8"},
-			{"name":"pointLock","type":"bytes"}
+			{"name":"pointLock","type":"bytes"},
+			{"name":"destination","type":"address"}
 		]},
 		{"type":"function","name":"Reclaim","inputs":[
 			{"name":"id","type":"hash"}
@@ -42,7 +44,8 @@ const (
 			{"name":"amount","type":"uint256"},
 			{"name":"expirationTime", "type":"int64"},
 			{"name":"pointType","type":"uint8"},
-			{"name":"pointLock","type":"bytes"}
+			{"name":"pointLock","type":"bytes"},
+			{"name":"destination","type":"address"}
 		]}
 	]`
 
@@ -56,19 +59,32 @@ const (
 	PtlcUnlockMessageDomain = "zenon-ptlc-unlock:v1"
 )
 
+// The point types. The first two lock to a public key and are opened by a
+// signature over the unlock message, so the secret behind the lock never
+// reaches the chain: a swap moves it inside an adaptor signature. The third
+// locks to a bare point and is opened by its discrete logarithm, which the
+// claim publishes. It is the lock Lightning's PTLC design describes, offered
+// directly because this VM, unlike Bitcoin script, can multiply a point.
 const (
 	PointTypeED25519 uint8 = iota
 	PointTypeBIP340
+	PointTypeSecp256k1Point
 )
 
+// PointTypePubKeySizes is the size of each type's lock. The secp256k1 point is
+// stored compressed, so that one point has one encoding.
 var PointTypePubKeySizes = map[uint8]uint8{
-	PointTypeED25519: 32,
-	PointTypeBIP340:  32,
+	PointTypeED25519:        32,
+	PointTypeBIP340:         32,
+	PointTypeSecp256k1Point: 33,
 }
 
-var PointTypeSignatureSizes = map[uint8]uint8{
-	PointTypeED25519: 64,
-	PointTypeBIP340:  64,
+// PointTypeWitnessSizes is the size of what Unlock carries in its `signature`
+// field: a signature for the key types, the scalar for the point type.
+var PointTypeWitnessSizes = map[uint8]uint8{
+	PointTypeED25519:        64,
+	PointTypeBIP340:         64,
+	PointTypeSecp256k1Point: 32,
 }
 
 var (
@@ -78,11 +94,16 @@ var (
 )
 
 type CreatePtlcParam struct {
-	ExpirationTime int64  `json:"expirationTime"`
-	PointType      uint8  `json:"pointType"`
-	PointLock      []byte `json:"pointLock"`
+	ExpirationTime int64         `json:"expirationTime"`
+	PointType      uint8         `json:"pointType"`
+	PointLock      []byte        `json:"pointLock"`
+	Destination    types.Address `json:"destination"`
 }
 
+// PtlcInfo is a stored entry. Destination is the only address an unlock may
+// pay; the zero address means any address the witness binds. A point lock
+// must have one, because its witness is a bare scalar that binds nothing, and
+// anyone who read it from a send block could otherwise claim the funds first.
 type PtlcInfo struct {
 	Id             types.Hash               `json:"id"`
 	TimeLocked     types.Address            `json:"timeLocked"`
@@ -91,10 +112,62 @@ type PtlcInfo struct {
 	ExpirationTime int64                    `json:"expirationTime"`
 	PointType      uint8                    `json:"pointType"`
 	PointLock      []byte                   `json:"pointLock"`
+	Destination    types.Address            `json:"destination"`
+}
+
+// PtlcInfoMarshal is the RPC shape: the amount as a decimal string, as every
+// other embedded contract returns it, so that clients that parse the htlc
+// shape parse this one too.
+type PtlcInfoMarshal struct {
+	Id             types.Hash               `json:"id"`
+	TimeLocked     types.Address            `json:"timeLocked"`
+	TokenStandard  types.ZenonTokenStandard `json:"tokenStandard"`
+	Amount         string                   `json:"amount"`
+	ExpirationTime int64                    `json:"expirationTime"`
+	PointType      uint8                    `json:"pointType"`
+	PointLock      []byte                   `json:"pointLock"`
+	Destination    types.Address            `json:"destination"`
+}
+
+func (p *PtlcInfo) ToPtlcInfoMarshal() *PtlcInfoMarshal {
+	return &PtlcInfoMarshal{
+		Id:             p.Id,
+		TimeLocked:     p.TimeLocked,
+		TokenStandard:  p.TokenStandard,
+		Amount:         p.Amount.String(),
+		ExpirationTime: p.ExpirationTime,
+		PointType:      p.PointType,
+		PointLock:      p.PointLock,
+		Destination:    p.Destination,
+	}
+}
+
+func (p *PtlcInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(p.ToPtlcInfoMarshal())
+}
+
+func (p *PtlcInfo) UnmarshalJSON(data []byte) error {
+	aux := new(PtlcInfoMarshal)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	amount, ok := new(big.Int).SetString(aux.Amount, 10)
+	if !ok {
+		return errors.Errorf("invalid amount %q", aux.Amount)
+	}
+	p.Id = aux.Id
+	p.TimeLocked = aux.TimeLocked
+	p.TokenStandard = aux.TokenStandard
+	p.Amount = amount
+	p.ExpirationTime = aux.ExpirationTime
+	p.PointType = aux.PointType
+	p.PointLock = aux.PointLock
+	p.Destination = aux.Destination
+	return nil
 }
 
 func (p PtlcInfo) String() string {
-	return fmt.Sprintf("Id:%s TimeLocked:%s TokenStandard:%s Amount:%s ExpirationTime:%d PointType:%d PointLock:%s ", p.Id, p.TimeLocked, p.TokenStandard, p.Amount, p.ExpirationTime, p.PointType, base64.StdEncoding.EncodeToString(p.PointLock))
+	return fmt.Sprintf("Id:%s TimeLocked:%s TokenStandard:%s Amount:%s ExpirationTime:%d PointType:%d PointLock:%s Destination:%s ", p.Id, p.TimeLocked, p.TokenStandard, p.Amount, p.ExpirationTime, p.PointType, base64.StdEncoding.EncodeToString(p.PointLock), p.Destination)
 }
 
 type UnlockPtlcParam struct {
@@ -117,6 +190,7 @@ func (entry *PtlcInfo) Save(context db.DB) error {
 		entry.ExpirationTime,
 		entry.PointType,
 		entry.PointLock,
+		entry.Destination,
 	)
 	if err != nil {
 		return err
@@ -147,6 +221,11 @@ func unmarshalPtlcInfoKey(key []byte) (*types.Hash, error) {
 	return h, nil
 }
 
+// GetPtlcUnlockMessage is what a key-type witness signs. It binds the chain,
+// the contract, the point type, the entry and the destination, so that a
+// signature made for one of them verifies for no other. The point type does
+// not sign anything: its witness is the scalar itself, and the entry's fixed
+// destination does the binding instead.
 func GetPtlcUnlockMessage(chainIdentifier uint64, pointType uint8, id types.Hash, destination types.Address) []byte {
 	return crypto.Hash(common.JoinBytes(
 		[]byte(PtlcUnlockMessageDomain),

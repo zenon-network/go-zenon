@@ -89,6 +89,7 @@ func createBIP340Ptlc(t *testing.T, z mock.MockZenon, pointLock []byte, expirati
 			expirationTime,
 			definition.PointTypeBIP340,
 			pointLock,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -108,6 +109,7 @@ func createED25519Ptlc(t *testing.T, z mock.MockZenon, pointLock []byte, expirat
 			expirationTime,
 			definition.PointTypeED25519,
 			pointLock,
+			types.ZeroAddress,
 		),
 		TokenStandard: token,
 		Amount:        amount,
@@ -136,6 +138,7 @@ func TestPtlc_spork_gating(t *testing.T) {
 			int64(genesisTimestamp+300),
 			definition.PointTypeED25519,
 			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -150,6 +153,7 @@ func TestPtlc_spork_gating(t *testing.T) {
 			int64(genesisTimestamp+300),
 			definition.PointTypeED25519,
 			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -191,6 +195,7 @@ t=2001-09-09T01:49:50+0000 lvl=dbug msg="invalid create - amount must be positiv
 			int64(genesisTimestamp+300), // expiration time
 			definition.PointTypeED25519, // point type
 			g.User2.Public,              // point lock
+			types.ZeroAddress,           // destination
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
@@ -222,6 +227,7 @@ func TestPtlc_unlock(t *testing.T) {
 			int64(genesisTimestamp+300), // expiration time
 			definition.PointTypeED25519, // point type
 			g.User2.Public,              // point lock
+			types.ZeroAddress,           // destination
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -229,16 +235,17 @@ func TestPtlc_unlock(t *testing.T) {
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	ptlcId := types.HexToHashPanic("6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79")
+	ptlcId := types.HexToHashPanic("b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da")
 	common.Json(ptlcApi.GetById(ptlcId)).Equals(t, `
 {
-	"id": "6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79",
+	"id": "b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da",
 	"timeLocked": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"amount": 1000000000,
+	"amount": "1000000000",
 	"expirationTime": 1000000300,
 	"pointType": 0,
-	"pointLock": "tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM="
+	"pointLock": "tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM=",
+	"destination": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f"
 }
 `)
 
@@ -355,6 +362,7 @@ func TestPtlc_proxy_unlock(t *testing.T) {
 			int64(genesisTimestamp+300), // expiration time
 			definition.PointTypeED25519, // point type
 			g.User2.Public,              // point lock
+			types.ZeroAddress,           // destination
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -362,16 +370,17 @@ func TestPtlc_proxy_unlock(t *testing.T) {
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	ptlcId := types.HexToHashPanic("6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79")
+	ptlcId := types.HexToHashPanic("b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da")
 	common.Json(ptlcApi.GetById(ptlcId)).Equals(t, `
 {
-	"id": "6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79",
+	"id": "b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da",
 	"timeLocked": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"amount": 1000000000,
+	"amount": "1000000000",
 	"expirationTime": 1000000300,
 	"pointType": 0,
-	"pointLock": "tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM="
+	"pointLock": "tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM=",
+	"destination": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f"
 }
 `)
 
@@ -461,6 +470,7 @@ func TestPtlc_wrongChainSignature(t *testing.T) {
 			int64(genesisTimestamp+300),
 			definition.PointTypeED25519,
 			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -497,6 +507,7 @@ func TestPtlc_wrongContractSignature(t *testing.T) {
 			int64(genesisTimestamp+300),
 			definition.PointTypeED25519,
 			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -528,9 +539,9 @@ func TestPtlc_reclaim(t *testing.T) {
 	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
 t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:d82f15026ad67abbc99786a9ed5b667ac578a78fb80df4ea573c22e727fd736a Name:spork-ptlc Description:activate spork for ptlc Activated:false EnforcementHeight:0}"
 t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:d82f15026ad67abbc99786a9ed5b667ac578a78fb80df4ea573c22e727fd736a Name:spork-ptlc Description:activate spork for ptlc Activated:true EnforcementHeight:9}"
-t=2001-09-09T01:50:00+0000 lvl=dbug msg=created module=embedded contract=ptlc ptlcInfo="Id:82eaa406d0762b558187eff923533242e0ebe801daa1aede897b6d2e3073eaad TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= "
-t=2001-09-09T01:53:20+0000 lvl=dbug msg="invalid unlock - entry is expired" module=embedded contract=ptlc id=82eaa406d0762b558187eff923533242e0ebe801daa1aede897b6d2e3073eaad address=z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx time=1000000400 expiration-time=1000000300
-t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc ptlcInfo="Id:82eaa406d0762b558187eff923533242e0ebe801daa1aede897b6d2e3073eaad TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= "
+t=2001-09-09T01:50:00+0000 lvl=dbug msg=created module=embedded contract=ptlc ptlcInfo="Id:a699ce2b0f7438c97df714b663cc66cf38fa59ec16cc6e8113c18104b93095d7 TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= Destination:z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f "
+t=2001-09-09T01:53:20+0000 lvl=dbug msg="invalid unlock - entry is expired" module=embedded contract=ptlc id=a699ce2b0f7438c97df714b663cc66cf38fa59ec16cc6e8113c18104b93095d7 address=z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx time=1000000400 expiration-time=1000000300
+t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc ptlcInfo="Id:a699ce2b0f7438c97df714b663cc66cf38fa59ec16cc6e8113c18104b93095d7 TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1qsrxxxxxxxxxxxxxmrhjll Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= Destination:z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f "
 `)
 	activatePtlc(t, z)
 
@@ -542,6 +553,7 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 			int64(genesisTimestamp+300), // expiration time
 			definition.PointTypeED25519, // point type
 			g.User2.Public,              // point lock
+			types.ZeroAddress,           // destination
 		),
 		TokenStandard: types.QsrTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -549,16 +561,17 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 	z.InsertNewMomentum()
 	z.InsertMomentumsTo(40)
 
-	ptlcId := types.HexToHashPanic("82eaa406d0762b558187eff923533242e0ebe801daa1aede897b6d2e3073eaad")
+	ptlcId := types.HexToHashPanic("a699ce2b0f7438c97df714b663cc66cf38fa59ec16cc6e8113c18104b93095d7")
 	common.Json(ptlcApi.GetById(ptlcId)).Equals(t, `
 {
-	"id": "82eaa406d0762b558187eff923533242e0ebe801daa1aede897b6d2e3073eaad",
+	"id": "a699ce2b0f7438c97df714b663cc66cf38fa59ec16cc6e8113c18104b93095d7",
 	"timeLocked": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"tokenStandard": "zts1qsrxxxxxxxxxxxxxmrhjll",
-	"amount": 1000000000,
+	"amount": "1000000000",
 	"expirationTime": 1000000300,
 	"pointType": 0,
-	"pointLock": "tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM="
+	"pointLock": "tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM=",
+	"destination": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f"
 }
 `)
 
@@ -637,6 +650,7 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg="invalid create - cannot create already 
 			int64(genesisTimestamp+300), // expiration time
 			definition.PointTypeED25519, // point type
 			g.User2.Public,              // point lock
+			types.ZeroAddress,           // destination
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -651,8 +665,8 @@ func TestPtlc_unlock_expiration_time(t *testing.T) {
 	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
 t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:d82f15026ad67abbc99786a9ed5b667ac578a78fb80df4ea573c22e727fd736a Name:spork-ptlc Description:activate spork for ptlc Activated:false EnforcementHeight:0}"
 t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:d82f15026ad67abbc99786a9ed5b667ac578a78fb80df4ea573c22e727fd736a Name:spork-ptlc Description:activate spork for ptlc Activated:true EnforcementHeight:9}"
-t=2001-09-09T01:50:00+0000 lvl=dbug msg=created module=embedded contract=ptlc ptlcInfo="Id:6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= "
-t=2001-09-09T01:51:40+0000 lvl=dbug msg="invalid unlock - entry is expired" module=embedded contract=ptlc id=6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 address=z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx time=1000000300 expiration-time=1000000300
+t=2001-09-09T01:50:00+0000 lvl=dbug msg=created module=embedded contract=ptlc ptlcInfo="Id:b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= Destination:z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f "
+t=2001-09-09T01:51:40+0000 lvl=dbug msg="invalid unlock - entry is expired" module=embedded contract=ptlc id=b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da address=z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx time=1000000300 expiration-time=1000000300
 `)
 	activatePtlc(t, z)
 
@@ -664,6 +678,7 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg="invalid unlock - entry is expired" modu
 			int64(genesisTimestamp+300), // expiration time
 			definition.PointTypeED25519, // point type
 			g.User2.Public,              // point lock
+			types.ZeroAddress,           // destination
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -671,7 +686,7 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg="invalid unlock - entry is expired" modu
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	ptlcId := types.HexToHashPanic("6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79")
+	ptlcId := types.HexToHashPanic("b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da")
 
 	z.InsertMomentumsTo(30)
 	// Sun Sep 09 2001 01:51:40 GMT+0000
@@ -700,8 +715,8 @@ func TestPtlc_reclaim_expiration_time(t *testing.T) {
 	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
 t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:d82f15026ad67abbc99786a9ed5b667ac578a78fb80df4ea573c22e727fd736a Name:spork-ptlc Description:activate spork for ptlc Activated:false EnforcementHeight:0}"
 t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:d82f15026ad67abbc99786a9ed5b667ac578a78fb80df4ea573c22e727fd736a Name:spork-ptlc Description:activate spork for ptlc Activated:true EnforcementHeight:9}"
-t=2001-09-09T01:50:00+0000 lvl=dbug msg=created module=embedded contract=ptlc ptlcInfo="Id:6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= "
-t=2001-09-09T01:51:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc ptlcInfo="Id:6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= "
+t=2001-09-09T01:50:00+0000 lvl=dbug msg=created module=embedded contract=ptlc ptlcInfo="Id:b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= Destination:z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f "
+t=2001-09-09T01:51:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc ptlcInfo="Id:b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= Destination:z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f "
 `)
 	activatePtlc(t, z)
 
@@ -713,6 +728,7 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 			int64(genesisTimestamp+300), // expiration time
 			definition.PointTypeED25519, // point type
 			g.User2.Public,              // point lock
+			types.ZeroAddress,           // destination
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -720,7 +736,7 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	ptlcId := types.HexToHashPanic("6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79")
+	ptlcId := types.HexToHashPanic("b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da")
 
 	z.InsertMomentumsTo(30)
 	// Sun Sep 09 2001 01:51:40 GMT+0000
@@ -746,12 +762,12 @@ func TestPtlc_reclaim_access(t *testing.T) {
 	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
 t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:d82f15026ad67abbc99786a9ed5b667ac578a78fb80df4ea573c22e727fd736a Name:spork-ptlc Description:activate spork for ptlc Activated:false EnforcementHeight:0}"
 t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:d82f15026ad67abbc99786a9ed5b667ac578a78fb80df4ea573c22e727fd736a Name:spork-ptlc Description:activate spork for ptlc Activated:true EnforcementHeight:9}"
-t=2001-09-09T01:50:00+0000 lvl=dbug msg=created module=embedded contract=ptlc ptlcInfo="Id:6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= "
-t=2001-09-09T01:50:20+0000 lvl=dbug msg="invalid reclaim - permission denied" module=embedded contract=ptlc id=6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 address=z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx
-t=2001-09-09T01:50:30+0000 lvl=dbug msg="invalid reclaim - permission denied" module=embedded contract=ptlc id=6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 address=z1qrs2lpccnsneglhnnfwvlsj0qncnxjnwlfmjac
-t=2001-09-09T01:53:20+0000 lvl=dbug msg="invalid reclaim - permission denied" module=embedded contract=ptlc id=6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 address=z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx
-t=2001-09-09T01:53:30+0000 lvl=dbug msg="invalid reclaim - permission denied" module=embedded contract=ptlc id=6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 address=z1qrs2lpccnsneglhnnfwvlsj0qncnxjnwlfmjac
-t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc ptlcInfo="Id:6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= "
+t=2001-09-09T01:50:00+0000 lvl=dbug msg=created module=embedded contract=ptlc ptlcInfo="Id:b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= Destination:z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f "
+t=2001-09-09T01:50:20+0000 lvl=dbug msg="invalid reclaim - permission denied" module=embedded contract=ptlc id=b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da address=z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx
+t=2001-09-09T01:50:30+0000 lvl=dbug msg="invalid reclaim - permission denied" module=embedded contract=ptlc id=b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da address=z1qrs2lpccnsneglhnnfwvlsj0qncnxjnwlfmjac
+t=2001-09-09T01:53:20+0000 lvl=dbug msg="invalid reclaim - permission denied" module=embedded contract=ptlc id=b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da address=z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx
+t=2001-09-09T01:53:30+0000 lvl=dbug msg="invalid reclaim - permission denied" module=embedded contract=ptlc id=b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da address=z1qrs2lpccnsneglhnnfwvlsj0qncnxjnwlfmjac
+t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc ptlcInfo="Id:b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= Destination:z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f "
 `)
 	activatePtlc(t, z)
 
@@ -763,6 +779,7 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 			int64(genesisTimestamp+300), // expiration time
 			definition.PointTypeED25519, // point type
 			g.User2.Public,              // point lock
+			types.ZeroAddress,           // destination
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -770,7 +787,7 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	ptlcId := types.HexToHashPanic("6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79")
+	ptlcId := types.HexToHashPanic("b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da")
 
 	// user 2 tries to reclaim unexpired
 	defer z.CallContract(&nom.AccountBlock{
@@ -909,6 +926,7 @@ func TestPtlc_nonexistent_after_unlock(t *testing.T) {
 			int64(genesisTimestamp+300), // expiration time
 			definition.PointTypeED25519, // point type
 			g.User2.Public,              // point lock
+			types.ZeroAddress,           // destination
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -916,7 +934,7 @@ func TestPtlc_nonexistent_after_unlock(t *testing.T) {
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	ptlcId := types.HexToHashPanic("6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79")
+	ptlcId := types.HexToHashPanic("b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da")
 
 	// user2 unlocks with correct signature
 	mh := ptlcUnlockMessage(z, definition.PointTypeED25519, ptlcId, g.User2.Address)
@@ -970,10 +988,10 @@ func TestPtlc_nonexistent_after_reclaim(t *testing.T) {
 	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
 t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:d82f15026ad67abbc99786a9ed5b667ac578a78fb80df4ea573c22e727fd736a Name:spork-ptlc Description:activate spork for ptlc Activated:false EnforcementHeight:0}"
 t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork spork="&{Id:d82f15026ad67abbc99786a9ed5b667ac578a78fb80df4ea573c22e727fd736a Name:spork-ptlc Description:activate spork for ptlc Activated:true EnforcementHeight:9}"
-t=2001-09-09T01:50:00+0000 lvl=dbug msg=created module=embedded contract=ptlc ptlcInfo="Id:6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= "
-t=2001-09-09T01:53:20+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc ptlcInfo="Id:6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= "
-t=2001-09-09T01:53:30+0000 lvl=dbug msg="invalid unlock - entry does not exist" module=embedded contract=ptlc id=6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 address=z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx
-t=2001-09-09T01:53:40+0000 lvl=dbug msg="invalid reclaim - entry does not exist" module=embedded contract=ptlc id=6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79 address=z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz
+t=2001-09-09T01:50:00+0000 lvl=dbug msg=created module=embedded contract=ptlc ptlcInfo="Id:b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= Destination:z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f "
+t=2001-09-09T01:53:20+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc ptlcInfo="Id:b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da TimeLocked:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz TokenStandard:zts1znnxxxxxxxxxxxxx9z4ulx Amount:1000000000 ExpirationTime:1000000300 PointType:0 PointLock:tUJu3P7Drp25XP662lIjyFlFpvj8bWUpyC+0y5YTzXM= Destination:z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f "
+t=2001-09-09T01:53:30+0000 lvl=dbug msg="invalid unlock - entry does not exist" module=embedded contract=ptlc id=b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da address=z1qr4pexnnfaexqqz8nscjjcsajy5hdqfkgadvwx
+t=2001-09-09T01:53:40+0000 lvl=dbug msg="invalid reclaim - entry does not exist" module=embedded contract=ptlc id=b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da address=z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz
 `)
 	activatePtlc(t, z)
 
@@ -985,6 +1003,7 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg="invalid reclaim - entry does not exist"
 			int64(genesisTimestamp+300), // expiration time
 			definition.PointTypeED25519, // point type
 			g.User2.Public,              // point lock
+			types.ZeroAddress,           // destination
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -992,7 +1011,7 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg="invalid reclaim - entry does not exist"
 	z.InsertNewMomentum()
 	z.InsertMomentumsTo(40)
 
-	ptlcId := types.HexToHashPanic("6809e10e211036a33d43ce4a72b71a5389ac8050df1249edefd52b632ce45b79")
+	ptlcId := types.HexToHashPanic("b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da")
 
 	// user1 reclaims
 	defer z.CallContract(&nom.AccountBlock{
@@ -1055,6 +1074,7 @@ t=2001-09-09T01:50:00+0000 lvl=dbug msg="invalid create - cannot create already 
 			int64(genesisTimestamp-300), // expiration time
 			definition.PointTypeED25519, // point type
 			g.User2.Public,              // point lock
+			types.ZeroAddress,           // destination
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -1090,6 +1110,7 @@ func TestPtlc_createRejectsInvalidBIP340Point(t *testing.T) {
 			int64(genesisTimestamp+300),
 			definition.PointTypeBIP340,
 			bytes.Repeat([]byte{0xff}, 32),
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -1119,6 +1140,7 @@ func TestPtlc_unlockBIP340(t *testing.T) {
 			int64(genesisTimestamp+300), // expiration time
 			definition.PointTypeBIP340,  // point type
 			pub2bip340,                  // point lock
+			types.ZeroAddress,           // destination
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -1135,17 +1157,18 @@ func TestPtlc_unlockBIP340(t *testing.T) {
 	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 10*g.Zexp)
 	z.ExpectBalance(types.PtlcContract, types.QsrTokenStandard, 0*g.Zexp)
 
-	ptlcId := types.HexToHashPanic("80a763df5c1a41bcd03da24cad3b1b325f2fc5d125d4e3b5fa2d1b48d891bea6")
+	ptlcId := types.HexToHashPanic("47f57134b5d8308335b5c146e586cfdcb62dc476c0279dd6c04963ecca586a0e")
 
 	common.Json(ptlcApi.GetById(ptlcId)).Equals(t, `
 {
-	"id": "80a763df5c1a41bcd03da24cad3b1b325f2fc5d125d4e3b5fa2d1b48d891bea6",
+	"id": "47f57134b5d8308335b5c146e586cfdcb62dc476c0279dd6c04963ecca586a0e",
 	"timeLocked": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 	"tokenStandard": "zts1znnxxxxxxxxxxxxx9z4ulx",
-	"amount": 1000000000,
+	"amount": "1000000000",
 	"expirationTime": 1000000300,
 	"pointType": 1,
-	"pointLock": "fiG8+7m7odpA43OSLYoUwZ0RvTtY6wwnAPKWVeOJ5ww="
+	"pointLock": "fiG8+7m7odpA43OSLYoUwZ0RvTtY6wwnAPKWVeOJ5ww=",
+	"destination": "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsggv2f"
 }
 `)
 	mh := ptlcUnlockMessage(z, definition.PointTypeBIP340, ptlcId, g.User2.Address)
@@ -1241,6 +1264,7 @@ func TestPtlc_proxyUnlockBIP340(t *testing.T) {
 			int64(genesisTimestamp+300),
 			definition.PointTypeBIP340,
 			pub2bip340,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),

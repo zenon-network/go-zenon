@@ -73,6 +73,8 @@ var (
 	ErrInvalidPointType      = errors.New("invalid point type")
 	ErrInvalidPointLock      = errors.New("invalid point lock")
 	ErrInvalidPointSignature = errors.New("invalid signature")
+	ErrInvalidPointScalar    = errors.New("invalid scalar")
+	ErrInvalidDestination    = errors.New("invalid destination")
 
 	// Bridge
 	ErrUnknownNetwork                       = errors.New("unknown network")
