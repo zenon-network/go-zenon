@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/syndtr/goleveldb/leveldb"
 
@@ -493,9 +495,12 @@ func TestManagerStopIsIdempotent(t *testing.T) {
 		{"leveldb", func(t *testing.T) (Manager, func()) {
 			dir := t.TempDir()
 			return NewLevelDBManager(dir), func() {
+				// The raw handle has no nil-on-repeat contract, so its
+				// single Close belongs to the cleanup that is registered
+				// as soon as the open succeeds.
 				ldb, err := leveldb.OpenFile(dir, nil)
 				common.FailIfErr(t, err)
-				common.FailIfErr(t, ldb.Close())
+				t.Cleanup(func() { common.FailIfErr(t, ldb.Close()) })
 			}
 		}},
 		{"memdb", func(t *testing.T) (Manager, func()) {
@@ -505,6 +510,9 @@ func TestManagerStopIsIdempotent(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m, reopen := tc.open(t)
+			// Registered before any assertion; a repeated Stop is the
+			// contract under test, so the explicit calls below stay.
+			t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 			common.FailIfErr(t, m.Add(newMockTransaction(1, m.Frontier())))
 			common.FailIfErr(t, m.Stop())
 			reopen()
@@ -523,9 +531,13 @@ func TestManagerStopIsIdempotent(t *testing.T) {
 // the documented no-op rather than a second error.
 func TestLevelDBManagerStopAfterFailedClose(t *testing.T) {
 	m := NewLevelDBManager(t.TempDir()).(*ldbManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+	// The handle is closed underneath the manager, so the failure the first
+	// Stop sees is goleveldb's ErrClosed; an I/O failure of a first Close
+	// is not what this fixture produces.
 	common.FailIfErr(t, m.ldb.Close())
-	if err := m.Stop(); err == nil {
-		t.Fatalf("expected Stop to report the close error")
+	if err := m.Stop(); err != leveldb.ErrClosed {
+		t.Fatalf("expected Stop to report leveldb.ErrClosed, got %v", err)
 	}
 	common.FailIfErr(t, m.Stop())
 	if m.Frontier() != nil {
@@ -537,6 +549,80 @@ func TestLevelDBManagerStopAfterFailedClose(t *testing.T) {
 // manager synchronises with the other methods. Run under the race detector
 // an unlocked Stop is reported against the concurrent Add; with the lock the
 // Add either lands before the Stop or is refused, and never panics.
+// barrierCommit pauses Serialize until released, which holds Add between
+// its early stopped check and the publication of the new state.
+type barrierCommit struct {
+	*mockCommit
+	entered chan struct{} // closed when Serialize is first called
+	release chan struct{} // Serialize returns once this is closed
+	once    sync.Once
+}
+
+func (c *barrierCommit) Serialize() ([]byte, error) {
+	c.once.Do(func() { close(c.entered) })
+	<-c.release
+	return c.mockCommit.Serialize()
+}
+
+// TestMemDBManagerStopDuringAdd pins the final stopped check in Add: a Stop
+// that lands after Add has passed its early check and taken its snapshot
+// must still make Add fail and leave nothing behind. Dropping only that
+// final check turns this test red; the race-detector test below cannot
+// order the two calls and so does not.
+func TestMemDBManagerStopDuringAdd(t *testing.T) {
+	m := NewMemDBManager(NewMemDB())
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+	transaction := newMockTransaction(1, m.Frontier())
+	commit := &barrierCommit{
+		mockCommit: transaction.commit.(*mockCommit),
+		entered:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	transaction.commit = commit
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(commit.release) }) }
+	t.Cleanup(release)
+
+	type outcome struct {
+		err      error
+		panicked interface{}
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- outcome{panicked: r}
+			}
+		}()
+		done <- outcome{err: m.Add(transaction)}
+	}()
+
+	select {
+	case <-commit.entered:
+	case <-time.After(5 * time.Second):
+		release()
+		t.Fatal("Add did not reach Serialize")
+	}
+	common.FailIfErr(t, m.Stop())
+	release()
+
+	select {
+	case result := <-done:
+		if result.panicked != nil {
+			t.Fatalf("Add panicked after Stop: %v", result.panicked)
+		}
+		if result.err == nil {
+			t.Fatal("expected Add to fail after Stop")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Add did not return")
+	}
+	identifier := commit.Identifier()
+	if m.Frontier() != nil || m.Get(identifier) != nil || m.GetPatch(identifier) != nil {
+		t.Fatal("state published by an Add that lost to Stop")
+	}
+}
+
 func TestMemDBManagerStopConcurrentWithAdd(t *testing.T) {
 	m := NewMemDBManager(NewMemDB())
 	transaction := newMockTransaction(1, m.Frontier())
