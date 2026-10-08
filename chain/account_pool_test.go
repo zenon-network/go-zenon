@@ -1,10 +1,17 @@
 package chain
 
 import (
+	"bytes"
+	"encoding/hex"
+	"fmt"
+	"math/big"
+	"sync"
 	"testing"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/db"
+	"github.com/zenon-network/go-zenon/common/types"
 )
 
 func TestAccountPool_filterBlocksToCommit(t *testing.T) {
@@ -21,4 +28,697 @@ func TestAccountPool_filterBlocksToCommit(t *testing.T) {
 		{Height: 2, BlockType: nom.BlockTypeContractSend},
 		{Height: 3, BlockType: nom.BlockTypeUserReceive},
 	})), 0)
+}
+
+// memStable backs an account pool with one in-memory stable DB per address.
+type memStable struct {
+	dbs map[types.Address]db.DB
+}
+
+func (s *memStable) GetStableAccountDB(address types.Address) db.DB {
+	if s.dbs == nil {
+		s.dbs = map[types.Address]db.DB{}
+	}
+	if s.dbs[address] == nil {
+		s.dbs[address] = db.NewMemDB()
+	}
+	return s.dbs[address]
+}
+
+// poolBlockChain builds a height-1 base block, two copies of a height-2 block
+// that share an identifier but differ in a field that is stored without being
+// hashed, and a height-3 descendant on top of the first copy.
+func poolBlockChain() (base, a, b, descendant *nom.AccountBlock) {
+	address := types.ParseAddressPanic("z1qqjfammypam0sjhzst0jfjth60vy9g8w0g5lhg")
+	base = &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeUserReceive,
+		Address:         address,
+		Height:          1,
+		Amount:          big.NewInt(0),
+		Signature:       bytes.Repeat([]byte{0x11}, 64),
+	}
+	base.Hash = base.ComputeHash()
+	a = &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeUserReceive,
+		Address:         address,
+		Height:          2,
+		PreviousHash:    base.Hash,
+		Amount:          big.NewInt(0),
+		Signature:       bytes.Repeat([]byte{0xaa}, 64),
+	}
+	a.Hash = a.ComputeHash()
+	b = a.Copy()
+	b.Signature = bytes.Repeat([]byte{0xbb}, 64)
+	descendant = &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeUserSend,
+		Address:         address,
+		Height:          3,
+		PreviousHash:    a.Hash,
+		Amount:          big.NewInt(0),
+		Signature:       bytes.Repeat([]byte{0x33}, 64),
+	}
+	descendant.Hash = descendant.ComputeHash()
+	return base, a, b, descendant
+}
+
+func poolTransaction(block *nom.AccountBlock) *nom.AccountBlockTransaction {
+	return &nom.AccountBlockTransaction{Block: block, Changes: db.NewPatch()}
+}
+
+func TestAccountPool_ForceAddReplacesSameIdentifierWithDifferentBytes(t *testing.T) {
+	base, a, b, descendant := poolBlockChain()
+	common.Expect(t, a.Identifier(), b.Identifier())
+
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(a)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(descendant)))
+	common.FailIfErr(t, ap.ForceAddAccountBlockTransaction(locker, poolTransaction(b)))
+
+	// The later pending block chains onto the unchanged hash and stays.
+	frontier := ap.GetFrontierAccountStore(a.Address)
+	common.Expect(t, frontier.Identifier(), descendant.Identifier())
+	stored, err := frontier.ByHeight(2)
+	common.FailIfErr(t, err)
+	common.ExpectBytes(t, stored.Signature, "0x"+hex.EncodeToString(b.Signature))
+}
+
+func TestAccountPool_AddKeepsFirstVariantOfSameIdentifier(t *testing.T) {
+	base, a, b, _ := poolBlockChain()
+
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(a)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(b)))
+
+	stored, err := ap.GetFrontierAccountStore(a.Address).ByHeight(2)
+	common.FailIfErr(t, err)
+	common.ExpectBytes(t, stored.Signature, "0x"+hex.EncodeToString(a.Signature))
+}
+
+func TestAccountPool_RestoreUncommittedRevertsForcedReplacement(t *testing.T) {
+	base, a, b, descendant := poolBlockChain()
+
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(a)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(descendant)))
+
+	patchesBefore := poolPatchDumps(ap, a.Address, base, a, descendant)
+
+	snapshot := ap.SnapshotUncommitted(locker, []types.Address{a.Address})
+	common.FailIfErr(t, ap.ForceAddAccountBlockTransaction(locker, poolTransaction(b)))
+	replaced, err := ap.GetFrontierAccountStore(a.Address).ByHeight(2)
+	common.FailIfErr(t, err)
+	common.ExpectBytes(t, replaced.Signature, "0x"+hex.EncodeToString(b.Signature))
+
+	common.FailIfErr(t, ap.RestoreUncommitted(locker, snapshot))
+
+	frontier := ap.GetFrontierAccountStore(a.Address)
+	common.Expect(t, frontier.Identifier(), descendant.Identifier())
+	stored, err := frontier.ByHeight(2)
+	common.FailIfErr(t, err)
+	common.ExpectBytes(t, stored.Signature, "0x"+hex.EncodeToString(a.Signature))
+	common.Expect(t, len(ap.GetUncommittedAccountBlocksByAddress(a.Address)), 3)
+	expectPatchDumps(t, patchesBefore, poolPatchDumps(ap, a.Address, base, a, descendant))
+}
+
+// poolPatchDumps returns the serialized patch of each block as the pool holds
+// it. Each dump is copied: Patch.Dump returns the patch's own backing buffer,
+// so a baseline taken from it would otherwise follow later changes to the
+// patch and a comparison against it could never fail.
+func poolPatchDumps(ap *accountPool, address types.Address, blocks ...*nom.AccountBlock) [][]byte {
+	dumps := make([][]byte, 0, len(blocks))
+	for _, block := range blocks {
+		patch := ap.GetPatch(address, block.Identifier())
+		if patch == nil {
+			dumps = append(dumps, nil)
+			continue
+		}
+		dumps = append(dumps, append([]byte(nil), patch.Dump()...))
+	}
+	return dumps
+}
+
+// TestAccountPool_PatchDumpBaselinesAreIndependentCopies is the control for
+// the comparisons above: a baseline must not change when the pool's patch
+// bytes do, and the comparison must then see the difference.
+func TestAccountPool_PatchDumpBaselinesAreIndependentCopies(t *testing.T) {
+	base, a, _, _ := poolBlockChain()
+
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(a)))
+
+	baseline := poolPatchDumps(ap, a.Address, a)[0]
+	if len(baseline) == 0 {
+		t.Fatal("block a has no patch bytes to compare")
+	}
+	expected := append([]byte(nil), baseline...)
+
+	// Write through the live patch's buffer, as a later pool operation that
+	// appends to or rewrites the stored patch would.
+	live := ap.GetPatch(a.Address, a.Identifier()).Dump()
+	live[0] ^= 0xff
+
+	if !bytes.Equal(baseline, expected) {
+		t.Fatal("baseline changed with the live patch; it aliases the patch buffer")
+	}
+	if bytes.Equal(baseline, poolPatchDumps(ap, a.Address, a)[0]) {
+		t.Fatal("comparison did not detect the altered patch bytes")
+	}
+}
+
+func expectPatchDumps(t *testing.T, before, after [][]byte) {
+	t.Helper()
+	common.Expect(t, len(after), len(before))
+	for i := range before {
+		if !bytes.Equal(before[i], after[i]) {
+			t.Fatalf("patch %d changed after restore: %d bytes before, %d bytes after", i, len(before[i]), len(after[i]))
+		}
+	}
+}
+
+// embeddedReceiveChain builds a contract receive at height 2 that carries two
+// descendant contract sends, on top of a height-1 base block.
+func embeddedReceiveChain() (base, receive *nom.AccountBlock) {
+	address := types.PillarContract
+	base = &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeContractReceive,
+		Address:         address,
+		Height:          1,
+		Amount:          big.NewInt(0),
+	}
+	base.Hash = base.ComputeHash()
+	previous := base.Hash
+	descendants := make([]*nom.AccountBlock, 0, 2)
+	for height := uint64(2); height <= 3; height++ {
+		d := &nom.AccountBlock{
+			Version:         1,
+			ChainIdentifier: 1,
+			BlockType:       nom.BlockTypeContractSend,
+			Address:         address,
+			Height:          height,
+			PreviousHash:    previous,
+			Amount:          big.NewInt(0),
+		}
+		d.Hash = d.ComputeHash()
+		previous = d.Hash
+		descendants = append(descendants, d)
+	}
+	receive = &nom.AccountBlock{
+		Version:          1,
+		ChainIdentifier:  1,
+		BlockType:        nom.BlockTypeContractReceive,
+		Address:          address,
+		Height:           4,
+		PreviousHash:     previous,
+		Amount:           big.NewInt(0),
+		DescendantBlocks: descendants,
+	}
+	receive.Hash = receive.ComputeHash()
+	return base, receive
+}
+
+func TestAccountPool_RestoreUncommittedKeepsBatchedEmbeddedTransaction(t *testing.T) {
+	base, receive := embeddedReceiveChain()
+
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(receive)))
+	all := append([]*nom.AccountBlock{base}, receive.DescendantBlocks...)
+	all = append(all, receive)
+	common.Expect(t, ap.GetFrontierAccountStore(receive.Address).Identifier(), receive.Identifier())
+	patchesBefore := poolPatchDumps(ap, receive.Address, all...)
+
+	snapshot := ap.SnapshotUncommitted(locker, []types.Address{receive.Address})
+	// Roll the account back to the base block, as a forced insert of a
+	// competing block would.
+	replacement := base.Copy()
+	replacement.Height = 2
+	replacement.PreviousHash = base.Hash
+	replacement.Hash = replacement.ComputeHash()
+	common.FailIfErr(t, ap.ForceAddAccountBlockTransaction(locker, poolTransaction(replacement)))
+	common.Expect(t, ap.GetFrontierAccountStore(receive.Address).Identifier(), replacement.Identifier())
+
+	common.FailIfErr(t, ap.RestoreUncommitted(locker, snapshot))
+
+	frontier := ap.GetFrontierAccountStore(receive.Address)
+	common.Expect(t, frontier.Identifier(), receive.Identifier())
+	for _, block := range all {
+		stored, err := frontier.ByHeight(block.Height)
+		common.FailIfErr(t, err)
+		if stored == nil || !stored.EqualBytes(block) {
+			t.Fatalf("block at height %d not restored byte-identically", block.Height)
+		}
+	}
+	expectPatchDumps(t, patchesBefore, poolPatchDumps(ap, receive.Address, all...))
+}
+
+func TestAccountPool_RestoreUncommittedEmptySnapshotClearsAddress(t *testing.T) {
+	base, a, _, _ := poolBlockChain()
+
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	snapshot := ap.SnapshotUncommitted(locker, []types.Address{a.Address, a.Address})
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(a)))
+
+	common.FailIfErr(t, ap.RestoreUncommitted(locker, snapshot))
+
+	common.Expect(t, ap.GetFrontierAccountStore(a.Address).Identifier(), types.ZeroHashHeight)
+	common.Expect(t, len(ap.GetAllUncommittedAccountBlocks()), 0)
+	common.FailIfErr(t, ap.RestoreUncommitted(locker, nil))
+}
+
+func TestAccountBlockCopyPreservesBytes(t *testing.T) {
+	base, receive := embeddedReceiveChain()
+	for _, block := range []*nom.AccountBlock{base, receive} {
+		if !block.Copy().EqualBytes(block) {
+			t.Fatalf("copy of block at height %d serializes differently", block.Height)
+		}
+	}
+}
+
+// TestAccountPool_ForceAddReplacementKeepsLaterPendingBlocks pins that a forced
+// replacement of a block by a byte-different copy with the same identifier
+// keeps the account's later pending blocks. They chain onto the hash, which
+// the replacement does not change, so they are still valid and must come back
+// with their patches instead of silently leaving the pool.
+func TestAccountPool_ForceAddReplacementKeepsLaterPendingBlocks(t *testing.T) {
+	base, a, b, descendant := poolBlockChain()
+
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(a)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(descendant)))
+	patchesBefore := poolPatchDumps(ap, a.Address, descendant)
+
+	common.FailIfErr(t, ap.ForceAddAccountBlockTransaction(locker, poolTransaction(b)))
+
+	frontier := ap.GetFrontierAccountStore(a.Address)
+	common.Expect(t, frontier.Identifier(), descendant.Identifier())
+	stored, err := frontier.ByHeight(2)
+	common.FailIfErr(t, err)
+	if stored == nil || !stored.EqualBytes(b) {
+		t.Fatalf("height 2 must hold the replacement copy")
+	}
+	later, err := frontier.ByHeight(3)
+	common.FailIfErr(t, err)
+	if later == nil || !later.EqualBytes(descendant) {
+		t.Fatalf("later pending block must survive the replacement byte-identically")
+	}
+	common.Expect(t, len(ap.GetUncommittedAccountBlocksByAddress(a.Address)), 3)
+	// Re-adding appends the frontier entries to the patch again, as the
+	// rebuild path does (#82), so the bytes grow; the state they produce
+	// must not change.
+	patchesAfter := poolPatchDumps(ap, a.Address, descendant)
+	common.ExpectString(t, patchState(t, patchesAfter[0]), patchState(t, patchesBefore[0]))
+}
+
+// patchState applies a serialized patch to an empty store and dumps the
+// result, so two patches compare by the state they produce rather than by
+// their bytes.
+func patchState(t *testing.T, dump []byte) string {
+	t.Helper()
+	patch, err := db.NewPatchFromDump(append([]byte(nil), dump...))
+	common.FailIfErr(t, err)
+	store := db.NewMemDB()
+	common.FailIfErr(t, db.ApplyPatch(store, patch))
+	return db.DebugDB(store)
+}
+
+// TestAccountPool_ForceAddReplacesBatchedEmbeddedReceive pins that the forced
+// replacement also works for a contract receive that carries descendants. Its
+// Previous() points before the whole batch, not one height below the receive,
+// so the predecessor check has to look up the batch's previous.
+func TestAccountPool_ForceAddReplacesBatchedEmbeddedReceive(t *testing.T) {
+	base, receive := embeddedReceiveChain()
+
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(receive)))
+
+	variant := receive.Copy()
+	variant.ChangesHash = types.NewHash([]byte("same identifier, different bytes"))
+	common.Expect(t, variant.Identifier(), receive.Identifier())
+	common.FailIfErr(t, ap.ForceAddAccountBlockTransaction(locker, poolTransaction(variant)))
+
+	frontier := ap.GetFrontierAccountStore(receive.Address)
+	common.Expect(t, frontier.Identifier(), receive.Identifier())
+	stored, err := frontier.ByHeight(receive.Height)
+	common.FailIfErr(t, err)
+	if stored == nil || !stored.EqualBytes(variant) {
+		t.Fatalf("the receive must hold the replacement copy")
+	}
+	for _, d := range receive.DescendantBlocks {
+		stored, err := frontier.ByHeight(d.Height)
+		common.FailIfErr(t, err)
+		if stored == nil || !stored.EqualBytes(d) {
+			t.Fatalf("descendant at height %d missing after replacement", d.Height)
+		}
+	}
+}
+
+// TestAccountPool_ForceAddReplacesBatchedEmbeddedReceiveAsFirstTransaction
+// covers the batch that opens an account: its Previous() is the zero
+// identifier, so there is no predecessor block to match at all.
+func TestAccountPool_ForceAddReplacesBatchedEmbeddedReceiveAsFirstTransaction(t *testing.T) {
+	address := types.PillarContract
+	previous := types.ZeroHash
+	descendants := make([]*nom.AccountBlock, 0, 2)
+	for height := uint64(1); height <= 2; height++ {
+		d := &nom.AccountBlock{
+			Version:         1,
+			ChainIdentifier: 1,
+			BlockType:       nom.BlockTypeContractSend,
+			Address:         address,
+			Height:          height,
+			PreviousHash:    previous,
+			Amount:          big.NewInt(0),
+		}
+		d.Hash = d.ComputeHash()
+		previous = d.Hash
+		descendants = append(descendants, d)
+	}
+	receive := &nom.AccountBlock{
+		Version:          1,
+		ChainIdentifier:  1,
+		BlockType:        nom.BlockTypeContractReceive,
+		Address:          address,
+		Height:           3,
+		PreviousHash:     previous,
+		Amount:           big.NewInt(0),
+		DescendantBlocks: descendants,
+	}
+	receive.Hash = receive.ComputeHash()
+	common.Expect(t, receive.Previous(), types.ZeroHashHeight)
+
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(receive)))
+
+	variant := receive.Copy()
+	variant.ChangesHash = types.NewHash([]byte("same identifier, different bytes"))
+	common.FailIfErr(t, ap.ForceAddAccountBlockTransaction(locker, poolTransaction(variant)))
+
+	frontier := ap.GetFrontierAccountStore(address)
+	common.Expect(t, frontier.Identifier(), receive.Identifier())
+	stored, err := frontier.ByHeight(receive.Height)
+	common.FailIfErr(t, err)
+	if stored == nil || !stored.EqualBytes(variant) {
+		t.Fatalf("the receive must hold the replacement copy")
+	}
+}
+
+// batchedReceiveOn builds a contract receive whose two descendant sends start
+// at firstHeight, chained onto prev.
+func batchedReceiveOn(prev *nom.AccountBlock, firstHeight uint64) *nom.AccountBlock {
+	previous := prev.Hash
+	descendants := make([]*nom.AccountBlock, 0, 2)
+	for height := firstHeight; height < firstHeight+2; height++ {
+		d := &nom.AccountBlock{
+			Version:         1,
+			ChainIdentifier: 1,
+			BlockType:       nom.BlockTypeContractSend,
+			Address:         prev.Address,
+			Height:          height,
+			PreviousHash:    previous,
+			Amount:          big.NewInt(0),
+		}
+		d.Hash = d.ComputeHash()
+		previous = d.Hash
+		descendants = append(descendants, d)
+	}
+	receive := &nom.AccountBlock{
+		Version:          1,
+		ChainIdentifier:  1,
+		BlockType:        nom.BlockTypeContractReceive,
+		Address:          prev.Address,
+		Height:           firstHeight + 2,
+		PreviousHash:     previous,
+		Amount:           big.NewInt(0),
+		DescendantBlocks: descendants,
+	}
+	receive.Hash = receive.ComputeHash()
+	return receive
+}
+
+// TestAccountPool_ForceAddReplacementKeepsLaterBatchedReceive pins that a
+// batched receive above the replaced block is kept whole. The store holds
+// its descendants at their own heights and the head with the descendants in
+// its record, so the batch has to go back as one transaction; re-adding the
+// heights one by one would leave the descendants without their head.
+func TestAccountPool_ForceAddReplacementKeepsLaterBatchedReceive(t *testing.T) {
+	base, receiveA := embeddedReceiveChain()
+	receiveB := batchedReceiveOn(receiveA, 5)
+
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(receiveA)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(receiveB)))
+	patchesBefore := poolPatchDumps(ap, base.Address, receiveB)
+
+	variant := receiveA.Copy()
+	variant.ChangesHash = types.NewHash([]byte("same identifier, different bytes"))
+	common.FailIfErr(t, ap.ForceAddAccountBlockTransaction(locker, poolTransaction(variant)))
+
+	frontier := ap.GetFrontierAccountStore(base.Address)
+	common.Expect(t, frontier.Identifier(), receiveB.Identifier())
+	all := append([]*nom.AccountBlock{}, receiveB.DescendantBlocks...)
+	all = append(all, receiveB)
+	for _, block := range all {
+		stored, err := frontier.ByHeight(block.Height)
+		common.FailIfErr(t, err)
+		if stored == nil || !stored.EqualBytes(block) {
+			t.Fatalf("block at height %d of the later batch missing after replacement", block.Height)
+		}
+	}
+	patchesAfter := poolPatchDumps(ap, base.Address, receiveB)
+	common.ExpectString(t, patchState(t, patchesAfter[0]), patchState(t, patchesBefore[0]))
+}
+
+// TestAccountPool_BatchedReceiveAgainstCompetingChain pins that a batch whose
+// head sits above the pool frontier, with its previous matching a lower block,
+// competes with the block at the first height it occupies. There is no block
+// at the head's height to compare against, and that must not be treated as a
+// competitor.
+func TestAccountPool_BatchedReceiveAgainstCompetingChain(t *testing.T) {
+	base, receive := embeddedReceiveChain() // receive: descendants 2-3, head 4, previous = base
+	competitor := &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeContractReceive,
+		Address:         base.Address,
+		Height:          2,
+		PreviousHash:    base.Hash,
+		Amount:          big.NewInt(0),
+		ChangesHash:     types.NewHash([]byte("competitor")),
+	}
+	competitor.Hash = competitor.ComputeHash()
+
+	t.Run("forced", func(t *testing.T) {
+		ap := newAccountPool(&memStable{})
+		locker := &sync.Mutex{}
+		common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+		common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(competitor)))
+		common.FailIfErr(t, ap.ForceAddAccountBlockTransaction(locker, poolTransaction(receive)))
+		common.Expect(t, ap.GetFrontierAccountStore(base.Address).Identifier(), receive.Identifier())
+	})
+	t.Run("not forced", func(t *testing.T) {
+		// Both blocks carry zero plasma, so the priority check comes down
+		// to the hash tie-break, which these fixtures lose: the batch must
+		// be refused with that error and the competitor must stay.
+		common.FailIfErr(t, higherPriority(competitor, receive))
+		common.Expect(t, higherPriority(receive, competitor), ErrHashTieBreak)
+
+		ap := newAccountPool(&memStable{})
+		locker := &sync.Mutex{}
+		common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+		common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(competitor)))
+		common.Expect(t, ap.AddAccountBlockTransaction(locker, poolTransaction(receive)), ErrHashTieBreak)
+		common.Expect(t, ap.GetFrontierAccountStore(base.Address).Identifier(), competitor.Identifier())
+	})
+}
+
+// committedPool returns a pool whose stable store for base's address already
+// holds base and a, as if both had been committed, so that the stable
+// frontier sits at a.
+func committedPool(t *testing.T, base, a *nom.AccountBlock) *accountPool {
+	t.Helper()
+	stable := &memStable{}
+	staging := newAccountPool(stable)
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, staging.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, staging.AddAccountBlockTransaction(locker, poolTransaction(a)))
+	store := stable.GetStableAccountDB(base.Address)
+	for _, block := range []*nom.AccountBlock{base, a} {
+		common.FailIfErr(t, db.ApplyPatch(store, staging.GetPatch(base.Address, block.Identifier())))
+	}
+	ap := newAccountPool(stable)
+	common.Expect(t, ap.getStableAccountStore(base.Address).Identifier(), a.Identifier())
+	return ap
+}
+
+// TestAccountPool_RejectsBatchBelowStableFrontier pins that a batch whose
+// previous sits below the stable frontier is refused before the rollback
+// starts. Otherwise the rollback would pop every uncommitted block of the
+// account and only then fail at the stable store, leaving the pool empty.
+func TestAccountPool_RejectsBatchBelowStableFrontier(t *testing.T) {
+	base, a, _, descendant := poolBlockChain()
+	ap := committedPool(t, base, a)
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(descendant)))
+	common.Expect(t, len(ap.GetUncommittedAccountBlocksByAddress(base.Address)), 1)
+
+	// A batch that opens the account again: descendants at 1-2, head at 3,
+	// previous is the zero identifier, below the stable frontier at 2.
+	zero := &nom.AccountBlock{Address: base.Address, Hash: types.ZeroHash}
+	batch := batchedReceiveOn(zero, 1)
+	common.Expect(t, batch.Previous(), types.ZeroHashHeight)
+	common.Expect(t, batch.Height, uint64(3))
+
+	if err := ap.ForceAddAccountBlockTransaction(locker, poolTransaction(batch)); err == nil {
+		t.Fatal("expected the batch below the stable frontier to be refused")
+	}
+	common.Expect(t, len(ap.GetUncommittedAccountBlocksByAddress(base.Address)), 1)
+	common.Expect(t, ap.GetFrontierAccountStore(base.Address).Identifier(), descendant.Identifier())
+}
+
+// nilPatchManager hides the stored patches of the manager it wraps.
+type nilPatchManager struct {
+	db.Manager
+}
+
+func (m *nilPatchManager) GetPatch(types.HashHeight) db.Patch { return nil }
+
+// TestAccountPool_ReplacementFailsWithoutLaterPatch pins that a later pending
+// block whose patch cannot be read makes the replacement fail before the
+// rollback, instead of being re-added without its state changes.
+func TestAccountPool_ReplacementFailsWithoutLaterPatch(t *testing.T) {
+	base, a, b, descendant := poolBlockChain()
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(a)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(descendant)))
+	ap.managers[a.Address] = &nilPatchManager{ap.managers[a.Address]}
+
+	if err := ap.ForceAddAccountBlockTransaction(locker, poolTransaction(b)); err == nil {
+		t.Fatal("expected the replacement to fail when a later patch is missing")
+	}
+	frontier := ap.GetFrontierAccountStore(a.Address)
+	common.Expect(t, frontier.Identifier(), descendant.Identifier())
+	stored, err := frontier.ByHeight(2)
+	common.FailIfErr(t, err)
+	if !stored.EqualBytes(a) {
+		t.Fatal("the pool must be untouched when the replacement fails")
+	}
+}
+
+// plasmaBlock builds a plain block at height on top of prev with the given
+// plasma ratio, so that priority between competing blocks is decided by
+// plasma rather than by the hash tie-break. The plasma is fused plasma,
+// which is hashed, so two blocks that differ only in plasma also differ in
+// identifier; total plasma is not part of the hash.
+func plasmaBlock(prev *nom.AccountBlock, height, totalPlasma uint64) *nom.AccountBlock {
+	block := &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeContractReceive,
+		Address:         prev.Address,
+		Height:          height,
+		PreviousHash:    prev.Hash,
+		Amount:          big.NewInt(0),
+		FusedPlasma:     totalPlasma,
+		BasePlasma:      1,
+		TotalPlasma:     totalPlasma,
+	}
+	block.Hash = block.ComputeHash()
+	return block
+}
+
+// TestAccountPool_BatchCompetesAtItsForkPoint pins that a batch is compared
+// with the pool block at the first height it occupies, whatever the length
+// of the competing chain. With plasma ratios C2 < batch < C4, the batch wins
+// against C2..C3 and must win against C2..C5 as well: the block displaced at
+// the fork point is the same.
+func TestAccountPool_BatchCompetesAtItsForkPoint(t *testing.T) {
+	base, receive := embeddedReceiveChain() // descendants 2-3, head 4, previous = base
+	receive.BasePlasma, receive.TotalPlasma = 1, 2
+	receive.Hash = receive.ComputeHash()
+	for _, length := range []int{2, 4} {
+		t.Run(fmt.Sprintf("competing chain of %d blocks", length), func(t *testing.T) {
+			ap := newAccountPool(&memStable{})
+			locker := &sync.Mutex{}
+			common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+			prev := base
+			for i := 0; i < length; i++ {
+				// C2 has a worse ratio than the batch, every later block a better one.
+				total := uint64(1)
+				if i > 0 {
+					total = 3
+				}
+				prev = plasmaBlock(prev, uint64(2+i), total)
+				common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(prev)))
+			}
+			common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(receive)))
+			common.Expect(t, ap.GetFrontierAccountStore(base.Address).Identifier(), receive.Identifier())
+		})
+	}
+}
+
+// TestAccountPool_HeightOneBlocksCompeteOnPlasma pins that a block opening
+// an account competes with the pool's height-1 block the way every other
+// height does: a better plasma ratio replaces the pending chain, a worse one
+// is refused. Before the zero identifier was accepted as a previous, height
+// 1 was the one height at which a competing block was always refused.
+func TestAccountPool_HeightOneBlocksCompeteOnPlasma(t *testing.T) {
+	zero := &nom.AccountBlock{Address: types.PillarContract, Hash: types.ZeroHash}
+	pending := plasmaBlock(zero, 1, 2)
+	child := plasmaBlock(pending, 2, 2)
+	cases := []struct {
+		name        string
+		totalPlasma uint64
+		wins        bool
+	}{
+		{"better ratio replaces the pending chain", 3, true},
+		{"worse ratio is refused", 1, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ap := newAccountPool(&memStable{})
+			locker := &sync.Mutex{}
+			common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(pending)))
+			common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(child)))
+			competing := plasmaBlock(zero, 1, tc.totalPlasma)
+			common.Expect(t, competing.Previous(), types.ZeroHashHeight)
+
+			err := ap.AddAccountBlockTransaction(locker, poolTransaction(competing))
+			frontier := ap.GetFrontierAccountStore(zero.Address).Identifier()
+			if tc.wins {
+				common.FailIfErr(t, err)
+				common.Expect(t, frontier, competing.Identifier())
+			} else {
+				common.Expect(t, err, ErrPlasmaRatioIsWorse)
+				common.Expect(t, frontier, child.Identifier())
+			}
+		})
+	}
 }

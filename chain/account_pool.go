@@ -60,11 +60,31 @@ func (ap *accountPool) canRollback(block *nom.AccountBlock) error {
 		return fmt.Errorf(`%w reason:%v; stable-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "older than stable identifier", stableIdentifier, identifier)
 	}
 
+	// A batch may start below the block's own height, so its previous is
+	// checked against the stable frontier as well: a rollback can only
+	// reach the stable identifier, never below it, and it must be refused
+	// here, before the rollback pops the account's uncommitted blocks.
+	if previous.Height < stableIdentifier.Height {
+		log.Info("failed to insert account-block-transaction", "reason", "previous below stable identifier", "stable-identifier", stableIdentifier)
+		return fmt.Errorf(`%w reason:%v; stable-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "previous below stable identifier", stableIdentifier, identifier)
+	}
+
 	frontier := ap.getFrontierAccountStore(address)
 	frontierIdentifier := frontier.Identifier()
 
-	// previous doesn't match
-	truePrevious, err := frontier.ByHeight(identifier.Height - 1)
+	// previous doesn't match. A block that carries descendants reports the
+	// batch's previous, which sits below the first descendant rather than one
+	// height under the block itself, so the lookup goes by the previous' own
+	// height. The zero identifier opens an account and has no block to match;
+	// the guard above has already required the stable frontier to be empty.
+	if previous.Height == 0 {
+		if previous != types.ZeroHashHeight {
+			log.Info("failed to insert account-block-transaction", "reason", "previous mismatch", "frontier-identifier", frontierIdentifier)
+			return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "missing previous", frontierIdentifier, identifier)
+		}
+		return nil
+	}
+	truePrevious, err := frontier.ByHeight(previous.Height)
 	if err != nil {
 		log.Info("failed to insert account-block-transaction", "reason", err, "frontier-identifier", frontierIdentifier)
 		return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, err, frontierIdentifier, identifier)
@@ -131,20 +151,84 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 		return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, err, frontierIdentifier, identifier)
 	}
 	if trueBlock != nil && trueBlock.Identifier() == identifier {
-		log.Info("account-block is already inserted")
-		return nil
+		// A block's identifier covers only its hashed fields. Fields that are
+		// stored but not hashed can still differ between two copies, and the
+		// stored bytes feed into the momentum changes-hash. A forced insert
+		// carries the copy the momentum was built from, so it must replace a
+		// byte-different copy instead of being treated as a duplicate.
+		if !forceAdd || trueBlock.EqualBytes(block) {
+			log.Info("account-block is already inserted")
+			return nil
+		}
+		log.Info("replacing account-block with different bytes but same identifier")
 	}
 
 	if err := ap.canRollback(block); err != nil {
 		return err
 	}
-	if err := higherPriority(block, trueBlock); !forceAdd && err != nil {
+	// The competitor is the pool block at the first height the incoming
+	// block occupies, the one just above its previous: for a plain block
+	// that is its own height, for a batch it is the first descendant's,
+	// so the comparison does not depend on how long the competing chain
+	// is. The fast-forward path above has already taken every case in
+	// which that height is empty.
+	competitor, err := frontier.ByHeight(previous.Height + 1)
+	if err != nil {
 		log.Info("failed to insert account-block-transaction", "reason", err, "frontier-identifier", frontierIdentifier)
-		return err
+		return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, err, frontierIdentifier, identifier)
+	}
+	if competitor != nil {
+		if err := higherPriority(block, competitor); !forceAdd && err != nil {
+			log.Info("failed to insert account-block-transaction", "reason", err, "frontier-identifier", frontierIdentifier)
+			return err
+		}
+	}
+
+	manager := ap.getAccountManager(address)
+
+	// A same-identifier replacement leaves the hash the later uncommitted
+	// blocks chain onto unchanged, so they stay valid: keep them with their
+	// patches and put them back after the replacement. A different block at
+	// this height invalidates them and they are dropped as before.
+	var keep []*nom.AccountBlockTransaction
+	if trueBlock != nil && trueBlock.Identifier() == identifier {
+		// Walk down from the frontier by previous links. A batch is stored
+		// as its descendants at their own heights plus the head carrying
+		// them in its record, and the head's Previous() points below its
+		// descendants, so the walk visits only the heads; the head alone,
+		// with its patch, puts the whole batch back. The walk yields the
+		// blocks top down and they are re-added bottom up.
+		for height := frontierIdentifier.Height; height > identifier.Height; {
+			later, err := frontier.ByHeight(height)
+			if err != nil || later == nil {
+				log.Info("failed to insert account-block-transaction", "reason", "can't read later pending block", "height", height, "err", err)
+				return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "can't read later pending block", frontierIdentifier, identifier)
+			}
+			// A block without its patch cannot go back with its state
+			// changes, so the replacement fails here, before the rollback.
+			stored := manager.GetPatch(later.Identifier())
+			if stored == nil {
+				log.Info("failed to insert account-block-transaction", "reason", "missing later pending patch", "height", later.Height)
+				return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "missing later pending patch", frontierIdentifier, identifier)
+			}
+			// Add appends to the patch it is given and stores it, and a
+			// snapshot clone shares the stored patch objects, so the
+			// re-add works on a copy. Dump aliases the patch buffer and
+			// Load aliases its input, hence the explicit byte copy.
+			patch, err := db.NewPatchFromDump(append([]byte(nil), stored.Dump()...))
+			if err != nil {
+				log.Info("failed to insert account-block-transaction", "reason", "can't copy later pending patch", "height", later.Height, "err", err)
+				return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "can't copy later pending patch", frontierIdentifier, identifier)
+			}
+			keep = append(keep, &nom.AccountBlockTransaction{Block: later, Changes: patch})
+			height = later.Previous().Height
+		}
+		for i, j := 0, len(keep)-1; i < j; i, j = i+1, j-1 {
+			keep[i], keep[j] = keep[j], keep[i]
+		}
 	}
 
 	// rollback blocks and insert this one
-	manager := ap.getAccountManager(address)
 	for {
 		currentIdentifier := db.GetFrontierIdentifier(manager.Frontier())
 		if currentIdentifier == previous {
@@ -159,7 +243,20 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	}
 
 	log.Info("inserting account-block after rollback")
-	return ap.getAccountManager(address).Add(transaction)
+	if err := manager.Add(transaction); err != nil {
+		return err
+	}
+	for _, later := range keep {
+		if err := manager.Add(later); err != nil {
+			// The replacement itself is in place, which is what the caller
+			// asked for, so this returns nil: the blocks above it are lost
+			// the way they were before they were kept at all, and only the
+			// log says so.
+			log.Warn("dropping later pending account-blocks after replacement", "reason", err, "header", later.Block.Header())
+			break
+		}
+	}
+	return nil
 }
 
 func (ap *accountPool) GetPatch(address types.Address, identifier types.HashHeight) db.Patch {
@@ -265,6 +362,67 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 	}
 
 	ap.log.Debug("finished rebuilding account-pool")
+	return nil
+}
+
+// UncommittedSnapshot captures the pool managers of a set of addresses so they
+// can be put back after a failed insertion. Each entry is an independent clone
+// of the manager as it was, or nil when the address had no manager. A snapshot
+// can be restored once; restoring installs the clones themselves.
+type UncommittedSnapshot struct {
+	managers map[types.Address]db.Manager
+}
+
+// SnapshotUncommitted clones the current pool manager of each given address.
+// Restoring the snapshot returns those addresses to exactly this state, byte
+// for byte and patch for patch, as long as their stable state has not advanced.
+func (ap *accountPool) SnapshotUncommitted(insertLocker sync.Locker, addresses []types.Address) *UncommittedSnapshot {
+	if insertLocker == nil {
+		panic("insertLocker can't be nil")
+	}
+	ap.changes.Lock()
+	defer ap.changes.Unlock()
+
+	snapshot := &UncommittedSnapshot{managers: make(map[types.Address]db.Manager, len(addresses))}
+	for _, address := range addresses {
+		if _, seen := snapshot.managers[address]; seen {
+			continue
+		}
+		manager := ap.managers[address]
+		if manager == nil {
+			snapshot.managers[address] = nil
+			continue
+		}
+		cloneable, ok := manager.(db.Cloneable)
+		if !ok {
+			// The pool only ever creates in-memory managers, which clone.
+			panic(fmt.Sprintf("account pool manager for %v can't be cloned", address))
+		}
+		snapshot.managers[address] = cloneable.Clone()
+	}
+	return snapshot
+}
+
+// RestoreUncommitted puts the snapshotted managers back, discarding whatever
+// the pool holds for those addresses now. The snapshot is consumed.
+func (ap *accountPool) RestoreUncommitted(insertLocker sync.Locker, snapshot *UncommittedSnapshot) error {
+	if insertLocker == nil {
+		return errors.Errorf("insertLocker can't be nil")
+	}
+	if snapshot == nil {
+		return nil
+	}
+	ap.changes.Lock()
+	defer ap.changes.Unlock()
+
+	for address, manager := range snapshot.managers {
+		if manager == nil {
+			delete(ap.managers, address)
+		} else {
+			ap.managers[address] = manager
+		}
+	}
+	snapshot.managers = nil
 	return nil
 }
 
