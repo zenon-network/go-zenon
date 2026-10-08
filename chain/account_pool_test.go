@@ -555,3 +555,78 @@ func TestAccountPool_BatchedReceiveAgainstCompetingChain(t *testing.T) {
 		common.Expect(t, ap.GetFrontierAccountStore(base.Address).Identifier(), competitor.Identifier())
 	})
 }
+
+// committedPool returns a pool whose stable store for base's address already
+// holds base and a, as if both had been committed, so that the stable
+// frontier sits at a.
+func committedPool(t *testing.T, base, a *nom.AccountBlock) *accountPool {
+	t.Helper()
+	stable := &memStable{}
+	staging := newAccountPool(stable)
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, staging.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, staging.AddAccountBlockTransaction(locker, poolTransaction(a)))
+	store := stable.GetStableAccountDB(base.Address)
+	for _, block := range []*nom.AccountBlock{base, a} {
+		common.FailIfErr(t, db.ApplyPatch(store, staging.GetPatch(base.Address, block.Identifier())))
+	}
+	ap := newAccountPool(stable)
+	common.Expect(t, ap.getStableAccountStore(base.Address).Identifier(), a.Identifier())
+	return ap
+}
+
+// TestAccountPool_RejectsBatchBelowStableFrontier pins that a batch whose
+// previous sits below the stable frontier is refused before the rollback
+// starts. Otherwise the rollback would pop every uncommitted block of the
+// account and only then fail at the stable store, leaving the pool empty.
+func TestAccountPool_RejectsBatchBelowStableFrontier(t *testing.T) {
+	base, a, _, descendant := poolBlockChain()
+	ap := committedPool(t, base, a)
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(descendant)))
+	common.Expect(t, len(ap.GetUncommittedAccountBlocksByAddress(base.Address)), 1)
+
+	// A batch that opens the account again: descendants at 1-2, head at 3,
+	// previous is the zero identifier, below the stable frontier at 2.
+	zero := &nom.AccountBlock{Address: base.Address, Hash: types.ZeroHash}
+	batch := batchedReceiveOn(zero, 1)
+	common.Expect(t, batch.Previous(), types.ZeroHashHeight)
+	common.Expect(t, batch.Height, uint64(3))
+
+	if err := ap.ForceAddAccountBlockTransaction(locker, poolTransaction(batch)); err == nil {
+		t.Fatal("expected the batch below the stable frontier to be refused")
+	}
+	common.Expect(t, len(ap.GetUncommittedAccountBlocksByAddress(base.Address)), 1)
+	common.Expect(t, ap.GetFrontierAccountStore(base.Address).Identifier(), descendant.Identifier())
+}
+
+// nilPatchManager hides the stored patches of the manager it wraps.
+type nilPatchManager struct {
+	db.Manager
+}
+
+func (m *nilPatchManager) GetPatch(types.HashHeight) db.Patch { return nil }
+
+// TestAccountPool_ReplacementFailsWithoutLaterPatch pins that a later pending
+// block whose patch cannot be read makes the replacement fail before the
+// rollback, instead of being re-added without its state changes.
+func TestAccountPool_ReplacementFailsWithoutLaterPatch(t *testing.T) {
+	base, a, b, descendant := poolBlockChain()
+	ap := newAccountPool(&memStable{})
+	locker := &sync.Mutex{}
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(a)))
+	common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(descendant)))
+	ap.managers[a.Address] = &nilPatchManager{ap.managers[a.Address]}
+
+	if err := ap.ForceAddAccountBlockTransaction(locker, poolTransaction(b)); err == nil {
+		t.Fatal("expected the replacement to fail when a later patch is missing")
+	}
+	frontier := ap.GetFrontierAccountStore(a.Address)
+	common.Expect(t, frontier.Identifier(), descendant.Identifier())
+	stored, err := frontier.ByHeight(2)
+	common.FailIfErr(t, err)
+	if !stored.EqualBytes(a) {
+		t.Fatal("the pool must be untouched when the replacement fails")
+	}
+}

@@ -60,13 +60,23 @@ func (ap *accountPool) canRollback(block *nom.AccountBlock) error {
 		return fmt.Errorf(`%w reason:%v; stable-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "older than stable identifier", stableIdentifier, identifier)
 	}
 
+	// A batch may start below the block's own height, so its previous is
+	// checked against the stable frontier as well: a rollback can only
+	// reach the stable identifier, never below it, and it must be refused
+	// here, before the rollback pops the account's uncommitted blocks.
+	if previous.Height < stableIdentifier.Height {
+		log.Info("failed to insert account-block-transaction", "reason", "previous below stable identifier", "stable-identifier", stableIdentifier)
+		return fmt.Errorf(`%w reason:%v; stable-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "previous below stable identifier", stableIdentifier, identifier)
+	}
+
 	frontier := ap.getFrontierAccountStore(address)
 	frontierIdentifier := frontier.Identifier()
 
 	// previous doesn't match. A block that carries descendants reports the
 	// batch's previous, which sits below the first descendant rather than one
 	// height under the block itself, so the lookup goes by the previous' own
-	// height. The zero identifier opens an account and has no block to match.
+	// height. The zero identifier opens an account and has no block to match;
+	// the guard above has already required the stable frontier to be empty.
 	if previous.Height == 0 {
 		if previous != types.ZeroHashHeight {
 			log.Info("failed to insert account-block-transaction", "reason", "previous mismatch", "frontier-identifier", frontierIdentifier)
@@ -206,18 +216,21 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 			if covered[later.Height] {
 				continue
 			}
+			// A block without its patch cannot go back with its state
+			// changes, so the replacement fails here, before the rollback.
+			stored := manager.GetPatch(later.Identifier())
+			if stored == nil {
+				log.Info("failed to insert account-block-transaction", "reason", "missing later pending patch", "height", later.Height)
+				return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "missing later pending patch", frontierIdentifier, identifier)
+			}
 			// Add appends to the patch it is given and stores it, and a
 			// snapshot clone shares the stored patch objects, so the
 			// re-add works on a copy. Dump aliases the patch buffer and
 			// Load aliases its input, hence the explicit byte copy.
-			patch := db.NewPatch()
-			if stored := manager.GetPatch(later.Identifier()); stored != nil {
-				copied, err := db.NewPatchFromDump(append([]byte(nil), stored.Dump()...))
-				if err != nil {
-					log.Info("failed to insert account-block-transaction", "reason", "can't copy later pending patch", "height", later.Height, "err", err)
-					return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "can't copy later pending patch", frontierIdentifier, identifier)
-				}
-				patch = copied
+			patch, err := db.NewPatchFromDump(append([]byte(nil), stored.Dump()...))
+			if err != nil {
+				log.Info("failed to insert account-block-transaction", "reason", "can't copy later pending patch", "height", later.Height, "err", err)
+				return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "can't copy later pending patch", frontierIdentifier, identifier)
 			}
 			keep = append(keep, &nom.AccountBlockTransaction{Block: later, Changes: patch})
 		}

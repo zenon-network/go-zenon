@@ -105,21 +105,24 @@ func TestInsertChain_RejectsEmptyAndNilInput(t *testing.T) {
 		return detailed
 	}
 	cases := []struct {
-		name  string
-		input []*nom.DetailedMomentum
+		name    string
+		input   []*nom.DetailedMomentum
+		message string
 	}{
-		{"nil slice", nil},
-		{"empty slice", []*nom.DetailedMomentum{}},
-		{"nil first entry", []*nom.DetailedMomentum{nil}},
-		{"nil last entry", []*nom.DetailedMomentum{valid(), nil}},
-		{"nil momentum", []*nom.DetailedMomentum{{Momentum: nil}}},
-		{"nil momentum after a valid one", []*nom.DetailedMomentum{valid(), {Momentum: nil}}},
+		{"nil slice", nil, "no momentums to insert"},
+		{"empty slice", []*nom.DetailedMomentum{}, "no momentums to insert"},
+		{"nil first entry", []*nom.DetailedMomentum{nil}, "missing momentum at index 0"},
+		{"nil last entry", []*nom.DetailedMomentum{valid(), nil}, "missing momentum at index 1"},
+		{"nil momentum", []*nom.DetailedMomentum{{Momentum: nil}}, "missing momentum at index 0"},
+		{"nil momentum after a valid one", []*nom.DetailedMomentum{valid(), {Momentum: nil}}, "missing momentum at index 1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := bridge.InsertChain(tc.input); err == nil {
+			_, err := bridge.InsertChain(tc.input)
+			if err == nil {
 				t.Fatalf("expected an error for %s", tc.name)
 			}
+			common.ExpectString(t, err.Error(), tc.message)
 			common.Expect(t, z.Chain().GetFrontierMomentumStore().Identifier(), frontier)
 		})
 	}
@@ -143,9 +146,11 @@ func TestInsertChain_RejectsEmptyAndNilInput(t *testing.T) {
 		before := z.Chain().GetFrontierMomentumStore().Identifier()
 
 		detailed.AccountBlocks = []*nom.AccountBlock{nil}
-		if _, err := bridge.InsertChain([]*nom.DetailedMomentum{detailed}); err == nil {
+		_, err := bridge.InsertChain([]*nom.DetailedMomentum{detailed})
+		if err == nil {
 			t.Fatal("expected an error for a nil account block")
 		}
+		common.ExpectString(t, err.Error(), "prefetched account-block at index 0 is nil")
 		common.Expect(t, z.Chain().GetFrontierMomentumStore().Identifier(), before)
 	})
 }
