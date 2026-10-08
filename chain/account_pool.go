@@ -484,71 +484,94 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 		log := ap.log.New("address", address)
 		log.Debug("start rebuilding")
 
-		uncommitted := make([]*nom.AccountBlock, 0)
 		oldManager := ap.managers[address]
+		newStable := ap.stable.GetStableAccountDB(address)
 
-		stable := account.NewAccountStore(address, ap.stable.GetStableAccountDB(address))
-		uncommittedStore := account.NewAccountStore(address, oldManager.db.Frontier())
-		for i := stable.Identifier().Height + 1; i <= uncommittedStore.Identifier().Height; i += 1 {
-			block, err := oldManager.BlockByHeight(i)
-			common.DealWithErr(err)
-			uncommitted = append(uncommitted, block)
-		}
-
-		delete(ap.managers, address)
-
-		if len(uncommitted) == 0 {
-			log.Debug("no uncommitted changes")
+		// Rebase moves this manager's versions onto the new stable DB and
+		// re-applies every pending patch, so uncommitted state survives the
+		// rollback without being replayed block by block here. On error no
+		// mutation has occurred: drop this address's manager and carry on with
+		// the others, so one failing address cannot abandon the remaining ones.
+		if err := oldManager.db.Rebase(newStable); err != nil {
+			log.Error("rebuild failed, dropping pending blocks for address",
+				"address", address,
+				"reason", err)
+			if firstErr == nil {
+				firstErr = errors.Errorf("account pool rebuild error. Unable to rebase address %v. Reason %v", address, err)
+			}
+			delete(ap.managers, address)
 			continue
 		}
 
-		log.Debug("staring applying blocks", "num-uncommitted", len(uncommitted))
-		manager := &accountManager{
-			db:     db.NewMemDBManager(ap.stable.GetStableAccountDB(address)),
-			blocks: make(map[uint64]*nom.AccountBlock),
-		}
-		for _, block := range uncommitted {
-			// After a rollback the frontier may be lower than when the block
-			// was accepted.  A block whose MomentumAcknowledged is above the
-			// current frontier is invalid against the new chain state; drop
-			// it and every subsequent block on this account chain, since they
-			// build on it.
+		// The blocks map is kept beside the DB and has to be pruned to match
+		// it. Blocks at or below the new stable height are committed now. A
+		// block whose MomentumAcknowledged is above the frontier is invalid
+		// against the new chain state, and so is every block built on it.
+		newStableHeight := db.GetFrontierIdentifier(newStable).Height
+		invalidFrom := uint64(0)
+		for height, block := range oldManager.blocks {
+			if height <= newStableHeight {
+				delete(oldManager.blocks, height)
+				continue
+			}
 			if block.MomentumAcknowledged.Height > detailed.Momentum.Height {
 				log.Info("dropping block with momentum-acknowledged above frontier",
 					"block", block.Header(),
 					"ma-height", block.MomentumAcknowledged.Height,
 					"frontier-height", detailed.Momentum.Height)
-				break
-			}
-			// DeleteMomentum's eviction keeps every retained acknowledgement
-			// at or below the frontier, so no hash re-check is needed here.
-			patch := oldManager.db.GetPatch(block.Identifier())
-			err := manager.Add(&nom.AccountBlockTransaction{
-				Block:   block,
-				Changes: patch,
-			})
-			if err != nil {
-				// Drop this address's manager entirely and carry on with the
-				// others.  Re-applying the rest of the chain from a manager
-				// whose state is already inconsistent is not safe.
-				log.Error("rebuild failed, dropping pending blocks for address",
-					"block", block.Header(),
-					"reason", err)
-				if firstErr == nil {
-					firstErr = errors.Errorf("account pool rebuild error. Unable to re-apply block %v. Reason %v", block.Header(), err)
+				if invalidFrom == 0 || height < invalidFrom {
+					invalidFrom = height
 				}
-				manager = nil
-				break
 			}
 		}
-		// An empty manager is a map entry with nothing in it until the next
-		// rebuild.  Only re-register the address when blocks survived.
-		if manager != nil && len(manager.blocks) > 0 {
-			ap.managers[address] = manager
-			log.Debug("successfully rebuild", "num-uncommitted", len(uncommitted))
-		} else {
-			log.Debug("rebuild produced no blocks, dropping manager")
+		for height := range oldManager.blocks {
+			if invalidFrom != 0 && height >= invalidFrom {
+				delete(oldManager.blocks, height)
+			}
 		}
+
+		// Pop the DB manager so its frontier matches the pruned blocks map.
+		// Without this the map can end at height 1 while the DB frontier
+		// remains at height 3, leaving orphaned versions whose application
+		// writes are still visible through Frontier().
+		if invalidFrom != 0 {
+			for {
+				frontier := db.GetFrontierIdentifier(oldManager.db.Frontier())
+				if frontier.Height < invalidFrom {
+					break
+				}
+				if err := oldManager.db.Pop(); err != nil {
+					log.Error("failed to pop invalid-MA suffix from DB manager",
+						"address", address,
+						"frontier", frontier,
+						"invalid-from", invalidFrom,
+						"reason", err)
+					delete(ap.managers, address)
+					break
+				}
+			}
+			if _, ok := ap.managers[address]; !ok {
+				continue // Pop failed; manager was dropped above
+			}
+		}
+
+		// Rebase left the DB manager reusable but this address's manager still
+		// describes the pre-rollback state, so publish a fresh one over the
+		// rebased DB. Rebuilt addresses therefore hold a different manager
+		// instance than before, which is what callers and the rollback
+		// regression test rely on to tell "rebuilt" from "left untouched".
+		// An empty manager is a map entry with nothing in it until the next
+		// rebuild, so only re-register the address when blocks survived.
+		if len(oldManager.blocks) == 0 {
+			log.Debug("rebuild produced no blocks, dropping manager")
+			delete(ap.managers, address)
+			continue
+		}
+		ap.managers[address] = &accountManager{
+			db:     oldManager.db,
+			blocks: oldManager.blocks,
+		}
+		log.Debug("successfully rebuild", "num-uncommitted", len(oldManager.blocks))
 	}
 
 	ap.log.Debug("finished rebuilding account-pool")
