@@ -86,3 +86,71 @@ func TestInsertChain_MomentumBytesReplacePoolCopyOfSameBlock(t *testing.T) {
 		t.Fatal("committed block does not match the momentum's copy")
 	}
 }
+
+// TestInsertChain_RejectsEmptyAndNilInput pins that malformed input is
+// answered with an error before anything is indexed or dereferenced. The
+// wire decoder never produces these shapes, so this is API hardening: a
+// caller mistake must not take the node down from the import goroutine.
+func TestInsertChain_RejectsEmptyAndNilInput(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	bridge := protocol.NewChainBridge(z.Chain(), z.Consensus(), z.Verifier(), vm.NewSupervisor(z.Chain(), z.Consensus()))
+
+	frontier := z.Chain().GetFrontierMomentumStore().Identifier()
+	valid := func() *nom.DetailedMomentum {
+		momentum, err := z.Chain().GetFrontierMomentumStore().GetFrontierMomentum()
+		common.FailIfErr(t, err)
+		detailed, err := z.Chain().GetFrontierMomentumStore().PrefetchMomentum(momentum)
+		common.FailIfErr(t, err)
+		return detailed
+	}
+	cases := []struct {
+		name    string
+		input   []*nom.DetailedMomentum
+		message string
+	}{
+		{"nil slice", nil, "no momentums to insert"},
+		{"empty slice", []*nom.DetailedMomentum{}, "no momentums to insert"},
+		{"nil first entry", []*nom.DetailedMomentum{nil}, "missing momentum"},
+		{"nil last entry", []*nom.DetailedMomentum{valid(), nil}, "missing momentum"},
+		{"nil momentum", []*nom.DetailedMomentum{{Momentum: nil}}, "missing momentum"},
+		{"nil momentum after a valid one", []*nom.DetailedMomentum{valid(), {Momentum: nil}}, "missing momentum"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := bridge.InsertChain(tc.input)
+			if err == nil {
+				t.Fatalf("expected an error for %s", tc.name)
+			}
+			common.ExpectString(t, err.Error(), tc.message)
+			common.Expect(t, z.Chain().GetFrontierMomentumStore().Identifier(), frontier)
+		})
+	}
+
+	// A nil entry inside a momentum's block list, passed through InsertChain
+	// rather than to the validator directly. The momentum has to be one the
+	// chain does not hold yet, or the dedup scan returns before validation.
+	t.Run("nil account block inside a new momentum", func(t *testing.T) {
+		z.InsertSendBlock(&nom.AccountBlock{
+			Address:       g.User1.Address,
+			ToAddress:     g.User2.Address,
+			TokenStandard: types.ZnnTokenStandard,
+			Amount:        big.NewInt(1),
+		}, nil, mock.SkipVmChanges)
+		z.InsertNewMomentum()
+		detailed := valid()
+		common.Expect(t, len(detailed.AccountBlocks), 1)
+		insert := z.Chain().AcquireInsert("test rollback")
+		common.FailIfErr(t, z.Chain().RollbackTo(insert, detailed.Momentum.Previous()))
+		insert.Unlock()
+		before := z.Chain().GetFrontierMomentumStore().Identifier()
+
+		detailed.AccountBlocks = []*nom.AccountBlock{nil}
+		_, err := bridge.InsertChain([]*nom.DetailedMomentum{detailed})
+		if err == nil {
+			t.Fatal("expected an error for a nil account block")
+		}
+		common.ExpectString(t, err.Error(), "prefetched account-block at index 0 is nil")
+		common.Expect(t, z.Chain().GetFrontierMomentumStore().Identifier(), before)
+	})
+}

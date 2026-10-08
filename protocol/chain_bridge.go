@@ -125,6 +125,22 @@ func (c chainBridge) Status() (td uint64, currentBlock types.Hash, genesisBlock 
 }
 
 func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error) {
+	// Cheap structural check on peer-supplied data before anything below
+	// indexes or dereferences it, before anything is sized from it, before
+	// any rollback and before any pool state is touched. The verifier
+	// repeats the semantic checks later; this only bounds the input and
+	// checks that the blocks are the momentum's content, in content order.
+	// The wire decoder never yields an empty batch or a nil entry; those
+	// cases guard callers.
+	if len(momentums) == 0 {
+		return 0, errors.Errorf("no momentums to insert")
+	}
+	for index, detailed := range momentums {
+		if err := validatePrefetchedBlocks(detailed); err != nil {
+			log.Error("malformed prefetched account-blocks", "reason", err, "index", index)
+			return index, err
+		}
+	}
 	a := momentums[0]
 	b := momentums[len(momentums)-1]
 	log.Info("start inserting chain", "num-momentums", len(momentums), "start-identifier", a.Momentum.Identifier(), "end-identifier", b.Momentum.Identifier())
@@ -156,18 +172,6 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		return 0, nil
 	}
 	momentums = momentums[start:]
-
-	// Cheap structural check on peer-supplied data before anything is
-	// sized from it, before any rollback and before any pool state is
-	// touched. The verifier repeats the semantic checks later; this only
-	// bounds the input and checks that the blocks are the momentum's
-	// content, in content order.
-	for index, detailed := range momentums {
-		if err := validatePrefetchedBlocks(detailed); err != nil {
-			log.Error("malformed prefetched account-blocks", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
-			return index + start, err
-		}
-	}
 
 	head := momentums[0].Momentum
 	tail := momentums[len(momentums)-1].Momentum
