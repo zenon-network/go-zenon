@@ -580,62 +580,83 @@ func TestDrainReadReturnsPermit(t *testing.T) {
 	}
 }
 
-// TestCloseDuringAdmissionClientDirect verifies that the read goroutine's
-// closing branch (select on c.closing in the slot-acquisition loop) fires
-// when Close is called while the goroutine is blocked on slot acquisition.
-// Without the closing branch, a full callSlots channel blocks the read
-// goroutine forever and drainRead never returns.
-func TestCloseDuringAdmissionClientDirect(t *testing.T) {
-	c := &Client{
-		callSlots: make(chan struct{}, maxConcurrentCallsPerConn),
-		readOp:    make(chan readOp),
-		readErr:   make(chan error),
-		close:     make(chan struct{}),
-		closing:   make(chan struct{}),
-		didClose:  make(chan struct{}),
-	}
+// admissionTestCodec is a ServerCodec that hands Client.read one call
+// message after release is closed, then blocks until the codec is closed.
+type admissionTestCodec struct {
+	release   chan struct{}
+	done      chan interface{}
+	closeOnce sync.Once
+	reads     int32 // atomic: completed readBatch calls
+}
 
-	// Pre-fill all call slots so acquisition blocks.
+func (c *admissionTestCodec) readBatch() ([]*jsonrpcMessage, bool, error) {
+	if atomic.AddInt32(&c.reads, 1) == 1 {
+		<-c.release
+		return []*jsonrpcMessage{{Version: vsn, ID: []byte("1"), Method: "test.block"}}, false, nil
+	}
+	<-c.done
+	return nil, false, io.EOF
+}
+
+func (c *admissionTestCodec) close() { c.closeOnce.Do(func() { close(c.done) }) }
+
+func (c *admissionTestCodec) writeJSON(context.Context, interface{}) error { return nil }
+
+func (c *admissionTestCodec) closed() <-chan interface{} { return c.done }
+
+func (c *admissionTestCodec) remoteAddr() string { return "" }
+
+// TestCloseDuringAdmissionClientDirect verifies that Client.Close completes
+// while the production read goroutine is blocked on slot acquisition. All
+// slots are held by the test and are never released, so the only way out
+// for Client.read is the closing branch of its admission select, which must
+// send readErr so that drainRead (in the dispatch defer) can return. Without
+// that branch Close blocks forever.
+func TestCloseDuringAdmissionClientDirect(t *testing.T) {
+	server, _ := newBackpressureTestServer(t)
+	codec := &admissionTestCodec{
+		release: make(chan struct{}),
+		done:    make(chan interface{}),
+	}
+	c := initClient(codec, randomIDGenerator(), &server.services, DefaultMaxSubscriptionsPerConn)
+
+	// Hold every slot, then let read decode one call. read must block on
+	// acquisition: no slot is ever released by this test.
 	for i := 0; i < maxConcurrentCallsPerConn; i++ {
 		c.callSlots <- struct{}{}
 	}
+	close(codec.release)
 
-	// Simulate the read goroutine entering slot acquisition.
-	readDone := make(chan struct{})
-	go func() {
-		defer close(readDone)
-		slotsNeeded := 1
-		for i := 0; i < slotsNeeded; i++ {
-			select {
-			case c.callSlots <- struct{}{}:
-			case <-c.closing:
-				c.readErr <- ErrClientQuit
-				return
-			}
+	// Wait until read has decoded the call and moved past readBatch. It
+	// cannot reach the dispatch loop without a slot, so the next state is
+	// blocked in the admission select (readBatch is not re-entered).
+	deadline := time.Now().Add(5 * time.Second)
+	for atomic.LoadInt32(&codec.reads) < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("read did not call readBatch")
 		}
-	}()
-
-	// Start drainRead so it can receive readErr.
-	drainDone := make(chan struct{})
-	go func() {
-		defer close(drainDone)
-		c.drainRead()
-	}()
-
-	// Simulate dispatch closing c.closing (its defer).
-	close(c.closing)
-
-	select {
-	case <-readDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("read goroutine did not exit")
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := atomic.LoadInt32(&codec.reads); n != 1 {
+		t.Fatalf("readBatch called %d times while saturated, want 1 (call dispatched without a slot)", n)
 	}
 
-	// drainRead must return after receiving the error.
+	closeDone := make(chan struct{})
+	go func() {
+		defer close(closeDone)
+		c.Close()
+	}()
 	select {
-	case <-drainDone:
+	case <-closeDone:
 	case <-time.After(5 * time.Second):
-		t.Fatal("drainRead did not return after closing branch fired")
+		t.Fatal("Client.Close did not return: read stuck in slot acquisition, drainRead never got readErr")
+	}
+
+	// The read goroutine left through the closing branch, not by obtaining
+	// a slot: every slot is still held by the test.
+	if got := len(c.callSlots); got != maxConcurrentCallsPerConn {
+		t.Fatalf("len(callSlots)=%d after close, want %d", got, maxConcurrentCallsPerConn)
 	}
 }
 
