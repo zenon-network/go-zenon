@@ -512,3 +512,45 @@ func TestAccountPool_ForceAddReplacementKeepsLaterBatchedReceive(t *testing.T) {
 	patchesAfter := poolPatchDumps(ap, base.Address, receiveB)
 	common.ExpectString(t, patchState(t, patchesAfter[0]), patchState(t, patchesBefore[0]))
 }
+
+// TestAccountPool_BatchedReceiveAgainstCompetingChain pins that a batch whose
+// head sits above the pool frontier, with its previous matching a lower block,
+// competes with the block at the first height it occupies. There is no block
+// at the head's height to compare against, and that must not be treated as a
+// competitor.
+func TestAccountPool_BatchedReceiveAgainstCompetingChain(t *testing.T) {
+	base, receive := embeddedReceiveChain() // receive: descendants 2-3, head 4, previous = base
+	competitor := &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeContractReceive,
+		Address:         base.Address,
+		Height:          2,
+		PreviousHash:    base.Hash,
+		Amount:          big.NewInt(0),
+		ChangesHash:     types.NewHash([]byte("competitor")),
+	}
+	competitor.Hash = competitor.ComputeHash()
+
+	t.Run("forced", func(t *testing.T) {
+		ap := newAccountPool(&memStable{})
+		locker := &sync.Mutex{}
+		common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+		common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(competitor)))
+		common.FailIfErr(t, ap.ForceAddAccountBlockTransaction(locker, poolTransaction(receive)))
+		common.Expect(t, ap.GetFrontierAccountStore(base.Address).Identifier(), receive.Identifier())
+	})
+	t.Run("not forced", func(t *testing.T) {
+		ap := newAccountPool(&memStable{})
+		locker := &sync.Mutex{}
+		common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+		common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(competitor)))
+		err := ap.AddAccountBlockTransaction(locker, poolTransaction(receive))
+		frontier := ap.GetFrontierAccountStore(base.Address).Identifier()
+		if err == nil {
+			common.Expect(t, frontier, receive.Identifier())
+		} else {
+			common.Expect(t, frontier, competitor.Identifier())
+		}
+	})
+}

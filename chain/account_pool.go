@@ -156,9 +156,24 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	if err := ap.canRollback(block); err != nil {
 		return err
 	}
-	if err := higherPriority(block, trueBlock); !forceAdd && err != nil {
-		log.Info("failed to insert account-block-transaction", "reason", err, "frontier-identifier", frontierIdentifier)
-		return err
+	// The competitor is the pool block at the height the incoming block
+	// claims. A batch whose head sits above the frontier has none there; its
+	// competitor is the block at the first height the batch occupies, the
+	// one just above its previous. The fast-forward path above has already
+	// taken every case in which that height is empty too.
+	competitor := trueBlock
+	if competitor == nil {
+		competitor, err = frontier.ByHeight(previous.Height + 1)
+		if err != nil {
+			log.Info("failed to insert account-block-transaction", "reason", err, "frontier-identifier", frontierIdentifier)
+			return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, err, frontierIdentifier, identifier)
+		}
+	}
+	if competitor != nil {
+		if err := higherPriority(block, competitor); !forceAdd && err != nil {
+			log.Info("failed to insert account-block-transaction", "reason", err, "frontier-identifier", frontierIdentifier)
+			return err
+		}
 	}
 
 	manager := ap.getAccountManager(address)
