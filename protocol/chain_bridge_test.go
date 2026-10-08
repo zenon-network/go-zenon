@@ -123,4 +123,29 @@ func TestInsertChain_RejectsEmptyAndNilInput(t *testing.T) {
 			common.Expect(t, z.Chain().GetFrontierMomentumStore().Identifier(), frontier)
 		})
 	}
+
+	// A nil entry inside a momentum's block list, passed through InsertChain
+	// rather than to the validator directly. The momentum has to be one the
+	// chain does not hold yet, or the dedup scan returns before validation.
+	t.Run("nil account block inside a new momentum", func(t *testing.T) {
+		z.InsertSendBlock(&nom.AccountBlock{
+			Address:       g.User1.Address,
+			ToAddress:     g.User2.Address,
+			TokenStandard: types.ZnnTokenStandard,
+			Amount:        big.NewInt(1),
+		}, nil, mock.SkipVmChanges)
+		z.InsertNewMomentum()
+		detailed := valid()
+		common.Expect(t, len(detailed.AccountBlocks), 1)
+		insert := z.Chain().AcquireInsert("test rollback")
+		common.FailIfErr(t, z.Chain().RollbackTo(insert, detailed.Momentum.Previous()))
+		insert.Unlock()
+		before := z.Chain().GetFrontierMomentumStore().Identifier()
+
+		detailed.AccountBlocks = []*nom.AccountBlock{nil}
+		if _, err := bridge.InsertChain([]*nom.DetailedMomentum{detailed}); err == nil {
+			t.Fatal("expected an error for a nil account block")
+		}
+		common.Expect(t, z.Chain().GetFrontierMomentumStore().Identifier(), before)
+	})
 }
