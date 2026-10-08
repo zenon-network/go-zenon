@@ -32,7 +32,7 @@ func getMockIdentifier(height uint64) types.HashHeight {
 func TestExtractor(t *testing.T) {
 	dir := t.TempDir()
 	m := storage.NewCacheDBManager(dir)
-	defer m.Stop()
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	identifier := types.ZeroHashHeight
 	cs := NewCacheStore(identifier, m)

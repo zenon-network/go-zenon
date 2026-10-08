@@ -478,12 +478,77 @@ func TestLevelDBManagerPopInvalidatesRollbackCaches(t *testing.T) {
 	}
 }
 
-// TestLevelDBManagerStopIsIdempotent pins that a second Stop is a no-op that
-// returns nil. A test that stops a manager explicitly, for example to reopen
-// its directory, must still be able to register an unconditional Stop in
-// t.Cleanup so the handle is released on every failure path too.
-func TestLevelDBManagerStopIsIdempotent(t *testing.T) {
-	m := NewLevelDBManager(t.TempDir())
+// TestManagerStopIsIdempotent pins the Manager.Stop contract for both
+// implementations: the first Stop releases the resources and a second Stop
+// is a no-op that returns nil. A test that stops a manager explicitly, for
+// example to reopen its directory, must still be able to register an
+// unconditional Stop in t.Cleanup so the handle is released on every failure
+// path too. For the LevelDB manager the directory is reopened after the first
+// Stop to pin that the handle, not just the flag, was released.
+func TestManagerStopIsIdempotent(t *testing.T) {
+	cases := []struct {
+		name string
+		open func(t *testing.T) (Manager, func())
+	}{
+		{"leveldb", func(t *testing.T) (Manager, func()) {
+			dir := t.TempDir()
+			return NewLevelDBManager(dir), func() {
+				ldb, err := leveldb.OpenFile(dir, nil)
+				common.FailIfErr(t, err)
+				common.FailIfErr(t, ldb.Close())
+			}
+		}},
+		{"memdb", func(t *testing.T) (Manager, func()) {
+			return NewMemDBManager(NewMemDB()), func() {}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, reopen := tc.open(t)
+			common.FailIfErr(t, m.Add(newMockTransaction(1, m.Frontier())))
+			common.FailIfErr(t, m.Stop())
+			reopen()
+			common.FailIfErr(t, m.Stop())
+			if m.Frontier() != nil {
+				t.Fatalf("Frontier must be nil after Stop")
+			}
+		})
+	}
+}
+
+// TestLevelDBManagerStopAfterFailedClose pins that Stop marks the manager
+// stopped even when closing the handle fails. goleveldb flags itself closed
+// before it does any work and answers every later call with ErrClosed, so
+// the handle is unusable after a failed Close and a retry of Stop has to be
+// the documented no-op rather than a second error.
+func TestLevelDBManagerStopAfterFailedClose(t *testing.T) {
+	m := NewLevelDBManager(t.TempDir()).(*ldbManager)
+	common.FailIfErr(t, m.ldb.Close())
+	if err := m.Stop(); err == nil {
+		t.Fatalf("expected Stop to report the close error")
+	}
 	common.FailIfErr(t, m.Stop())
+	if m.Frontier() != nil {
+		t.Fatalf("Frontier must be nil after a Stop that reported an error")
+	}
+}
+
+// TestMemDBManagerStopConcurrentWithAdd pins that Stop on the in-memory
+// manager synchronises with the other methods. Run under the race detector
+// an unlocked Stop is reported against the concurrent Add; with the lock the
+// Add either lands before the Stop or is refused, and never panics.
+func TestMemDBManagerStopConcurrentWithAdd(t *testing.T) {
+	m := NewMemDBManager(NewMemDB())
+	transaction := newMockTransaction(1, m.Frontier())
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		common.FailIfErr(t, m.Stop())
+	}()
+	_ = m.Add(transaction)
+	<-stopped
+	if err := m.Add(newMockTransaction(2, NewMemDB())); err == nil {
+		t.Fatalf("expected Add after Stop to fail")
+	}
 	common.FailIfErr(t, m.Stop())
 }

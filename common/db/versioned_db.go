@@ -51,6 +51,11 @@ type Manager interface {
 	Add(Transaction) error
 	Pop() error
 
+	// Stop releases the manager's resources. It is idempotent: the first call
+	// releases them and reports any error from doing so, every later call is
+	// a no-op that returns nil, so callers may stop a manager unconditionally
+	// (for example from a test cleanup next to an explicit Stop). After Stop,
+	// Frontier and Get return nil and Add and Pop return an error.
 	Stop() error
 	Location() string
 }
@@ -64,6 +69,7 @@ type memdbManager struct {
 	patches            map[types.HashHeight]Patch
 
 	changes sync.Mutex
+	stopped bool
 }
 
 func NewMemDBManager(rawDB DB) Manager {
@@ -103,8 +109,14 @@ func (m *memdbManager) Add(transaction Transaction) error {
 	previous := commits[0].Previous()
 	head := commits[len(commits)-1].Identifier()
 
-	if previous != m.frontierIdentifier {
-		return errors.Errorf("can't insert identifier %v. previous doesn't match with current frontier %v", head, m.frontierIdentifier)
+	m.changes.Lock()
+	stopped, frontierIdentifier := m.stopped, m.frontierIdentifier
+	m.changes.Unlock()
+	if stopped {
+		return errors.Errorf("can't add transaction to stopped db")
+	}
+	if previous != frontierIdentifier {
+		return errors.Errorf("can't insert identifier %v. previous doesn't match with current frontier %v", head, frontierIdentifier)
 	}
 
 	// apply transaction on db
@@ -138,6 +150,9 @@ func (m *memdbManager) Add(transaction Transaction) error {
 
 	m.changes.Lock()
 	defer m.changes.Unlock()
+	if m.stopped {
+		return errors.Errorf("can't add transaction to stopped db")
+	}
 
 	m.frontierIdentifier = head
 	m.previous[head] = previous
@@ -154,6 +169,9 @@ func (m *memdbManager) Add(transaction Transaction) error {
 func (m *memdbManager) Pop() error {
 	m.changes.Lock()
 	defer m.changes.Unlock()
+	if m.stopped {
+		return errors.Errorf("can't pop stopped db")
+	}
 	if m.stableIdentifier == m.frontierIdentifier {
 		return errors.Errorf("can't rollback stable db")
 	}
@@ -170,7 +188,14 @@ func (m *memdbManager) Pop() error {
 	return nil
 }
 func (m *memdbManager) Stop() error {
+	m.changes.Lock()
+	defer m.changes.Unlock()
+	if m.stopped {
+		return nil
+	}
+	m.stopped = true
 	m.frontierIdentifier = types.ZeroHashHeight
+	m.previous = nil
 	m.versions = nil
 	m.patches = nil
 	return nil
@@ -421,14 +446,15 @@ func (m *ldbManager) Stop() error {
 	if m.stopped {
 		return nil
 	}
-	if err := m.ldb.Close(); err != nil {
-		return err
-	}
+	// goleveldb marks the handle closed before it does any work and answers
+	// every later call with ErrClosed, so the manager is stopped whatever
+	// Close returns; only the error is reported.
+	err := m.ldb.Close()
 	m.stopped = true
 	m.ldb = nil
 	m.l1Cache = nil
 	m.l2Cache = nil
-	return nil
+	return err
 }
 func (m *ldbManager) Location() string {
 	return m.location

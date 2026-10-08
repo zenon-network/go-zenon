@@ -39,6 +39,10 @@ type CacheManager interface {
 	Add(types.HashHeight, db.Patch) error
 	Pop() error
 
+	// Stop releases the LevelDB handle. It is idempotent: the first call
+	// closes the handle and reports any error from doing so, every later call
+	// is a no-op that returns nil. After Stop, DB returns nil and Add and Pop
+	// return leveldb.ErrClosed.
 	Stop() error
 }
 
@@ -146,12 +150,17 @@ func (m *cacheManager) Pop() error {
 func (m *cacheManager) Stop() error {
 	m.changes.Lock()
 	defer m.changes.Unlock()
-	if err := m.ldb.Close(); err != nil {
-		return err
+	// A second Stop is a no-op: the handle is already closed and nil.
+	if m.stopped {
+		return nil
 	}
+	// goleveldb marks the handle closed before it does any work and answers
+	// every later call with ErrClosed, so the manager is stopped whatever
+	// Close returns; only the error is reported.
+	err := m.ldb.Close()
 	m.stopped = true
 	m.ldb = nil
-	return nil
+	return err
 }
 
 func (m *cacheManager) getRollback(height uint64) (db.Patch, error) {
