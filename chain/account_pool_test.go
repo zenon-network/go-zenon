@@ -3,6 +3,7 @@ package chain
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"sync"
 	"testing"
@@ -628,5 +629,96 @@ func TestAccountPool_ReplacementFailsWithoutLaterPatch(t *testing.T) {
 	common.FailIfErr(t, err)
 	if !stored.EqualBytes(a) {
 		t.Fatal("the pool must be untouched when the replacement fails")
+	}
+}
+
+// plasmaBlock builds a plain block at height on top of prev with the given
+// plasma ratio, so that priority between competing blocks is decided by
+// plasma rather than by the hash tie-break. The plasma is fused plasma,
+// which is hashed, so two blocks that differ only in plasma also differ in
+// identifier; total plasma is not part of the hash.
+func plasmaBlock(prev *nom.AccountBlock, height, totalPlasma uint64) *nom.AccountBlock {
+	block := &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeContractReceive,
+		Address:         prev.Address,
+		Height:          height,
+		PreviousHash:    prev.Hash,
+		Amount:          big.NewInt(0),
+		FusedPlasma:     totalPlasma,
+		BasePlasma:      1,
+		TotalPlasma:     totalPlasma,
+	}
+	block.Hash = block.ComputeHash()
+	return block
+}
+
+// TestAccountPool_BatchCompetesAtItsForkPoint pins that a batch is compared
+// with the pool block at the first height it occupies, whatever the length
+// of the competing chain. With plasma ratios C2 < batch < C4, the batch wins
+// against C2..C3 and must win against C2..C5 as well: the block displaced at
+// the fork point is the same.
+func TestAccountPool_BatchCompetesAtItsForkPoint(t *testing.T) {
+	base, receive := embeddedReceiveChain() // descendants 2-3, head 4, previous = base
+	receive.BasePlasma, receive.TotalPlasma = 1, 2
+	receive.Hash = receive.ComputeHash()
+	for _, length := range []int{2, 4} {
+		t.Run(fmt.Sprintf("competing chain of %d blocks", length), func(t *testing.T) {
+			ap := newAccountPool(&memStable{})
+			locker := &sync.Mutex{}
+			common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(base)))
+			prev := base
+			for i := 0; i < length; i++ {
+				// C2 has a worse ratio than the batch, every later block a better one.
+				total := uint64(1)
+				if i > 0 {
+					total = 3
+				}
+				prev = plasmaBlock(prev, uint64(2+i), total)
+				common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(prev)))
+			}
+			common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(receive)))
+			common.Expect(t, ap.GetFrontierAccountStore(base.Address).Identifier(), receive.Identifier())
+		})
+	}
+}
+
+// TestAccountPool_HeightOneBlocksCompeteOnPlasma pins that a block opening
+// an account competes with the pool's height-1 block the way every other
+// height does: a better plasma ratio replaces the pending chain, a worse one
+// is refused. Before the zero identifier was accepted as a previous, height
+// 1 was the one height at which a competing block was always refused.
+func TestAccountPool_HeightOneBlocksCompeteOnPlasma(t *testing.T) {
+	zero := &nom.AccountBlock{Address: types.PillarContract, Hash: types.ZeroHash}
+	pending := plasmaBlock(zero, 1, 2)
+	child := plasmaBlock(pending, 2, 2)
+	cases := []struct {
+		name        string
+		totalPlasma uint64
+		wins        bool
+	}{
+		{"better ratio replaces the pending chain", 3, true},
+		{"worse ratio is refused", 1, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ap := newAccountPool(&memStable{})
+			locker := &sync.Mutex{}
+			common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(pending)))
+			common.FailIfErr(t, ap.AddAccountBlockTransaction(locker, poolTransaction(child)))
+			competing := plasmaBlock(zero, 1, tc.totalPlasma)
+			common.Expect(t, competing.Previous(), types.ZeroHashHeight)
+
+			err := ap.AddAccountBlockTransaction(locker, poolTransaction(competing))
+			frontier := ap.GetFrontierAccountStore(zero.Address).Identifier()
+			if tc.wins {
+				common.FailIfErr(t, err)
+				common.Expect(t, frontier, competing.Identifier())
+			} else {
+				common.Expect(t, err, ErrPlasmaRatioIsWorse)
+				common.Expect(t, frontier, child.Identifier())
+			}
+		})
 	}
 }

@@ -111,10 +111,10 @@ func TestInsertChain_RejectsEmptyAndNilInput(t *testing.T) {
 	}{
 		{"nil slice", nil, "no momentums to insert"},
 		{"empty slice", []*nom.DetailedMomentum{}, "no momentums to insert"},
-		{"nil first entry", []*nom.DetailedMomentum{nil}, "missing momentum at index 0"},
-		{"nil last entry", []*nom.DetailedMomentum{valid(), nil}, "missing momentum at index 1"},
-		{"nil momentum", []*nom.DetailedMomentum{{Momentum: nil}}, "missing momentum at index 0"},
-		{"nil momentum after a valid one", []*nom.DetailedMomentum{valid(), {Momentum: nil}}, "missing momentum at index 1"},
+		{"nil first entry", []*nom.DetailedMomentum{nil}, "missing momentum"},
+		{"nil last entry", []*nom.DetailedMomentum{valid(), nil}, "missing momentum"},
+		{"nil momentum", []*nom.DetailedMomentum{{Momentum: nil}}, "missing momentum"},
+		{"nil momentum after a valid one", []*nom.DetailedMomentum{valid(), {Momentum: nil}}, "missing momentum"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

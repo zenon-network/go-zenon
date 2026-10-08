@@ -166,18 +166,16 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	if err := ap.canRollback(block); err != nil {
 		return err
 	}
-	// The competitor is the pool block at the height the incoming block
-	// claims. A batch whose head sits above the frontier has none there; its
-	// competitor is the block at the first height the batch occupies, the
-	// one just above its previous. The fast-forward path above has already
-	// taken every case in which that height is empty too.
-	competitor := trueBlock
-	if competitor == nil {
-		competitor, err = frontier.ByHeight(previous.Height + 1)
-		if err != nil {
-			log.Info("failed to insert account-block-transaction", "reason", err, "frontier-identifier", frontierIdentifier)
-			return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, err, frontierIdentifier, identifier)
-		}
+	// The competitor is the pool block at the first height the incoming
+	// block occupies, the one just above its previous: for a plain block
+	// that is its own height, for a batch it is the first descendant's,
+	// so the comparison does not depend on how long the competing chain
+	// is. The fast-forward path above has already taken every case in
+	// which that height is empty.
+	competitor, err := frontier.ByHeight(previous.Height + 1)
+	if err != nil {
+		log.Info("failed to insert account-block-transaction", "reason", err, "frontier-identifier", frontierIdentifier)
+		return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, err, frontierIdentifier, identifier)
 	}
 	if competitor != nil {
 		if err := higherPriority(block, competitor); !forceAdd && err != nil {
@@ -194,27 +192,17 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	// this height invalidates them and they are dropped as before.
 	var keep []*nom.AccountBlockTransaction
 	if trueBlock != nil && trueBlock.Identifier() == identifier {
-		// A batch is stored as its descendants at their own heights plus the
-		// head carrying them in its record, so the head alone, with its
-		// patch, puts the whole batch back. Collect first: the descendants
-		// sit below their head and are only known to be covered once the
-		// head is read.
-		above := make([]*nom.AccountBlock, 0, frontierIdentifier.Height-identifier.Height)
-		covered := make(map[uint64]bool)
-		for height := identifier.Height + 1; height <= frontierIdentifier.Height; height++ {
+		// Walk down from the frontier by previous links. A batch is stored
+		// as its descendants at their own heights plus the head carrying
+		// them in its record, and the head's Previous() points below its
+		// descendants, so the walk visits only the heads; the head alone,
+		// with its patch, puts the whole batch back. The walk yields the
+		// blocks top down and they are re-added bottom up.
+		for height := frontierIdentifier.Height; height > identifier.Height; {
 			later, err := frontier.ByHeight(height)
 			if err != nil || later == nil {
 				log.Info("failed to insert account-block-transaction", "reason", "can't read later pending block", "height", height, "err", err)
 				return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "can't read later pending block", frontierIdentifier, identifier)
-			}
-			for _, descendant := range later.DescendantBlocks {
-				covered[descendant.Height] = true
-			}
-			above = append(above, later)
-		}
-		for _, later := range above {
-			if covered[later.Height] {
-				continue
 			}
 			// A block without its patch cannot go back with its state
 			// changes, so the replacement fails here, before the rollback.
@@ -233,6 +221,10 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 				return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "can't copy later pending patch", frontierIdentifier, identifier)
 			}
 			keep = append(keep, &nom.AccountBlockTransaction{Block: later, Changes: patch})
+			height = later.Previous().Height
+		}
+		for i, j := 0, len(keep)-1; i < j; i, j = i+1, j-1 {
+			keep[i], keep[j] = keep[j], keep[i]
 		}
 	}
 
