@@ -70,7 +70,7 @@ func newMockTransaction(seed int64, db DB) *mockTransaction {
 
 func TestLevelDBManagerAddWriteFailureIsAtomic(t *testing.T) {
 	m := NewLevelDBManager(t.TempDir()).(*ldbManager)
-	defer m.Stop()
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	before := GetFrontierIdentifier(m.Frontier())
 	transaction := newMockTransaction(1, m.Frontier())
@@ -97,7 +97,7 @@ func TestLevelDBManagerAddWriteFailureIsAtomic(t *testing.T) {
 
 func TestLevelDBManagerPopWriteFailureIsAtomic(t *testing.T) {
 	m := NewLevelDBManager(t.TempDir()).(*ldbManager)
-	defer m.Stop()
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	transaction := newMockTransaction(1, m.Frontier())
 	common.FailIfErr(t, m.Add(transaction))
@@ -124,7 +124,7 @@ func TestLevelDBManagerPopWriteFailureIsAtomic(t *testing.T) {
 
 func TestVersionedDBConcurrentUse(t *testing.T) {
 	m := NewLevelDBManager(t.TempDir())
-	defer m.Stop()
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 	v0 := m.Frontier()
 	v01 := m.Frontier()
 
@@ -166,6 +166,9 @@ e871bc355914f2c3 - 48c39064a7c7e355`)
 func TestVersionedDBVersions(t *testing.T) {
 	dir := t.TempDir()
 	m := NewLevelDBManager(dir)
+	// The explicit Stop below releases dir for the reopen; the Cleanup
+	// covers the failure paths above it and is a no-op after that Stop.
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	db := m.Frontier()
 	t1 := newMockTransaction(1, db)
@@ -295,7 +298,7 @@ f25f4b21eef64b43 - 9c0a8a2bfc0914df`)
 
 	common.FailIfErr(t, m.Stop())
 	m2 := NewLevelDBManager(dir)
-	defer m2.Stop()
+	t.Cleanup(func() { common.FailIfErr(t, m2.Stop()) })
 	db = m2.Frontier()
 	common.ExpectString(t, DebugDB(db), `
 00 - 0a220a20d8ba48392cd7843812028c9fc3d7c92e232b8a725db741d69c930772e8551a851003
@@ -326,6 +329,7 @@ f25f4b21eef64b43 - 9c0a8a2bfc0914df`)
 // instead of overwriting the frontier with stale state.
 func TestLevelDBManagerAddRejectsNonFrontierPrevious(t *testing.T) {
 	m := NewLevelDBManager(t.TempDir())
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	t1 := newMockTransaction(1, m.Frontier())
 	id1 := t1.commit.Identifier()
@@ -472,4 +476,14 @@ func TestLevelDBManagerPopInvalidatesRollbackCaches(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLevelDBManagerStopIsIdempotent pins that a second Stop is a no-op that
+// returns nil. A test that stops a manager explicitly, for example to reopen
+// its directory, must still be able to register an unconditional Stop in
+// t.Cleanup so the handle is released on every failure path too.
+func TestLevelDBManagerStopIsIdempotent(t *testing.T) {
+	m := NewLevelDBManager(t.TempDir())
+	common.FailIfErr(t, m.Stop())
+	common.FailIfErr(t, m.Stop())
 }
