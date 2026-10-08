@@ -62,7 +62,6 @@ func TestRebuildRebasesManagerInPlace(t *testing.T) {
 	}
 }
 
-
 // advancingStable returns a stable account DB whose frontier advances as
 // blocks are committed, unlike fakeStable which always returns an empty DB.
 // This exercises the Rebase path where the stable floor actually moves,
@@ -192,11 +191,14 @@ func TestRebuildAdvancingStableOverlayReconstruction(t *testing.T) {
 			}
 		}
 
-		// Bounded retained overlay depth: the number of versions still
-		// accessible through the manager must be exactly the stable (1) plus
-		// the pending blocks, not the total number of blocks ever added.
-		// If Rebase failed to sever committed overlays the count would grow
-		// by one per cycle instead of shrinking.
+		// Retained version-ID count: the number of block identifiers still
+		// resolvable through the manager's version map must be exactly the
+		// stable identifier (1) plus the pending blocks, not the total
+		// blocks ever added. If Rebase failed to remove committed map entries
+		// the count would grow by one per cycle instead of shrinking.
+		// Note: this measures version-map membership (Get hit), not overlay
+		// ancestry. The DB-layer TestRebase* tests cover ancestry retention
+		// independently.
 		pending := numBlocks - cycle
 		accessible := 0
 		for _, b := range blocks {
@@ -205,10 +207,10 @@ func TestRebuildAdvancingStableOverlayReconstruction(t *testing.T) {
 				accessible++
 			}
 		}
-		// Accessible versions = pending blocks + the stable identifier itself.
+		// Accessible version-IDs = pending blocks + the stable identifier itself.
 		if uint64(accessible) != pending+1 {
-			t.Fatalf("cycle %d: accessible versions = %d, want %d (1 stable + %d pending) — "+
-				"overlay depth is not bounded, committed versions were retained",
+			t.Fatalf("cycle %d: accessible version-IDs = %d, want %d (1 stable + %d pending) — "+
+				"version-ID count exceeds pending+stable, committed entries were retained in the map",
 				cycle, accessible, pending+1, pending)
 		}
 	}
