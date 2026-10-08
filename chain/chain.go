@@ -1,6 +1,7 @@
 package chain
 
 import (
+	stderrors "errors"
 	"fmt"
 	"os"
 	"sync"
@@ -110,11 +111,11 @@ func (c *chain) Stop() error {
 
 	c.UnRegister(c.accountPool)
 
-	if err := c.cacheManager.Stop(); err != nil {
-		return err
-	}
-
-	return c.chainManager.Stop()
+	// Every manager is stopped whatever the earlier ones report: a manager
+	// marks itself stopped even when its Close fails, so bailing out on the
+	// first error would leave the remaining handles open until exit. The
+	// caller sees every error that occurred.
+	return stderrors.Join(c.cacheManager.Stop(), c.chainManager.Stop())
 }
 
 func (c *chain) checkGenesisCompatibility() error {

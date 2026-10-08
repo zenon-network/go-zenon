@@ -153,6 +153,12 @@ func (m *memdbManager) Add(transaction Transaction) error {
 	if m.stopped {
 		return errors.Errorf("can't add transaction to stopped db")
 	}
+	// Re-check the frontier under the lock the new state is published
+	// with: another Add with the same previous may have committed while
+	// this one was building its patch.
+	if previous != m.frontierIdentifier {
+		return errors.Errorf("can't insert identifier %v. previous doesn't match with current frontier %v", head, m.frontierIdentifier)
+	}
 
 	m.frontierIdentifier = head
 	m.previous[head] = previous

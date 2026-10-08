@@ -623,16 +623,68 @@ func TestMemDBManagerStopDuringAdd(t *testing.T) {
 	}
 }
 
+// TestMemDBManagerAddRechecksFrontierAtCommit pins that Add compares
+// `previous` against the frontier under the lock it publishes with, not
+// only in its early check. Two Adds that share a previous both pass the
+// early check; the one that commits second must be refused, otherwise it
+// silently replaces the frontier and orphans the first head.
+func TestMemDBManagerAddRechecksFrontierAtCommit(t *testing.T) {
+	m := NewMemDBManager(NewMemDB())
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+	first := newMockTransaction(1, m.Frontier())
+	second := newMockTransaction(2, m.Frontier())
+	if first.commit.Identifier() == second.commit.Identifier() {
+		t.Fatal("fixture: the two transactions must have distinct heads")
+	}
+	commit := &barrierCommit{
+		mockCommit: first.commit.(*mockCommit),
+		entered:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	first.commit = commit
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(commit.release) }) }
+	t.Cleanup(release)
+
+	done := make(chan error, 1)
+	go func() { done <- m.Add(first) }()
+	select {
+	case <-commit.entered:
+	case <-time.After(5 * time.Second):
+		release()
+		t.Fatal("first Add did not reach Serialize")
+	}
+	// The second Add lands while the first is paused past its early check.
+	common.FailIfErr(t, m.Add(second))
+	release()
+
+	var firstErr error
+	select {
+	case firstErr = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first Add did not return")
+	}
+	if firstErr == nil {
+		t.Fatal("expected the Add that lost the frontier race to fail")
+	}
+	want := second.commit.Identifier()
+	if got := GetFrontierIdentifier(m.Frontier()); got != want {
+		t.Fatalf("frontier moved to %v, want %v", got, want)
+	}
+	if m.Get(commit.Identifier()) != nil || m.GetPatch(commit.Identifier()) != nil {
+		t.Fatal("state published by an Add that lost the frontier race")
+	}
+}
+
 func TestMemDBManagerStopConcurrentWithAdd(t *testing.T) {
 	m := NewMemDBManager(NewMemDB())
 	transaction := newMockTransaction(1, m.Frontier())
-	stopped := make(chan struct{})
-	go func() {
-		defer close(stopped)
-		common.FailIfErr(t, m.Stop())
-	}()
+	// Stop runs on a helper goroutine, so its error is reported from the
+	// test goroutine rather than through a Fatal on the helper.
+	stopped := make(chan error, 1)
+	go func() { stopped <- m.Stop() }()
 	_ = m.Add(transaction)
-	<-stopped
+	common.FailIfErr(t, <-stopped)
 	if err := m.Add(newMockTransaction(2, NewMemDB())); err == nil {
 		t.Fatalf("expected Add after Stop to fail")
 	}
