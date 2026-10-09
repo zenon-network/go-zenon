@@ -78,3 +78,27 @@ the signature's destination binding is the only protection, as before.
 
 The scalar check is one fixed-base scalar multiplication per unlock, charged as
 `EmbeddedWWithdraw` like every other unlock.
+
+## A refused unlock still publishes its witness
+
+The contract judges an unlock when it receives it, against the timestamp of the
+momentum it runs in. The caller's send block is on the chain, with its witness in
+the clear, before that: a call sent just before `expirationTime` and received just
+after it is refused with `ErrExpired`, and its witness is public all the same. For a
+point lock the witness is the scalar itself; for a key lock made from an adaptor
+pre-signature it gives the adaptor secret to whoever holds the pre-signature. Either
+way the counterparty can reclaim its own entry at its expiry and use the secret on the
+other leg. A client must not send an unlock with less than a few momentums left on
+the chain's clock; the tooling in zenon-ptlc refuses with under 60 seconds.
+
+## Who locks first in a swap
+
+Two entries that one secret opens are a swap only if the party holding the secret
+locks first and its entry expires last. The other party locks once that entry is on
+the chain, with an expiry earlier by at least the time it needs to claim after the
+secret appears. In the other order the holder can claim the counterparty's entry
+without ever funding its own, or wait out its own entry, take it back, and claim the
+counterparty's afterwards. The contract cannot tell the two orders apart: each call
+is valid in both. `TestPtlc_pointLock_swapOrder_wrongOrderLosesBob` and
+`TestPtlc_pointLock_swapOrder_lateRevealCostsTheRevealer` in
+`vm/embedded/tests/ptlc_point_test.go` run both cases on the mock chain.

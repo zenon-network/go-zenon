@@ -302,9 +302,11 @@ func TestPtlc_pointLock_tweakedSwap(t *testing.T) {
 		t.Fatal("the tweak did not change the point")
 	}
 
-	// Bob locks first and expires last; Alice's lock expires first
-	bobLock := createPointPtlc(t, z, bob, tPoint, alice.Address, int64(genesisTimestamp+6000), types.ZnnTokenStandard, big.NewInt(10*g.Zexp), nil)
-	aliceLock := createPointPtlc(t, z, alice, t2Point, bob.Address, int64(genesisTimestamp+3000), types.QsrTokenStandard, big.NewInt(100*g.Zexp), nil)
+	// Alice holds t, so she locks first and her entry expires last. Bob locks
+	// only once hers is on the chain, and his expires first: whenever Alice
+	// claims his entry, publishing t, hers is still open to him.
+	aliceLock := createPointPtlc(t, z, alice, t2Point, bob.Address, int64(genesisTimestamp+6000), types.QsrTokenStandard, big.NewInt(100*g.Zexp), nil)
+	bobLock := createPointPtlc(t, z, bob, tPoint, alice.Address, int64(genesisTimestamp+3000), types.ZnnTokenStandard, big.NewInt(10*g.Zexp), nil)
 
 	// Bob cannot open Alice's leg yet: he does not know t
 	unlockPtlcAs(t, z, bob, aliceLock, dTweak, constants.ErrInvalidPointScalar)
@@ -322,4 +324,89 @@ func TestPtlc_pointLock_tweakedSwap(t *testing.T) {
 	z.ExpectBalance(bob.Address, types.ZnnTokenStandard, 7990*g.Zexp)
 	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 0)
 	z.ExpectBalance(types.PtlcContract, types.QsrTokenStandard, 0)
+}
+
+func reclaimPtlcAs(t *testing.T, z mock.MockZenon, caller *wallet.KeyPair, id types.Hash, expected error) {
+	t.Helper()
+	call := z.CallContract(&nom.AccountBlock{
+		Address:   caller.Address,
+		ToAddress: types.PtlcContract,
+		Data:      definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName, id),
+	})
+	z.InsertNewMomentum()
+	z.InsertNewMomentum()
+	call.Error(t, expected)
+}
+
+// The order the tweaked swap above uses is the protocol's, not the contract's:
+// the contract does what each call asks. This is the swap in the order SPEC.md
+// §3 had until 2026-10-09, with the party who does not hold t locking first and
+// expiring last. Alice waits out her own entry, takes it back, and then claims
+// Bob's with t. When t becomes public, the entry Bob needed it for is gone.
+func TestPtlc_pointLock_swapOrder_wrongOrderLosesBob(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	activatePtlc(t, z)
+
+	alice, bob := g.User1, g.User2
+
+	var kt, kd btcec.ModNScalar
+	kt.SetInt(5550123)
+	kd.SetInt(777)
+	tSecret := scalarBytes(&kt)
+	dTweak := scalarBytes(&kd)
+	t2Secret := addScalars(tSecret, dTweak)
+
+	bobLock := createPointPtlc(t, z, bob, pointFor(tSecret), alice.Address, int64(genesisTimestamp+6000), types.ZnnTokenStandard, big.NewInt(10*g.Zexp), nil)
+	aliceLock := createPointPtlc(t, z, alice, pointFor(t2Secret), bob.Address, int64(genesisTimestamp+3000), types.QsrTokenStandard, big.NewInt(100*g.Zexp), nil)
+
+	// past Alice's expiry, before Bob's
+	z.InsertMomentumsTo(310)
+	reclaimPtlcAs(t, z, alice, aliceLock, nil)
+	unlockPtlcAs(t, z, alice, bobLock, tSecret, nil)
+
+	// t is public now, and too late to be of use to Bob
+	unlockPtlcAs(t, z, bob, aliceLock, t2Secret, constants.ErrDataNonExistent)
+
+	autoreceive(t, z, alice.Address)
+	z.ExpectBalance(alice.Address, types.ZnnTokenStandard, 12010*g.Zexp)
+	z.ExpectBalance(alice.Address, types.QsrTokenStandard, 120000*g.Zexp)
+	z.ExpectBalance(bob.Address, types.ZnnTokenStandard, 7990*g.Zexp)
+	z.ExpectBalance(bob.Address, types.QsrTokenStandard, 80000*g.Zexp)
+}
+
+// The same attempt against the safe order fails, and costs Alice. Her claim on
+// Bob's entry comes after his expiry, so the contract refuses it; but the
+// refused call still carries t, and her own entry is open to Bob for another
+// fifty minutes. Bob takes his ZNN back and her QSR as well. A witness is
+// public the moment its block is, whatever the contract answers, which is why
+// a client must not reveal one close to the deadline.
+func TestPtlc_pointLock_swapOrder_lateRevealCostsTheRevealer(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	activatePtlc(t, z)
+
+	alice, bob := g.User1, g.User2
+
+	var kt, kd btcec.ModNScalar
+	kt.SetInt(4440321)
+	kd.SetInt(999)
+	tSecret := scalarBytes(&kt)
+	dTweak := scalarBytes(&kd)
+	t2Secret := addScalars(tSecret, dTweak)
+
+	aliceLock := createPointPtlc(t, z, alice, pointFor(t2Secret), bob.Address, int64(genesisTimestamp+6000), types.QsrTokenStandard, big.NewInt(100*g.Zexp), nil)
+	bobLock := createPointPtlc(t, z, bob, pointFor(tSecret), alice.Address, int64(genesisTimestamp+3000), types.ZnnTokenStandard, big.NewInt(10*g.Zexp), nil)
+
+	// past Bob's expiry, before Alice's
+	z.InsertMomentumsTo(310)
+	unlockPtlcAs(t, z, alice, bobLock, tSecret, constants.ErrExpired)
+	reclaimPtlcAs(t, z, bob, bobLock, nil)
+	unlockPtlcAs(t, z, bob, aliceLock, t2Secret, nil)
+
+	autoreceive(t, z, bob.Address)
+	z.ExpectBalance(bob.Address, types.ZnnTokenStandard, 8000*g.Zexp)
+	z.ExpectBalance(bob.Address, types.QsrTokenStandard, 80100*g.Zexp)
+	z.ExpectBalance(alice.Address, types.ZnnTokenStandard, 12000*g.Zexp)
+	z.ExpectBalance(alice.Address, types.QsrTokenStandard, 119900*g.Zexp)
 }
