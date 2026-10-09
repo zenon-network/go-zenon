@@ -6,6 +6,9 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
+
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -137,6 +140,27 @@ func TestPtlc_ED25519SignatureScalarOutOfRange(t *testing.T) {
 		t.Fatalf("s + L does not fit 32 bytes for this signature")
 	}
 	common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, id, User1.Address, shifted), constants.ErrInvalidPointSignature)
+}
+
+func TestPtlc_BIP340AlternateNonceAccepted(t *testing.T) {
+	privateKey, publicKey := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{7}, 32))
+	chainIdentifier := uint64(100)
+	id := types.NewHash([]byte("bip340-alternate-nonce"))
+	info := &definition.PtlcInfo{
+		Id: id, TimeLocked: User1.Address, TokenStandard: types.ZnnTokenStandard, Amount: big.NewInt(1),
+		ExpirationTime: 1000000000, PointType: definition.PointTypeBIP340, PointLock: schnorr.SerializePubKey(publicKey),
+	}
+	message := definition.GetPtlcUnlockMessage(chainIdentifier, info.PointType, id, User1.Address)
+
+	first, err := schnorr.Sign(privateKey, message, schnorr.CustomNonce([32]byte{1}))
+	common.FailIfErr(t, err)
+	second, err := schnorr.Sign(privateKey, message, schnorr.CustomNonce([32]byte{2}))
+	common.FailIfErr(t, err)
+	if bytes.Equal(first.Serialize(), second.Serialize()) {
+		t.Fatalf("two nonces gave one signature")
+	}
+	common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, id, User1.Address, first.Serialize()), nil)
+	common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, id, User1.Address, second.Serialize()), nil)
 }
 
 func TestPtlc_CreateRejectsUnregisteredContractDestination(t *testing.T) {

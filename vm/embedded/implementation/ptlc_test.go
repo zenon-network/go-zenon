@@ -853,18 +853,17 @@ func FuzzPtlcStoredInfoValidation(f *testing.F) {
 }
 
 func FuzzPtlcED25519DomainMutationRejected(f *testing.F) {
-	chainIdentifier := uint64(100)
-	id := types.NewHash([]byte("ed25519-domain-fuzz"))
-	destination := User1.Address
-	validSignature := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, definition.PointTypeED25519, id, destination))
+	signedChain := uint64(100)
+	signedId := types.NewHash([]byte("ed25519-domain-fuzz"))
+	signedDestination := User1.Address
+	signature := User1.Sign(definition.GetPtlcUnlockMessage(signedChain, definition.PointTypeED25519, signedId, signedDestination))
 
-	f.Add(chainIdentifier, id.Bytes(), destination.Bytes(), validSignature)
-	f.Add(chainIdentifier+1, id.Bytes(), destination.Bytes(), validSignature)
-	f.Add(chainIdentifier, types.NewHash([]byte("other-id")).Bytes(), destination.Bytes(), validSignature)
-	f.Add(chainIdentifier, id.Bytes(), types.PubKeyToAddress([]byte("other-destination")).Bytes(), validSignature)
-	f.Add(chainIdentifier, id.Bytes(), destination.Bytes(), validSignature[:63])
+	f.Add(signedChain, signedId.Bytes(), signedDestination.Bytes())
+	f.Add(signedChain+1, signedId.Bytes(), signedDestination.Bytes())
+	f.Add(signedChain, types.NewHash([]byte("other-id")).Bytes(), signedDestination.Bytes())
+	f.Add(signedChain, signedId.Bytes(), types.PubKeyToAddress([]byte("other-destination")).Bytes())
 
-	f.Fuzz(func(t *testing.T, chainIdentifier uint64, idBytes []byte, destinationBytes []byte, signature []byte) {
+	f.Fuzz(func(t *testing.T, chainIdentifier uint64, idBytes []byte, destinationBytes []byte) {
 		id := fuzzHash(idBytes)
 		destination := fuzzAddress(destinationBytes)
 		info := &definition.PtlcInfo{
@@ -878,9 +877,12 @@ func FuzzPtlcED25519DomainMutationRejected(f *testing.F) {
 		}
 
 		err := verifyPtlcSignature(info, chainIdentifier, id, destination, signature)
-		expectedSignature := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, definition.PointTypeED25519, id, destination))
-		if err == nil && !bytes.Equal(signature, expectedSignature) {
-			t.Fatalf("accepted unexpected ED25519 signature for chain=%d id=%s destination=%s", chainIdentifier, id, destination)
+		signed := chainIdentifier == signedChain && id == signedId && destination == signedDestination
+		if signed && err != nil {
+			t.Fatalf("refused the ED25519 signature in the domain it was made for: %v", err)
+		}
+		if !signed && err != constants.ErrInvalidPointSignature {
+			t.Fatalf("ED25519 signature answered %v outside its domain: chain=%d id=%s destination=%s", err, chainIdentifier, id, destination)
 		}
 	})
 }
@@ -888,21 +890,21 @@ func FuzzPtlcED25519DomainMutationRejected(f *testing.F) {
 func FuzzPtlcBIP340DomainMutationRejected(f *testing.F) {
 	privateKeyBytes := bytes.Repeat([]byte{7}, 32)
 	privateKey, publicKey := btcec.PrivKeyFromBytes(privateKeyBytes)
-	chainIdentifier := uint64(100)
-	id := types.NewHash([]byte("bip340-domain-fuzz"))
-	destination := User1.Address
-	validSignature, err := schnorr.Sign(privateKey, definition.GetPtlcUnlockMessage(chainIdentifier, definition.PointTypeBIP340, id, destination))
+	signedChain := uint64(100)
+	signedId := types.NewHash([]byte("bip340-domain-fuzz"))
+	signedDestination := User1.Address
+	validSignature, err := schnorr.Sign(privateKey, definition.GetPtlcUnlockMessage(signedChain, definition.PointTypeBIP340, signedId, signedDestination))
 	if err != nil {
 		f.Fatalf("sign BIP340 seed: %v", err)
 	}
+	signature := validSignature.Serialize()
 
-	f.Add(chainIdentifier, id.Bytes(), destination.Bytes(), validSignature.Serialize())
-	f.Add(chainIdentifier+1, id.Bytes(), destination.Bytes(), validSignature.Serialize())
-	f.Add(chainIdentifier, types.NewHash([]byte("other-id")).Bytes(), destination.Bytes(), validSignature.Serialize())
-	f.Add(chainIdentifier, id.Bytes(), types.PubKeyToAddress([]byte("other-destination")).Bytes(), validSignature.Serialize())
-	f.Add(chainIdentifier, id.Bytes(), destination.Bytes(), validSignature.Serialize()[:63])
+	f.Add(signedChain, signedId.Bytes(), signedDestination.Bytes())
+	f.Add(signedChain+1, signedId.Bytes(), signedDestination.Bytes())
+	f.Add(signedChain, types.NewHash([]byte("other-id")).Bytes(), signedDestination.Bytes())
+	f.Add(signedChain, signedId.Bytes(), types.PubKeyToAddress([]byte("other-destination")).Bytes())
 
-	f.Fuzz(func(t *testing.T, chainIdentifier uint64, idBytes []byte, destinationBytes []byte, signature []byte) {
+	f.Fuzz(func(t *testing.T, chainIdentifier uint64, idBytes []byte, destinationBytes []byte) {
 		id := fuzzHash(idBytes)
 		destination := fuzzAddress(destinationBytes)
 		info := &definition.PtlcInfo{
@@ -916,10 +918,12 @@ func FuzzPtlcBIP340DomainMutationRejected(f *testing.F) {
 		}
 
 		err := verifyPtlcSignature(info, chainIdentifier, id, destination, signature)
-		expectedSignature, signErr := schnorr.Sign(privateKey, definition.GetPtlcUnlockMessage(chainIdentifier, definition.PointTypeBIP340, id, destination))
-		common.FailIfErr(t, signErr)
-		if err == nil && !bytes.Equal(signature, expectedSignature.Serialize()) {
-			t.Fatalf("accepted unexpected BIP340 signature for chain=%d id=%s destination=%s", chainIdentifier, id, destination)
+		signed := chainIdentifier == signedChain && id == signedId && destination == signedDestination
+		if signed && err != nil {
+			t.Fatalf("refused the BIP340 signature in the domain it was made for: %v", err)
+		}
+		if !signed && err != constants.ErrInvalidPointSignature {
+			t.Fatalf("BIP340 signature answered %v outside its domain: chain=%d id=%s destination=%s", err, chainIdentifier, id, destination)
 		}
 	})
 }
