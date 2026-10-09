@@ -72,3 +72,31 @@ the 32-byte scalar `t` with `t·G = T` as the witness. The scalar must be canoni
 nonzero and below the group order, so that one secret has exactly one encoding. No
 message is signed; the entry's fixed destination does the binding that the unlock
 message does for the key types.
+
+## Adaptor pre-signatures over the unlock message
+
+A swap on key locks ([Security](SECURITY.md#a-swap-on-key-locks-needs-the-fixed-destination))
+uses a BIP340 signature that is made in two steps. The contract sees only the
+finished signature and checks it as any other; the two steps are the client's.
+
+With the lock's secret key `d` (negated if its public key has odd y, as BIP340 signs),
+a nonce `k`, the adaptor point `T` and `m` the unlock message of the entry:
+
+```txt
+R  = k*G + T                      negate k if R has odd y
+e  = tagged_hash("BIP0340/challenge", x(R) || x(P) || m)
+s' = k + e*d                      the pre-signature is (R compressed, s'): 65 bytes
+s  = s' + t   (s' - t if R has odd y)     the signature is (x(R), s): 64 bytes
+t  = s - s'   (s' - s if R has odd y)     what the maker of s' learns from s
+```
+
+The receiver of a pre-signature checks `s'*G == (R - T) + e*P` (`(T - R) + e*P` for
+odd `R`) before relying on it. `m` names the entry and the destination, so a
+pre-signature can be made only after the entry exists, and is good for one entry
+and one address. The nonce must not be used for two different challenges; deriving
+it from the key, `m`, `T` and fresh randomness ensures that.
+
+The construction is the Schnorr adaptor signature of Blockstream's scriptless-scripts
+notes (`md/atomic-swap.md`), with BIP340's even-y rule applied to `R`. Test
+implementations are in `vm/embedded/tests/ptlc_keyswap_test.go` and
+`testnet/ptlc/ptlc_point_test.go`; neither is part of the node.

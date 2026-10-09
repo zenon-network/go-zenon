@@ -52,7 +52,7 @@ PTLC logs record signature hashes, not full submitted signatures. Unlock signatu
 
 ## Limitations
 
-This implementation verifies ordinary ED25519 and BIP340 signatures. It does not specify adaptor signatures, scalar extraction, or a complete cross-chain PTLC swap protocol.
+The contract verifies ordinary ED25519 and BIP340 signatures, and the scalar behind a secp256k1 point. It does not enforce adaptor signatures or scalar extraction, and it does not specify the other chain's half of a cross-chain swap. Two single-chain swap protocols are specified and tested on it: one on point locks ([Who locks first in a swap](#who-locks-first-in-a-swap)) and one on key locks with adaptor pre-signatures ([A swap on key locks needs the fixed destination](#a-swap-on-key-locks-needs-the-fixed-destination)). The rest of this section is about key-type witnesses, and was written before either existed.
 
 In particular, the on-chain witness is `Sign(pointPrivateKey, PTLCUnlockMessage(chainIdentifier, pointType, id, destination))`. It is destination-bound, PTLC-id-bound, contract-bound, and chain-bound. Higher-level swap protocols must not treat it as a shared plaintext preimage like an HTLC witness. If an adaptor-signature protocol expects a fixed destination or fixed signing transcript, wallets must pin those exact fields before signing; a fresh ordinary signature over a different destination should be treated as a protocol abort, not as reusable secret revelation.
 

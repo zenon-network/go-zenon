@@ -32,9 +32,10 @@ import (
 // only ever to pay the other party (TestPtlc_keySwap_openDestinationLosesBob
 // is the same swap without it).
 //
-// The adaptor arithmetic below is BIP-340's with the nonce offset by T, as in
-// libsecp256k1-zkp's schnorr_adaptor module. It is here so that the test needs
-// nothing outside this repository; the contract sees only ordinary signatures.
+// The adaptor arithmetic below is BIP-340's with the nonce offset by T, the
+// Schnorr adaptor signature of Blockstream's scriptless-scripts notes, written
+// out in docs/ptlc/SIGNING.md. It is here so that the test needs nothing
+// outside this repository; the contract sees only ordinary signatures.
 
 func bip340Challenge(rx, px, msg []byte) btcec.ModNScalar {
 	tag := sha256.Sum256([]byte("BIP0340/challenge"))
