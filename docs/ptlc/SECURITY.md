@@ -102,3 +102,22 @@ counterparty's afterwards. The contract cannot tell the two orders apart: each c
 is valid in both. `TestPtlc_pointLock_swapOrder_wrongOrderLosesBob` and
 `TestPtlc_pointLock_swapOrder_lateRevealCostsTheRevealer` in
 `vm/embedded/tests/ptlc_point_test.go` run both cases on the mock chain.
+
+## ED25519 locks are not decoded
+
+`Create` checks an ED25519 lock for its length and nothing else, and an unlock is
+verified with Go's `crypto/ed25519`, the function that checks account blocks. That
+function accepts a public key of small order, and under such a key a signature needs
+no secret: with the identity as the key (`01` and 31 zero bytes), the signature `01`
+and 63 zero bytes verifies for every message, so anyone opens the entry, to any
+destination. Thirty-two bytes that are no point make an entry no signature opens; its
+creator reclaims it at the expiry. The two secp256k1 types are decoded at `Create` and
+have neither case.
+
+This is left as it is on purpose. The contract takes the keys the chain's own accounts
+take, as Zcash's ZIP-215 does, and adds no rule of its own; libsodium, ed25519-dalek's
+`verify_strict` and Oasis Core refuse such keys. The check is the client's: one that
+makes an ED25519 lock, or relies on one somebody else made, must decode the key and
+refuse it when it is no point or when its eightfold is the identity. The tooling in
+zenon-ptlc does (`ptlc.create` in the CLI, `lockProblem` in the lab's console), and its
+scenarios page runs the forgery as `weak-key`.
