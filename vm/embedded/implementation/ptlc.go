@@ -40,13 +40,8 @@ func signatureHashForLog(signature []byte) string {
 	return base64.StdEncoding.EncodeToString(crypto.Hash(signature))
 }
 
-func isEmbeddedDestination(address types.Address) bool {
-	for _, contract := range types.EmbeddedContracts {
-		if address == contract {
-			return true
-		}
-	}
-	return false
+func isPayableDestination(address types.Address) bool {
+	return !address.IsZero() && !types.IsEmbeddedAddress(address)
 }
 
 func isPtlcWitnessSize(size int) bool {
@@ -138,7 +133,7 @@ func checkPtlc(param definition.CreatePtlcParam) error {
 	if param.PointType == definition.PointTypeSecp256k1Point && param.Destination.IsZero() {
 		return constants.ErrInvalidDestination
 	}
-	if !param.Destination.IsZero() && isEmbeddedDestination(param.Destination) {
+	if !param.Destination.IsZero() && !isPayableDestination(param.Destination) {
 		return constants.ErrInvalidDestination
 	}
 
@@ -369,6 +364,11 @@ func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock
 		return nil, err
 	}
 
+	if !isPayableDestination(destination) {
+		ptlcLog.Debug("invalid unlock - destination cannot be paid", "id", ptlcInfo.Id, "address", sendBlock.Address, "destination", destination)
+		return nil, constants.ErrInvalidDestination
+	}
+
 	if !ptlcInfo.Destination.IsZero() && destination != ptlcInfo.Destination {
 		ptlcLog.Debug("invalid unlock - wrong destination", "id", ptlcInfo.Id, "address", sendBlock.Address, "destination", destination, "expected", ptlcInfo.Destination)
 		return nil, constants.ErrPermissionDenied
@@ -459,6 +459,10 @@ func (p *ProxyUnlockPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error
 
 	if !isZeroAmount(block.Amount) {
 		return constants.ErrInvalidTokenOrAmount
+	}
+
+	if !isPayableDestination(param.Destination) {
+		return constants.ErrInvalidDestination
 	}
 
 	if !isPtlcWitnessSize(len(param.Signature)) {

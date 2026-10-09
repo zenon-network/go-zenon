@@ -14,6 +14,8 @@ import (
 )
 
 var (
+	unregisteredContract = types.Address{types.ContractAddrByte, 0xde, 0xad, 0xbe, 0xef}
+
 	ed25519SmallOrderLocks = map[string]string{
 		"identity":                   "0100000000000000000000000000000000000000000000000000000000000000",
 		"order 2":                    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
@@ -135,4 +137,70 @@ func TestPtlc_ED25519SignatureScalarOutOfRange(t *testing.T) {
 		t.Fatalf("s + L does not fit 32 bytes for this signature")
 	}
 	common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, id, User1.Address, shifted), constants.ErrInvalidPointSignature)
+}
+
+func TestPtlc_CreateRejectsUnregisteredContractDestination(t *testing.T) {
+	for name, pointType := range map[string]uint8{"ED25519": definition.PointTypeED25519, "point": definition.PointTypeSecp256k1Point} {
+		lock := []byte(User1.Public)
+		if pointType == definition.PointTypeSecp256k1Point {
+			lock = pointOf(pointScalar(7))
+		}
+		param := definition.CreatePtlcParam{ExpirationTime: 1000000000, PointType: pointType, PointLock: lock, Destination: unregisteredContract}
+		if err := checkPtlc(param); err != constants.ErrInvalidDestination {
+			t.Errorf("%s lock: got %v, want %v", name, err, constants.ErrInvalidDestination)
+		}
+	}
+}
+
+func TestPtlc_ProxyUnlockRejectsUnpayableDestination(t *testing.T) {
+	id := types.NewHash([]byte("unpayable"))
+	method := &ProxyUnlockPtlcMethod{definition.ProxyUnlockPtlcMethodName}
+	for name, c := range map[string]struct {
+		destination types.Address
+		want        error
+	}{
+		"an account":               {User1.Address, nil},
+		"the zero address":         {types.ZeroAddress, constants.ErrInvalidDestination},
+		"an embedded contract":     {types.PtlcContract, constants.ErrInvalidDestination},
+		"an unregistered contract": {unregisteredContract, constants.ErrInvalidDestination},
+	} {
+		data := definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName, id, c.destination, bytes.Repeat([]byte{1}, 64))
+		if err := method.ValidateSendBlock(&nom.AccountBlock{Amount: big.NewInt(0), Data: data}); err != c.want {
+			t.Errorf("%s: got %v, want %v", name, err, c.want)
+		}
+	}
+}
+
+func TestPtlc_WildcardLockDoesNotPayUnpayableDestination(t *testing.T) {
+	chainIdentifier := uint64(100)
+	for name, destination := range map[string]types.Address{
+		"the zero address":         types.ZeroAddress,
+		"an embedded contract":     types.PtlcContract,
+		"an unregistered contract": unregisteredContract,
+	} {
+		id := types.NewHash([]byte(name))
+		ctx := newTestPtlcContext(chainIdentifier, 100)
+		info := &definition.PtlcInfo{
+			Id: id, TimeLocked: User1.Address, TokenStandard: types.ZnnTokenStandard, Amount: big.NewInt(1),
+			ExpirationTime: 200, PointType: definition.PointTypeED25519, PointLock: User1.Public,
+		}
+		common.FailIfErr(t, info.Save(ctx.Storage()))
+
+		signature := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, info.PointType, id, destination))
+		common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, id, destination, signature), nil)
+
+		blocks, err := unlockPtlc(ctx, &nom.AccountBlock{Address: User1.Address}, id, destination, signature)
+		if err != constants.ErrInvalidDestination || blocks != nil {
+			t.Errorf("%s: got %v and %d blocks, want %v and none", name, err, len(blocks), constants.ErrInvalidDestination)
+		}
+		if _, err := definition.GetPtlcInfo(ctx.Storage(), id); err != nil {
+			t.Errorf("%s: the entry did not survive the refused unlock: %v", name, err)
+		}
+
+		paid := User1.Sign(definition.GetPtlcUnlockMessage(chainIdentifier, info.PointType, id, User1.Address))
+		blocks, err = unlockPtlc(ctx, &nom.AccountBlock{Address: User1.Address}, id, User1.Address, paid)
+		if err != nil || len(blocks) != 1 {
+			t.Errorf("%s: the entry could not be opened to an account afterwards: %v", name, err)
+		}
+	}
 }
