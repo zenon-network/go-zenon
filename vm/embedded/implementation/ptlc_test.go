@@ -60,7 +60,7 @@ func TestPtlc_CreateRejectsInvalidBIP340Point(t *testing.T) {
 		defaultPtlc.ExpirationTime,
 		definition.PointTypeBIP340,
 		invalidPoint,
-			types.ZeroAddress,
+		types.ZeroAddress,
 	)
 
 	common.ExpectError(t, checkPtlc(definition.CreatePtlcParam{
@@ -715,7 +715,7 @@ func TestPtlc_CreateExpirationBoundary(t *testing.T) {
 					test.expiration,
 					definition.PointTypeED25519,
 					User1.Public,
-			types.ZeroAddress,
+					types.ZeroAddress,
 				),
 			}
 
@@ -739,7 +739,10 @@ func expectDefinedPtlcError(t *testing.T, err error) {
 	t.Helper()
 
 	switch err {
-	case nil, constants.ErrInvalidPointType, constants.ErrInvalidPointLock, constants.ErrInvalidPointSignature:
+	case nil, constants.ErrInvalidPointType, constants.ErrInvalidPointLock, constants.ErrInvalidPointSignature,
+		// the point type's own two: a witness that is not the scalar, and a
+		// point lock that names no destination
+		constants.ErrInvalidPointScalar, constants.ErrInvalidDestination:
 	default:
 		t.Fatalf("unexpected PTLC error: %v", err)
 	}
@@ -755,6 +758,9 @@ func FuzzPtlc_CheckAndVerify(f *testing.F) {
 	f.Add(definition.PointTypeED25519, []byte{}, []byte{})
 	f.Add(definition.PointTypeBIP340, bytes.Repeat([]byte{0xff}, 32), bytes.Repeat([]byte{0xff}, 64))
 	f.Add(uint8(99), bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{1}, 64))
+	f.Add(definition.PointTypeSecp256k1Point, pointOf(pointScalar(7)), pointScalar(7))
+	f.Add(definition.PointTypeSecp256k1Point, pointOf(pointScalar(7)), bytes.Repeat([]byte{1}, 64))
+	f.Add(definition.PointTypeSecp256k1Point, bytes.Repeat([]byte{4}, 33), []byte{})
 
 	f.Fuzz(func(t *testing.T, pointType uint8, pointLock []byte, signature []byte) {
 		err := checkPtlc(definition.CreatePtlcParam{

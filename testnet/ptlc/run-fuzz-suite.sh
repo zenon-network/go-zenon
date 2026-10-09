@@ -19,6 +19,9 @@ FUZZ_TARGETS=(
 	"FuzzPtlcStoredInfoValidation"
 	"FuzzPtlcED25519DomainMutationRejected"
 	"FuzzPtlcBIP340DomainMutationRejected"
+	"FuzzPtlc_CheckAndVerify"
+	"FuzzPtlcPointScalarWitness"
+	"FuzzPtlcPointLockEncoding"
 )
 
 mkdir -p "$RUN_DIR" "$GOCACHE_DIR"
@@ -113,6 +116,32 @@ done < "$STATUS_FILE"
 			if (base == "FuzzPtlcStoredInfoValidation") return "Seed corpus for persisted PTLC invariant validation";
 			if (base == "FuzzPtlcED25519DomainMutationRejected") return "Seed corpus for ED25519 domain mutation rejection";
 			if (base == "FuzzPtlcBIP340DomainMutationRejected") return "Seed corpus for BIP340 domain mutation rejection";
+			if (base == "FuzzPtlc_CheckAndVerify") return "Seed corpus for create and witness checks over all three point types returning only errors the contract defines";
+			if (base == "FuzzPtlcPointScalarWitness") return "Seed corpus for a point lock opening with its canonical scalar and nothing else";
+			if (base == "FuzzPtlcPointLockEncoding") return "Seed corpus for a point lock being accepted only as a compressed point on the curve";
+			if (base == "TestPtlc_CreateRejectsInvalidBIP340Point") return "Rejects a BIP340 lock with no point above it at create";
+			if (base == "TestPtlc_WitnessIsDestinationBound") return "A key-lock witness for one destination does not verify for another";
+			if (base == "TestPtlc_WitnessNotPortableAcrossEntries") return "A key-lock witness for one entry does not verify for another";
+			if (base == "TestPtlc_ReclaimIndependentOfPointFields") return "Reclaim needs only the reclaim-relevant stored fields";
+			if (base == "TestPtlc_DoubleUnlockDeletesBeforeSecondWithdrawal") return "A second unlock finds the entry deleted";
+			if (base == "TestPtlc_UnlockThenReclaimRace") return "Unlock and reclaim cannot both pay";
+			if (base == "TestPtlc_PointScalarRules") return "Point lock opens only with the canonical scalar: not its negation, zero, the order, a non-canonical encoding or another length";
+			if (base == "TestPtlc_PointLockEncoding") return "Point lock must be a compressed point on the curve";
+			if (base == "TestPtlc_DestinationRules") return "A point lock must name a destination, a key lock may, and none may name an embedded contract, at create and in stored state";
+			if (base == "TestPtlc_createRejectsInvalidBIP340Point") return "The node does not take a create with an invalid BIP340 lock";
+			if (base == "TestPtlc_pointLock_create_rules") return "Point-lock create rules on the mock chain: destination required, encoding checked";
+			if (base == "TestPtlc_pointLock_unlock") return "Point lock pays its named destination for the right scalar, direct and proxied, and nobody else";
+			if (base == "TestPtlc_pointLock_expiry_and_reclaim") return "Point lock refuses the scalar at expiry and returns to its creator";
+			if (base == "TestPtlc_fixedDestination_keyLock") return "Key lock with a fixed destination refuses a valid signature for another address";
+			if (base == "TestPtlc_pointLock_tweakedSwap") return "Swap on two point locks with a tweak, in the safe order";
+			if (base == "TestPtlc_pointLock_swapOrder_wrongOrderLosesBob") return "The swap with the party that lacks the secret locking first and last: it loses";
+			if (base == "TestPtlc_pointLock_swapOrder_lateRevealCostsTheRevealer") return "A scalar revealed after the other entry has expired costs the revealer both legs";
+			if (base == "TestPtlc_keySwap_adaptor") return "Swap on two BIP340 key locks with adaptor pre-signatures, in all four key and nonce parity cases";
+			if (base == "TestPtlc_keySwap_keysPayOnlyTheCounterparty") return "With fixed destinations neither lock key can pay its own owner, and neither entry is reclaimable early";
+			if (base == "TestPtlc_keySwap_bobNeverLocks") return "Key swap abandoned after the first lock: a pre-signature opens nothing and the creator reclaims";
+			if (base == "TestPtlc_keySwap_aliceNeverClaims") return "Key swap abandoned after both locks: each reclaims at its own expiry";
+			if (base == "TestPtlc_keySwap_lateClaimCostsTheClaimer") return "A completed signature published after expiry gives the secret away";
+			if (base == "TestPtlc_keySwap_openDestinationLosesBob") return "Key swap whose first entry names no destination: its maker takes it back";
 			if (base == "TestPtlc_spork_gating") return "Requires PTLC spork activation";
 			if (base == "TestPtlc_zero") return "Rejects zero-value creates";
 			if (base == "TestPtlc_unlock") return "Covers ED25519 direct unlock validation and payout";
@@ -139,7 +168,7 @@ done < "$STATUS_FILE"
 			print "| Result | Test | What It Covers | Duration |";
 			print "|---|---|---|---|";
 		}
-		/^--- (PASS|FAIL|SKIP): (Test|Fuzz)Ptlc/ {
+		/^[[:space:]]*--- (PASS|FAIL|SKIP): (Test|Fuzz)Ptlc/ {
 			result=$2;
 			sub(":", "", result);
 			test=$3;
