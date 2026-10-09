@@ -311,11 +311,25 @@ func writePillarConfig(path, name string, producer types.Address, producerIdx ui
 			"ListenHost":        "0.0.0.0",
 			"ListenPort":        35995,
 			"MinPeers":          minPeers,
-			"MinConnectedPeers": minPeers,
+			"MinConnectedPeers": meshPeers(minPeers),
 			"Seeders":           seeders,
 		},
 	}
 	return writeJSON(path, cfg)
+}
+
+// meshPeers is how many peers a node keeps dialling for. MinPeers is the
+// threshold for syncing and stays small; this is the number of other nodes, so
+// that the five end up fully meshed. With the two equal, a node stopped
+// dialling at its first one or two peers, and whether a block published at the
+// RPC node reached the producing pillar within a momentum was left to which
+// peers those happened to be: on one host it took over two minutes. The
+// bootstrap pillar has no seeders to dial and keeps zero.
+func meshPeers(minPeers int) int {
+	if minPeers == 0 {
+		return 0
+	}
+	return len(pillars) + len(relays) - 1
 }
 
 func writeRelayConfig(path, name string, seeders []string, minPeers int) error {
@@ -341,7 +355,7 @@ func writeRelayConfig(path, name string, seeders []string, minPeers int) error {
 			"ListenHost":        "0.0.0.0",
 			"ListenPort":        35995,
 			"MinPeers":          minPeers,
-			"MinConnectedPeers": minPeers,
+			"MinConnectedPeers": meshPeers(minPeers),
 			"Seeders":           seeders,
 		},
 	}

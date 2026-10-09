@@ -6,7 +6,7 @@
     "Net": {
         "ListenHost": "0.0.0.0",
         "ListenPort": 35995,
-        "MinConnectedPeers": 2,
+        "MinConnectedPeers": 4,
         "MinPeers": 2,
         "Seeders": [
             "enode://91125cf1d9986023f41a5ba5b7d171956834873fdf2b3c825208522a7a581d3f56aa9c24d2008d606ec703ab6e23234d506152f9c4094d6732718e408cf76442@172.30.0.10:35995",

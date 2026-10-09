@@ -24,7 +24,7 @@ BUILDDIR = $(shell pwd)/build
 GIT_COMMIT=$(shell git rev-parse HEAD)
 GIT_COMMIT_FILE=$(shell pwd)/metadata/git_commit.go
 LOCAL_GOCACHE ?= $(shell pwd)/.gocache
-TESTNET_GO_TEST_FLAGS ?= -timeout 25m
+TESTNET_GO_TEST_FLAGS ?= -timeout 60m
 TESTNET_RESULTS_DIR ?= $(shell pwd)/test-results/ptlc
 PTLC_FUZZ_RESULTS_DIR ?= $(shell pwd)/test-results/ptlc-fuzz
 PTLC_FUZZ_UNIT_TIMEOUT ?= 120s
@@ -57,11 +57,11 @@ devnet-down:
 	docker compose down -v
 
 testnet-ptlc:
-	sh -c 'set -e; trap "docker compose down -v" EXIT; docker compose down -v; docker compose up -d --build; PTLC_TESTNET_RPC="$${PTLC_TESTNET_RPC:-http://localhost:35997}" GOCACHE="$(LOCAL_GOCACHE)" TESTNET_GO_TEST_FLAGS="$(TESTNET_GO_TEST_FLAGS)" TESTNET_RESULTS_DIR="$(TESTNET_RESULTS_DIR)" bash testnet/ptlc/run-suite.sh'
+	sh -c 'set -e; trap "docker compose down -v" EXIT; docker compose down -v; docker compose up -d --build; PTLC_TESTNET_RPC="$${PTLC_TESTNET_RPC:-http://localhost:$${ZNND_DEVNET_RPC_HTTP:-35997}}" GOCACHE="$(LOCAL_GOCACHE)" TESTNET_GO_TEST_FLAGS="$(TESTNET_GO_TEST_FLAGS)" TESTNET_RESULTS_DIR="$(TESTNET_RESULTS_DIR)" bash testnet/ptlc/run-suite.sh'
 
 testnet-ptlc-keep:
 	docker compose up -d --build
-	PTLC_TESTNET_RPC="$${PTLC_TESTNET_RPC:-http://localhost:35997}" GOCACHE="$(LOCAL_GOCACHE)" TESTNET_GO_TEST_FLAGS="$(TESTNET_GO_TEST_FLAGS)" TESTNET_RESULTS_DIR="$(TESTNET_RESULTS_DIR)" bash testnet/ptlc/run-suite.sh
+	PTLC_TESTNET_RPC="$${PTLC_TESTNET_RPC:-http://localhost:$${ZNND_DEVNET_RPC_HTTP:-35997}}" GOCACHE="$(LOCAL_GOCACHE)" TESTNET_GO_TEST_FLAGS="$(TESTNET_GO_TEST_FLAGS)" TESTNET_RESULTS_DIR="$(TESTNET_RESULTS_DIR)" bash testnet/ptlc/run-suite.sh
 
 ptlc-fuzz:
 	GOCACHE="$(LOCAL_GOCACHE)" PTLC_FUZZ_RESULTS_DIR="$(PTLC_FUZZ_RESULTS_DIR)" PTLC_FUZZ_UNIT_TIMEOUT="$(PTLC_FUZZ_UNIT_TIMEOUT)" PTLC_FUZZ_TIME="$(PTLC_FUZZ_TIME)" PTLC_FUZZ_TIMEOUT="$(PTLC_FUZZ_TIMEOUT)" bash testnet/ptlc/run-fuzz-suite.sh

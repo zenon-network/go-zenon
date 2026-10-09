@@ -24,6 +24,16 @@ three pillars plus each other. Pillar 2 and pillar 3 also seed each other,
 which keeps the dedicated RPC path from depending on a single bootstrap
 connection.
 
+Every node but the bootstrap pillar keeps dialling until it has all four
+others (`Net.MinConnectedPeers` 4); `Net.MinPeers`, the threshold for
+syncing, is unchanged. With the two equal, as they were, a node stopped at
+its first one or two peers. On one host that left pillar 1 with a single
+peer and the RPC node with two, and a call published at the RPC node was
+not in a momentum two minutes later, which fails the live suite's waits.
+Meshed, `stats.networkInfo` reports 4 peers on all five, and the live
+suite passed on that host. An existing data volume keeps its old config, since
+the entrypoint copies it only once: `make devnet-down` first.
+
 ### Chain ID vs Network ID
 
 The `ChainIdentifier` in `genesis.json` (`69`) is used as **both** the
@@ -62,7 +72,9 @@ and configs are all committed under `docker/devnet/`.
 - `go-test.log` is the full verbose `go test` stream.
 - `summary.md` lists the RPC endpoint, suite status, each test case, and
   the package result. The suite includes a two-party ZNN/QSR swap
-  choreography and an abort/refund path over predefined devnet terms.
+  choreography and an abort/refund path over predefined devnet terms, and
+  six tests of the point type, the fixed destination and the two swaps
+  built on them ([docs/ptlc](../../docs/ptlc/README.md#testing)).
 
 `make ptlc-fuzz` writes the same style of tester-friendly artifacts
 under `test-results/ptlc-fuzz/<timestamp>/`:
@@ -74,6 +86,39 @@ under `test-results/ptlc-fuzz/<timestamp>/`:
 
 `test-results/` is ignored because generated logs and summaries include
 absolute local paths.
+
+## Running beside another devnet
+
+The names, ports and subnet in the table above are defaults. Each comes from an
+environment variable, so a second devnet can run on a host where the first one's are
+taken, by another checkout of this repository or by anything else:
+
+| Variable | Sets | Default |
+|---|---|---|
+| `ZNND_DEVNET_NAME` | container-name prefix and the network's name | `znnd-devnet` |
+| `ZNND_DEVNET_IMAGE` | the image built and run | `go-zenon-devnet:latest` |
+| `ZNND_DEVNET_SUBNET` | first three octets of the network's `/24` | `172.30.0` |
+| `ZNND_DEVNET_RPC_HTTP` | host port of the RPC node, HTTP | `35997` |
+| `ZNND_DEVNET_RPC_WS` | host port of the RPC node, WebSocket | `35998` |
+| `ZNND_DEVNET_PILLAR_HTTP` | host port of pillar 1, HTTP | `35991` |
+
+```sh
+ZNND_DEVNET_NAME=znnd-ptlc ZNND_DEVNET_IMAGE=go-zenon-devnet:ptlc \
+ZNND_DEVNET_SUBNET=172.30.77 \
+ZNND_DEVNET_RPC_HTTP=36997 ZNND_DEVNET_RPC_WS=36998 ZNND_DEVNET_PILLAR_HTTP=36991 \
+make testnet-ptlc
+```
+
+The committed node configs name their seeders by address in `172.30.0.0/24`. When
+`ZNND_DEVNET_SUBNET` differs, the entrypoint rewrites those addresses as it seeds a
+node's data directory; the last octet of each node stays the same. The live suite
+finds the RPC node at `http://localhost:$ZNND_DEVNET_RPC_HTTP` unless
+`PTLC_TESTNET_RPC` says otherwise. Volumes belong to the compose project, which is
+named after the checkout's directory, so `make devnet-down` removes only this
+checkout's chain.
+
+Give a second devnet its own image name. Two checkouts that build the same tag
+replace each other's image.
 
 ## RPC endpoints
 
