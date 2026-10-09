@@ -9,7 +9,7 @@ LOG_FILE="$RUN_DIR/go-test.log"
 SUMMARY_FILE="$RUN_DIR/summary.md"
 
 RPC_URL="${PTLC_TESTNET_RPC:-http://localhost:35997}"
-GO_TEST_FLAGS="${TESTNET_GO_TEST_FLAGS:--timeout 25m}"
+GO_TEST_FLAGS="${TESTNET_GO_TEST_FLAGS:--timeout 60m}"
 GOCACHE_DIR="${GOCACHE:-$ROOT_DIR/.gocache}"
 
 mkdir -p "$RUN_DIR" "$GOCACHE_DIR"
@@ -67,6 +67,24 @@ fi
 			}
 			if (test == "TestPtlcExpirationAndReclaimViaRPC") {
 				return "Expiration rejects early reclaim and expired unlock, then allows locker reclaim";
+			}
+			if (test == "TestPtlcPointLockViaRPC") {
+				return "Point lock: no destination and a bad encoding are not taken; a wrong scalar and the right scalar from the wrong account are refused; a relayed scalar pays the named destination";
+			}
+			if (test == "TestPtlcFixedDestinationKeyLockViaRPC") {
+				return "Key lock with a fixed destination: an embedded destination is not taken; a valid signature for another address is refused; the named destination is paid";
+			}
+			if (test == "TestPtlcPointLockTweakedSwapViaRPC") {
+				return "Swap on two point locks with a tweak, secret holder first and last to expire; the counterparty reads the scalar from the chain";
+			}
+			if (test == "TestPtlcKeySwapAdaptorViaRPC") {
+				return "Swap on two BIP340 key locks with single-signer adaptor pre-signatures; the secret is extracted from the published signature and is nowhere on the chain";
+			}
+			if (test == "TestPtlcKeySwapOpenDestinationLosesViaRPC") {
+				return "The same swap with the first entry naming no destination: its maker signs it back and the counterparty loses";
+			}
+			if (test == "TestPtlcLateClaimPublishesWitnessViaRPC") {
+				return "A claim after expiry is refused and still publishes its witness; the counterparty reclaims and takes the other leg";
 			}
 			if (test == "TestRpcRelayDiagnosticViaRPC") {
 				return "Opt-in diagnostic comparing dedicated RPC and pillar visibility";
