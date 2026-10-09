@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"math/big"
 
+	"filippo.io/edwards25519"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/zenon-network/go-zenon/chain/nom"
@@ -57,6 +58,17 @@ func isPtlcWitnessSize(size int) bool {
 	return false
 }
 
+func checkED25519PointLock(pointLock []byte) error {
+	point, err := new(edwards25519.Point).SetBytes(pointLock)
+	if err != nil {
+		return constants.ErrInvalidPointLock
+	}
+	if point.MultByCofactor(point).Equal(edwards25519.NewIdentityPoint()) == 1 {
+		return constants.ErrInvalidPointLock
+	}
+	return nil
+}
+
 func verifyBIP340Signature(message, pointLock, signature []byte) error {
 	s, err := schnorr.ParseSignature(signature)
 	if err != nil {
@@ -99,6 +111,10 @@ func checkPointLock(pointType uint8, pointLock []byte) error {
 	}
 
 	switch pointType {
+	case definition.PointTypeED25519:
+		if err := checkED25519PointLock(pointLock); err != nil {
+			return err
+		}
 	case definition.PointTypeBIP340:
 		if _, err := schnorr.ParsePubKey(pointLock); err != nil {
 			return constants.ErrInvalidPointLock

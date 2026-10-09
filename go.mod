@@ -3,6 +3,7 @@ module github.com/zenon-network/go-zenon
 go 1.23
 
 require (
+	filippo.io/edwards25519 v1.1.0
 	github.com/btcsuite/btcd/btcec/v2 v2.2.0
 	github.com/btcsuite/btcd/btcutil v1.1.3
 	github.com/deckarep/golang-set v1.8.0
