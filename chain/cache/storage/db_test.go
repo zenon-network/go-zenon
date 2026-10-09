@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"path"
 	"testing"
 
 	"github.com/syndtr/goleveldb/leveldb"
@@ -27,7 +28,7 @@ func getMockIdentifier(height uint64) types.HashHeight {
 
 func TestAddWriteFailureIsAtomic(t *testing.T) {
 	m := NewCacheDBManager(t.TempDir()).(*cacheManager)
-	defer m.Stop()
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	common.FailIfErr(t, m.Add(getMockIdentifier(1), getMockPatch([]byte{1})))
 	beforeIdentifier := GetFrontierIdentifier(m.DB())
@@ -50,7 +51,7 @@ func TestAddWriteFailureIsAtomic(t *testing.T) {
 
 func TestPopWriteFailureIsAtomic(t *testing.T) {
 	m := NewCacheDBManager(t.TempDir()).(*cacheManager)
-	defer m.Stop()
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	common.FailIfErr(t, m.Add(getMockIdentifier(1), getMockPatch([]byte{1})))
 	common.FailIfErr(t, m.Add(getMockIdentifier(2), getMockPatch([]byte{2})))
@@ -75,7 +76,7 @@ func TestPopWriteFailureIsAtomic(t *testing.T) {
 func TestPop(t *testing.T) {
 	dir := t.TempDir()
 	m := NewCacheDBManager(dir)
-	defer m.Stop()
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	for i := 1; i <= 10; i++ {
 		m.Add(getMockIdentifier(uint64(i)), getMockPatch([]byte{byte(i)}))
@@ -110,4 +111,46 @@ func TestPop(t *testing.T) {
 04 - 04
 05 - 05
 `)
+}
+
+// TestCacheDBManagerStopIsIdempotent pins the same Stop contract the
+// common/db managers have: the first Stop releases the LevelDB handle (the
+// directory can be reopened) and a second Stop is a no-op that returns nil,
+// so callers such as chain.Stop and test cleanups may call it unconditionally.
+func TestCacheDBManagerStopIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	m := NewCacheDBManager(dir)
+	// Registered before any assertion; a repeated Stop is the contract
+	// under test, so the explicit calls below stay.
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+	common.FailIfErr(t, m.Add(getMockIdentifier(1), getMockPatch([]byte{1})))
+	common.FailIfErr(t, m.Stop())
+	// The raw handle has no nil-on-repeat contract, so its single Close
+	// belongs to the cleanup registered as soon as the open succeeds.
+	ldb, err := leveldb.OpenFile(path.Join(dir, "cache"), nil)
+	common.FailIfErr(t, err)
+	t.Cleanup(func() { common.FailIfErr(t, ldb.Close()) })
+	common.FailIfErr(t, m.Stop())
+	if m.DB() != nil {
+		t.Fatalf("DB must be nil after Stop")
+	}
+}
+
+// TestCacheDBManagerStopAfterFailedClose pins that Stop marks the manager
+// stopped even when closing the handle fails, since goleveldb treats the
+// handle as closed from the first Close call regardless of its result.
+func TestCacheDBManagerStopAfterFailedClose(t *testing.T) {
+	m := NewCacheDBManager(t.TempDir()).(*cacheManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+	// The handle is closed underneath the manager, so the failure the first
+	// Stop sees is goleveldb's ErrClosed; an I/O failure of a first Close
+	// is not what this fixture produces.
+	common.FailIfErr(t, m.ldb.Close())
+	if err := m.Stop(); err != leveldb.ErrClosed {
+		t.Fatalf("expected Stop to report leveldb.ErrClosed, got %v", err)
+	}
+	common.FailIfErr(t, m.Stop())
+	if m.DB() != nil {
+		t.Fatalf("DB must be nil after a Stop that reported an error")
+	}
 }
