@@ -121,3 +121,33 @@ makes an ED25519 lock, or relies on one somebody else made, must decode the key 
 refuse it when it is no point or when its eightfold is the identity. The tooling in
 zenon-ptlc does (`ptlc.create` in the CLI, `lockProblem` in the lab's console), and its
 scenarios page runs the forgery as `weak-key`.
+
+## A swap on key locks needs the fixed destination
+
+Two BIP340 entries make a swap with single-signer adaptor signatures, and no key held
+by two parties, when each entry names its counterparty as its destination. This is the
+protocol the Limitations section above asks a higher layer to document:
+
+- The secret is a scalar `t`, held by one party, with the point `T = t*G` known to
+  both. Neither is ever on this chain.
+- Each party locks to a key of its own, made for the swap, with the other party as the
+  entry's destination. Each gives the other an adaptor pre-signature on `T` by that key
+  over its own entry's unlock message: the nonce is `R = k*G + T` and the scalar is
+  `s' = k + e*d`, so `s' + t` is a BIP340 signature (`s' - t` when `R` has odd y).
+- The holder of `t` completes the counterparty's pre-signature and unlocks with it. The
+  counterparty made that pre-signature, so the published signature gives it
+  `t = s - s'`, with which it completes the other one.
+- Both unlock messages are this contract's, so the chain, contract, entry and
+  destination bindings above apply to both legs.
+
+The destination is what makes one key enough. A lock's key can sign at any time, but
+with a fixed destination every signature it makes pays the counterparty. With the zero
+destination the same key signs the entry back to its owner, after the owner has
+claimed the other leg or before: `Create` accepts such an entry, so the party locking
+second must read the first entry and refuse one that does not name it.
+
+The order and the timing rules of the two sections above hold unchanged: the holder
+of `t` locks first and expires last, and a claim refused as too late still publishes
+the completed signature, which gives the counterparty `t`. `ptlc_keyswap_test.go` in
+`vm/embedded/tests` runs the swap in the four parity cases of key and nonce, both
+ways of abandoning it, the late claim, and the swap without the fixed destination.
