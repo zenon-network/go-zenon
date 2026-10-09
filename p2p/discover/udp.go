@@ -31,7 +31,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
-	"github.com/zenon-network/go-zenon/p2p/nat"
+	"github.com/zenon-network/go-zenon/p2p/legacy/nat"
 )
 
 const Version = 4
@@ -537,10 +537,20 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromID NodeID, mac []byte) er
 	})
 	if !t.handleReply(fromID, pingPacket, req) {
 		// Note: we're ignoring the provided IP address right now
+		//
+		// Admit the bond before starting anything for it. The pong above
+		// has already answered the remote; when the budget is exhausted the
+		// follow-up bond is skipped and the remote can ping again later,
+		// and a remote whose bond is already in flight is served by that.
+		if !t.admitInbound(fromID) {
+			common.P2PLogger.Debug(fmt.Sprintf("Inbound bond not admitted for %x", fromID[:8]))
+			return nil
+		}
 		t.wg.Add(1)
 		go func() {
+			defer t.wg.Done()
+			defer t.releaseInbound(fromID)
 			t.bond(true, fromID, from, req.From.TCP)
-			t.wg.Done()
 		}()
 	}
 	return nil

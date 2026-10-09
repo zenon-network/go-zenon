@@ -38,10 +38,16 @@ type Protocol struct {
 	// The peer connection is closed when Start returns. It should return
 	// any protocol-level error (such as an I/O error) that is
 	// encountered.
-	Run func(peer *Peer, rw MsgReadWriter) error
+	// peer is passed as an interface so the legacy and libp2p backends
+	// can supply their own concrete Peer types without coupling
+	// protocol-layer code to a specific transport.
+	Run func(peer Peer, rw MsgReadWriter) error
 }
 
-func (p Protocol) cap() Cap {
+// Cap returns the capability (name + version) advertised for this
+// subprotocol during the handshake. Exported so backend Server
+// implementations in subpackages can build their handshake messages.
+func (p Protocol) Cap() Cap {
 	return Cap{p.Name, p.Version}
 }
 
@@ -59,10 +65,10 @@ func (cap Cap) String() string {
 	return fmt.Sprintf("%s/%d", cap.Name, cap.Version)
 }
 
-type capsByNameAndVersion []Cap
+type CapsByNameAndVersion []Cap
 
-func (cs capsByNameAndVersion) Len() int      { return len(cs) }
-func (cs capsByNameAndVersion) Swap(i, j int) { cs[i], cs[j] = cs[j], cs[i] }
-func (cs capsByNameAndVersion) Less(i, j int) bool {
+func (cs CapsByNameAndVersion) Len() int      { return len(cs) }
+func (cs CapsByNameAndVersion) Swap(i, j int) { cs[i], cs[j] = cs[j], cs[i] }
+func (cs CapsByNameAndVersion) Less(i, j int) bool {
 	return cs[i].Name < cs[j].Name || (cs[i].Name == cs[j].Name && cs[i].Version < cs[j].Version)
 }

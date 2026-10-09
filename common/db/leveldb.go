@@ -41,6 +41,9 @@ func (ro *levelDBROWrapper) Has(key []byte) (bool, error) {
 func (ro *levelDBROWrapper) Put(key []byte, value []byte) error {
 	panic("unimplemented")
 }
+func (ro *levelDBROWrapper) Delete(key []byte) error {
+	panic("unimplemented")
+}
 func (ro *levelDBROWrapper) changesInternal(prefix []byte) (Patch, error) {
 	panic("unimplemented")
 }
@@ -51,6 +54,7 @@ func (ro *levelDBROWrapper) NewIterator(prefix []byte) StorageIterator {
 type LevelDBLike interface {
 	LevelDBLikeRO
 	Put(key []byte, value []byte, wo *opt.WriteOptions) error
+	Delete(key []byte, wo *opt.WriteOptions) error
 }
 
 type levelDBWrapper struct {
@@ -65,6 +69,9 @@ func (ldbw *levelDBWrapper) Has(key []byte) (bool, error) {
 }
 func (ldbw *levelDBWrapper) Put(key, value []byte) error {
 	return ldbw.db.Put(key, value, nil)
+}
+func (ldbw *levelDBWrapper) Delete(key []byte) error {
+	return ldbw.db.Delete(key, nil)
 }
 func (ldbw *levelDBWrapper) NewIterator(prefix []byte) StorageIterator {
 	return ldbw.db.NewIterator(util.BytesPrefix(prefix), nil)
@@ -89,14 +96,21 @@ func NewLevelDBSnapshotWrapper(ldb *leveldb.Snapshot) DB {
 		&levelDBROWrapper{
 			db: ldb,
 		},
-	}))
+	}), false)
 }
 
 func NewLevelDBWrapper(db *leveldb.DB) DB {
 	return enableDelete(
 		&levelDBWrapper{
 			db: db,
-		})
+		}, false)
+}
+
+func NewLevelDBWrapperWithFullDelete(db *leveldb.DB) DB {
+	return enableDelete(
+		&levelDBWrapper{
+			db: db,
+		}, true)
 }
 
 func NewLevelDB(dirname string) (DB, *leveldb.DB) {

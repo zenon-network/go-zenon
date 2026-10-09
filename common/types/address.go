@@ -42,6 +42,9 @@ var (
 	// until an embedded governance contract is taken into use.
 	// The address belongs to Mariposa01 pillar.
 	CommunitySporkAddress = ParseAddressPanic("z1qqvwzz2xq7q5gwk6uhcddgrpxlfcyzc8rsu82s")
+
+	// TODO: Update governance address to governance contract
+	GovernanceAddress = ParseAddressPanic("z1qq9n7fpaqd8lpcljandzmx4xtku9w4ftwyg0mq")
 )
 
 func IsEmbeddedAddress(addr Address) bool {
@@ -54,7 +57,7 @@ var ZeroAddress = Address{}
 
 func (addr *Address) SetBytes(b []byte) error {
 	if length := len(b); length != AddressSize {
-		return fmt.Errorf("error address size  %v", length)
+		return fmt.Errorf("error address size %v", length)
 	}
 	copy(addr[:], b)
 	return nil
@@ -137,7 +140,7 @@ func (addr *Address) Proto() *AddressProto {
 }
 func DeProtoAddress(pb *AddressProto) *Address {
 	if len(pb.Address) != AddressSize {
-		panic(fmt.Sprintf("invalid DeProto - wanted hash size %v but got %v", HashSize, len(pb.Address)))
+		panic(fmt.Sprintf("invalid DeProto - wanted address size %v but got %v", AddressSize, len(pb.Address)))
 	}
 	addr := new(Address)
 	copy(addr[:], pb.Address)

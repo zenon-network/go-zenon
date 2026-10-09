@@ -22,5 +22,6 @@ var (
 	// === derivation errors ===
 
 	ErrInvalidPath        = errors.New("invalid derivation path")
+	ErrInvalidSeed        = errors.New("empty derivation seed")
 	ErrNoPublicDerivation = errors.New("no public derivation for ed25519")
 )

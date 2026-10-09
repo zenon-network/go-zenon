@@ -242,19 +242,22 @@ func TestPlasma_rpc(t *testing.T) {
 			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj",
 			"expirationHeight": 0,
-			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+			"isRevocable": true
 		},
 		{
 			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"expirationHeight": 0,
-			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+			"isRevocable": true
 		},
 		{
 			"qsrAmount": "1000000000",
 			"beneficiary": "z1qqdt06lnwz57x38rwlyutcx5wgrtl0ynkfe3kv",
 			"expirationHeight": 102,
-			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+			"isRevocable": false
 		}
 	]
 }`)
@@ -287,13 +290,15 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj",
 			"expirationHeight": 0,
-			"id": "0000000000000000000000000000000000000000000000000000000000000000"
+			"id": "0000000000000000000000000000000000000000000000000000000000000000",
+			"isRevocable": true
 		},
 		{
 			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"expirationHeight": 0,
-			"id": "117613e734b6cb0fd7b7583f5b0e863a3f0c856cd32fa36f1b60b464d068c5a6"
+			"id": "117613e734b6cb0fd7b7583f5b0e863a3f0c856cd32fa36f1b60b464d068c5a6",
+			"isRevocable": true
 		}
 	]
 }`)
@@ -374,7 +379,8 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj",
 			"expirationHeight": 0,
-			"id": "0000000000000000000000000000000000000000000000000000000000000000"
+			"id": "0000000000000000000000000000000000000000000000000000000000000000",
+			"isRevocable": true
 		}
 	]
 }`)
@@ -408,13 +414,15 @@ t=2001-09-09T01:52:10+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj",
 			"expirationHeight": 0,
-			"id": "0000000000000000000000000000000000000000000000000000000000000000"
+			"id": "0000000000000000000000000000000000000000000000000000000000000000",
+			"isRevocable": true
 		},
 		{
 			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"expirationHeight": 0,
-			"id": "117613e734b6cb0fd7b7583f5b0e863a3f0c856cd32fa36f1b60b464d068c5a6"
+			"id": "117613e734b6cb0fd7b7583f5b0e863a3f0c856cd32fa36f1b60b464d068c5a6",
+			"isRevocable": true
 		}
 	]
 }`)
@@ -441,19 +449,22 @@ t=2001-09-09T01:52:10+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj",
 			"expirationHeight": 0,
-			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+			"isRevocable": true
 		},
 		{
 			"qsrAmount": "1000000000000",
 			"beneficiary": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"expirationHeight": 0,
-			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+			"isRevocable": true
 		},
 		{
 			"qsrAmount": "1000000000",
 			"beneficiary": "z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz",
 			"expirationHeight": 32,
-			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+			"id": "XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+			"isRevocable": true
 		}
 	]
 }`)

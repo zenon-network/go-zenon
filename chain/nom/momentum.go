@@ -11,6 +11,10 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
+const (
+	DynamicPlasmaMomentumVersion = uint64(2)
+)
+
 var (
 	emptyEd25519PublicKey ed25519.PublicKey
 )
@@ -48,6 +52,9 @@ type Momentum struct {
 	producer  *types.Address    `rlp:"-"`          // not included in hash, for caching purpose only
 	PublicKey ed25519.PublicKey `json:"publicKey"` // not included in hash
 	Signature []byte            `json:"signature"` // not included in hash
+
+	NextFusionPrice uint64 `json:"nextFusionPrice" rlp:"optional"` // NextFusionPrice was added with the Dynamic Plasma spork
+	NextWorkPrice   uint64 `json:"nextWorkPrice" rlp:"optional"`   // NextWorkPrice was added with the Dynamic Plasma spork
 }
 
 type DetailedMomentum struct {
@@ -56,7 +63,7 @@ type DetailedMomentum struct {
 }
 
 func (m *Momentum) ComputeHash() types.Hash {
-	return types.NewHash(common.JoinBytes(
+	bytes := common.JoinBytes(
 		common.Uint64ToBytes(m.Version),
 		common.Uint64ToBytes(m.ChainIdentifier),
 		m.PreviousHash.Bytes(),
@@ -65,7 +72,15 @@ func (m *Momentum) ComputeHash() types.Hash {
 		types.NewHash(m.Data).Bytes(),
 		m.Content.Hash().Bytes(),
 		m.ChangesHash.Bytes(),
-	))
+	)
+	if m.Version >= DynamicPlasmaMomentumVersion {
+		bytes = common.JoinBytes(
+			bytes,
+			common.Uint64ToBytes(m.NextFusionPrice),
+			common.Uint64ToBytes(m.NextWorkPrice),
+		)
+	}
+	return types.NewHash(bytes)
 }
 
 func (m *Momentum) Identifier() types.HashHeight {
@@ -112,6 +127,8 @@ func (m *Momentum) Proto() *MomentumProto {
 		ChangesHash:     m.ChangesHash.Proto(),
 		PublicKey:       m.PublicKey,
 		Signature:       m.Signature,
+		NextFusionPrice: m.NextFusionPrice,
+		NextWorkPrice:   m.NextWorkPrice,
 	}
 }
 func DeProtoMomentum(pb *MomentumProto) *Momentum {
@@ -127,6 +144,8 @@ func DeProtoMomentum(pb *MomentumProto) *Momentum {
 		ChangesHash:     *types.DeProtoHash(pb.ChangesHash),
 		PublicKey:       pb.PublicKey,
 		Signature:       pb.Signature,
+		NextFusionPrice: pb.NextFusionPrice,
+		NextWorkPrice:   pb.NextWorkPrice,
 	}
 	m.EnsureCache()
 	return m

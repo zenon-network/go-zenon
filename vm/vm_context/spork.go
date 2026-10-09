@@ -6,25 +6,31 @@ import (
 )
 
 func (ctx *accountVmContext) IsAcceleratorSporkEnforced() bool {
-	active, err := ctx.momentumStore.IsSporkActive(types.AcceleratorSpork)
-	common.DealWithErr(err)
-	return active
-}
-
-func (ctx *accountVmContext) IsBridgeAndLiquiditySporkEnforced() bool {
-	active, err := ctx.momentumStore.IsSporkActive(types.BridgeAndLiquiditySpork)
+	active, err := ctx.cacheStore.IsSporkActive(types.AcceleratorSpork)
 	common.DealWithErr(err)
 	return active
 }
 
 func (ctx *accountVmContext) IsHtlcSporkEnforced() bool {
-	active, err := ctx.momentumStore.IsSporkActive(types.HtlcSpork)
+	active, err := ctx.cacheStore.IsSporkActive(types.HtlcSpork)
+	common.DealWithErr(err)
+	return active
+}
+
+func (ctx *accountVmContext) IsBridgeAndLiquiditySporkEnforced() bool {
+	active, err := ctx.cacheStore.IsSporkActive(types.BridgeAndLiquiditySpork)
+	common.DealWithErr(err)
+	return active
+}
+
+func (ctx *accountVmContext) IsDynamicPlasmaSporkEnforced() bool {
+	active, err := ctx.cacheStore.IsSporkActive(types.DynamicPlasmaSpork)
 	common.DealWithErr(err)
 	return active
 }
 
 func (ctx *accountVmContext) IsPtlcSporkEnforced() bool {
-	active, err := ctx.momentumStore.IsSporkActive(types.PtlcSpork)
+	active, err := ctx.cacheStore.IsSporkActive(types.PtlcSpork)
 	common.DealWithErr(err)
 	return active
 }

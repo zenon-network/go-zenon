@@ -61,7 +61,7 @@ func TestMergedIterators(t *testing.T) {
 
 	common.ExpectString(t, DebugDB(enableDelete(newMergedDb([]db{
 		db1, db2,
-	}))), `
+	}), false)), `
 000101 - 102001
 000102 - 
 000103 - 102013
@@ -72,7 +72,7 @@ func TestMergedIterators(t *testing.T) {
 000302 - `)
 	common.ExpectString(t, DebugDB(enableDelete(newMergedDb([]db{
 		db1, newSkipDelete(db2),
-	}))), `
+	}), false)), `
 000101 - 102001
 000102 - 
 000103 - 102013
@@ -82,7 +82,7 @@ func TestMergedIterators(t *testing.T) {
 000302 - `)
 	common.ExpectString(t, DebugDB(enableDelete(newSkipDelete(newMergedDb([]db{
 		db1, db2,
-	})))), `
+	})), false)), `
 000101 - 102001
 000103 - 102013
 000201 - 102003

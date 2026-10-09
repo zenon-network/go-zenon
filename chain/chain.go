@@ -1,12 +1,14 @@
 package chain
 
 import (
+	stderrors "errors"
 	"fmt"
 	"os"
 	"sync"
 
 	"github.com/pkg/errors"
 
+	"github.com/zenon-network/go-zenon/chain/cache/storage"
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
@@ -24,20 +26,25 @@ type chain struct {
 	*accountPool
 	*momentumPool
 	*momentumEventManager
+	*chainCache
 
 	chainManager db.Manager
+	cacheManager storage.CacheManager
 	insert       sync.Mutex
 }
 
-func NewChain(chainManager db.Manager, genesis store.Genesis) *chain {
+func NewChain(chainManager db.Manager, cacheManager storage.CacheManager, genesis store.Genesis) *chain {
 	momentumPool := NewMomentumPool(chainManager, genesis)
+	cache := NewChainCache(cacheManager)
 	return &chain{
 		log:                  common.ChainLogger,
 		Genesis:              genesis,
 		accountPool:          newAccountPool(momentumPool),
 		momentumPool:         momentumPool,
 		momentumEventManager: momentumPool.momentumEventManager,
+		chainCache:           cache,
 		chainManager:         chainManager,
+		cacheManager:         cacheManager,
 	}
 }
 
@@ -53,12 +60,22 @@ func (c *chain) Init() error {
 	}
 	types.SporkAddress = c.genesis.GetSporkAddress()
 	c.Register(c.accountPool)
+	// Prime the pool's pricing context from the committed frontier so the
+	// first contested insert after start-up is priced the same way as one
+	// arriving after the next momentum, rather than falling back to the
+	// legacy comparator until then.
+	c.accountPool.refreshDynamicPlasma()
 
 	frontierStore := c.GetFrontierMomentumStore()
 	frontier, err := frontierStore.GetFrontierMomentum()
 	if err != nil {
 		return err
 	}
+
+	if err := c.chainCache.Init(c.chainManager, frontierStore); err != nil {
+		return err
+	}
+
 	fmt.Printf("Initialized NoM. Height: %v, Hash: %v\n", frontier.Height, frontier.Hash)
 	c.log.Info("initialized nom", "identifier", frontier.Identifier())
 
@@ -94,7 +111,11 @@ func (c *chain) Stop() error {
 
 	c.UnRegister(c.accountPool)
 
-	return c.chainManager.Stop()
+	// Every manager is stopped whatever the earlier ones report: a manager
+	// marks itself stopped even when its Close fails, so bailing out on the
+	// first error would leave the remaining handles open until exit. The
+	// caller sees every error that occurred.
+	return stderrors.Join(c.cacheManager.Stop(), c.chainManager.Stop())
 }
 
 func (c *chain) checkGenesisCompatibility() error {

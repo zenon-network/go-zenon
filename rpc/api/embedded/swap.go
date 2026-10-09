@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"math/big"
 
-	"github.com/inconshreveable/log15"
-
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -21,14 +19,12 @@ import (
 type SwapApi struct {
 	chain     chain.Chain
 	consensus consensus.Consensus
-	log       log15.Logger
 }
 
 func NewSwapApi(z zenon.Zenon) *SwapApi {
 	return &SwapApi{
 		chain:     z.Chain(),
 		consensus: z.Consensus(),
-		log:       common.RPCLogger.New("module", "rpc_api/embedded_swap_api"),
 	}
 }
 

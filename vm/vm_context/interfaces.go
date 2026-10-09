@@ -12,6 +12,7 @@ import (
 type AccountVmContext interface {
 	api.PillarReader
 	store.Account
+	CacheStore() store.Cache
 	MomentumStore() store.Momentum
 
 	// ====== State ======
@@ -33,7 +34,8 @@ type AccountVmContext interface {
 	// ====== Spork ======
 
 	IsAcceleratorSporkEnforced() bool
-	IsBridgeAndLiquiditySporkEnforced() bool
 	IsHtlcSporkEnforced() bool
+	IsBridgeAndLiquiditySporkEnforced() bool
+	IsDynamicPlasmaSporkEnforced() bool
 	IsPtlcSporkEnforced() bool
 }

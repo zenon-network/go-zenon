@@ -5,6 +5,8 @@ import (
 	"time"
 
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
+	"github.com/zenon-network/go-zenon/consensus"
+
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/constants"
@@ -17,11 +19,15 @@ func TestStateGenesis(t *testing.T) {
 	store := z.Chain().GetFrontierMomentumStore()
 	common.ExpectBytes(t, store.Identifier().Hash.Bytes(), "0x0385d849ee33b94c8783288c148e3ae741c2ecec98b08b3f59d6bcc219168fe5")
 
+	cacheStore := z.Chain().GetFrontierCacheStore()
+	common.ExpectBytes(t, cacheStore.Identifier().Hash.Bytes(), "0x0385d849ee33b94c8783288c148e3ae741c2ecec98b08b3f59d6bcc219168fe5")
+
 	genesis, err := store.GetMomentumByHeight(1)
 	common.FailIfErr(t, err)
 	common.ExpectString(t, string(genesis.Data[0:43]), "This is the genesis config used for testing")
 
 	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 12000*g.Zexp)
+	z.ExpectCacheFusedAmount(g.User1.Address, 10000*g.Zexp)
 }
 
 func TestStateProducer(t *testing.T) {
@@ -95,4 +101,62 @@ t=2001-09-09T01:48:10+0000 lvl=eror msg="failed to update contracts" module=pill
 	constants.UpdateMinNumMomentums = 5
 
 	z.InsertMomentumsTo(10)
+}
+
+func TestProducerContinuesAfterFailedContractInsert(t *testing.T) {
+	time.Local = time.UTC
+	z := NewMockZenon(t)
+	defer z.StopPanic()
+	constants.UpdateMinNumMomentums = 5
+	z.InsertMomentumsTo(5) // warm-up: reaches the round that autoreceives
+
+	addr := types.PillarContract
+	z.(*mockZenon).failInsertFor = &addr
+
+	defer z.SaveLogs(common.PillarLogger).HideHashes().Equals(t, `
+t=2001-09-09T01:47:20+0000 lvl=info msg="producing momentum" module=pillar submodule=worker event="{StartTime:2001-09-09 01:47:30 +0000 UTC EndTime:2001-09-09 01:47:40 +0000 UTC Producer:z1qqq43dyrswfehx9w9td43exflqzcxrt7g6alah Name:}"
+t=2001-09-09T01:47:20+0000 lvl=info msg="broadcasting own momentum" module=pillar submodule=worker identifier="{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:6}"
+t=2001-09-09T01:47:30+0000 lvl=info msg="start creating autoreceive blocks" module=pillar submodule=worker
+t=2001-09-09T01:47:30+0000 lvl=info msg="generated embedded-block" module=pillar submodule=worker send-block-header="{Address:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:2}}" identifier="{Address:z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:2}}" send-block-hash=XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX returned-error=nil
+t=2001-09-09T01:47:30+0000 lvl=eror msg="unable to insert autoreceive block for contract" module=pillar submodule=worker contract-address=z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg reason="injected insert failure for z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg"
+t=2001-09-09T01:47:30+0000 lvl=info msg="generated embedded-block" module=pillar submodule=worker send-block-header="{Address:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:4}}" identifier="{Address:z1qxemdeddedxsentynelxxxxxxxxxxxxxwy0r2r HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}" send-block-hash=XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX returned-error=nil
+t=2001-09-09T01:47:30+0000 lvl=info msg="created autoreceive-block" module=pillar submodule=worker identifier="{Address:z1qxemdeddedxsentynelxxxxxxxxxxxxxwy0r2r HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}"
+t=2001-09-09T01:47:30+0000 lvl=info msg="generated embedded-block" module=pillar submodule=worker send-block-header="{Address:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:3}}" identifier="{Address:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}" send-block-hash=XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX returned-error=nil
+t=2001-09-09T01:47:30+0000 lvl=info msg="created autoreceive-block" module=pillar submodule=worker identifier="{Address:z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62 HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}"
+t=2001-09-09T01:47:30+0000 lvl=info msg="generated embedded-block" module=pillar submodule=worker send-block-header="{Address:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:5}}" identifier="{Address:z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}" send-block-hash=XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX returned-error=nil
+t=2001-09-09T01:47:30+0000 lvl=info msg="created autoreceive-block" module=pillar submodule=worker identifier="{Address:z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:1}}"
+t=2001-09-09T01:47:30+0000 lvl=info msg="generated embedded-block" module=pillar submodule=worker send-block-header="{Address:z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:2}}" identifier="{Address:z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:2}}" send-block-hash=XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX returned-error=nil
+t=2001-09-09T01:47:30+0000 lvl=eror msg="unable to insert autoreceive block for contract" module=pillar submodule=worker contract-address=z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg reason="injected insert failure for z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg"
+t=2001-09-09T01:47:30+0000 lvl=info msg="checking if can update contracts" module=pillar submodule=worker
+t=2001-09-09T01:47:30+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg
+t=2001-09-09T01:47:30+0000 lvl=info msg="producing block to update embedded-contract" module=pillar submodule=worker contract-address=z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22
+t=2001-09-09T01:47:30+0000 lvl=eror msg="failed to update contracts" module=pillar submodule=worker reason="method not found in the abi"
+`)
+	z.InsertNewMomentum()
+}
+
+// The mock overrides global state (clock, epoch duration, logger handlers);
+// Stop must restore all of it or later tests in the same process inherit a
+// stopped chain's clock and silenced loggers.
+func TestStopRestoresGlobalState(t *testing.T) {
+	clockBefore := common.Clock
+	epochBefore := consensus.EpochDuration
+
+	z := NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	if consensus.EpochDuration != time.Hour {
+		t.Fatalf("consensus.EpochDuration = %v while running, want %v", consensus.EpochDuration, time.Hour)
+	}
+	z.StopPanic()
+
+	if common.Clock != clockBefore {
+		t.Fatal("common.Clock not restored after Stop")
+	}
+	if consensus.EpochDuration != epochBefore {
+		t.Fatalf("consensus.EpochDuration = %v, want %v", consensus.EpochDuration, epochBefore)
+	}
+	for i := range AllLoggers {
+		if AllLoggers[i].GetHandler() == nil {
+			t.Fatalf("logger %d handler is nil after Stop", i)
+		}
+	}
 }

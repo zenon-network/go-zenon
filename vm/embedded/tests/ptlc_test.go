@@ -173,7 +173,7 @@ func TestPtlc_spork_gating(t *testing.T) {
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
-	}, nil, mock.SkipVmChanges)
+	}, constants.ErrContractDoesntExist, mock.NoVmChanges)
 	z.InsertNewMomentum()
 }
 

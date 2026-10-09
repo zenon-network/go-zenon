@@ -470,7 +470,7 @@ func (p *CancelLiquidityStakeMethod) ReceiveBlock(context vm_context.AccountVmCo
 	amount := stakeInfo.Amount
 	stakeInfo.RevokeTime = momentum.Timestamp.Unix()
 	// signal that the amount has been received, to future-proof
-	stakeInfo.Amount = common.Big0
+	stakeInfo.Amount = big.NewInt(0)
 	common.DealWithErr(stakeInfo.Save(context.Storage()))
 
 	stakeLog.Debug("revoked liquidity stake entry", "id", stakeInfo.Id, "owner", stakeInfo.StakeAddress, "start-time", stakeInfo.StartTime, "revoke-time", stakeInfo.RevokeTime)

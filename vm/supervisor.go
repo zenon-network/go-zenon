@@ -40,13 +40,39 @@ func NewSupervisor(chain chain.Chain, consensus consensus.Consensus) *Supervisor
 		log:       common.SupervisorLogger,
 		chain:     chain,
 		consensus: consensus,
-		verifier:  verifier.NewVerifier(chain, consensus),
+		verifier:  verifier.NewVerifier(chain, consensus, CanonicalBasePlasma),
 	}
 }
 
 func (s *Supervisor) newBlockContext(block *nom.AccountBlock) vm_context.AccountVmContext {
+	if types.IsEmbeddedAddress(block.Address) {
+		return s.newEmbeddedBlockContext(block)
+	} else {
+		return s.newUserBlockContext(block)
+	}
+}
+
+func (s *Supervisor) newUserBlockContext(block *nom.AccountBlock) vm_context.AccountVmContext {
+	accountStore := s.chain.GetAccountStore(block.Address, block.Previous())
+	cacheStore := s.chain.GetCacheStore(block.MomentumAcknowledged)
+	if accountStore == nil {
+		panic(fmt.Sprintf("can't find accountStore for %v %v", block.Address, block.Previous()))
+	}
+	if cacheStore == nil {
+		panic(fmt.Sprintf("can't find cacheStore for %v", block.MomentumAcknowledged))
+	}
+	return vm_context.NewAccountContext(
+		nil,
+		accountStore,
+		cacheStore,
+		nil,
+	)
+}
+
+func (s *Supervisor) newEmbeddedBlockContext(block *nom.AccountBlock) vm_context.AccountVmContext {
 	momentumStore := s.chain.GetMomentumStore(block.MomentumAcknowledged)
 	accountStore := s.chain.GetAccountStore(block.Address, block.Previous())
+	cacheStore := s.chain.GetCacheStore(block.MomentumAcknowledged)
 	cache := s.consensus.FixedPillarReader(block.MomentumAcknowledged)
 	if momentumStore == nil {
 		panic(fmt.Sprintf("can't find momentumStore for %v", block.MomentumAcknowledged))
@@ -54,15 +80,20 @@ func (s *Supervisor) newBlockContext(block *nom.AccountBlock) vm_context.Account
 	if accountStore == nil {
 		panic(fmt.Sprintf("can't find accountStore for %v %v", block.Address, block.Previous()))
 	}
+	if cacheStore == nil {
+		panic(fmt.Sprintf("can't find cacheStore for %v", block.MomentumAcknowledged))
+	}
 	if cache == nil {
 		panic(fmt.Sprintf("can't find cache for %v", block.MomentumAcknowledged))
 	}
 	return vm_context.NewAccountContext(
 		momentumStore,
 		accountStore,
+		cacheStore,
 		cache,
 	)
 }
+
 func (s *Supervisor) newMomentumContext(momentum *nom.Momentum) vm_context.MomentumVMContext {
 	return vm_context.NewMomentumVMContext(
 		s.chain.GetMomentumStore(momentum.Previous()),
@@ -112,7 +143,20 @@ func (s *Supervisor) GenerateFromTemplate(template *nom.AccountBlock, signFunc S
 	}
 	return s.applyBlock(template, signFunc)
 }
-func (s *Supervisor) GenerateAutoReceive(sendBlock *nom.AccountBlock) (*ContractExecution, error) {
+func (s *Supervisor) GenerateAutoReceive(sendBlock *nom.AccountBlock) (execution *ContractExecution, internalErr error) {
+	// Matches ApplyMomentum/GenerateMomentum/GenerateGenesisMomentum/applyBlock.
+	// This runs on the producer goroutine, which common.NewTask starts without a
+	// handler of its own and where common.RecoverStack re-panics, so a panic that
+	// escapes here ends the process rather than the block.
+	defer func() {
+		if err := recover(); err != nil {
+			s.log.Error("vm panic when generating autoreceive block", "send-block", sendBlock.Header(), "reason", err, "stack", string(debug.Stack()))
+
+			execution = nil
+			internalErr = constants.ErrVmRunPanic
+		}
+	}()
+
 	template := &nom.AccountBlock{
 		BlockType:     nom.BlockTypeContractReceive,
 		Address:       sendBlock.ToAddress,
@@ -129,13 +173,12 @@ func (s *Supervisor) GenerateAutoReceive(sendBlock *nom.AccountBlock) (*Contract
 	if err := s.setBlockPlasma(context, template); err != nil {
 		return nil, err
 	}
-	vm := NewVM(context)
+	vm := NewVM(context, s.chain.GetFrontierMomentumStore())
 	block, methodErr, err := vm.generateEmbeddedReceive(template.FromBlockHash)
-	if err := s.verifier.AccountBlock(block); err != nil {
+	if err != nil {
 		return nil, err
 	}
-
-	if err != nil {
+	if err := s.verifier.AccountBlock(block); err != nil {
 		return nil, err
 	}
 	transaction, err := s.packBlock(context, block, nil)
@@ -212,7 +255,7 @@ func (s *Supervisor) applyBlock(block *nom.AccountBlock, signFunc SignFunc) (tra
 		return nil, err
 	}
 	context := s.newBlockContext(block)
-	vm := NewVM(context)
+	vm := NewVM(context, s.chain.GetFrontierMomentumStore())
 	err := vm.applyBlock(block)
 	if err != nil {
 		return nil, err
@@ -242,15 +285,6 @@ func (s *Supervisor) packBlock(context vm_context.AccountVmContext, block *nom.A
 		return nil, err
 	}
 
-	if signFunc != nil {
-		block.Hash = block.ComputeHash()
-		signature, _, publicKey, err := signFunc(block.Hash.Bytes())
-		if err != nil {
-			return nil, err
-		}
-		block.Signature = signature
-		block.PublicKey = publicKey
-	}
 	if signFunc != nil {
 		block.ChangesHash = db.PatchHash(changes)
 		block.Hash = block.ComputeHash()
@@ -326,7 +360,7 @@ func (s *Supervisor) setBlockFields(block *nom.AccountBlock) {
 			block.Amount = big.NewInt(0)
 		}
 	case nom.BlockTypeUserReceive, nom.BlockTypeContractReceive:
-		block.Amount = common.Big0
+		block.Amount = big.NewInt(0)
 		block.TokenStandard = types.ZeroTokenStandard
 	}
 }

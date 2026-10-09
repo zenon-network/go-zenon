@@ -28,6 +28,33 @@ var ProtocolLengths = []uint64{9}
 
 const (
 	ProtocolMaxMsgSize = 10 * 1024 * 1024 // Maximum cap on the size of a protocol message
+
+	// MaxBlocksRequest is the most hashes the receiver of one GetBlocksMsg
+	// looks up. It bounds hash lookups only: every named hash costs one
+	// store lookup whether or not the block exists, and the receiver stops
+	// looking after this many and answers with what it found, as it already
+	// does once the reply holds downloader.MaxBlockFetch blocks. It does not
+	// bound the work a found block costs (a momentum read plus one read per
+	// account block). The size of the reply is capped separately by
+	// softResponseLimit (2 MB), which stops the handler once the encoded
+	// reply exceeds that limit.
+	//
+	// The value is twice the reply cap downloader.MaxBlockFetch, which
+	// TestMaxBlocksRequest_CoversEveryHonestRequester pins, so a request
+	// that mixes misses and hits can still fill a reply. It is independent
+	// of the fetcher's per-peer announce limit, which happens to be the same
+	// number. peer.RequestBlocks, the only sender, splits larger batches
+	// into requests of downloader.MaxBlockFetch hashes, so a node running
+	// this code never names more than the reply cap in one message.
+	MaxBlocksRequest = 256
+
+	// softResponseLimit is the target maximum cumulative size of a GetBlocks
+	// reply. The handler stops appending blocks once the encoded reply
+	// exceeds this limit, which bounds the read and encode work a single
+	// request can cause. It is not a hard wire cap: the reply is one message,
+	// and both transports reject frames above their own limit (10 MiB in
+	// libp2p; 10 MiB plus a frame header on legacy RLPx).
+	softResponseLimit = 2 * 1024 * 1024 // 2 MB, matching go-ethereum
 )
 
 // eth protocol message codes

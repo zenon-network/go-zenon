@@ -16,8 +16,10 @@ type MockZenon interface {
 
 	CallContract(template *nom.AccountBlock) *common.Expecter
 	InsertSendBlock(template *nom.AccountBlock, expectedError error, expectedVmChanges string) *nom.AccountBlock
+	InsertSendBlockRejected(template *nom.AccountBlock, expectedError error)
 	InsertReceiveBlock(fromHeader types.AccountHeader, template *nom.AccountBlock, expectedError error, expectedVmChanges string) *nom.AccountBlock
 
 	SaveLogs(logger common.Logger) *common.Expecter
 	ExpectBalance(address types.Address, standard types.ZenonTokenStandard, expected int64)
+	ExpectCacheFusedAmount(address types.Address, expected int64)
 }

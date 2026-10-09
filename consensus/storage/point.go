@@ -97,7 +97,7 @@ func (p *Point) Unmarshal(buf []byte) error {
 
 func (p *Point) LeftAppend(left *Point) error {
 	if left.EndHash != p.PrevHash {
-		return errors.Errorf("failed to merge consensus points. LeftPoint is [%v,%v) and RightPoint is [%v,%v)", left.PrevHash, left.EndHash, p.PrevHash, p.EndHash)
+		return errors.Errorf("failed to merge consensus points. LeftPoint is (%v,%v] and RightPoint is (%v,%v]", left.PrevHash, left.EndHash, p.PrevHash, p.EndHash)
 	}
 
 	p.PrevHash = left.PrevHash

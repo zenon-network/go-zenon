@@ -6,6 +6,9 @@ var (
 	chainPlasmaKey           = []byte{5}
 	receivedBlockPrefix      = []byte{6}
 	sequencerLastReceivedKey = []byte{7}
+
+	StorageKeyPrefix = storageKeyPrefix
+	ChainPlasmaKey   = chainPlasmaKey
 )
 
 const (

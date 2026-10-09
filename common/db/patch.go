@@ -80,6 +80,25 @@ func (pa *patchApplier) Delete(key []byte) {
 	pa.err = pa.db.Delete(key)
 }
 
+type levelDBBatchApplier struct {
+	batch      *leveldb.Batch
+	prefix     []byte
+	fullDelete bool
+}
+
+func (pa *levelDBBatchApplier) Put(key []byte, value []byte) {
+	pa.batch.Put(common.JoinBytes(pa.prefix, key), common.JoinBytes(existsByte, value))
+}
+
+func (pa *levelDBBatchApplier) Delete(key []byte) {
+	key = common.JoinBytes(pa.prefix, key)
+	if pa.fullDelete {
+		pa.batch.Delete(key)
+	} else {
+		pa.batch.Put(key, []byte{})
+	}
+}
+
 type patchValuePrefixer struct {
 	prefix []byte
 	Patch
@@ -111,8 +130,40 @@ func (pa *patchApplierWO) Delete(key []byte) {
 	if ok, err := pa.db.Has(key); err != nil {
 		pa.err = err
 	} else if !ok {
-		pa.err = pa.db.Put(key, []byte{0})
+		// A deleted key is an empty value, the same encoding the on-disk
+		// frontier uses, so the delete-aware view reports it as absent.
+		// A one-byte value would read as present with an empty payload.
+		pa.err = pa.db.Put(key, []byte{})
 	}
+}
+
+// keyFilter replays a patch into another one, dropping the listed keys.
+type keyFilter struct {
+	out  Patch
+	skip map[string]struct{}
+}
+
+func (kf *keyFilter) Put(key []byte, value []byte) {
+	if _, drop := kf.skip[string(key)]; !drop {
+		kf.out.Put(key, value)
+	}
+}
+func (kf *keyFilter) Delete(key []byte) {
+	if _, drop := kf.skip[string(key)]; !drop {
+		kf.out.Delete(key)
+	}
+}
+
+// RemoveKeys returns a copy of patch without any operation on the given keys.
+func RemoveKeys(patch Patch, keys [][]byte) (Patch, error) {
+	filter := &keyFilter{out: NewPatch(), skip: make(map[string]struct{}, len(keys))}
+	for _, key := range keys {
+		filter.skip[string(key)] = struct{}{}
+	}
+	if err := patch.Replay(filter); err != nil {
+		return nil, err
+	}
+	return filter.out, nil
 }
 
 func DebugPatch(patch Patch) string {
@@ -185,6 +236,18 @@ func ApplyPatch(db DB, patch Patch) error {
 	}
 	return pa.err
 }
+
+// AppendPatchToLevelDBBatch adds a logical patch to a raw LevelDB batch. The
+// prefix and delete behavior must match the DB wrapper through which the patch
+// would otherwise be applied.
+func AppendPatchToLevelDBBatch(batch *leveldb.Batch, prefix []byte, patch Patch, fullDelete bool) error {
+	return patch.Replay(&levelDBBatchApplier{
+		batch:      batch,
+		prefix:     prefix,
+		fullDelete: fullDelete,
+	})
+}
+
 func ApplyWithoutOverride(db db, patch Patch) error {
 	pa := &patchApplierWO{
 		db: db,

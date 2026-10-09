@@ -9,15 +9,6 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
-func (as *accountStore) SetFrontier(block *nom.AccountBlock) error {
-	data, err := block.Serialize()
-	if err != nil {
-		return err
-	}
-
-	return db.SetFrontier(as.DB, block.Identifier(), data)
-}
-
 func parseAccountBlock(data []byte, err error) (*nom.AccountBlock, error) {
 	if err == leveldb.ErrNotFound {
 		return nil, nil

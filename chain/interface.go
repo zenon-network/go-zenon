@@ -23,6 +23,7 @@ type Chain interface {
 	AccountPool
 	MomentumPool
 	MomentumEventManager
+	ChainCache
 }
 
 type MomentumEventListener interface {
@@ -36,6 +37,10 @@ type MomentumEventManager interface {
 }
 
 type MomentumPool interface {
+	// CaptureBranchAbove returns every momentum above identifier, lowest first,
+	// together with its stored state patch, so the branch can be re-inserted
+	// after a rollback. It fails, without side effects, if any patch is missing.
+	CaptureBranchAbove(insertLocker sync.Locker, identifier types.HashHeight) ([]*RemovedMomentum, error)
 	AddMomentumTransaction(insertLocker sync.Locker, transaction *nom.MomentumTransaction) error
 	RollbackTo(insertLocker sync.Locker, identifier types.HashHeight) error
 
@@ -62,4 +67,11 @@ type AccountPool interface {
 	GetNewMomentumContent() []*nom.AccountBlock
 	GetAllUncommittedAccountBlocks() []*nom.AccountBlock
 	GetUncommittedAccountBlocksByAddress(address types.Address) []*nom.AccountBlock
+}
+
+type ChainCache interface {
+	UpdateCache(insertLocker sync.Locker, detailed *nom.DetailedMomentum, changes db.Patch) error
+	RollbackCacheTo(insertLocker sync.Locker, identifier types.HashHeight) error
+	GetCacheStore(identifier types.HashHeight) store.Cache
+	GetFrontierCacheStore() store.Cache
 }

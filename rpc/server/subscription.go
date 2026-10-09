@@ -36,7 +36,15 @@ var (
 	ErrNotificationsUnsupported = errors.New("notifications not supported")
 	// ErrNotificationNotFound is returned when the notification for the given id is not found
 	ErrSubscriptionNotFound = errors.New("subscription not found")
+	// ErrTooManySubscriptions is returned when a connection already holds
+	// DefaultMaxSubscriptionsPerConn server subscriptions unless the
+	// server configures another limit; see Server.SetMaxSubscriptionsPerConn.
+	ErrTooManySubscriptions = errors.New("too many subscriptions on this connection")
 )
+
+// DefaultMaxSubscriptionsPerConn bounds the server subscriptions one connection can
+// hold at a time; a client that needs more must unsubscribe first.
+const DefaultMaxSubscriptionsPerConn = 64
 
 var globalGen = randomIDGenerator()
 
@@ -119,7 +127,20 @@ func (n *Notifier) CreateSubscription() *Subscription {
 }
 
 // Notify sends a notification to the client with the given data as payload.
-// If an error occurs the RPC connection is closed and the error is returned.
+//
+// Once the notifier has been activated, an error writing the notification is
+// returned to the caller. Notify does not close the connection and does not
+// uninstall the subscription; it is up to the caller to decide whether to
+// unsubscribe or close. The connection is closed only by its own lifecycle:
+// a read-side failure such as the peer disconnecting, or Server.Stop at
+// shutdown.
+//
+// Before activation the encoded message is buffered and nil is returned. The
+// buffer is flushed by activate, whose error the RPC handler discards, so
+// notifications sent during the pre-activation window can fail silently.
+//
+// Notify panics if called before a subscription has been created, or with an ID
+// that does not match the subscription.
 func (n *Notifier) Notify(id ID, data interface{}) error {
 	enc, err := json.Marshal(data)
 	if err != nil {

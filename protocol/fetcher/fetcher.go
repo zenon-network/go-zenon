@@ -37,7 +37,7 @@ const (
 	fetchTimeout  = 5 * time.Second        // Maximum alloted time to return an explicitly requested block
 	maxUncleDist  = 7                      // Maximum allowed backward distance from the chain head
 	maxQueueDist  = 32                     // Maximum allowed distance from the chain head to queue
-	hashLimit     = 256                    // Maximum number of unique blocks a peer may have announced
+	HashLimit     = 256                    // Maximum number of unique blocks a peer may have announced; also the largest batch one fetch request names
 	blockLimit    = 64                     // Maximum number of unique blocks a per may have delivered
 )
 
@@ -52,8 +52,10 @@ type blockRetrievalFn func(types.Hash) *nom.DetailedMomentum
 // blockRequesterFn is a callback type for sending a block retrieval request.
 type blockRequesterFn func([]types.Hash) error
 
-// blockValidatorFn is a callback type to verify a block's header for fast propagation.
-type blockValidatorFn func(block *nom.Momentum, parent *nom.Momentum) error
+// blockVerifierFn is a callback type to run structural pre-checks on a detailed
+// momentum before propagation; signature and producer verification happen
+// later during insertion.
+type blockVerifierFn func(detailed *nom.DetailedMomentum) error
 
 // blockBroadcasterFn is a callback type for broadcasting a block to connected peers.
 type blockBroadcasterFn func(block *nom.DetailedMomentum, propagate bool)
@@ -83,20 +85,29 @@ type inject struct {
 	detailed *nom.DetailedMomentum
 }
 
+// filterRequest carries the blocks delivered by peer to the fetcher loop for
+// filtering, identifying the peer that actually sent them so that explicit
+// fetches are attributed to that peer rather than whoever announced the hash.
+type filterRequest struct {
+	peer  string
+	reply chan []*nom.DetailedMomentum
+}
+
 // Fetcher is responsible for accumulating block announcements from various peers
 // and scheduling them for retrieval.
 type Fetcher struct {
 	// Various event channels
 	notify chan *announce
 	inject chan *inject
-	filter chan chan []*nom.DetailedMomentum
+	filter chan *filterRequest
 	done   chan types.Hash
 	quit   chan struct{}
 
 	// Announce states
-	announces map[string]int             // Per peer announce counts to prevent memory exhaustion
-	announced map[types.Hash][]*announce // Announced blocks, scheduled for fetching
-	fetching  map[types.Hash]*announce   // Announced blocks, currently fetching
+	announces   map[string]int             // Per peer announce counts to prevent memory exhaustion
+	announced   map[types.Hash][]*announce // Announced blocks, scheduled for fetching
+	fetching    map[types.Hash]*announce   // Announced blocks, currently fetching
+	oldestFetch time.Time                  // Announce time of the oldest pending fetch as of the last sweep, zero when none
 
 	// Block cache
 	queue  *prque.Prque           // Queue containing the import operations (block number sorted)
@@ -105,7 +116,7 @@ type Fetcher struct {
 
 	// Callbacks
 	getBlock       blockRetrievalFn   // Retrieves a block from the local chain
-	validateBlock  blockValidatorFn   // Checks if a block's headers have a valid proof of work
+	verifyBlock    blockVerifierFn    // Fully verifies a momentum before propagation
 	broadcastBlock blockBroadcasterFn // Broadcasts a block to connected peers
 	chainHeight    chainHeightFn      // Retrieves the current chain's height
 	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
@@ -113,17 +124,18 @@ type Fetcher struct {
 
 	// Testing hooks
 	fetchingHook func([]types.Hash)  // Method to call upon starting a block fetch
+	expiredHook  func([]types.Hash)  // Method to call after timed-out fetches are swept
 	importedHook func(*nom.Momentum) // Method to call upon successful block import
 
 	wg sync.WaitGroup
 }
 
 // New creates a block fetcher to retrieve blocks based on hash announcements.
-func New(getBlock blockRetrievalFn, validateBlock blockValidatorFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertChain chainInsertFn, dropPeer peerDropFn) *Fetcher {
+func New(getBlock blockRetrievalFn, verifyBlock blockVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertChain chainInsertFn, dropPeer peerDropFn) *Fetcher {
 	return &Fetcher{
 		notify:         make(chan *announce),
 		inject:         make(chan *inject),
-		filter:         make(chan chan []*nom.DetailedMomentum),
+		filter:         make(chan *filterRequest),
 		done:           make(chan types.Hash),
 		quit:           make(chan struct{}),
 		announces:      make(map[string]int),
@@ -133,7 +145,7 @@ func New(getBlock blockRetrievalFn, validateBlock blockValidatorFn, broadcastBlo
 		queues:         make(map[string]int),
 		queued:         make(map[types.Hash]*inject),
 		getBlock:       getBlock,
-		validateBlock:  validateBlock,
+		verifyBlock:    verifyBlock,
 		broadcastBlock: broadcastBlock,
 		chainHeight:    chainHeight,
 		insertChain:    insertChain,
@@ -188,25 +200,28 @@ func (f *Fetcher) Enqueue(peer string, block *nom.DetailedMomentum) error {
 }
 
 // Filter extracts all the blocks that were explicitly requested by the fetcher,
-// returning those that should be handled differently.
-func (f *Fetcher) Filter(blocks []*nom.DetailedMomentum) []*nom.DetailedMomentum {
-	// Send the filter channel to the fetcher
-	filter := make(chan []*nom.DetailedMomentum)
+// returning those that should be handled differently. peer identifies the
+// connection the blocks actually arrived on, so that explicit fetches are
+// attributed - and any misbehaving sender penalized - correctly, regardless
+// of which peer originally announced the hash.
+func (f *Fetcher) Filter(peer string, blocks []*nom.DetailedMomentum) []*nom.DetailedMomentum {
+	// Send the filter request to the fetcher
+	req := &filterRequest{peer: peer, reply: make(chan []*nom.DetailedMomentum)}
 
 	select {
-	case f.filter <- filter:
+	case f.filter <- req:
 	case <-f.quit:
 		return nil
 	}
 	// Request the filtering of the block list
 	select {
-	case filter <- blocks:
+	case req.reply <- blocks:
 	case <-f.quit:
 		return nil
 	}
 	// Retrieve the blocks remaining after filtering
 	select {
-	case blocks := <-filter:
+	case blocks := <-req.reply:
 		return blocks
 	case <-f.quit:
 		return nil
@@ -218,12 +233,15 @@ func (f *Fetcher) Filter(blocks []*nom.DetailedMomentum) []*nom.DetailedMomentum
 func (f *Fetcher) loop() {
 	// Iterate the block fetching until a quit is requested
 	fetch := time.NewTimer(0)
+	expire := time.NewTimer(0)
 	for {
-		// Clean up any expired block fetches
-		for hash, announce := range f.fetching {
-			if time.Since(announce.time) > fetchTimeout {
-				f.forgetHash(hash)
-			}
+		// Clean up any expired block fetches. Expired entries still count
+		// against their peer's announce allowance, so the sweep must also
+		// run when nothing else wakes the loop: arm a timer for the oldest
+		// surviving fetch so the allowance is released on time.
+		f.sweepExpired()
+		if !f.oldestFetch.IsZero() {
+			expire.Reset(fetchTimeout - time.Since(f.oldestFetch))
 		}
 		// Import any queued blocks that could potentially fit
 		height := f.chainHeight()
@@ -252,10 +270,13 @@ func (f *Fetcher) loop() {
 			return
 
 		case notification := <-f.notify:
-			// A block was announced, make sure the peer isn't DOSing us
+			// A block was announced, make sure the peer isn't DOSing us.
+			// Release fetches that timed out since the last sweep first,
+			// so a peer at its limit is judged on live entries only.
+			f.releaseExpired(notification.origin)
 			count := f.announces[notification.origin] + 1
-			if count > hashLimit {
-				log.Info("Peer exceeded outstanding announces", "peer", notification.origin, "hash-limit", hashLimit)
+			if count > HashLimit {
+				log.Info("Peer exceeded outstanding announces", "peer", notification.origin, "hash-limit", HashLimit)
 				break
 			}
 			// All is well, schedule the announce if block's not yet downloading
@@ -287,23 +308,25 @@ func (f *Fetcher) loop() {
 					announce := announces[rand.Intn(len(announces))]
 					f.forgetHash(hash)
 
-					// If the block still didn't arrive, queue for fetching
+					// If the block still didn't arrive, queue for fetching.
+					// The fetching entry is outstanding work for the chosen
+					// peer, so count it again: forgetHash just released the
+					// announce and will release this entry when the fetch
+					// completes or times out.
 					if f.getBlock(hash) == nil {
 						request[announce.origin] = append(request[announce.origin], hash)
 						f.fetching[hash] = announce
+						f.announces[announce.origin]++
 					}
 				}
 			}
 			// Send out all block requests
 			for peer, hashes := range request {
 				if len(hashes) > 0 {
-					list := "["
-					for _, hash := range hashes {
-						list += fmt.Sprintf("%x, ", hash[:4])
-					}
-					list = list[:len(list)-2] + "]"
-
-					log.Debug("fetching", "peer", peer, "hashes", list)
+					// Log a summary rather than the whole list: formatting
+					// every hash costs work proportional to the batch before
+					// the logger decides whether debug output is even on.
+					log.Debug("fetching", "peer", peer, "count", len(hashes), "first-hash", fmt.Sprintf("%x", hashes[0][:4]))
 				}
 				// Create a closure of the fetch and schedule in on a new thread
 				fetcher, hashes := f.fetching[hashes[0]].fetch, hashes
@@ -317,11 +340,15 @@ func (f *Fetcher) loop() {
 			// Schedule the next fetch if blocks are still pending
 			f.reschedule(fetch)
 
-		case filter := <-f.filter:
+		case <-expire.C:
+			// The oldest fetch has timed out; the sweep at the top of the
+			// loop removes it and releases the peer's allowance.
+
+		case req := <-f.filter:
 			// Blocks arrived, extract any explicit fetches, return all else
 			var blocks []*nom.DetailedMomentum
 			select {
-			case blocks = <-filter:
+			case blocks = <-req.reply:
 			case <-f.quit:
 				return
 			}
@@ -346,18 +373,56 @@ func (f *Fetcher) loop() {
 			}
 
 			select {
-			case filter <- download:
+			case req.reply <- download:
 			case <-f.quit:
 				return
 			}
-			// Schedule the retrieved blocks for ordered import
+			// Schedule the retrieved blocks for ordered import, attributing
+			// them to the peer that actually delivered them rather than the
+			// peer that announced the hash.
 			for _, block := range explicit {
 				if announce := f.fetching[block.Momentum.Hash]; announce != nil {
-					f.enqueue(announce.origin, block)
+					f.enqueue(req.peer, block)
 				}
 			}
 		}
 	}
+}
+
+// sweepExpired forgets every pending fetch older than fetchTimeout, records
+// the announce time of the oldest survivor for the expiry timer and for
+// admission, and reports the expired hashes to the test hook.
+func (f *Fetcher) sweepExpired() {
+	var expired []types.Hash
+	f.oldestFetch = time.Time{}
+	for hash, announce := range f.fetching {
+		if time.Since(announce.time) > fetchTimeout {
+			f.forgetHash(hash)
+			if f.expiredHook != nil {
+				expired = append(expired, hash)
+			}
+		} else if f.oldestFetch.IsZero() || announce.time.Before(f.oldestFetch) {
+			f.oldestFetch = announce.time
+		}
+	}
+	if len(expired) > 0 {
+		f.expiredHook(expired)
+	}
+}
+
+// releaseExpired sweeps timed-out fetches when peer is at its announce
+// allowance and the oldest pending fetch has passed its timeout since the
+// last sweep. The sweep runs before the loop blocks in select, so when the
+// timeout passes while the loop is blocked and a notification is selected
+// ahead of the expiry timer, the peer would otherwise be judged against
+// fetches that have already timed out. The sweep only runs when something
+// has actually expired, and each fetch expires once, so a peer at its limit
+// cannot make refused announces cost repeated walks of the table.
+func (f *Fetcher) releaseExpired(peer string) {
+	if f.announces[peer] < HashLimit || f.oldestFetch.IsZero() || time.Since(f.oldestFetch) <= fetchTimeout {
+		return
+	}
+	f.sweepExpired()
 }
 
 // reschedule resets the specified fetch timer to the next announce timeout.
@@ -423,16 +488,8 @@ func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 		if parent == nil {
 			return
 		}
-		// Quickly validate the header and propagate the momentum if it passes
-		switch err := f.validateBlock(momentum, parent.Momentum); err {
-		case nil:
-			// All ok, quickly propagate to our peers
-			go func() {
-				f.broadcastBlock(detailed, true)
-			}()
-
-		default:
-			// Something went very wrong, drop the peer
+		// Run structural pre-checks before propagation
+		if err := f.verifyBlock(detailed); err != nil {
 			log.Info("momentum verification failed", "peer", peer, "momentum", momentum.Height, "hash", hash[:4], "reason", err)
 			f.dropPeer(peer)
 			return
@@ -448,7 +505,7 @@ func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 		}
 		// If import succeeded, broadcast the momentum
 		go func() {
-			f.broadcastBlock(detailed, false)
+			f.broadcastBlock(detailed, true)
 		}()
 
 		// Invoke the testing hook if needed
@@ -461,10 +518,12 @@ func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 // forgetHash removes all traces of a block announcement from the fetcher's
 // internal state.
 func (f *Fetcher) forgetHash(hash types.Hash) {
-	// Remove all pending announces and decrement DOS counters
+	// Remove all pending announces and decrement DOS counters. A counter
+	// that reaches zero is dropped rather than kept, so it can never sit
+	// below zero and grant a peer extra announces.
 	for _, announce := range f.announced[hash] {
 		f.announces[announce.origin]--
-		if f.announces[announce.origin] == 0 {
+		if f.announces[announce.origin] <= 0 {
 			delete(f.announces, announce.origin)
 		}
 	}
@@ -473,7 +532,7 @@ func (f *Fetcher) forgetHash(hash types.Hash) {
 	// Remove any pending fetches and decrement the DOS counters
 	if announce := f.fetching[hash]; announce != nil {
 		f.announces[announce.origin]--
-		if f.announces[announce.origin] == 0 {
+		if f.announces[announce.origin] <= 0 {
 			delete(f.announces, announce.origin)
 		}
 		delete(f.fetching, hash)

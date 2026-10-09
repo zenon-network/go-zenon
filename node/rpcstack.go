@@ -21,17 +21,22 @@ import (
 
 // httpConfig is the JSON-RPC/HTTP configuration.
 type httpConfig struct {
-	Modules            []string
-	CorsAllowedOrigins []string
-	Vhosts             []string
-	prefix             string // path prefix on which to mount http handler
+	Modules                 []string
+	CorsAllowedOrigins      []string
+	Vhosts                  []string
+	MaxSubscriptionsPerConn int
+	prefix                  string // path prefix on which to mount http handler
 }
 
 // wsConfig is the JSON-RPC/Websocket configuration
 type wsConfig struct {
-	Origins []string
-	Modules []string
-	prefix  string // path prefix on which to mount ws handler
+	Origins                 []string
+	Modules                 []string
+	MaxSubscriptionsPerConn int
+	// MaxConnectionsPerIP bounds concurrent WebSocket connections from a
+	// single remote IP address. Zero means no per-IP limit.
+	MaxConnectionsPerIP int
+	prefix              string // path prefix on which to mount ws handler
 }
 
 type rpcHandler struct {
@@ -87,8 +92,15 @@ func (h *httpServer) setListenAddr(host string, port int) error {
 		return fmt.Errorf("HTTP server already running on %s", h.endpoint)
 	}
 
+	// Build before mutating: on a malformed host the server must keep its
+	// previous address rather than end up half-configured.
+	endpoint, err := joinHostPort(host, port)
+	if err != nil {
+		return fmt.Errorf("invalid listen address: %w", err)
+	}
+
 	h.host, h.port = host, port
-	h.endpoint = fmt.Sprintf("%s:%d", host, port)
+	h.endpoint = endpoint
 	return nil
 }
 
@@ -240,7 +252,7 @@ func (h *httpServer) doStop() {
 
 	// Shut down the server.
 	httpHandler := h.httpHandler.Load().(*rpcHandler)
-	wsHandler := h.httpHandler.Load().(*rpcHandler)
+	wsHandler := h.wsHandler.Load().(*rpcHandler)
 	if httpHandler != nil {
 		h.httpHandler.Store((*rpcHandler)(nil))
 		httpHandler.server.Stop()
@@ -269,6 +281,7 @@ func (h *httpServer) enableRPC(apis []rpc.API, config httpConfig) error {
 
 	// Create RPC server and handler.
 	srv := rpc.NewServer()
+	srv.SetMaxSubscriptionsPerConn(config.MaxSubscriptionsPerConn)
 	if err := RegisterApisFromWhitelist(apis, config.Modules, srv, false); err != nil {
 		return err
 	}
@@ -301,12 +314,17 @@ func (h *httpServer) enableWS(apis []rpc.API, config wsConfig) error {
 
 	// Create RPC server and handler.
 	srv := rpc.NewServer()
+	srv.SetMaxSubscriptionsPerConn(config.MaxSubscriptionsPerConn)
 	if err := RegisterApisFromWhitelist(apis, config.Modules, srv, false); err != nil {
 		return err
 	}
 	h.wsConfig = config
+	wsHandler := srv.WebsocketHandler(config.Origins)
+	if config.MaxConnectionsPerIP > 0 {
+		wsHandler = maxWSConnectionsPerIP(wsHandler, config.MaxConnectionsPerIP)
+	}
 	h.wsHandler.Store(&rpcHandler{
-		Handler: srv.WebsocketHandler(config.Origins),
+		Handler: wsHandler,
 		server:  srv,
 	})
 	return nil
@@ -412,7 +430,7 @@ func (h *virtualHostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.next.ServeHTTP(w, r)
 		return
 	}
-	if _, exist := h.vhosts[host]; exist {
+	if _, exist := h.vhosts[strings.ToLower(host)]; exist {
 		h.next.ServeHTTP(w, r)
 		return
 	}
@@ -513,5 +531,73 @@ func checkTimeouts(timeouts *rpc.HTTPTimeouts) {
 	if timeouts.IdleTimeout < time.Second {
 		log.Warn("Sanitizing invalid HTTP idle timeout", "provided", timeouts.IdleTimeout, "updated", rpc.DefaultHTTPTimeouts.IdleTimeout)
 		timeouts.IdleTimeout = rpc.DefaultHTTPTimeouts.IdleTimeout
+	}
+}
+
+// wsConnLimiter bounds concurrent WebSocket connections per remote IP.
+type wsConnLimiter struct {
+	mu       sync.Mutex
+	maxPerIP int
+	counts   map[string]int
+}
+
+// maxWSConnectionsPerIP returns an http.Handler that admits at most maxPerIP
+// concurrent WebSocket connections from each remote IP address. Connections
+// in excess of the limit receive HTTP 429. A maxPerIP below one is a no-op
+// (the handler is returned unwrapped).
+func maxWSConnectionsPerIP(handler http.Handler, maxPerIP int) http.Handler {
+	if maxPerIP < 1 {
+		return handler
+	}
+	l := &wsConnLimiter{
+		maxPerIP: maxPerIP,
+		counts:   make(map[string]int),
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := wsRemoteIP(r.RemoteAddr)
+		if !l.admit(ip) {
+			http.Error(w, "too many WebSocket connections from this address", http.StatusTooManyRequests)
+			return
+		}
+		defer l.release(ip)
+		handler.ServeHTTP(w, r)
+	})
+}
+
+// wsRemoteIP extracts the IP address from an http.Request.RemoteAddr value
+// ("ip:port"). When the value has no port it is returned as-is; an empty
+// input yields an empty string.
+func wsRemoteIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return host
+}
+
+// admit reports whether the IP may open another connection and records it.
+// The empty IP (in-process, some IPC transports) is always admitted.
+func (l *wsConnLimiter) admit(ip string) bool {
+	if ip == "" {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.counts[ip] >= l.maxPerIP {
+		return false
+	}
+	l.counts[ip]++
+	return true
+}
+
+func (l *wsConnLimiter) release(ip string) {
+	if ip == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.counts[ip]--
+	if l.counts[ip] <= 0 {
+		delete(l.counts, ip)
 	}
 }

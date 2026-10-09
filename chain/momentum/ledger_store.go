@@ -50,7 +50,7 @@ func (ms *momentumStore) AddAccountBlockTransaction(header types.AccountHeader, 
 	}
 	identifier := ms.Identifier()
 	if err := ms.DB.Subset(getAccountStorePrefix(header.Address)).Apply(patch); err != nil {
-		return nil
+		return err
 	}
 
 	// Set znn balance
@@ -79,7 +79,7 @@ func (ms *momentumStore) AddAccountBlockTransaction(header types.AccountHeader, 
 			return err
 		}
 		if err := ms.setBlockConfirmationHeight(block.Hash, identifier.Height+1); err != nil {
-			return nil
+			return err
 		}
 
 		if block.IsSendBlock() {

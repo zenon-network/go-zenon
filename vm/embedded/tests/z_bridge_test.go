@@ -3,6 +3,7 @@ package tests
 import (
 	"crypto/ecdsa"
 	"encoding/base64"
+	"fmt"
 	eabi "github.com/ethereum/go-ethereum/accounts/abi"
 	ecommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -16,13 +17,15 @@ import (
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/rpc/api/embedded"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
-func activateBridge(z mock.MockZenon) {
+func activateBridge(t *testing.T, z mock.MockZenon) {
+	saveSporkState(t)
 	z.InsertSendBlock(&nom.AccountBlock{
 		Address:   g.Spork.Address,
 		ToAddress: types.SporkContract,
@@ -51,10 +54,11 @@ func activateBridge(z mock.MockZenon) {
 
 // Activate spork
 func activateBridgeStep0(t *testing.T, z mock.MockZenon) {
-	activateBridge(z)
+	activateBridge(t, z)
 	z.InsertMomentumsTo(10)
 
 	bridgeAPI := embedded.NewBridgeApi(z)
+	saveBridgeConstants(t)
 	constants.InitialBridgeAdministrator.SetBytes(g.User5.Address.Bytes())
 	constants.MinAdministratorDelay = 20
 	constants.MinSoftDelay = 10
@@ -1413,6 +1417,22 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 	z.ExpectBalance(types.BridgeContract, types.ZnnTokenStandard, 15*g.Zexp)
 	z.ExpectBalance(g.User1.Address, types.ZnnTokenStandard, 1195500000000)
 
+	// The stored ToAddress is lowercased at write time; a checksummed
+	// (EIP-55 mixed-case) query must still match.
+	byAddr, err := bridgeAPI.GetAllWrapTokenRequestsByToAddress("0xB794F5eA0ba39494cE839613fffBA74279579268", 0, 10)
+	common.DealWithErr(err)
+	if byAddr.Count != 1 || len(byAddr.List) != 1 {
+		t.Fatalf("checksummed ByToAddress query: count=%d len=%d, want 1/1", byAddr.Count, len(byAddr.List))
+	}
+
+	// Wrap/unwrap listings enforce the shared page-size cap.
+	if _, err := bridgeAPI.GetAllWrapTokenRequests(0, api.RpcMaxPageSize+1); err != api.ErrPageSizeParamTooBig {
+		t.Fatalf("expected ErrPageSizeParamTooBig for oversized pageSize, got %v", err)
+	}
+	if _, err := bridgeAPI.GetAllUnwrapTokenRequests(0, api.RpcMaxPageSize+1); err != api.ErrPageSizeParamTooBig {
+		t.Fatalf("expected ErrPageSizeParamTooBig for oversized pageSize, got %v", err)
+	}
+
 	// We remove the network and try to wrap again
 	defer z.CallContract(removeNetwork(g.User5.Address, networkClass, chainId)).Error(t, nil)
 	insertMomentums(z, 2)
@@ -1978,6 +1998,294 @@ t=2001-09-09T02:05:00+0000 lvl=eror msg=Unwrap-ErrInvalidSignature module=embedd
 		}
 	]
 }`)
+}
+
+// TestBridge_GetAllUnwrapTokenRequests_SortStability verifies that
+// GetAllUnwrapTokenRequests sorts strictly by RegistrationMomentumHeight
+// descending, deterministically tie-breaks equal-height requests, and
+// returns consistent results across page boundaries.
+//
+// The underlying GetUnwrapTokenRequests iterates LevelDB by
+// (TransactionHash, LogIndex), so the input slice arrives in an order
+// that is *unrelated* to height. The API uses sort.SliceStable, which
+// preserves the deterministic upstream order as an implicit tie-breaker
+// for equal-height entries.
+//
+// The stability assertion is contract-based: we capture the raw
+// upstream order via definition.GetUnwrapTokenRequests and require the
+// API to preserve the relative order of tied entries. This avoids
+// coupling the test to Go's sort implementation details (pdqsort
+// cutoffs, insertion-sort thresholds, etc.).
+//
+// The 12-tie fixture is sized to force the unstable path — at this size
+// Go's current sort.Slice reorders ties via pdqsort, while SliceStable
+// preserves them. If a future Go version changes the cutoff, the
+// fixture may need to grow; the assertion itself remains valid.
+//
+// Tx-hash prefixes are also chosen so that lexicographic tx-hash order
+// disagrees with height-descending order — proving the sort is doing
+// real work and not accidentally relying on LevelDB iteration.
+func TestBridge_GetAllUnwrapTokenRequests_SortStability(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+
+	activateBridgeStep6(t, z)
+
+	networkClass := uint32(2) // evm
+	chainId := uint32(123)
+	tokenAddress := "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+	amount := big.NewInt(50 * g.Zexp)
+
+	// 12 unwraps submitted back-to-back (no insertMomentums between
+	// them). They all land in the next produced momentum and share a
+	// RegistrationMomentumHeight. Hash prefixes 0x00..0x0b place them in
+	// strict tx-hash-ascending order in LevelDB, which is the order
+	// SliceStable must preserve when the comparator only considers height.
+	const tieCount = 12
+	tieHashes := make([]types.Hash, tieCount)
+	for i := 0; i < tieCount; i++ {
+		hex := fmt.Sprintf("%02x"+"01010101010101010101010101010101010101010101010101010101010101", i)
+		tieHashes[i] = types.HexToHashPanic(hex)
+		signature := getUnwrapTokenSignature(t, networkClass, chainId, tieHashes[i], 200, tokenAddress, amount, networkClass)
+		defer z.CallContract(unwrapToken(networkClass, chainId, tieHashes[i], 200, tokenAddress, amount, signature)).
+			Error(t, nil)
+	}
+	insertMomentums(z, 2)
+
+	// 13th unwrap, registered later at a strictly higher height. Its
+	// hash prefix 0xff is lexicographically larger than every tied hash;
+	// LevelDB therefore returns it last, while the height-descending sort
+	// must place it first. Together with the tied block this proves the
+	// sort is height-driven, not tx-hash-driven.
+	hashNewest := types.HexToHashPanic("ff03030303030303030303030303030303030303030303030303030303030303")
+	sigNewest := getUnwrapTokenSignature(t, networkClass, chainId, hashNewest, 200, tokenAddress, amount, networkClass)
+	defer z.CallContract(unwrapToken(networkClass, chainId, hashNewest, 200, tokenAddress, amount, sigNewest)).
+		Error(t, nil)
+	insertMomentums(z, 2)
+
+	bridgeAPI := embedded.NewBridgeApi(z)
+
+	full, err := bridgeAPI.GetAllUnwrapTokenRequests(0, 100)
+	common.FailIfErr(t, err)
+	expectedCount := tieCount + 1
+	if full.Count != expectedCount || len(full.List) != expectedCount {
+		t.Fatalf("expected %d unwraps, got count=%d len=%d", expectedCount, full.Count, len(full.List))
+	}
+
+	// Confirm the tied entries actually share a single height; otherwise
+	// the stability assertion below would be vacuous.
+	tiedHeight := full.List[1].RegistrationMomentumHeight
+	for i := 2; i < expectedCount; i++ {
+		if full.List[i].RegistrationMomentumHeight != tiedHeight {
+			t.Fatalf("expected indices 1..%d to share height %d; index %d had %d",
+				expectedCount-1, tiedHeight, i, full.List[i].RegistrationMomentumHeight)
+		}
+	}
+	if full.List[0].RegistrationMomentumHeight <= tiedHeight {
+		t.Fatalf("expected index 0 height > tied height; got %d <= %d",
+			full.List[0].RegistrationMomentumHeight, tiedHeight)
+	}
+
+	// Height-descending overall.
+	for i := 1; i < len(full.List); i++ {
+		if full.List[i].RegistrationMomentumHeight > full.List[i-1].RegistrationMomentumHeight {
+			t.Fatalf("not height-descending at index %d: prev=%d cur=%d", i,
+				full.List[i-1].RegistrationMomentumHeight, full.List[i].RegistrationMomentumHeight)
+		}
+	}
+
+	// Capture the raw upstream order so the stability assertion is
+	// algorithm-independent: SliceStable must preserve the upstream
+	// relative order of tied entries, regardless of how LevelDB or Go's
+	// sort happen to arrange them.
+	_, context, err := api.GetFrontierContext(z.Chain(), types.BridgeContract)
+	common.FailIfErr(t, err)
+	upstream, err := definition.GetUnwrapTokenRequests(context.Storage())
+	common.FailIfErr(t, err)
+
+	upstreamTied := make([]*definition.UnwrapTokenRequest, 0, tieCount)
+	for _, r := range upstream {
+		if r.RegistrationMomentumHeight == tiedHeight {
+			upstreamTied = append(upstreamTied, r)
+		}
+	}
+	if len(upstreamTied) != tieCount {
+		t.Fatalf("expected %d tied entries upstream, got %d", tieCount, len(upstreamTied))
+	}
+
+	// Index 0 is the newest unwrap (height > tiedHeight). Indices
+	// 1..tieCount are the tied entries; their relative order in the API
+	// output must match upstream. This is the SliceStable contract that
+	// distinguishes it from sort.Slice (which would reorder ties for
+	// inputs at this size under Go's current pdqsort).
+	if full.List[0].TransactionHash != hashNewest {
+		t.Fatalf("index 0: expected newest %v, got %v", hashNewest, full.List[0].TransactionHash)
+	}
+	for i := 0; i < tieCount; i++ {
+		got := full.List[i+1].TransactionHash
+		want := upstreamTied[i].TransactionHash
+		if got != want {
+			t.Fatalf("index %d (tie-break): expected %v (upstream position %d), got %v — relative order not preserved",
+				i+1, want, i, got)
+		}
+	}
+
+	// Pagination determinism: with pageSize=5 the 13 results land on
+	// three pages. Concatenating them must reproduce the full single-call
+	// result exactly. This catches sort instability that varies across
+	// API invocations as well as off-by-one paging bugs.
+	const pageSize = 5
+	combined := make([]*embedded.UnwrapTokenRequest, 0, expectedCount)
+	for page := uint32(0); ; page++ {
+		p, err := bridgeAPI.GetAllUnwrapTokenRequests(page, pageSize)
+		common.FailIfErr(t, err)
+		if p.Count != expectedCount {
+			t.Fatalf("page %d: expected total Count=%d, got %d", page, expectedCount, p.Count)
+		}
+		combined = append(combined, p.List...)
+		if len(p.List) < pageSize {
+			break
+		}
+	}
+	if len(combined) != len(full.List) {
+		t.Fatalf("combined paginated length %d != full length %d", len(combined), len(full.List))
+	}
+	for i := range full.List {
+		if combined[i].TransactionHash != full.List[i].TransactionHash ||
+			combined[i].LogIndex != full.List[i].LogIndex {
+			t.Fatalf("paginated/full ordering differs at index %d: paged=%v/%d full=%v/%d", i,
+				combined[i].TransactionHash, combined[i].LogIndex,
+				full.List[i].TransactionHash, full.List[i].LogIndex)
+		}
+	}
+
+	// A second full-list call must also be byte-identical to the first.
+	again, err := bridgeAPI.GetAllUnwrapTokenRequests(0, 100)
+	common.FailIfErr(t, err)
+	if len(again.List) != len(full.List) {
+		t.Fatalf("repeated call length differs: %d vs %d", len(again.List), len(full.List))
+	}
+	for i := range full.List {
+		if again.List[i].TransactionHash != full.List[i].TransactionHash ||
+			again.List[i].LogIndex != full.List[i].LogIndex {
+			t.Fatalf("repeated call ordering differs at index %d", i)
+		}
+	}
+
+	// GetAllUnwrapTokenRequestsByToAddress must produce the identical
+	// stable, height-descending order - both filtered (every unwrap above
+	// targets g.User2) and with the empty (unfiltered) address.
+	for _, toAddress := range []string{g.User2.Address.String(), ""} {
+		byAddr, err := bridgeAPI.GetAllUnwrapTokenRequestsByToAddress(toAddress, 0, 100)
+		common.FailIfErr(t, err)
+		if len(byAddr.List) != len(full.List) {
+			t.Fatalf("ByToAddress(%q) length %d != full length %d", toAddress, len(byAddr.List), len(full.List))
+		}
+		for i := range full.List {
+			if byAddr.List[i].TransactionHash != full.List[i].TransactionHash ||
+				byAddr.List[i].LogIndex != full.List[i].LogIndex {
+				t.Fatalf("ByToAddress(%q) ordering differs from full list at index %d", toAddress, i)
+			}
+		}
+	}
+}
+
+// TestBridge_GetAllUnwrapTokenRequests_RemovedPairPagination verifies that
+// unwrap requests whose token pair has been removed are excluded *before*
+// Count and pagination are computed. Previously the removed-pair skip
+// happened inside the page loop, so a page consisting entirely of
+// removed-pair unwraps came back empty even though valid unwraps existed on
+// later pages - a naive "empty list means end" client would stop early -
+// and Count included unlistable entries.
+func TestBridge_GetAllUnwrapTokenRequests_RemovedPairPagination(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+
+	activateBridgeStep6(t, z)
+
+	networkClass := uint32(2) // evm
+	chainId := uint32(123)
+	keptTokenAddress := "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+	doomedTokenAddress := "0x6fbdb2315678afecb367f032d93f642f64180aa3"
+	amount := big.NewInt(50 * g.Zexp)
+
+	bridgeAPI := embedded.NewBridgeApi(z)
+	securityInfo, err := bridgeAPI.GetSecurityInfo()
+	common.FailIfErr(t, err)
+
+	// Second pair, QSR at a distinct EVM address, to be removed later.
+	setTokenPair(t, z, g.User5.Address, securityInfo.SoftDelay, networkClass, chainId, types.QsrTokenStandard, doomedTokenAddress, true, true, false,
+		big.NewInt(100), uint32(15), uint32(20), `{"APR": 15, "LockingPeriod": 100}`)
+
+	// 3 unwraps on the surviving ZNN pair, registered first (lower height,
+	// so they sort to the back of the height-descending listing).
+	keptHashes := make(map[types.Hash]bool, 3)
+	for i := 0; i < 3; i++ {
+		hash := types.HexToHashPanic(fmt.Sprintf("%02x"+"02020202020202020202020202020202020202020202020202020202020202", i))
+		keptHashes[hash] = true
+		signature := getUnwrapTokenSignature(t, networkClass, chainId, hash, 300, keptTokenAddress, amount, networkClass)
+		defer z.CallContract(unwrapToken(networkClass, chainId, hash, 300, keptTokenAddress, amount, signature)).
+			Error(t, nil)
+	}
+	insertMomentums(z, 2)
+
+	// 4 unwraps on the doomed QSR pair, registered later (higher height, so
+	// they occupy the front of the listing and fill page 0 at pageSize=4).
+	for i := 0; i < 4; i++ {
+		hash := types.HexToHashPanic(fmt.Sprintf("%02x"+"03030303030303030303030303030303030303030303030303030303030303", 0xf0+i))
+		signature := getUnwrapTokenSignature(t, networkClass, chainId, hash, 400, doomedTokenAddress, amount, networkClass)
+		defer z.CallContract(unwrapToken(networkClass, chainId, hash, 400, doomedTokenAddress, amount, signature)).
+			Error(t, nil)
+	}
+	insertMomentums(z, 2)
+
+	// Sanity: all 7 listable while both pairs exist.
+	full, err := bridgeAPI.GetAllUnwrapTokenRequests(0, 100)
+	common.FailIfErr(t, err)
+	if full.Count != 7 || len(full.List) != 7 {
+		t.Fatalf("before removal: expected count=7 len=7, got count=%d len=%d", full.Count, len(full.List))
+	}
+
+	defer z.CallContract(removeTokenPair(g.User5.Address, networkClass, chainId, types.QsrTokenStandard, doomedTokenAddress)).
+		Error(t, nil)
+	insertMomentums(z, 2)
+
+	// Page 0 at pageSize=4 was previously exactly the four removed-pair
+	// unwraps: Count stayed 7 but List came back empty. Now the removed
+	// entries must not be counted or paginated at all.
+	page0, err := bridgeAPI.GetAllUnwrapTokenRequests(0, 4)
+	common.FailIfErr(t, err)
+	if page0.Count != 3 {
+		t.Fatalf("after removal: expected Count=3, got %d", page0.Count)
+	}
+	if len(page0.List) != 3 {
+		t.Fatalf("after removal: expected 3 entries on page 0, got %d", len(page0.List))
+	}
+	for i, r := range page0.List {
+		if !keptHashes[r.TransactionHash] {
+			t.Fatalf("after removal: page 0 index %d has removed-pair unwrap %v", i, r.TransactionHash)
+		}
+	}
+
+	// Pagination stays dense: pageSize=2 yields pages of 2 and 1.
+	p0, err := bridgeAPI.GetAllUnwrapTokenRequests(0, 2)
+	common.FailIfErr(t, err)
+	p1, err := bridgeAPI.GetAllUnwrapTokenRequests(1, 2)
+	common.FailIfErr(t, err)
+	if len(p0.List) != 2 || len(p1.List) != 1 {
+		t.Fatalf("after removal: expected dense pages 2+1, got %d+%d", len(p0.List), len(p1.List))
+	}
+
+	// ByToAddress must apply the same pre-pagination filtering - every
+	// unwrap above targets g.User2, and the empty address lists everything.
+	for _, toAddress := range []string{g.User2.Address.String(), ""} {
+		byAddr, err := bridgeAPI.GetAllUnwrapTokenRequestsByToAddress(toAddress, 0, 4)
+		common.FailIfErr(t, err)
+		if byAddr.Count != 3 || len(byAddr.List) != 3 {
+			t.Fatalf("ByToAddress(%q) after removal: expected count=3 len=3, got count=%d len=%d",
+				toAddress, byAddr.Count, len(byAddr.List))
+		}
+	}
 }
 
 func TestBridge_Redeem(t *testing.T) {
@@ -3077,6 +3385,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 
 	// We have orc info
 	activateBridgeStep1(t, z)
+	constants.MinGuardians = 4
 
 	bridgeAPI := embedded.NewBridgeApi(z)
 	securityInfo, err := bridgeAPI.GetSecurityInfo()
@@ -3699,5 +4008,36 @@ func sign(hash []byte, privateKey string) (string, error) {
 func insertMomentums(z mock.MockZenon, target int) {
 	for i := 0; i < target; i++ {
 		z.InsertNewMomentum()
+	}
+}
+
+// A valid compressed key whose X coordinate has a leading zero byte must be
+// stored as a fixed-width 0x04 || X[32] || Y[32] value. Minimal-width big.Int
+// encoding would store it as 64 bytes, which CheckECDSASignature (requiring
+// exactly 65) then rejects, disabling bridge signature operations after the
+// rotation.
+func TestBridge_ChangeTssShortCoordinateStoredFullWidth(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+
+	activateBridgeStep3(t, z)
+
+	bridgeAPI := embedded.NewBridgeApi(z)
+	securityInfo, err := bridgeAPI.GetSecurityInfo()
+	common.DealWithErr(err)
+
+	// Decompresses to a 31-byte X coordinate.
+	const shortXKey = "AgB3WPsbAbaMAZdHlFw58Q8936u9QISPZ358k3ze48Zm"
+	changeTssWithAdministrator(t, z, g.User5.Address, shortXKey, securityInfo.SoftDelay)
+
+	info, err := bridgeAPI.GetBridgeInfo()
+	common.DealWithErr(err)
+	if info.CompressedTssECDSAPubKey != shortXKey {
+		t.Fatalf("rotation did not take: compressed key is %q", info.CompressedTssECDSAPubKey)
+	}
+	stored, err := base64.StdEncoding.DecodeString(info.DecompressedTssECDSAPubKey)
+	common.DealWithErr(err)
+	if len(stored) != 65 {
+		t.Fatalf("stored decompressed key is %d bytes, want 65", len(stored))
 	}
 }

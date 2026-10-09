@@ -21,8 +21,8 @@ func NewTask(action func(TaskResolver)) Task {
 	}
 
 	go func() {
+		defer t.finish()
 		action(t)
-		t.finish()
 	}()
 
 	return t

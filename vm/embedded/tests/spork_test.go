@@ -51,6 +51,7 @@ t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork s
 func TestSpork_CreateCommunitySpork(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
+	saveCommunitySporkGlobals(t)
 
 	// Set community spork address and validity heights
 	types.CommunitySporkAddress = g.Pillar1.Address
@@ -189,6 +190,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=created module=embedded contract=spork s
 func TestSpork_ActivateSpork(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
+	saveSporkState(t)
 	sporkAPI := embedded.NewSporkApi(z)
 	defer z.SaveLogs(common.EmbeddedLogger).Equals(t, `
 t=2001-09-09T01:46:50+0000 lvl=dbug msg=created module=embedded contract=spork spork="&{Id:eedcf4003fedfa69a0494e8b09c156f70c3e790af563642d0222514c3078966f Name:spork-1 Description:spork description Activated:false EnforcementHeight:0}"
@@ -237,6 +239,7 @@ t=2001-09-09T01:47:00+0000 lvl=dbug msg=activated module=embedded contract=spork
 func TestSpork_ActivateCommunitySpork(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
+	saveSporkState(t)
 
 	// Set community spork address and validity heights
 	types.CommunitySporkAddress = g.Pillar1.Address

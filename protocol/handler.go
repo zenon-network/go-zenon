@@ -82,7 +82,7 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 			Name:    "eth",
 			Version: version,
 			Length:  ProtocolLengths[i],
-			Run: func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
+			Run: func(p p2p.Peer, rw p2p.MsgReadWriter) error {
 				peer := manager.newPeer(int(version), int(networkId), p, rw)
 				manager.newPeerCh <- peer
 				return manager.handle(peer)
@@ -97,9 +97,8 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 		manager.chainman.InsertChain,
 		manager.removePeer)
 
-	validator := func(block *nom.Momentum, parent *nom.Momentum) error {
-		//return core.ValidateHeader(pow, block.Headerr(), parent, true)
-		return nil
+	verifier := func(detailed *nom.DetailedMomentum) error {
+		return manager.chainman.VerifyMomentum(detailed)
 	}
 	heighter := func() uint64 {
 		momentum := manager.chainman.CurrentBlock()
@@ -107,7 +106,7 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 	}
 	manager.fetcher = fetcher.New(
 		manager.chainman.GetBlock,
-		validator,
+		verifier,
 		manager.BroadcastMomentum,
 		heighter,
 		manager.chainman.InsertChain,
@@ -164,7 +163,7 @@ func (pm *ProtocolManager) Stop() {
 	log.Info("Protocol handler stopped")
 }
 
-func (pm *ProtocolManager) newPeer(pv, nv int, p *p2p.Peer, rw p2p.MsgReadWriter) *peer {
+func (pm *ProtocolManager) newPeer(pv, nv int, p p2p.Peer, rw p2p.MsgReadWriter) *peer {
 	return newPeer(pv, nv, p, rw)
 }
 
@@ -201,6 +200,75 @@ func (pm *ProtocolManager) handle(p *peer) error {
 			return err
 		}
 	}
+}
+
+// gatherBlocksForReply reads hashes from a GetBlocksMsg stream, deduplicates
+// them, and collects blocks until the count or reply-size limit is reached.
+// It returns the collected blocks and the total number of hashes read (before
+// dedup), for logging. The getBlock function is injected for testability.
+//
+// The MaxBlocksRequest bound counts every decoded hash, before dedup, because
+// every named hash costs the receiver a store lookup whether or not the block
+// exists and whether or not the hash repeats (issue #84). The dedup skips the
+// redundant lookup but not the budget. The soft reply cap stops the loop once
+// the encoded reply exceeds softResponseLimit, which bounds the read and
+// encode work a single request can cause (issue #124). It is a soft bound on
+// this handler's work, not a guarantee that the transport accepts what
+// follows: the reply is still one message, and both transports reject frames
+// above their own cap (10 MiB in libp2p; 10 MiB plus a frame header on legacy
+// RLPx).
+func gatherBlocksForReply(msgStream *rlp.Stream, getBlock func(types.Hash) *nom.DetailedMomentum) (blocks []*nom.DetailedMomentum, hashCount int, err error) {
+	var (
+		hash      types.Hash
+		seen      = make(map[types.Hash]struct{})
+		replySize int
+	)
+	for {
+		// Every requested hash costs a store lookup whether or not the
+		// block exists, so bound the lookups, not only the hits: after
+		// MaxBlocksRequest of them, answer with what was found and leave
+		// the rest of the message unread and undecoded. Disconnecting
+		// instead would cost the same lookups and only cut off peers on
+		// releases that do not split requests.
+		if hashCount >= MaxBlocksRequest {
+			break
+		}
+		derr := msgStream.Decode(&hash)
+		if derr == rlp.EOL {
+			break
+		} else if derr != nil {
+			return nil, hashCount, errResp(ErrDecode, "getBlocks: %v", derr)
+		}
+		hashCount++
+
+		// Skip duplicates: each unique hash costs one store lookup, but
+		// repeating a hash must not multiply the reply payload (issue #124).
+		// The hash still counted toward MaxBlocksRequest above.
+		if _, dup := seen[hash]; dup {
+			continue
+		}
+		seen[hash] = struct{}{}
+
+		// Retrieve the requested block, stopping if enough was found
+		if block := getBlock(hash); block != nil {
+			encoded, encErr := rlp.EncodeToBytes(block)
+			if encErr != nil {
+				continue
+			}
+			// Include the block, then stop if the reply has grown past
+			// the soft limit. Appending before checking ensures at least
+			// one block is always returned, matching go-ethereum.
+			replySize += len(encoded)
+			blocks = append(blocks, block)
+			if replySize > softResponseLimit {
+				break
+			}
+			if len(blocks) >= downloader.MaxBlockFetch {
+				break
+			}
+		}
+	}
+	return blocks, hashCount, nil
 }
 
 // handleMsg is invoked whenever an inbound message is received from a remote
@@ -295,38 +363,12 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		if _, err := msgStream.List(); err != nil {
 			return err
 		}
-		// Gather blocks until the fetch or network limits is reached
-		var (
-			hash   types.Hash
-			hashes []types.Hash
-			blocks []*nom.DetailedMomentum
-		)
-		for {
-			err := msgStream.Decode(&hash)
-			if err == rlp.EOL {
-				break
-			} else if err != nil {
-				return errResp(ErrDecode, "msg %v: %v", msg, err)
-			}
-			hashes = append(hashes, hash)
-
-			// Retrieve the requested block, stopping if enough was found
-			if block := pm.chainman.GetBlock(hash); block != nil {
-				blocks = append(blocks, block)
-				if len(blocks) >= downloader.MaxBlockFetch {
-					break
-				}
-			}
+		blocks, hashCount, err := gatherBlocksForReply(msgStream, pm.chainman.GetBlock)
+		if err != nil {
+			return err
 		}
-
-		if len(blocks) == 0 && len(hashes) > 0 {
-			list := "["
-			for _, hash := range hashes {
-				list += fmt.Sprintf("%x, ", hash[:4])
-			}
-			list = list[:len(list)-2] + "]"
-
-			log.Debug("no blocks found for requested hashes", "peer-id", p.id, "hashes", list)
+		if len(blocks) == 0 && hashCount > 0 {
+			log.Debug("no blocks found for requested hashes", "peer-id", p.id, "count", hashCount)
 		}
 		return p.SendBlocks(blocks)
 
@@ -343,12 +385,16 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 
 		hashes := make([]types.Hash, len(blocks))
 		for i, block := range blocks {
+			// Decoded from the peer, so do not assume the elements are populated.
+			if block == nil || block.Momentum == nil {
+				return errResp(ErrDecode, "%v: incomplete momentum at index %d", msg, i)
+			}
 			block.Momentum.EnsureCache()
 			hashes[i] = block.Momentum.Hash
 		}
 
 		// Filter out any explicitly requested blocks, deliver the rest to the downloader
-		if blocks := pm.fetcher.Filter(blocks); len(blocks) > 0 {
+		if blocks := pm.fetcher.Filter(p.id, blocks); len(blocks) > 0 {
 			if err := pm.downloader.DeliverBlocks(p.id, blocks); err != nil {
 				log.Debug("failed to deliver blocks", "reason", err)
 			}
@@ -384,6 +430,10 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		var detailed *nom.DetailedMomentum
 		if err := msg.Decode(&detailed); err != nil {
 			return errResp(ErrDecode, "%v: %v", msg, err)
+		}
+		// Decoded from the peer, so do not assume the message is populated.
+		if detailed == nil || detailed.Momentum == nil {
+			return errResp(ErrDecode, "%v: incomplete momentum", msg)
 		}
 
 		detailed.Momentum.EnsureCache()
@@ -432,6 +482,10 @@ func (pm *ProtocolManager) BroadcastMomentum(detailed *nom.DetailedMomentum, pro
 	hash := detailed.Momentum.Hash
 	peers := pm.peers.PeersWithoutBlock(hash)
 
+	// Peers that don't receive the full momentum below still need a hash
+	// announcement if we have the block.
+	announce := peers
+
 	// If propagation is requested, send to a subset of the peer
 	if propagate {
 		numPeers := len(peers)
@@ -446,16 +500,17 @@ func (pm *ProtocolManager) BroadcastMomentum(detailed *nom.DetailedMomentum, pro
 			}
 		}
 		log.Info("propagated momentum to peers", "num-peers", len(transfer), "momentum-identifier", detailed.Momentum.Identifier())
+		announce = peers[numPeers:]
 	}
 
 	// Otherwise if the block is indeed in out own chain, announce it
 	if pm.chainman.HasBlock(hash) {
-		for _, p := range peers {
+		for _, p := range announce {
 			if err := p.SendNewBlockHashes([]types.Hash{hash}); err != nil {
 				log.Debug("failed to announce momentum", "peer-id", p.id, "reason", err)
 			}
 		}
-		log.Info("announced momentum to peers", "num-peers", len(peers), "momentum-identifier", detailed.Momentum.Identifier())
+		log.Info("announced momentum to peers", "num-peers", len(announce), "momentum-identifier", detailed.Momentum.Identifier())
 	}
 }
 

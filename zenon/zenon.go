@@ -4,6 +4,7 @@ import (
 	"github.com/syndtr/goleveldb/leveldb"
 
 	"github.com/zenon-network/go-zenon/chain"
+	cache "github.com/zenon-network/go-zenon/chain/cache/storage"
 	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/pillar"
 	"github.com/zenon-network/go-zenon/protocol"
@@ -30,11 +31,10 @@ func NewZenon(cfg *Config) (Zenon, error) {
 	z := &zenon{
 		config: cfg,
 	}
-
-	z.chain = chain.NewChain(cfg.NewDBManager("nom"), cfg.GenesisConfig)
+	z.chain = chain.NewChain(cfg.NewDBManager("nom"), cache.NewCacheDBManager(cfg.DataDir), cfg.GenesisConfig)
 	db, levelDb := cfg.NewLevelDB("consensus")
 	z.consensus = consensus.NewConsensus(db, z.chain, false)
-	z.verifier = verifier.NewVerifier(z.chain, z.consensus)
+	z.verifier = verifier.NewVerifier(z.chain, z.consensus, vm.CanonicalBasePlasma)
 	z.levelDb = levelDb
 
 	chainBridge := protocol.NewChainBridge(z.chain, z.consensus, z.verifier, vm.NewSupervisor(z.chain, z.consensus))
@@ -43,6 +43,7 @@ func NewZenon(cfg *Config) (Zenon, error) {
 
 	z.evPrinter = NewEventPrinter(z.chain, z.broadcaster)
 	z.subscribe = subscribe.GetSubscribeServer(z.chain)
+	z.subscribe.SetMaxSubscriptions(cfg.MaxSubscriptions)
 	z.pillar = pillar.NewPillar(z.chain, z.consensus, z.broadcaster)
 
 	if cfg.ProducingKeyPair != nil {

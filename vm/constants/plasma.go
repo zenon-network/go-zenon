@@ -56,4 +56,5 @@ const (
 
 var (
 	MaxFussedAmountForAccountBig = big.NewInt(MaxFussedAmountForAccount)
+	MaxFusionPlasmaForAccountBig = big.NewInt(MaxFusionPlasmaForAccount)
 )

@@ -81,10 +81,10 @@ func (w *worker) Process(e consensus.ProducerEvent) common.Task {
 	}
 
 	task := common.NewTask(func(task common.TaskResolver) {
+		defer w.working.Unlock()
+		defer w.children.Done()
 		defer common.RecoverStack()
 		w.work(task, e)
-		w.children.Done()
-		w.working.Unlock()
 	})
 
 	return task
@@ -94,7 +94,8 @@ func (w *worker) work(task common.TaskResolver, e consensus.ProducerEvent) {
 	var momentumStore store.Momentum
 
 	w.log.Info("producing momentum", "event", e)
-	momentum, err := w.generateMomentum(e)
+	transaction, detailed, err := w.generateMomentum(e)
+
 	if err != nil {
 		w.log.Error("failed to generate momentum", "reason", err)
 		return
@@ -107,10 +108,10 @@ func (w *worker) work(task common.TaskResolver, e consensus.ProducerEvent) {
 		return
 	}
 	if common.Clock.Now().After(e.StartTime.Add(3 * time.Second)) {
-		w.log.Error("do not broadcast own momentum", "identifier", momentum.Momentum.Identifier(), "reason", "too-late")
+		w.log.Error("do not broadcast own momentum", "identifier", transaction.Momentum.Identifier(), "reason", "too-late")
 	} else {
-		w.log.Info("broadcasting own momentum", "identifier", momentum.Momentum.Identifier())
-		w.broadcaster.CreateMomentum(momentum)
+		w.log.Info("broadcasting own momentum", "identifier", transaction.Momentum.Identifier())
+		w.broadcaster.CreateMomentum(transaction, detailed)
 	}
 
 	if task.ShouldStop() {
@@ -139,7 +140,10 @@ func (w *worker) work(task common.TaskResolver, e consensus.ProducerEvent) {
 				w.log.Error("unable to generate receive block for contract", "reason", err)
 				return
 			}
-			w.broadcaster.CreateAccountBlock(transaction)
+			if err := w.broadcaster.CreateAccountBlock(transaction); err != nil {
+				w.log.Error("unable to insert autoreceive block for contract", "contract-address", contractAddress, "reason", err)
+				continue
+			}
 			w.log.Info("created autoreceive-block", "identifier", transaction.Block.Header())
 
 			one = true

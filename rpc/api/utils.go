@@ -15,6 +15,10 @@ const (
 )
 
 func GetRange(index, count, listLen uint32) (uint32, uint32) {
+	// index*count must not wrap around uint32 into a valid-looking page
+	if count != 0 && index > listLen/count {
+		return listLen, listLen
+	}
 	start := index * count
 	if start >= listLen {
 		return listLen, listLen
@@ -37,6 +41,7 @@ func GetFrontierContext(c chain.Chain, addr types.Address) (*nom.Momentum, vm_co
 	context := vm_context.NewAccountContext(
 		store,
 		c.GetFrontierAccountStore(addr),
+		c.GetFrontierCacheStore(),
 		nil,
 	)
 	return frontier, context, nil

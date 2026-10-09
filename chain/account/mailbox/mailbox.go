@@ -17,7 +17,6 @@ func parseAccountHeader(data []byte, err error) *types.AccountHeader {
 	}
 	if err != nil {
 		panic(err)
-		return nil
 	}
 	if header, err := types.DeserializeAccountHeader(data); err != nil {
 		panic(fmt.Sprintf("m.Deserialize failed, Error: %v", err))
@@ -82,9 +81,12 @@ func (m *mailbox) GetBlockWhichReceives(fromHash types.Hash) *types.AccountHeade
 	return parseAccountHeader(m.DB.Get(getBlockWhichReceivesKey(fromHash)))
 }
 func (m *mailbox) GetUnreceivedAccountBlockHashes(atMost uint64) ([]types.Hash, error) {
+	list := make([]types.Hash, 0)
+	if atMost == 0 {
+		return list, nil
+	}
 	iterator := m.DB.NewIterator(getPendingBlocksIterator())
 	defer iterator.Release()
-	list := make([]types.Hash, 0)
 
 	for {
 		if !iterator.Next() {

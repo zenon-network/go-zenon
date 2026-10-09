@@ -19,6 +19,7 @@ package server
 import (
 	"context"
 	"io"
+	"sync"
 	"sync/atomic"
 
 	mapset "github.com/deckarep/golang-set"
@@ -46,16 +47,47 @@ type Server struct {
 	idgen    func() ID
 	run      int32
 	codecs   mapset.Set
+	// maxSubscriptionsPerConn is the subscription budget given to each
+	// connection served after it was set; see SetMaxSubscriptionsPerConn.
+	maxSubscriptionsPerConn int
+
+	// mu orders codec registration against Stop. A codec that passes the
+	// running check is registered before Stop can take its view of the set,
+	// so Stop closes every codec that was admitted while the server was
+	// running. Stop releases mu before it closes anything: a codec's close
+	// runs caller-supplied code (a Conn passed to NewCodec) that may itself
+	// call Stop.
+	mu sync.Mutex
+	// beforeRegister, when set, runs after the running check and before the
+	// codec is registered. Tests use it to hold admission at that point.
+	beforeRegister func()
 }
 
 // NewServer creates a new server instance with no registered handlers.
 func NewServer() *Server {
-	server := &Server{idgen: randomIDGenerator(), codecs: mapset.NewSet(), run: 1}
+	server := &Server{idgen: randomIDGenerator(), codecs: mapset.NewSet(), run: 1, maxSubscriptionsPerConn: DefaultMaxSubscriptionsPerConn}
 	// Register the default service providing meta information about the RPC service such
 	// as the services and methods it offers.
 	rpcService := &RPCService{server}
 	server.RegisterName(MetadataApi, rpcService)
 	return server
+}
+
+// SetMaxSubscriptionsPerConn sets how many server subscriptions one connection
+// may hold at a time. It applies to connections served after the call, so it
+// is meant to be called once, before the server is handed to a transport. A
+// value below one restores DefaultMaxSubscriptionsPerConn.
+func (s *Server) SetMaxSubscriptionsPerConn(n int) {
+	if n < 1 {
+		n = DefaultMaxSubscriptionsPerConn
+	}
+	s.maxSubscriptionsPerConn = n
+}
+
+// MaxSubscriptionsPerConn reports the subscription budget given to each
+// connection.
+func (s *Server) MaxSubscriptionsPerConn() int {
+	return s.maxSubscriptionsPerConn
 }
 
 // RegisterName creates a service for the given receiver type under the given name. When no
@@ -72,20 +104,45 @@ func (s *Server) RegisterName(name string, receiver interface{}) error {
 //
 // Note that codec options are no longer supported.
 func (s *Server) ServeCodec(codec ServerCodec, options CodecOption) {
+	if !s.trackCodec(codec) {
+		codec.close()
+		return
+	}
+	// Deferred in this order so the codec is closed before it leaves the set
+	// on every exit path, not only the normal one below, which waits on
+	// codec.closed() before either deferred call runs.
+	defer s.untrackCodec(codec)
 	defer codec.close()
+
+	c := initClient(codec, s.idgen, &s.services, s.maxSubscriptionsPerConn)
+	<-codec.closed()
+	c.Close()
+}
+
+// trackCodec registers codec so that Stop can close it. It reports false,
+// leaving codec unregistered, when the server has stopped. The check and the
+// registration happen under s.mu, which Stop also holds while it takes its
+// view of the set, so a codec cannot slip in between that view and its own
+// registration.
+func (s *Server) trackCodec(codec ServerCodec) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// Don't serve if server is stopped.
 	if atomic.LoadInt32(&s.run) == 0 {
-		return
+		return false
 	}
-
-	// Add the codec to the set so it can be closed by Stop.
+	if s.beforeRegister != nil {
+		s.beforeRegister()
+	}
 	s.codecs.Add(codec)
-	defer s.codecs.Remove(codec)
+	return true
+}
 
-	c := initClient(codec, s.idgen, &s.services)
-	<-codec.closed()
-	c.Close()
+func (s *Server) untrackCodec(codec ServerCodec) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.codecs.Remove(codec)
 }
 
 // serveSingleRequest reads and processes a single RPC request from the given codec. This
@@ -97,13 +154,15 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 		return
 	}
 
-	h := newHandler(ctx, codec, s.idgen, &s.services)
+	h := newHandler(ctx, codec, s.idgen, &s.services, s.maxSubscriptionsPerConn)
 	h.allowSubscribe = false
 	defer h.close(io.EOF, nil)
 
 	reqs, batch, err := codec.readBatch()
 	if err != nil {
-		if err != io.EOF {
+		if err == errBatchTooLarge {
+			_ = codec.writeJSON(ctx, errorMessage(err))
+		} else if err != io.EOF {
 			codec.writeJSON(ctx, errorMessage(&invalidMessageError{"parse error"}))
 		}
 		return
@@ -115,16 +174,30 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 	}
 }
 
-// Stop stops reading new requests, waits for stopPendingRequestTimeout to allow pending
-// requests to finish, then closes all codecs which will cancel pending requests and
-// subscriptions.
+// Stop stops admitting new codecs and closes every codec registered before it
+// took its snapshot of the set, which cancels their pending requests and
+// subscriptions. The call that moves the server to stopped returns once it
+// has issued those closes; it does not wait for the serving goroutines to
+// observe them and leave the set. Any other call, whether concurrent with
+// that one or re-entered from the code it runs, returns at once and may do so
+// before those closes have been issued.
 func (s *Server) Stop() {
-	if atomic.CompareAndSwapInt32(&s.run, 1, 0) {
-		log.Debug("RPC server shutting down")
-		s.codecs.Each(func(c interface{}) bool {
-			c.(ServerCodec).close()
-			return true
-		})
+	s.mu.Lock()
+	if !atomic.CompareAndSwapInt32(&s.run, 1, 0) {
+		s.mu.Unlock()
+		return
+	}
+	codecs := s.codecs.ToSlice()
+	s.mu.Unlock()
+
+	// Every codec still registered at this point is in codecs: later arrivals
+	// see the flag cleared under s.mu and are refused, and one that removed
+	// itself has already been closed. Logging and closing happen outside the
+	// lock because both run caller-supplied code (a log handler, a codec's
+	// Conn) that may call back into Stop, which now returns at the flag.
+	log.Debug("RPC server shutting down")
+	for _, c := range codecs {
+		c.(ServerCodec).close()
 	}
 }
 

@@ -16,7 +16,7 @@
 
 // Contains the meters and timers used by the networking layer.
 
-package p2p
+package legacy
 
 import (
 	"net"

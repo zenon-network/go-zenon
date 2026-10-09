@@ -104,7 +104,7 @@ func (ct *chainTicker) GetContent(tick uint64) ([]*nom.Momentum, error) {
 
 		// make sure proof is right
 		if endBlock.Hash != blocks[len(blocks)-1].Hash {
-			return nil, errors.Errorf("chainTicker.GetContent failed expects %v but got %v", endBlock.Hash, blocks[0].Hash)
+			return nil, errors.Errorf("chainTicker.GetContent failed expects %v but got %v", endBlock.Hash, blocks[len(blocks)-1].Hash)
 		}
 		return blocks, nil
 	} else {

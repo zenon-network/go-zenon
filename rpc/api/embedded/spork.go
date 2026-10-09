@@ -1,12 +1,8 @@
 package embedded
 
 import (
-	"github.com/inconshreveable/log15"
-
 	"github.com/zenon-network/go-zenon/chain"
-	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
-	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/zenon"
@@ -14,17 +10,11 @@ import (
 
 type SporkApi struct {
 	chain chain.Chain
-	z     zenon.Zenon
-	cs    consensus.Consensus
-	log   log15.Logger
 }
 
 func NewSporkApi(z zenon.Zenon) *SporkApi {
 	return &SporkApi{
 		chain: z.Chain(),
-		z:     z,
-		cs:    z.Consensus(),
-		log:   common.RPCLogger.New("module", "embedded_spork_api"),
 	}
 }
 

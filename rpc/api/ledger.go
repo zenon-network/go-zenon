@@ -58,6 +58,9 @@ func (l *LedgerApi) PublishRawTransaction(block *AccountBlock) error {
 		return err
 	}
 	m, err := l.chain.GetFrontierMomentumStore().GetFrontierMomentum()
+	if err != nil {
+		return err
+	}
 	if m == nil {
 		return errors.New("failed to get latest momentum")
 	}
@@ -69,8 +72,7 @@ func (l *LedgerApi) PublishRawTransaction(block *AccountBlock) error {
 		return err
 	}
 
-	l.z.Broadcaster().CreateAccountBlock(transaction)
-	return nil
+	return l.z.Broadcaster().CreateAccountBlock(transaction)
 }
 
 // Unconfirmed AccountBlocks
@@ -198,6 +200,10 @@ func (l *LedgerApi) GetAccountBlocksByPage(address types.Address, pageIndex, pag
 	for i, j := 0, len(ans.List)-1; i < j; i, j = i+1, j-1 {
 		ans.List[i], ans.List[j] = ans.List[j], ans.List[i]
 	}
+
+	// Set More to true if there are more pages available (startHeight > 1 means we haven't reached the first block)
+	ans.More = startHeight > 1
+
 	return ans, nil
 }
 func (l *LedgerApi) GetAccountInfoByAddress(address types.Address) (*AccountInfo, error) {

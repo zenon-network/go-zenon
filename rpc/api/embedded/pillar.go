@@ -233,7 +233,7 @@ func (a *PillarApi) GetAll(pageIndex, pageSize uint32) (*PillarInfoList, error) 
 			pillarStat, ok := stats.Pillars[pillar.Name]
 			if ok {
 				pillar.CurrentStats.ProducedMomentums = pillarStat.BlockNum
-				pillar.CurrentStats.ExpectedMomentums = pillarStat.ExceptedBlockNum
+				pillar.CurrentStats.ExpectedMomentums = pillarStat.ExpectedBlockNum
 			}
 		}
 	}

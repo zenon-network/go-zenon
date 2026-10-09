@@ -24,9 +24,35 @@ const (
 
 	DefaultNetDirName        = "network"
 	DefaultNetPrivateKeyFile = "network-private-key"
+
+	// DefaultPeerstoreDirName is the conventional subdirectory under
+	// the network data dir where the libp2p backend keeps its peer
+	// database (a LevelDB database; see p2p/libp2p/peerdb.go). Sits
+	// alongside the legacy nodeDb but is independent from it.
+	DefaultPeerstoreDirName = "libp2p-peerstore"
 )
 
 var (
+	// DefaultBootstrapPeers contains the libp2p bootstrap peers used after
+	// the libp2p activation spork enforces. Entries are multiaddr strings,
+	// e.g. /ip4/<ip>/tcp/35995/p2p/<peer-id>.
+	//
+	// Ships empty by default: the community operators who run the libp2p
+	// bootstrap infrastructure populate this list as part of the binary
+	// release that ships ahead of the activation block. Operators may
+	// override the list via the Net.BootstrapPeers field in config.json.
+	DefaultBootstrapPeers = []string{
+		// populated as community operators stand up libp2p infrastructure
+	}
+
+	// DefaultSeeders contains the legacy (devp2p/RLPX) mainnet bootstrap
+	// peers in enode:// format. These remain in service until the libp2p
+	// activation spork enforces; after that the legacy backend is torn
+	// down and these entries become unused.
+	//
+	// They are kept here (rather than moved to a "legacy" package) so an
+	// operator's existing config.json (which references the Net.Seeders
+	// field) continues to work without modification across the upgrade.
 	DefaultSeeders = []string{
 		"enode://f0e3e1f507c7cc5a2d2cf0eb173c204c820786c7cecbc0118d1cf76e5eaba90348ce57e5c9dee35c27a40f5a44dafc61b8996f00bb33647c66f66c997ce6592b@206.188.197.194:35995",
 		"enode://b65fcbc62293e21ed026f922b986bec16c70dc44de79a11eaaba5650579bd9e5e43630aa0a12eb689dc644b4ccc593fa6e64f189fd892c11eb22917fe46120b6@139.177.178.226:35995",
@@ -147,6 +173,22 @@ var (
 	}
 )
 
+// P2PBackend selects which transport backend the switcher starts.
+type P2PBackend string
+
+const (
+	// P2PBackendAuto is the default: the switcher picks legacy or libp2p
+	// based on the spork oracle, and swaps when activation fires.
+	P2PBackendAuto P2PBackend = "auto"
+	// P2PBackendLibp2p starts the libp2p backend directly, skipping the
+	// oracle check and the activation watcher. Used by fresh nodes joining
+	// a network where the libp2p spork has already activated (issue #105).
+	P2PBackendLibp2p P2PBackend = "libp2p"
+	// P2PBackendLegacy starts the legacy backend and never swaps. Used
+	// on networks where the libp2p spork has not been scheduled.
+	P2PBackendLegacy P2PBackend = "legacy"
+)
+
 type Net struct {
 	// This field must be set to a valid secp256k1 private key.
 	privateKey *ecdsa.PrivateKey
@@ -163,19 +205,63 @@ type Net struct {
 	// MinConnectedPeers is the minimum number of peers that can be connected
 	MinConnectedPeers int
 
-	// MaxPendingPeers is the maximum number of peers that can be pending in the
-	// handshake phase, counted separately for inbound and outbound connections.
-	// Zero defaults to preset values.
+	// MaxPendingPeers is the maximum number of inbound peers that can be
+	// pending in the handshake phase. Zero defaults to preset values.
 	MaxPendingPeers int
 
 	// Name sets the node name of this server.
 	Name string
 
+	// Seeders are the legacy (devp2p/RLPX) bootstrap peers in enode://
+	// format. Used by the legacy backend until the libp2p activation
+	// spork enforces. Existing operator configs populate this field.
 	Seeders []string
+
+	// BootstrapPeers are the libp2p bootstrap peers in multiaddr format,
+	// e.g. /ip4/<ip>/tcp/35995/p2p/<peer-id>. Used by the libp2p backend
+	// once the activation spork enforces. New field added in the
+	// spork-gated rollout; existing configs that omit it fall back to
+	// DefaultBootstrapPeers.
+	BootstrapPeers []string
+
+	// NATPortMap enables UPnP / NAT-PMP port mapping in the libp2p
+	// backend. Defaults to false to match the pre-libp2p network's
+	// behaviour: the legacy backend's NAT field was unset in the wiring
+	// path, so port mapping was effectively off. Home operators behind
+	// a NATting router can set this to true; data-center operators
+	// should leave it false to avoid pointless UPnP probes leaving
+	// their host.
+	NATPortMap bool
+
+	// PeerstoreDir is the on-disk path for the libp2p backend's peer
+	// database. When set, every peer that completes a Zenon handshake
+	// is recorded (with its dialable addresses and a last-seen stamp,
+	// expiring after 30 days unseen) and on startup a "warm bootstrap"
+	// redials the most recently seen of them in parallel with the
+	// configured BootstrapPeers, drastically reducing dependence on
+	// the bootstrap-node list staying current. Empty string disables
+	// peer persistence — every restart is a cold start.
+	//
+	// Conventionally set to <DataPath>/network/libp2p-peerstore/ by
+	// node/config.go, alongside the legacy nodeDb at
+	// <DataPath>/network/. The two databases are independent —
+	// migration of legacy entries to the libp2p format is not
+	// attempted because the peer.ID encoding differs and the dial
+	// endpoints (TCP vs RLPX) are incompatible.
+	PeerstoreDir string
 
 	// NodeDatabase is the path to the database containing the previously seen
 	// live nodes in the network.
 	NodeDatabase string
+
+	// P2PBackend overrides the spork-oracle backend selection.
+	// "auto" (default) keeps the current behavior: legacy before
+	// activation, swap to libp2p when the spork enforces.
+	// "libp2p" starts libp2p unconditionally — used by fresh nodes
+	// joining a post-activation network (issue #105).
+	// "legacy" starts legacy and never swaps.
+	// Unknown values are rejected at startup.
+	P2PBackend P2PBackend
 
 	// If ListenAddr is set to a non-nil address, the server
 	// will listen for incoming connections.

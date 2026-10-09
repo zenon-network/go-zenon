@@ -349,7 +349,7 @@ func (p *UpdateEmbeddedAcceleratorMethod) ReceiveBlock(context vm_context.Accoun
 			// Check if project voting period has ended
 			if project.CreationTimestamp+constants.AcceleratorProjectVotingPeriod >= frontierMomentum.Timestamp.Unix() {
 				ok := checkAcceleratorVotes(context, project.Id, numPillars)
-				acceleratorLog.Debug("project passed voting period", "project-id", project.Id, "passed-votes", ok)
+				acceleratorLog.Debug("project in voting period", "project-id", project.Id, "passed-votes", ok)
 				if ok {
 					project.Status = definition.ActiveStatus
 					project.LastUpdateTimestamp = frontierMomentum.Timestamp.Unix()

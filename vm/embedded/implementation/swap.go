@@ -124,8 +124,8 @@ func (p *SwapRetrieveAssetsMethod) ReceiveBlock(context vm_context.AccountVmCont
 		})
 	}
 
-	deposit.Znn = common.Big0
-	deposit.Qsr = common.Big0
+	deposit.Znn = big.NewInt(0)
+	deposit.Qsr = big.NewInt(0)
 	common.DealWithErr(deposit.Save(context.Storage()))
 
 	return result, nil

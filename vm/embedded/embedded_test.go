@@ -7,11 +7,25 @@ import (
 	"testing"
 
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/types"
 )
+
+// getAllEmbedded returns the fully merged contract map with all spork
+// diffs applied, for tests that introspect the complete set of contract
+// methods.
+func getAllEmbedded() map[types.Address]*embeddedImplementation {
+	contractsMap := getOrigin()
+	applyAcceleratorDiffs(contractsMap)
+	applyBridgeAndLiquidityDiffs(contractsMap)
+	applyHtlcDiffs(contractsMap)
+	applyDynamicPlasmaDiffs(contractsMap)
+	applyPtlcDiffs(contractsMap)
+	return contractsMap
+}
 
 func TestDumpContractsABIMethods(t *testing.T) {
 	dumps := make([]string, 0)
-	for addr, contract := range ptlcEmbedded {
+	for addr, contract := range getAllEmbedded() {
 		for _, method := range contract.abi.Methods {
 			dumps = append(dumps, fmt.Sprintf(`{"address":"%v", "name":"%v", "id":"%v", "signature":"%v"}`, addr, method.Name, hex.EncodeToString(method.Id()), method.Sig()))
 		}
@@ -79,6 +93,7 @@ func TestDumpContractsABIMethods(t *testing.T) {
 {"address":"z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae", "name":"Update", "id":"20093ea6", "signature":"Update()"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"CancelFuse", "id":"f9ca9dc3", "signature":"CancelFuse(hash)"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"Fuse", "id":"5ac942e8", "signature":"Fuse(address)"}
+{"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"SetVariables", "id":"15db3894", "signature":"SetVariables(uint64,uint64,uint64,uint8,uint8)"}
 {"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"Create", "id":"22cec8ee", "signature":"Create(int64,uint8,bytes,address)"}
 {"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"ProxyUnlock", "id":"8bffc216", "signature":"ProxyUnlock(hash,address,bytes)"}
 {"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"Reclaim", "id":"7e003c8d", "signature":"Reclaim(hash)"}

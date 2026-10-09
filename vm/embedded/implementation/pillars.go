@@ -51,10 +51,10 @@ func checkAvailableProducingAddress(context vm_context.AccountVmContext, produci
 }
 
 func checkPillarPercentages(param *definition.RegisterParam) error {
-	if param.GiveBlockRewardPercentage > 100 || param.GiveBlockRewardPercentage < 0 {
+	if param.GiveBlockRewardPercentage > 100 {
 		return constants.ErrForbiddenParam
 	}
-	if param.GiveDelegateRewardPercentage > 100 || param.GiveDelegateRewardPercentage < 0 {
+	if param.GiveDelegateRewardPercentage > 100 {
 		return constants.ErrForbiddenParam
 	}
 	return nil
@@ -370,7 +370,6 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 		return err
 	}
 
-	distributed := make(map[types.Address]*big.Int)
 	toGive := make(map[string]*big.Int)
 	pillarInfos, err := definition.GetPillarsList(context.Storage(), false, definition.AnyPillarType)
 
@@ -420,7 +419,7 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 		addReward(context, epoch, definition.RewardDeposit{
 			Address: &pillar.RewardWithdrawAddress,
 			Znn:     new(big.Int).Sub(reward.TotalReward, toGiveN),
-			Qsr:     common.Big0,
+			Qsr:     big.NewInt(0),
 		})
 	}
 
@@ -449,7 +448,7 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 					addReward(context, epoch, definition.RewardDeposit{
 						Address: &pillar.RewardWithdrawAddress,
 						Znn:     toBackers,
-						Qsr:     common.Big0,
+						Qsr:     big.NewInt(0),
 					})
 					break
 				}
@@ -465,21 +464,9 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 			addReward(context, epoch, definition.RewardDeposit{
 				Address: &address,
 				Znn:     toBacker,
-				Qsr:     common.Big0,
+				Qsr:     big.NewInt(0),
 			})
 		}
-	}
-
-	// for debug, sort keys and print distributed map
-	distributedAddresses := make([]string, 0, len(distributed))
-	for address := range distributed {
-		distributedAddresses = append(distributedAddresses, address.String())
-	}
-	sort.Strings(distributedAddresses)
-	for _, address := range distributedAddresses {
-		raw, _ := types.ParseAddress(address)
-		amount, _ := distributed[raw]
-		pillarLog.Debug("distribute pillar rewards", "epoch", epoch, "address", address, "amount", amount)
 	}
 
 	return nil
@@ -515,15 +502,19 @@ func computePillarRewardForEpoch(detail *api.EpochStats, name string) *pillarEpo
 		TotalReward:      big.NewInt(0),
 		ProducedBlockNum: 0,
 		ExpectedBlockNum: 0,
-		Weight:           new(big.Int).Set(detail.Pillars[name].Weight),
+		Weight:           big.NewInt(0),
 	}
-	if !ok || selfDetail.ExceptedBlockNum == 0 {
+	if !ok {
+		return reward
+	}
+	reward.Weight.Set(selfDetail.Weight)
+	if selfDetail.ExpectedBlockNum == 0 {
 		return reward
 	}
 
 	var totalExpectedBlockNum uint64 = 0
 	for _, detail := range detail.Pillars {
-		totalExpectedBlockNum += detail.ExceptedBlockNum
+		totalExpectedBlockNum += detail.ExpectedBlockNum
 	}
 
 	// reward = DelegationRewardsPerBlock * totalExpectedBlocks * (selfProducedBlockNum / expectedBlockNum) * (weight / totalWeight)
@@ -539,7 +530,7 @@ func computePillarRewardForEpoch(detail *api.EpochStats, name string) *pillarEpo
 		reward.DelegationReward.Mul(reward.DelegationReward, selfDetail.Weight)
 		tmp.SetUint64(totalExpectedBlockNum)
 		reward.DelegationReward.Mul(reward.DelegationReward, tmp)
-		tmp.SetUint64(selfDetail.ExceptedBlockNum)
+		tmp.SetUint64(selfDetail.ExpectedBlockNum)
 		reward.DelegationReward.Quo(reward.DelegationReward, tmp)
 		reward.DelegationReward.Quo(reward.DelegationReward, detail.TotalWeight)
 	}
@@ -550,7 +541,7 @@ func computePillarRewardForEpoch(detail *api.EpochStats, name string) *pillarEpo
 
 	reward.TotalReward.Add(reward.BlockReward, reward.DelegationReward)
 	reward.ProducedBlockNum = int32(selfDetail.BlockNum)
-	reward.ExpectedBlockNum = int32(selfDetail.ExceptedBlockNum)
+	reward.ExpectedBlockNum = int32(selfDetail.ExpectedBlockNum)
 
 	pillarLog.Debug("computer pillar-reward", "epoch", detail.Epoch, "pillar-name", name, "reward", reward, "total-weight", detail.TotalWeight, "self-weight", selfDetail.Weight)
 	return reward

@@ -14,4 +14,28 @@ make znnd
 
 Since version `0.0.2`, `znnd` is configured with the Alphanet Genesis and default seeders.
 
+`--host` sets the P2P listen host (`Net.ListenHost`) and does not configure RPC; use `--http-addr` for HTTP JSON-RPC and `--ws-addr` for WebSocket RPC. On earlier versions `--host X` set the HTTP-RPC host instead: replace that use with `--http-addr X`, and pass `--host X` only when P2P should bind to `X`.
+
 Use [znn-controller](https://github.com/zenon-network/znn_controller_dart) to configure your full node. For more information please consult the [Wiki](https://github.com/zenon-network/znn-wiki).
+
+By default the HTTP (`35997`) and WebSocket (`35998`) JSON-RPC servers listen on `127.0.0.1` only. The HTTP server sends no CORS headers, so browsers do not let pages from other origins read its responses. The WebSocket server accepts connections that carry no `Origin` header (wallets, CLI tools, SDKs) and browser pages served from `http://localhost` or `http://<machine hostname>` on any port; it rejects every other origin, including `http://127.0.0.1:<port>` and `https://localhost`. Neither check is authentication: any process that can connect to the port can call the API. To serve other hosts, set `RPC.HTTPHost` / `RPC.WSHost` in `config.json` (or pass `--http-addr` / `--ws-addr`), and list the browser origins that need access in `RPC.HTTPCors` / `RPC.WSOrigins`. At startup `znnd` prints a warning in its status output and logs one with the same content to `<data>/log/zenon.log`, per protocol on each listener bound to a non-loopback address, per wildcard origin list, and when `RPC.HTTPVirtualHosts` contains `*` (a page that rebinds a DNS name to the node's address is then same-origin with it); put a firewall or a proxy in front of a public endpoint.
+
+## Local devnet
+
+This branch includes a dockerized five-node local devnet with three
+producing pillars, one public RPC ingress node, and one non-pillar observer
+node for relay/sync coverage.
+
+```shell
+make devnet-up      # start the local docker devnet
+make devnet-down    # stop and wipe local devnet state
+make devnet-keys    # regenerate committed devnet configs/keys
+```
+
+The public endpoints are `http://localhost:35997` for HTTP JSON-RPC and
+`ws://localhost:35998` for WebSocket RPC. Pillar 1 also exposes HTTP RPC at
+`http://localhost:35991` for producer-path debugging. The local explorer is
+served at `http://localhost:36000` and is preconfigured to use the public
+devnet RPC endpoint.
+
+More detail: [docker/devnet/README.md](docker/devnet/README.md).

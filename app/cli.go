@@ -31,6 +31,11 @@ func Run() {
 }
 
 func Stop() {
+	// exported for libznn; a consumer may call Stop before Run assigned the
+	// manager, which would otherwise nil-deref inside Manager.Stop
+	if nodeManager == nil {
+		return
+	}
 	err := nodeManager.Stop()
 	common.DealWithErr(err)
 	fmt.Println("znnd successfully stopped")

@@ -13,7 +13,7 @@ import (
 
 func canPerformEmbeddedUpdate(momentumStore store.Momentum, pool chain.AccountPool, contract types.Address) error {
 	store := pool.GetFrontierAccountStore(contract)
-	context := vm_context.NewAccountContext(momentumStore, store, nil)
+	context := vm_context.NewAccountContext(momentumStore, store, nil, nil)
 	return implementation.CanPerformUpdate(context)
 }
 
@@ -28,8 +28,8 @@ func (w *worker) updateContracts(momentumStore store.Momentum) error {
 				Data:      definition.ABICommon.PackMethodPanic(definition.UpdateMethodName),
 			}, w.coinbase.Signer); err != nil {
 				return err
-			} else {
-				w.broadcaster.CreateAccountBlock(block)
+			} else if err := w.broadcaster.CreateAccountBlock(block); err != nil {
+				w.log.Error("unable to insert update block for embedded-contract", "contract-address", address, "reason", err)
 			}
 		} else if err == constants.ErrUpdateTooRecent || err == constants.ErrContractMethodNotFound {
 		} else {

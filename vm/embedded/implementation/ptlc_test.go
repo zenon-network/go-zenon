@@ -501,6 +501,10 @@ func newTestPtlcContext(chainIdentifier uint64, timestamp int64) *testPtlcContex
 	}
 }
 
+func (ctx *testPtlcContext) CacheStore() store.Cache {
+	return nil
+}
+
 func (ctx *testPtlcContext) MomentumStore() store.Momentum {
 	return nil
 }
@@ -530,6 +534,10 @@ func (ctx *testPtlcContext) IsBridgeAndLiquiditySporkEnforced() bool {
 
 func (ctx *testPtlcContext) IsHtlcSporkEnforced() bool {
 	return true
+}
+
+func (ctx *testPtlcContext) IsDynamicPlasmaSporkEnforced() bool {
+	return false
 }
 
 func (ctx *testPtlcContext) IsPtlcSporkEnforced() bool {

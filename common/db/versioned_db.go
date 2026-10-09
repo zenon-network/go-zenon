@@ -51,6 +51,11 @@ type Manager interface {
 	Add(Transaction) error
 	Pop() error
 
+	// Stop releases the manager's resources. It is idempotent: the first call
+	// releases them and reports any error from doing so, every later call is
+	// a no-op that returns nil, so callers may stop a manager unconditionally
+	// (for example from a test cleanup next to an explicit Stop). After Stop,
+	// Frontier and Get return nil and Add and Pop return an error.
 	Stop() error
 	Location() string
 }
@@ -64,6 +69,7 @@ type memdbManager struct {
 	patches            map[types.HashHeight]Patch
 
 	changes sync.Mutex
+	stopped bool
 }
 
 func NewMemDBManager(rawDB DB) Manager {
@@ -103,8 +109,14 @@ func (m *memdbManager) Add(transaction Transaction) error {
 	previous := commits[0].Previous()
 	head := commits[len(commits)-1].Identifier()
 
-	if previous != m.frontierIdentifier {
-		return errors.Errorf("can't insert identifier %v. previous doesn't match with current frontier %v", head, m.frontierIdentifier)
+	m.changes.Lock()
+	stopped, frontierIdentifier := m.stopped, m.frontierIdentifier
+	m.changes.Unlock()
+	if stopped {
+		return errors.Errorf("can't add transaction to stopped db")
+	}
+	if previous != frontierIdentifier {
+		return errors.Errorf("can't insert identifier %v. previous doesn't match with current frontier %v", head, frontierIdentifier)
 	}
 
 	// apply transaction on db
@@ -138,6 +150,15 @@ func (m *memdbManager) Add(transaction Transaction) error {
 
 	m.changes.Lock()
 	defer m.changes.Unlock()
+	if m.stopped {
+		return errors.Errorf("can't add transaction to stopped db")
+	}
+	// Re-check the frontier under the lock the new state is published
+	// with: another Add with the same previous may have committed while
+	// this one was building its patch.
+	if previous != m.frontierIdentifier {
+		return errors.Errorf("can't insert identifier %v. previous doesn't match with current frontier %v", head, m.frontierIdentifier)
+	}
 
 	m.frontierIdentifier = head
 	m.previous[head] = previous
@@ -154,13 +175,16 @@ func (m *memdbManager) Add(transaction Transaction) error {
 func (m *memdbManager) Pop() error {
 	m.changes.Lock()
 	defer m.changes.Unlock()
+	if m.stopped {
+		return errors.Errorf("can't pop stopped db")
+	}
 	if m.stableIdentifier == m.frontierIdentifier {
 		return errors.Errorf("can't rollback stable db")
 	}
 
 	previous, ok := m.previous[m.frontierIdentifier]
 	if !ok {
-		return errors.Errorf("can't find previous for ")
+		return errors.Errorf("can't find previous for %v", m.frontierIdentifier)
 	}
 
 	delete(m.previous, m.frontierIdentifier)
@@ -170,7 +194,14 @@ func (m *memdbManager) Pop() error {
 	return nil
 }
 func (m *memdbManager) Stop() error {
+	m.changes.Lock()
+	defer m.changes.Unlock()
+	if m.stopped {
+		return nil
+	}
+	m.stopped = true
 	m.frontierIdentifier = types.ZeroHashHeight
+	m.previous = nil
 	m.versions = nil
 	m.patches = nil
 	return nil
@@ -189,6 +220,7 @@ type ldbManager struct {
 	l1Cache  *lru.Cache
 	l2Cache  *lru.Cache
 	ldb      *leveldb.DB
+	write    func(*leveldb.Batch) error
 	changes  sync.Mutex
 	stopped  bool
 }
@@ -206,6 +238,9 @@ func NewLevelDBManager(dir string) Manager {
 		l1Cache:  l1Cache,
 		l2Cache:  l2Cache,
 		ldb:      ldb,
+		write: func(batch *leveldb.Batch) error {
+			return ldb.Write(batch, nil)
+		},
 	}
 }
 
@@ -286,7 +321,7 @@ func (m *ldbManager) Get(identifier types.HashHeight) DB {
 				newSubDB(frontierByte, newLevelDBSnapshotWrapper(snapshot)),
 			})),
 	})
-	return enableDelete(u)
+	return enableDelete(u, false)
 }
 func (m *ldbManager) GetPatch(identifier types.HashHeight) Patch {
 	m.changes.Lock()
@@ -354,52 +389,78 @@ func (m *ldbManager) Add(transaction Transaction) error {
 	}
 
 	rollbackPatch := RollbackPatch(db, patch)
+	batch := new(leveldb.Batch)
+	batch.Put(common.JoinBytes(patchByte, common.Uint64ToBytes(identifier.Height)), patch.Dump())
+	batch.Put(common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height)), rollbackPatch.Dump())
+	if err := AppendPatchToLevelDBBatch(batch, frontierByte, patch, false); err != nil {
+		return err
+	}
 
 	m.changes.Lock()
 	defer m.changes.Unlock()
-
-	frontierIdentifier := GetFrontierIdentifier(db)
-
-	if previous == frontierIdentifier {
-		if err := m.ldb.Put(common.JoinBytes(patchByte, common.Uint64ToBytes(identifier.Height)), patch.Dump(), nil); err != nil {
-			return err
-		}
-		if err := m.ldb.Put(common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height)), rollbackPatch.Dump(), nil); err != nil {
-			return err
-		}
-		if err := ApplyPatch(NewLevelDBWrapper(m.ldb).Subset(frontierByte), patch); err != nil {
-			return err
-		}
+	if m.stopped {
+		return errors.Errorf("can't add transaction to stopped db")
 	}
-	return nil
+
+	// Compare against the real disk frontier; `db` is a historical view at
+	// `previous`, so its own frontier identifier always equals `previous`.
+	frontierIdentifier := GetFrontierIdentifier(NewLevelDBWrapper(m.ldb).Subset(frontierByte))
+	if previous != frontierIdentifier {
+		return errors.Errorf("can't insert identifier %v. previous %v doesn't match with current frontier %v", identifier, previous, frontierIdentifier)
+	}
+	return m.write(batch)
 }
 func (m *ldbManager) Pop() error {
-	frontierIdentifier := GetFrontierIdentifier(m.Frontier())
-	rollbackPatch := m.getRollback(frontierIdentifier.Height)
-
-	if err := ApplyPatch(NewLevelDBWrapper(m.ldb).Subset(frontierByte), rollbackPatch); err != nil {
-		return err
-	}
-	if err := m.ldb.Delete(common.JoinBytes(patchByte, common.Uint64ToBytes(frontierIdentifier.Height)), nil); err != nil {
-		return err
-	}
-	if err := m.ldb.Delete(common.JoinBytes(rollbackByte, common.Uint64ToBytes(frontierIdentifier.Height)), nil); err != nil {
-		return err
+	m.changes.Lock()
+	defer m.changes.Unlock()
+	if m.stopped {
+		return errors.Errorf("can't pop stopped db")
 	}
 
+	frontierIdentifier := GetFrontierIdentifier(NewLevelDBWrapper(m.ldb).Subset(frontierByte))
+	rollbackData, err := m.ldb.Get(common.JoinBytes(rollbackByte, common.Uint64ToBytes(frontierIdentifier.Height)), nil)
+	if err != nil {
+		return err
+	}
+	rollbackPatch, err := NewPatchFromDump(rollbackData)
+	if err != nil {
+		return err
+	}
+
+	batch := new(leveldb.Batch)
+	if err := AppendPatchToLevelDBBatch(batch, frontierByte, rollbackPatch, false); err != nil {
+		return err
+	}
+	batch.Delete(common.JoinBytes(patchByte, common.Uint64ToBytes(frontierIdentifier.Height)))
+	batch.Delete(common.JoinBytes(rollbackByte, common.Uint64ToBytes(frontierIdentifier.Height)))
+	if err := m.write(batch); err != nil {
+		return err
+	}
+	// Each cached overlay records the frontier it was built against and Get
+	// replays only the rollbacks above that height. The frontier now sits
+	// below every cached one and the next Add reuses the popped height, so
+	// an overlay kept here would skip the rollbacks of whatever is added
+	// there and show that branch's writes at its identifier.
+	m.l1Cache.Purge()
+	m.l2Cache.Purge()
 	return nil
 }
 func (m *ldbManager) Stop() error {
 	m.changes.Lock()
 	defer m.changes.Unlock()
-	if err := m.ldb.Close(); err != nil {
-		return err
+	// A second Stop is a no-op: the handle is already closed and nil.
+	if m.stopped {
+		return nil
 	}
+	// goleveldb marks the handle closed before it does any work and answers
+	// every later call with ErrClosed, so the manager is stopped whatever
+	// Close returns; only the error is reported.
+	err := m.ldb.Close()
 	m.stopped = true
 	m.ldb = nil
 	m.l1Cache = nil
 	m.l2Cache = nil
-	return nil
+	return err
 }
 func (m *ldbManager) Location() string {
 	return m.location

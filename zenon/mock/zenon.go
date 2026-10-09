@@ -11,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/zenon-network/go-zenon/chain"
+	cache "github.com/zenon-network/go-zenon/chain/cache/storage"
 	"github.com/zenon-network/go-zenon/chain/genesis"
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
 	"github.com/zenon-network/go-zenon/chain/nom"
@@ -22,7 +23,6 @@ import (
 	"github.com/zenon-network/go-zenon/protocol"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm"
-	"github.com/zenon-network/go-zenon/vm/vm_context"
 	"github.com/zenon-network/go-zenon/zenon"
 )
 
@@ -36,6 +36,7 @@ balance`
 var AllLoggers = []common.Logger{
 	common.ZenonLogger,
 	common.ChainLogger,
+	common.ConsensusLogger,
 	common.SupervisorLogger,
 	common.P2PLogger,
 	common.PillarLogger,
@@ -130,6 +131,16 @@ type mockZenon struct {
 	loggers              []log15.Logger
 	handlers             []log15.Handler
 	initialEpochDuration time.Duration
+	initialClock         common.ClockType
+
+	// failInsertFor, when non-nil, makes CreateAccountBlock reject every
+	// block for that account address with an injected error instead of
+	// inserting it. Test-only fault injection for the pillar worker's
+	// insert-failure handling. Set it before the momentum round that
+	// should observe the failure: InsertNewMomentum runs the worker on
+	// its own goroutine and waits for it, so a write from the test
+	// goroutine before that call is ordered ahead of every read.
+	failInsertFor *types.Address
 }
 
 func (zenon *mockZenon) SyncInfo() *protocol.SyncInfo {
@@ -142,10 +153,14 @@ func (zenon *mockZenon) SyncInfo() *protocol.SyncInfo {
 func (zenon *mockZenon) SyncState() protocol.SyncState {
 	return protocol.SyncDone
 }
-func (zenon *mockZenon) CreateMomentum(momentumTransaction *nom.MomentumTransaction) {
+func (zenon *mockZenon) CreateMomentum(momentumTransaction *nom.MomentumTransaction, detailed *nom.DetailedMomentum) {
 	insert := zenon.chain.AcquireInsert("mock-zenon create-momentum")
 	defer insert.Unlock()
-	err := zenon.chain.AddMomentumTransaction(insert, momentumTransaction)
+	err := zenon.chain.UpdateCache(insert, detailed, momentumTransaction.Changes)
+	if err != nil {
+		panic(fmt.Errorf("failed to insert own momentum to chain cache. reason:%w", err))
+	}
+	err = zenon.chain.AddMomentumTransaction(insert, momentumTransaction)
 	if err != nil {
 		panic(fmt.Errorf("failed to insert own momentum. reason:%w", err))
 	}
@@ -153,7 +168,10 @@ func (zenon *mockZenon) CreateMomentum(momentumTransaction *nom.MomentumTransact
 		zenon.log.Info("added block to momentum", "momentum-height", momentumTransaction.Momentum.Height, "identifier", block)
 	}
 }
-func (zenon *mockZenon) CreateAccountBlock(accountBlockTransaction *nom.AccountBlockTransaction) {
+func (zenon *mockZenon) CreateAccountBlock(accountBlockTransaction *nom.AccountBlockTransaction) error {
+	if zenon.failInsertFor != nil && accountBlockTransaction.Block.Address == *zenon.failInsertFor {
+		return fmt.Errorf("injected insert failure for %v", *zenon.failInsertFor)
+	}
 	insert := zenon.chain.AcquireInsert("mock-zenon create-account-block")
 	defer insert.Unlock()
 	err := zenon.chain.AddAccountBlockTransaction(insert, accountBlockTransaction)
@@ -165,6 +183,7 @@ func (zenon *mockZenon) CreateAccountBlock(accountBlockTransaction *nom.AccountB
 	if err != nil {
 		zenon.log.Error("failed to insert own account-block.", "reason", err)
 	}
+	return err
 }
 
 func (zenon *mockZenon) InsertNewMomentum() {
@@ -222,10 +241,24 @@ func (zenon *mockZenon) InsertSendBlock(template *nom.AccountBlock, expectedErro
 		if expectedVmChanges != SkipVmChanges {
 			common.ExpectString(zenon.t, db.DebugPatch(transaction.Changes), expectedVmChanges)
 		}
-		zenon.CreateAccountBlock(transaction)
+		common.FailIfErr(zenon.t, zenon.CreateAccountBlock(transaction))
 		return transaction.Block
 	}
 	return nil
+}
+
+// InsertSendBlockRejected generates a send block from template and
+// requires the account pool to reject it with expectedError. Its
+// counterpart InsertSendBlock requires the insert to succeed.
+func (zenon *mockZenon) InsertSendBlockRejected(template *nom.AccountBlock, expectedError error) {
+	template.BlockType = nom.BlockTypeUserSend
+	transaction, err := zenon.supervisor.GenerateFromTemplate(template, getSignFunc(template.Address))
+	common.FailIfErr(zenon.t, err)
+	// errors.Is, not common.ExpectError: the pool returns some rejections
+	// as-is and others wrapped with %w around a sentinel.
+	if err := zenon.CreateAccountBlock(transaction); !errors.Is(err, expectedError) {
+		zenon.t.Fatalf("expected block %v to be rejected with '%v' but got '%v'", transaction.Block.Header(), expectedError, err)
+	}
 }
 func (zenon *mockZenon) InsertReceiveBlock(fromHeader types.AccountHeader, template *nom.AccountBlock, expectedError error, expectedVmChanges string) *nom.AccountBlock {
 	store := zenon.chain.GetFrontierAccountStore(fromHeader.Address)
@@ -259,22 +292,10 @@ func (zenon *mockZenon) InsertReceiveBlock(fromHeader types.AccountHeader, templ
 		if expectedVmChanges != SkipVmChanges {
 			common.ExpectString(zenon.t, db.DebugPatch(transaction.Changes), expectedVmChanges)
 		}
-		zenon.CreateAccountBlock(transaction)
+		common.FailIfErr(zenon.t, zenon.CreateAccountBlock(transaction))
 		return transaction.Block
 	}
 	return nil
-}
-
-func (zenon *mockZenon) EmbeddedContext(address types.Address) vm_context.AccountVmContext {
-	momentumStore := zenon.chain.GetFrontierMomentumStore()
-	accountStore := zenon.chain.GetFrontierAccountStore(address)
-
-	return vm_context.NewAccountContext(
-		momentumStore,
-		accountStore,
-		zenon.consensus.FixedPillarReader(momentumStore.Identifier()),
-	)
-
 }
 
 func (zenon *mockZenon) SaveLogs(logger common.Logger) *common.Expecter {
@@ -282,6 +303,14 @@ func (zenon *mockZenon) SaveLogs(logger common.Logger) *common.Expecter {
 }
 func (zenon *mockZenon) ExpectBalance(address types.Address, standard types.ZenonTokenStandard, expected int64) {
 	amount, err := zenon.chain.GetFrontierAccountStore(address).GetBalance(standard)
+	common.FailIfErr(zenon.t, err)
+	if amount == nil {
+		amount = big.NewInt(0)
+	}
+	common.ExpectAmount(zenon.t, amount, big.NewInt(expected))
+}
+func (zenon *mockZenon) ExpectCacheFusedAmount(address types.Address, expected int64) {
+	amount, err := zenon.chain.GetFrontierCacheStore().GetStakeBeneficialAmount(address)
 	common.FailIfErr(zenon.t, err)
 	if amount == nil {
 		amount = big.NewInt(0)
@@ -323,6 +352,7 @@ func (zenon *mockZenon) Stop() error {
 	}
 
 	consensus.EpochDuration = zenon.initialEpochDuration
+	common.Clock = zenon.initialClock
 	return nil
 }
 func (zenon *mockZenon) StopPanic() {
@@ -360,13 +390,23 @@ func NewMockZenonWithCustomEpochDuration(t common.T, epochDuration time.Duration
 }
 
 func newMockZenon(t common.T, customEpochDuration time.Duration) MockZenon {
+	// snapshot global state BEFORE overriding any of it, so Stop can restore
+	initialEpochDuration := consensus.EpochDuration
+	initialClock := common.Clock
+	loggers := make([]log15.Logger, len(AllLoggers))
+	handlers := make([]log15.Handler, len(AllLoggers))
+	for i := range AllLoggers {
+		loggers[i] = AllLoggers[i]
+		handlers[i] = AllLoggers[i].GetHandler()
+	}
+
 	// silence loggers
 	common.ChainLogger.SetHandler(log15.LvlFilterHandler(log15.LvlError, log15.StderrHandler))
 	common.ConsensusLogger.SetHandler(log15.LvlFilterHandler(log15.LvlError, log15.StderrHandler))
 	common.SupervisorLogger.SetHandler(log15.LvlFilterHandler(log15.LvlError, log15.StderrHandler))
 	consensus.EpochDuration = customEpochDuration
 
-	ch := chain.NewChain(db.NewLevelDBManager(t.TempDir()), genesis.NewGenesis(g.EmbeddedGenesis))
+	ch := chain.NewChain(db.NewLevelDBManager(t.TempDir()), cache.NewCacheDBManager(t.TempDir()), genesis.NewGenesis(g.EmbeddedGenesis))
 	cs := consensus.NewConsensus(db.NewMemDB(), ch, true)
 	supervisor := vm.NewSupervisor(ch, cs)
 	zenon := &mockZenon{
@@ -375,14 +415,10 @@ func newMockZenon(t common.T, customEpochDuration time.Duration) MockZenon {
 		chain:                ch,
 		consensus:            cs,
 		supervisor:           supervisor,
-		loggers:              make([]log15.Logger, len(AllLoggers)),
-		handlers:             make([]log15.Handler, len(AllLoggers)),
-		initialEpochDuration: consensus.EpochDuration,
-	}
-
-	for i := range AllLoggers {
-		zenon.loggers[i] = AllLoggers[i]
-		zenon.handlers[i] = AllLoggers[i].GetHandler()
+		loggers:              loggers,
+		handlers:             handlers,
+		initialEpochDuration: initialEpochDuration,
+		initialClock:         initialClock,
 	}
 
 	common.Clock = &mockClock{

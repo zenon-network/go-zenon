@@ -5,12 +5,9 @@ import (
 	"math/big"
 	"sort"
 
-	"github.com/inconshreveable/log15"
-
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
-	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/zenon"
@@ -18,17 +15,11 @@ import (
 
 type StakeApi struct {
 	chain chain.Chain
-	z     zenon.Zenon
-	cs    consensus.Consensus
-	log   log15.Logger
 }
 
 func NewStakeApi(z zenon.Zenon) *StakeApi {
 	return &StakeApi{
 		chain: z.Chain(),
-		z:     z,
-		cs:    z.Consensus(),
-		log:   common.RPCLogger.New("module", "embedded_stake_api"),
 	}
 }
 

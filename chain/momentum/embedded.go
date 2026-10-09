@@ -57,14 +57,20 @@ func (ms *momentumStore) computeBackers(infos []*definition.DelegationInfo) (*ma
 	return &result, nil
 }
 func (ms *momentumStore) ComputePillarDelegations() ([]*types.PillarDelegationDetail, error) {
-	delegations, _ := ms.getAllDelegations()
+	delegations, err := ms.getAllDelegations()
+	if err != nil {
+		return nil, err
+	}
 	backers, err := ms.computeBackers(delegations)
 	if err != nil {
 		return nil, err
 	}
 
 	// query register info
-	registerList, _ := ms.GetActivePillars()
+	registerList, err := ms.GetActivePillars()
+	if err != nil {
+		return nil, err
+	}
 	pillarDelegationDetails := make([]*types.PillarDelegationDetail, 0, len(registerList))
 	for _, registration := range registerList {
 		pillarDelegationDetails = append(pillarDelegationDetails, &types.PillarDelegationDetail{
@@ -114,6 +120,18 @@ func (ms *momentumStore) GetStakeBeneficialAmount(addr types.Address) (*big.Int,
 		return nil, err
 	}
 	return fused.Amount, nil
+}
+func (ms *momentumStore) GetPlasmaVariables() (*definition.PlasmaVariables, error) {
+	sd, err := ms.getEmbeddedStore(types.PlasmaContract)
+	if err != nil {
+		return nil, fmt.Errorf("getEmbeddedStore failed: %w", err)
+	}
+
+	config, err := definition.GetPlasmaVariables(sd.Storage())
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
 }
 func (ms *momentumStore) GetTokenInfoByTs(ts types.ZenonTokenStandard) (*definition.TokenInfo, error) {
 	sd, err := ms.getEmbeddedStore(types.TokenContract)

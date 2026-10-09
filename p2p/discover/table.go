@@ -44,6 +44,9 @@ const (
 	nBuckets   = hashBits + 1 // Number of buckets
 
 	maxBondingPingPongs = 16
+	// maxInboundBonds bounds the bonding processes started for unsolicited
+	// pings, whether they are waiting for a bonding slot or holding one.
+	maxInboundBonds     = 64
 	maxFindnodeFailures = 5
 )
 
@@ -58,6 +61,14 @@ type Table struct {
 	bondmu    sync.Mutex
 	bonding   map[NodeID]*bondproc
 	bondslots chan struct{} // limits total number of active bonding processes
+	// inbound holds the identities with a bond started by an unsolicited
+	// ping, whether waiting for a bonding slot or holding one. An identity
+	// is admitted before its goroutine starts and removed when it exits, so
+	// work is bounded before it is queued anywhere, and an identity whose
+	// inbound bond is still in flight is not admitted again: its pings
+	// coalesce onto that process instead of each taking a permit. Outbound
+	// bonds are not tracked here and take no permit.
+	inbound map[NodeID]struct{}
 
 	nodeAddedHook func(*Node) // for testing
 
@@ -105,6 +116,7 @@ func newTable(t transport, ourID NodeID, ourAddr *net.UDPAddr, nodeDBPath string
 		closing:   make(chan struct{}),
 		bonding:   make(map[NodeID]*bondproc),
 		bondslots: make(chan struct{}, maxBondingPingPongs),
+		inbound:   make(map[NodeID]struct{}),
 	}
 	for i := 0; i < cap(tab.bondslots); i++ {
 		tab.bondslots <- struct{}{}
@@ -432,23 +444,41 @@ func (tab *Table) bond(pinged bool, id NodeID, addr *net.UDPAddr, tcpPort uint16
 	return node, result
 }
 
+// admitInbound reserves an inbound bonding permit for id. It reports false,
+// and reserves nothing, when the budget is full or an inbound bond for id
+// is already in flight. The caller must return the permit with
+// releaseInbound.
+func (tab *Table) admitInbound(id NodeID) bool {
+	tab.bondmu.Lock()
+	defer tab.bondmu.Unlock()
+	if _, busy := tab.inbound[id]; busy || len(tab.inbound) >= maxInboundBonds {
+		return false
+	}
+	tab.inbound[id] = struct{}{}
+	return true
+}
+
+// releaseInbound returns the permit reserved by admitInbound.
+func (tab *Table) releaseInbound(id NodeID) {
+	tab.bondmu.Lock()
+	delete(tab.inbound, id)
+	tab.bondmu.Unlock()
+}
+
 func (tab *Table) pingpong(w *bondproc, pinged bool, id NodeID, addr *net.UDPAddr, tcpPort uint16) {
-	// Request a bonding slot to limit network usage
-	<-tab.bondslots
-	ok := true
-	go func() {
-		select {
-		case <-w.done:
-		case <-tab.bondslots:
-		case <-tab.closing:
-			ok = false
-		}
-	}()
-	defer func() {
-		if ok {
-			tab.bondslots <- struct{}{}
-		}
-	}()
+	// Request a bonding slot to limit network usage. Waiting also ends at
+	// shutdown so queued processes exit at once instead of each taking a
+	// slot and failing through the closed transport in turn.
+	select {
+	case <-tab.bondslots:
+	case <-tab.closing:
+		w.err = errClosed
+		close(w.done)
+		return
+	}
+	// The slot is always returned: there are exactly cap(bondslots) tokens
+	// and this process holds one, so the send cannot block.
+	defer func() { tab.bondslots <- struct{}{} }()
 
 	// Ping the remote side and wait for a pong
 	if w.err = tab.ping(id, addr); w.err != nil {
@@ -496,7 +526,7 @@ func (tab *Table) ping(id NodeID, addr *net.UDPAddr) error {
 	}
 	// Pong received, update the database and return
 	tab.db.updateLastPong(id, time.Now())
-	tab.db.ensureExpirer()
+	tab.db.markBonded()
 
 	return nil
 }

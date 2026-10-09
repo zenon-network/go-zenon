@@ -41,7 +41,7 @@ const (
 )
 
 type peer struct {
-	*p2p.Peer
+	p2p.Peer
 
 	rw p2p.MsgReadWriter
 
@@ -58,7 +58,7 @@ type peer struct {
 	knownBlocks *lru.Cache // Set of block hashes known to be known by this peer
 }
 
-func newPeer(version, network int, p *p2p.Peer, rw p2p.MsgReadWriter) *peer {
+func newPeer(version, network int, p p2p.Peer, rw p2p.MsgReadWriter) *peer {
 	id := p.ID()
 
 	knownTxs, err := lru.New(maxKnownTxs)
@@ -71,7 +71,7 @@ func newPeer(version, network int, p *p2p.Peer, rw p2p.MsgReadWriter) *peer {
 		rw:          rw,
 		version:     version,
 		network:     network,
-		id:          fmt.Sprintf("%x", id[:8]),
+		id:          fmt.Sprintf("%x", id[:]),
 		knownTxs:    knownTxs,
 		knownBlocks: knownBlocks,
 	}
@@ -194,8 +194,18 @@ func (p *peer) RequestHashesFromNumber(from uint64, count int) error {
 }
 
 // RequestBlocks fetches a batch of blocks corresponding to the specified hashes.
+// A batch larger than downloader.MaxBlockFetch is sent as several requests of
+// that size: the remote answers at most that many blocks per message, so a
+// larger request would leave the rest to time out, and it looks up at most
+// MaxBlocksRequest hashes per message, which such requests stay well within.
 func (p *peer) RequestBlocks(hashes []types.Hash) error {
 	log.Info("fetching", "peer-id", p.id, "num-blocks", len(hashes))
+	for len(hashes) > downloader.MaxBlockFetch {
+		if err := p2p.Send(p.rw, GetBlocksMsg, hashes[:downloader.MaxBlockFetch]); err != nil {
+			return err
+		}
+		hashes = hashes[downloader.MaxBlockFetch:]
+	}
 	return p2p.Send(p.rw, GetBlocksMsg, hashes)
 }
 

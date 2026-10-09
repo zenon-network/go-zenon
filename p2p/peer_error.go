@@ -21,33 +21,33 @@ import (
 )
 
 const (
-	errInvalidMsgCode = iota
-	errInvalidMsg
+	ErrInvalidMsgCode = iota
+	ErrInvalidMsg
 )
 
 var errorToString = map[int]string{
-	errInvalidMsgCode: "invalid message code",
-	errInvalidMsg:     "invalid message",
+	ErrInvalidMsgCode: "invalid message code",
+	ErrInvalidMsg:     "invalid message",
 }
 
-type peerError struct {
+type PeerError struct {
 	code    int
 	message string
 }
 
-func newPeerError(code int, format string, v ...interface{}) *peerError {
+func NewPeerError(code int, format string, v ...interface{}) *PeerError {
 	desc, ok := errorToString[code]
 	if !ok {
 		panic("invalid error code")
 	}
-	err := &peerError{code, desc}
+	err := &PeerError{code, desc}
 	if format != "" {
 		err.message += ": " + fmt.Sprintf(format, v...)
 	}
 	return err
 }
 
-func (self *peerError) Error() string {
+func (self *PeerError) Error() string {
 	return self.message
 }
 
@@ -86,7 +86,9 @@ var discReasonToString = [...]string{
 }
 
 func (d DiscReason) String() string {
-	if len(discReasonToString) < int(d) {
+	// d indexes discReasonToString, so the bound is >= len, not > len. d is also
+	// decoded from the wire and is not constrained to the declared reasons.
+	if int(d) < 0 || int(d) >= len(discReasonToString) {
 		return fmt.Sprintf("Unknown Reason(%d)", d)
 	}
 	return discReasonToString[d]
@@ -96,14 +98,14 @@ func (d DiscReason) Error() string {
 	return d.String()
 }
 
-func discReasonForError(err error) DiscReason {
+func DiscReasonForError(err error) DiscReason {
 	if reason, ok := err.(DiscReason); ok {
 		return reason
 	}
-	peerError, ok := err.(*peerError)
+	PeerError, ok := err.(*PeerError)
 	if ok {
-		switch peerError.code {
-		case errInvalidMsgCode, errInvalidMsg:
+		switch PeerError.code {
+		case ErrInvalidMsgCode, ErrInvalidMsg:
 			return DiscProtocolError
 		default:
 			return DiscSubprotocolError

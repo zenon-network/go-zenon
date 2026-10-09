@@ -149,7 +149,7 @@ func (p *Project) UnmarshalJSON(data []byte) error {
 		p.PhaseIds[idx] = phaseId
 	}
 	p.Votes = aux.Votes
-	p.Phases = make([]*Phase, len(p.Phases))
+	p.Phases = make([]*Phase, len(aux.Phases))
 	for idx, phase := range aux.Phases {
 		p.Phases[idx] = phase
 	}
@@ -164,6 +164,9 @@ type ProjectList struct {
 // === Getters for projects ===
 
 func (a *AcceleratorApi) GetAll(pageIndex, pageSize uint32) (*ProjectList, error) {
+	if pageSize > api.RpcMaxPageSize {
+		return nil, api.ErrPageSizeParamTooBig
+	}
 	_, context, err := api.GetFrontierContext(a.chain, types.AcceleratorContract)
 	if err != nil {
 		return nil, err
@@ -178,17 +181,16 @@ func (a *AcceleratorApi) GetAll(pageIndex, pageSize uint32) (*ProjectList, error
 		return projects[i].LastUpdateTimestamp > projects[j].LastUpdateTimestamp
 	})
 
+	// The listing and the sort need every project; the vote and phase
+	// lookups are only done for the page that is returned.
+	start, end := api.GetRange(pageIndex, pageSize, uint32(len(projects)))
 	result := &ProjectList{
 		Count: len(projects),
-		List:  make([]*Project, len(projects)),
+		List:  make([]*Project, 0, end-start),
 	}
-
-	for index, project := range projects {
-		result.List[index] = a.toProject(context, project)
+	for _, project := range projects[start:end] {
+		result.List = append(result.List, a.toProject(context, project))
 	}
-
-	start, end := api.GetRange(pageIndex, pageSize, uint32(len(result.List)))
-	result.List = result.List[start:end]
 
 	return result, nil
 }

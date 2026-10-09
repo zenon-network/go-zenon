@@ -389,6 +389,54 @@ func TestSimple_MomentumContent(t *testing.T) {
 	}
 }
 
+// Test that only a valid MomentumAcknowledged HashHeight is accepted
+func TestSimple_MomentumAcknowledgedHashHeight(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+
+	ledgerApi := api.NewLedgerApi(z)
+	frontier, err := ledgerApi.GetFrontierMomentum()
+	common.FailIfErr(t, err)
+
+	// Verify that a non-existing momentum acknowledgment hash is not accepted
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(100 * g.Zexp),
+		MomentumAcknowledged: types.HashHeight{
+			Hash:   types.HexToHashPanic("83a3bf2b54596fc1843373be30b75c65a7cce7fb946d9c673d0d8550a238dc75"),
+			Height: frontier.Height,
+		},
+	}, verifier.ErrABMAMissing, mock.SkipVmChanges)
+
+	z.InsertNewMomentum()
+
+	// Verify that a mismatch in the momentum acknowledgment hash and height is not accepted
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(100 * g.Zexp),
+		MomentumAcknowledged: types.HashHeight{
+			Hash:   frontier.Hash,
+			Height: frontier.Height + 1,
+		},
+	}, verifier.ErrABMAMissing, mock.SkipVmChanges)
+
+	// Expect no error for a valid momentum acknowledgment hash and height
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(100 * g.Zexp),
+		MomentumAcknowledged: types.HashHeight{
+			Hash:   frontier.Hash,
+			Height: frontier.Height,
+		},
+	}, nil, mock.SkipVmChanges)
+}
+
 // Test that an address cannot receive a send block that it is not the receiver of
 func TestSendBlockReceiver(t *testing.T) {
 	z := mock.NewMockZenon(t)
@@ -440,4 +488,46 @@ func TestSendBlockReceiver(t *testing.T) {
 		Address:              g.User4.Address,
 		MomentumAcknowledged: frontierMomentum.Identifier(),
 	}, verifier.ErrABFromBlockReceiverMismatch, mock.SkipVmChanges)
+}
+
+// Test that the amount of uncommitted account-blocks that can be added to the account pool
+// per account is limited by MaxUncommittedBlocksPerAccount.
+func TestSimple_MaxUncommittedAccountBlocks(t *testing.T) {
+	saveChainGlobals(t)
+	chain.MaxUncommittedBlocksPerAccount = 5
+
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	ledgerApi := api.NewLedgerApi(z)
+
+	defer z.SaveLogs(common.ZenonLogger).HideHashes().Equals(t, `
+t=2001-09-09T01:46:40+0000 lvl=info msg="inserted block" module=zenon identifier="{Address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:2}}"
+t=2001-09-09T01:46:40+0000 lvl=info msg="inserted block" module=zenon identifier="{Address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:3}}"
+t=2001-09-09T01:46:40+0000 lvl=info msg="inserted block" module=zenon identifier="{Address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:4}}"
+t=2001-09-09T01:46:40+0000 lvl=info msg="inserted block" module=zenon identifier="{Address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:5}}"
+t=2001-09-09T01:46:40+0000 lvl=info msg="inserted block" module=zenon identifier="{Address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:6}}"
+t=2001-09-09T01:46:40+0000 lvl=info msg="failed to insert block" module=zenon reason="failed to insert account-block-transaction reason: max uncommitted blocks per account reached; address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz" identifier="{Address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz HashHeight:{Hash:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Height:7}}"
+t=2001-09-09T01:46:40+0000 lvl=eror msg="failed to insert own account-block." module=zenon reason="failed to insert account-block-transaction reason: max uncommitted blocks per account reached; address:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz"
+`)
+
+	// MaxUncommittedBlocksPerAccount pending blocks are allowed; the one that
+	// would push the count past it is rejected.
+	for i := 0; i < int(chain.MaxUncommittedBlocksPerAccount); i += 1 {
+		z.InsertSendBlock(&nom.AccountBlock{
+			Address:       g.User1.Address,
+			ToAddress:     g.User2.Address,
+			TokenStandard: types.ZnnTokenStandard,
+			Amount:        big.NewInt(1500 * g.Zexp),
+		}, nil, mock.SkipVmChanges)
+	}
+	z.InsertSendBlockRejected(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(1500 * g.Zexp),
+	}, chain.ErrFailedToAddAccountBlockTransaction)
+
+	frontierAccBlock, err := ledgerApi.GetFrontierAccountBlock(g.User1.Address)
+	common.FailIfErr(t, err)
+	common.Expect(t, frontierAccBlock.Height, 6)
 }

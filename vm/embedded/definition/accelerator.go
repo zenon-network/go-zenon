@@ -91,10 +91,14 @@ const (
 
 	ProjectVariableName = "project"
 	PhaseVariableName   = "phase"
+)
 
-	_ byte = iota
-	projectKeyPrefix
-	phaseKeyPrefix
+const (
+	// Historical values inherited from a shared iota const block (iota was
+	// already 11 here, not 0). They are baked into on-chain contract-storage
+	// keys and must never change.
+	projectKeyPrefix byte = 12
+	phaseKeyPrefix   byte = 13
 )
 
 var (
@@ -190,7 +194,7 @@ type PhaseMarshal struct {
 	Status            uint8      `json:"status"`
 }
 
-func (phase *Phase) ToProjectMarshal() *PhaseMarshal {
+func (phase *Phase) ToPhaseMarshal() *PhaseMarshal {
 	aux := &PhaseMarshal{
 		Id:                phase.Id,
 		ProjectId:         phase.ProjectId,
@@ -206,8 +210,16 @@ func (phase *Phase) ToProjectMarshal() *PhaseMarshal {
 	return aux
 }
 
+// ToProjectMarshal is the historical name of ToPhaseMarshal, kept so external
+// importers keep compiling.
+//
+// Deprecated: use ToPhaseMarshal.
+func (phase *Phase) ToProjectMarshal() *PhaseMarshal {
+	return phase.ToPhaseMarshal()
+}
+
 func (phase *Phase) MarshalJSON() ([]byte, error) {
-	return json.Marshal(phase.ToProjectMarshal())
+	return json.Marshal(phase.ToPhaseMarshal())
 }
 
 func (phase *Phase) UnmarshalJSON(data []byte) error {

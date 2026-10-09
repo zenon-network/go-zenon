@@ -14,32 +14,97 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/dp"
 )
 
 var (
 	ErrFailedToAddAccountBlockTransaction = errors.Errorf("failed to insert account-block-transaction")
 	ErrPlasmaRatioIsWorse                 = errors.Errorf("plasma ratio is smaller for current block")
 	ErrHashTieBreak                       = errors.Errorf("hash tie-break is worse for current block")
+	ErrBlockHeightNotFound                = errors.Errorf("block height does not exist in account manager")
 
 	// MaxAccountBlocksInMomentum takes into account batched account-blocks
+	// Not used after Dynamic Plasma spork
 	MaxAccountBlocksInMomentum = 100
+
+	// MaxUncommittedBlocksPerAccount limits the length of the uncommitted
+	// state a user account chain can have to limit node resource consumption.
+	MaxUncommittedBlocksPerAccount uint64 = 500
 )
 
 type Stable interface {
 	GetStableAccountDB(address types.Address) db.DB
+	GetFrontierMomentumStore() store.Momentum
+}
+
+type accountManager struct {
+	db     db.Manager
+	blocks map[uint64]*nom.AccountBlock
+}
+
+func (am *accountManager) Add(transaction *nom.AccountBlockTransaction) error {
+	if err := am.db.Add(transaction); err != nil {
+		return err
+	}
+
+	block := transaction.Block.Copy()
+	am.blocks[block.Height] = block
+	for _, d := range block.DescendantBlocks {
+		am.blocks[d.Height] = d
+	}
+	return nil
+}
+
+func (am *accountManager) Pop() error {
+	frontier := db.GetFrontierIdentifier(am.db.Frontier())
+	if err := am.db.Pop(); err != nil {
+		return err
+	}
+	newFrontier := db.GetFrontierIdentifier(am.db.Frontier())
+	for height := newFrontier.Height + 1; height <= frontier.Height; height += 1 {
+		delete(am.blocks, height)
+	}
+	return nil
+}
+
+func (am *accountManager) BlockByHeight(height uint64) (*nom.AccountBlock, error) {
+	block, ok := am.blocks[height]
+	if !ok {
+		return nil, ErrBlockHeightNotFound
+	}
+	return block.Copy(), nil
 }
 
 type accountPool struct {
 	log      log15.Logger
 	stable   Stable
-	managers map[types.Address]db.Manager
+	managers map[types.Address]*accountManager
 	changes  sync.Mutex
+
+	// plasma is the dynamic-plasma pricing context derived from the
+	// committed frontier momentum, or nil while the dynamic-plasma spork
+	// is inactive or the momentum store cannot answer. It only changes
+	// when the frontier momentum does, so it is refreshed once per
+	// committed (or rolled-back) momentum rather than recomputed on every
+	// contested insert.
+	//
+	// plasmaMu guards the field alone: it is never held across a store
+	// read or across ap.changes, so it is a leaf lock. Every production
+	// writer (momentum insert/rollback) and reader (higherPriority) runs
+	// under chain.insert already, so plasmaMu is what keeps that invariant
+	// enforced rather than assumed — including for direct unit-test use of
+	// the pool, and for -race.
+	plasma   dp.DynamicPlasma
+	plasmaMu sync.Mutex
 }
 
-func (ap *accountPool) getAccountManager(address types.Address) db.Manager {
+func (ap *accountPool) getAccountManager(address types.Address) *accountManager {
 	manager := ap.managers[address]
 	if manager == nil {
-		manager = db.NewMemDBManager(ap.stable.GetStableAccountDB(address))
+		manager = &accountManager{
+			db:     db.NewMemDBManager(ap.stable.GetStableAccountDB(address)),
+			blocks: make(map[uint64]*nom.AccountBlock),
+		}
 		ap.managers[address] = manager
 	}
 	return manager
@@ -75,13 +140,51 @@ func (ap *accountPool) canRollback(block *nom.AccountBlock) error {
 	}
 	if truePrevious.Identifier() != previous {
 		log.Info("failed to insert account-block-transaction", "reason", "previous mismatch", "frontier-identifier", frontierIdentifier)
-		return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "missing previous", frontierIdentifier, identifier)
+		return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "previous mismatch", frontierIdentifier, identifier)
 	}
 
 	return nil
 }
 
-func higherPriority(a, b *nom.AccountBlock) error {
+// higherPricedBlock reports whether a should replace b under dynamic-plasma
+// pricing. An exact price tie is resolved by smallest hash so that nodes
+// seeing the two blocks in different orders converge on the same one, the
+// rule documented on the AccountPool interface.
+func higherPricedBlock(plasma dp.DynamicPlasma, a, b *nom.AccountBlock) error {
+	err := plasma.HigherPrice(a, b)
+	if err == dp.ErrBlockPriceSame {
+		if bytes.Compare(a.Hash.Bytes()[:], b.Hash.Bytes()[:]) > -1 {
+			return ErrHashTieBreak
+		}
+		return nil
+	}
+	return err
+}
+
+// higherPriority reports whether a should replace b as the pool's block
+// at their shared height. Once dynamic plasma is active, momentum
+// content selection ranks blocks by the same price rule,
+// dp.DynamicPlasma.HigherPrice (see pillar/content_selector.go), so
+// replacement must use it too — otherwise the pool can accept a
+// replacement that content selection would then rank below the block it
+// just evicted. An exact price tie is resolved here by smallest hash, the
+// fork-resolution rule documented on the AccountPool interface
+// (chain/interface.go), deliberately independent of the content
+// selector's larger-hash tie-break: the two answer different questions —
+// which block survives a fork vs. which block is emitted first. The
+// comparator uses the pricing context cached from the committed frontier
+// momentum; while that context is empty (dynamic plasma inactive, or the
+// momentum store could not answer — genesis construction, for one) momentum
+// content selection still uses the legacy TotalPlasma/BasePlasma ratio, so
+// that remains the fallback.
+func (ap *accountPool) higherPriority(a, b *nom.AccountBlock) error {
+	ap.plasmaMu.Lock()
+	plasma := ap.plasma
+	ap.plasmaMu.Unlock()
+	if plasma != nil {
+		return higherPricedBlock(plasma, a, b)
+	}
+
 	if a.TotalPlasma*b.BasePlasma < b.TotalPlasma*a.BasePlasma {
 		return ErrPlasmaRatioIsWorse
 	} else if a.TotalPlasma*b.BasePlasma == b.TotalPlasma*a.BasePlasma && bytes.Compare(a.Hash.Bytes()[:], b.Hash.Bytes()[:]) > -1 {
@@ -120,6 +223,15 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 
 	// fast-forward insert on top of chain
 	if previous == frontierIdentifier {
+		// check uncommitted plasma amount. Only applies to fast-forward
+		// inserts: a rollback/replacement doesn't lengthen the pending
+		// chain, and an already-inserted duplicate is idempotent —
+		// neither should be rejected just because the account is at cap.
+		if !forceAdd && !types.IsEmbeddedAddress(address) {
+			if err := ap.checkUncommittedBlocksCount(address); err != nil {
+				return err
+			}
+		}
 		log.Info("fast-forward inserting account-block")
 		return ap.getAccountManager(address).Add(transaction)
 	}
@@ -138,7 +250,7 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	if err := ap.canRollback(block); err != nil {
 		return err
 	}
-	if err := higherPriority(block, trueBlock); !forceAdd && err != nil {
+	if err := ap.higherPriority(block, trueBlock); !forceAdd && err != nil {
 		log.Info("failed to insert account-block-transaction", "reason", err, "frontier-identifier", frontierIdentifier)
 		return err
 	}
@@ -146,7 +258,7 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	// rollback blocks and insert this one
 	manager := ap.getAccountManager(address)
 	for {
-		currentIdentifier := db.GetFrontierIdentifier(manager.Frontier())
+		currentIdentifier := db.GetFrontierIdentifier(manager.db.Frontier())
 		if currentIdentifier == previous {
 			break
 		}
@@ -166,7 +278,7 @@ func (ap *accountPool) GetPatch(address types.Address, identifier types.HashHeig
 	ap.changes.Lock()
 	defer ap.changes.Unlock()
 
-	return ap.getAccountManager(address).GetPatch(identifier)
+	return ap.getAccountManager(address).db.GetPatch(identifier)
 }
 func (ap *accountPool) GetAccountStore(address types.Address, identifier types.HashHeight) store.Account {
 	ap.changes.Lock()
@@ -182,9 +294,9 @@ func (ap *accountPool) GetAccountStore(address types.Address, identifier types.H
 	}
 
 	manager := ap.getAccountManager(address)
-	accountDb := manager.Get(identifier)
+	accountDb := manager.db.Get(identifier)
 	if accountDb == nil {
-		frontier := db.GetFrontierIdentifier(manager.Frontier())
+		frontier := db.GetFrontierIdentifier(manager.db.Frontier())
 		ap.log.Info("unable to get account store", "address", address, "frontier-identifier", frontier, "reason", "missing-db")
 		return nil
 	}
@@ -201,10 +313,55 @@ func (ap *accountPool) getStableAccountStore(address types.Address) store.Accoun
 	return account.NewAccountStore(address, db.NewMemDBManager(ap.stable.GetStableAccountDB(address)).Frontier())
 }
 func (ap *accountPool) getFrontierAccountStore(address types.Address) store.Account {
-	return account.NewAccountStore(address, ap.getAccountManager(address).Frontier())
+	return account.NewAccountStore(address, ap.getAccountManager(address).db.Frontier())
+}
+
+// refreshDynamicPlasma recomputes the pricing context from the committed
+// frontier momentum. Called on every momentum insert and rollback, and
+// once at chain start-up.
+func (ap *accountPool) refreshDynamicPlasma() {
+	plasma := ap.computeDynamicPlasma()
+	ap.plasmaMu.Lock()
+	ap.plasma = plasma
+	ap.plasmaMu.Unlock()
+}
+
+// computeDynamicPlasma returns the pricing context for the committed
+// frontier momentum, or nil when dynamic plasma is inactive or the
+// momentum store cannot answer. A store that cannot answer is logged at
+// Warn: it means pool replacement falls back to the legacy plasma-ratio
+// comparator while momentum content selection keeps ranking by price, so
+// the pool can keep a block content selection would rank below the one it
+// evicted.
+func (ap *accountPool) computeDynamicPlasma() dp.DynamicPlasma {
+	store := ap.stable.GetFrontierMomentumStore()
+	if store == nil {
+		return nil
+	}
+	active, err := store.IsSporkActive(types.DynamicPlasmaSpork)
+	if err != nil {
+		ap.log.Warn("using legacy plasma-ratio comparator", "reason", err)
+		return nil
+	}
+	if !active {
+		return nil
+	}
+	previous, err := store.GetFrontierMomentum()
+	if err != nil {
+		ap.log.Warn("using legacy plasma-ratio comparator", "reason", err)
+		return nil
+	}
+	config, err := store.GetPlasmaVariables()
+	if err != nil {
+		ap.log.Warn("using legacy plasma-ratio comparator", "reason", err)
+		return nil
+	}
+	return dp.NewDynamicPlasma(previous, config)
 }
 
 func (ap *accountPool) InsertMomentum(detailed *nom.DetailedMomentum) {
+	ap.refreshDynamicPlasma()
+
 	ap.changes.Lock()
 	defer ap.changes.Unlock()
 
@@ -212,12 +369,103 @@ func (ap *accountPool) InsertMomentum(detailed *nom.DetailedMomentum) {
 		common.ChainLogger.Error("failed to handle InsertMomentum in AccountPool", "reason", err)
 	}
 }
-func (ap *accountPool) DeleteMomentum(*nom.DetailedMomentum) {
+func (ap *accountPool) DeleteMomentum(detailed *nom.DetailedMomentum) {
+	ap.refreshDynamicPlasma()
+
 	ap.changes.Lock()
 	defer ap.changes.Unlock()
 
-	ap.managers = make(map[types.Address]db.Manager)
+	// Only remove managers for addresses whose account blocks were included
+	// in the deleted momentum.  Wiping every manager discards pending blocks
+	// that are unrelated to the rollback and leaves the subsequent rebuild
+	// with nothing to iterate over.
+	if detailed == nil {
+		return
+	}
+	touched := make(map[types.Address]struct{})
+	rolledBackSends := make(map[types.Hash]struct{})
+	for _, block := range detailed.AccountBlocks {
+		touched[block.Address] = struct{}{}
+		if block.IsSendBlock() {
+			rolledBackSends[block.Hash] = struct{}{}
+		}
+	}
+	for address := range touched {
+		delete(ap.managers, address)
+	}
+
+	// Evict managers holding pending receives whose from-block (send) was
+	// rolled back.  Such receives are orphaned: their from-block no longer
+	// exists on the committed chain, so including them in the next momentum
+	// would fail with "Can't find from-block in store" and stall block
+	// production.
+	if len(rolledBackSends) > 0 {
+		for address, manager := range ap.managers {
+			for _, block := range manager.blocks {
+				if block.IsReceiveBlock() && block.BlockType != nom.BlockTypeGenesisReceive {
+					if _, ok := rolledBackSends[block.FromBlockHash]; ok {
+						delete(ap.managers, address)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Evict blocks whose MomentumAcknowledged is no longer canonical after
+	// the rollback.  Rollback pops from the top, so at DeleteMomentum(popped)
+	// every pending block with MA.Height >= popped.Height acknowledges a
+	// momentum that is no longer canonical.  After the last pop every retained
+	// block acknowledges a height at or below the target, where the chain is
+	// byte-identical by construction (RollbackTo verifies the target hash).
+	// A height-only suffix truncation closes the window without a store
+	// lookup.  This runs during DeleteMomentum (not just during rebuild) so
+	// that stale-acknowledged blocks are removed BEFORE momentum selection
+	// can pick them up.
+	poppedHeight := detailed.Momentum.Height
+	for address, manager := range ap.managers {
+		// Find the lowest height whose block acknowledges a stale momentum.
+		// Blocks form a chain and MA is non-decreasing along it, so stale
+		// blocks are a contiguous suffix: truncate from the cutoff, keep
+		// everything below it.
+		cutoff := uint64(0)
+		for height, block := range manager.blocks {
+			if block.MomentumAcknowledged.Height > 0 && block.MomentumAcknowledged.Height >= poppedHeight {
+				if cutoff == 0 || height < cutoff {
+					cutoff = height
+				}
+			}
+		}
+		if cutoff == 0 {
+			continue
+		}
+		ap.log.Info("truncating stale momentum-acknowledged suffix",
+			"address", address,
+			"cutoff-height", cutoff,
+			"popped-height", poppedHeight)
+		// Pop versions until the frontier is below the cutoff.  Each Pop
+		// removes one block (and its descendants) from the manager.
+		for {
+			frontier := db.GetFrontierIdentifier(manager.db.Frontier())
+			if frontier.Height < cutoff {
+				break
+			}
+			if err := manager.Pop(); err != nil {
+				ap.log.Error("failed to pop stale block during truncation",
+					"address", address,
+					"frontier", frontier,
+					"reason", err)
+				delete(ap.managers, address)
+				break
+			}
+		}
+		// If every block was stale the manager is now empty; drop it.
+		if len(manager.blocks) == 0 {
+			delete(ap.managers, address)
+		}
+	}
 }
+
 func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 	addresses := make([]types.Address, 0, len(ap.managers))
 	for address := range ap.managers {
@@ -225,6 +473,13 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 	}
 
 	ap.log.Debug("started rebuilding account-pool", "momentum-identifier", detailed.Momentum.Identifier())
+	// Rebuild must not abandon the remaining addresses when one of them fails.
+	// Returning mid-loop leaves the addresses already processed bound to the
+	// new stable DB and the rest still bound to the previous one, with no
+	// indication which is which.  Fail each address independently instead:
+	// the address whose rebuild failed keeps no manager, and every other
+	// address is rebuilt consistently.
+	var firstErr error
 	for _, address := range addresses {
 		log := ap.log.New("address", address)
 		log.Debug("start rebuilding")
@@ -233,9 +488,9 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 		oldManager := ap.managers[address]
 
 		stable := account.NewAccountStore(address, ap.stable.GetStableAccountDB(address))
-		uncommittedStore := account.NewAccountStore(address, oldManager.Frontier())
+		uncommittedStore := account.NewAccountStore(address, oldManager.db.Frontier())
 		for i := stable.Identifier().Height + 1; i <= uncommittedStore.Identifier().Height; i += 1 {
-			block, err := uncommittedStore.ByHeight(i)
+			block, err := oldManager.BlockByHeight(i)
 			common.DealWithErr(err)
 			uncommitted = append(uncommitted, block)
 		}
@@ -248,24 +503,56 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 		}
 
 		log.Debug("staring applying blocks", "num-uncommitted", len(uncommitted))
-		manager := db.NewMemDBManager(ap.stable.GetStableAccountDB(address))
+		manager := &accountManager{
+			db:     db.NewMemDBManager(ap.stable.GetStableAccountDB(address)),
+			blocks: make(map[uint64]*nom.AccountBlock),
+		}
 		for _, block := range uncommitted {
-			patch := oldManager.GetPatch(block.Identifier())
+			// After a rollback the frontier may be lower than when the block
+			// was accepted.  A block whose MomentumAcknowledged is above the
+			// current frontier is invalid against the new chain state; drop
+			// it and every subsequent block on this account chain, since they
+			// build on it.
+			if block.MomentumAcknowledged.Height > detailed.Momentum.Height {
+				log.Info("dropping block with momentum-acknowledged above frontier",
+					"block", block.Header(),
+					"ma-height", block.MomentumAcknowledged.Height,
+					"frontier-height", detailed.Momentum.Height)
+				break
+			}
+			// DeleteMomentum's eviction keeps every retained acknowledgement
+			// at or below the frontier, so no hash re-check is needed here.
+			patch := oldManager.db.GetPatch(block.Identifier())
 			err := manager.Add(&nom.AccountBlockTransaction{
 				Block:   block,
 				Changes: patch,
 			})
 			if err != nil {
-				return errors.Errorf("account pool rebuild error. Unable to re-apply block %v. Reason %v", block.Header(), err)
+				// Drop this address's manager entirely and carry on with the
+				// others.  Re-applying the rest of the chain from a manager
+				// whose state is already inconsistent is not safe.
+				log.Error("rebuild failed, dropping pending blocks for address",
+					"block", block.Header(),
+					"reason", err)
+				if firstErr == nil {
+					firstErr = errors.Errorf("account pool rebuild error. Unable to re-apply block %v. Reason %v", block.Header(), err)
+				}
+				manager = nil
+				break
 			}
 		}
-		ap.managers[address] = manager
-
-		log.Debug("successfully rebuild", "num-uncommitted", len(uncommitted))
+		// An empty manager is a map entry with nothing in it until the next
+		// rebuild.  Only re-register the address when blocks survived.
+		if manager != nil && len(manager.blocks) > 0 {
+			ap.managers[address] = manager
+			log.Debug("successfully rebuild", "num-uncommitted", len(uncommitted))
+		} else {
+			log.Debug("rebuild produced no blocks, dropping manager")
+		}
 	}
 
 	ap.log.Debug("finished rebuilding account-pool")
-	return nil
+	return firstErr
 }
 
 func (ap *accountPool) GetNewMomentumContent() []*nom.AccountBlock {
@@ -309,8 +596,9 @@ func (ap *accountPool) getUncommittedAccountBlocksByAddress(address types.Addres
 
 	stable := ap.getStableAccountStore(address)
 	frontier := ap.getFrontierAccountStore(address)
+	manager := ap.getAccountManager(address)
 	for i := stable.Identifier().Height + 1; i <= frontier.Identifier().Height; i += 1 {
-		block, err := frontier.ByHeight(i)
+		block, err := manager.BlockByHeight(i)
 		common.DealWithErr(err)
 		blocks = append(blocks, block)
 	}
@@ -318,11 +606,40 @@ func (ap *accountPool) getUncommittedAccountBlocksByAddress(address types.Addres
 	return blocks
 }
 
+func (ap *accountPool) checkUncommittedBlocksCount(address types.Address) error {
+	frontier, err := ap.getFrontierAccountStore(address).Frontier()
+	if err != nil {
+		ap.log.Info("failed to get frontier block", "reason", err)
+		return fmt.Errorf(`%w reason:%v; address:%v`, ErrFailedToAddAccountBlockTransaction, err, address)
+	}
+	stableFrontier, err := ap.getStableAccountStore(address).Frontier()
+	if err != nil {
+		ap.log.Info("failed to get stable frontier block", "reason", err)
+		return fmt.Errorf(`%w reason:%v; address:%v`, ErrFailedToAddAccountBlockTransaction, err, address)
+	}
+	if frontier == nil {
+		return nil
+	}
+	// A never-committed account has no stable frontier yet; treat it as height 0
+	// so its uncommitted blocks are still counted against the limit.
+	var stableHeight uint64
+	if stableFrontier != nil {
+		stableHeight = stableFrontier.Height
+	}
+	uncommittedBlockCount := frontier.Height - stableHeight
+	if uncommittedBlockCount+1 > MaxUncommittedBlocksPerAccount {
+		ap.log.Info("max uncommitted blocks per account reached")
+		return fmt.Errorf(`%w reason: max uncommitted blocks per account reached; address:%v`,
+			ErrFailedToAddAccountBlockTransaction, address)
+	}
+	return nil
+}
+
 func newAccountPool(stable Stable) *accountPool {
 	return &accountPool{
 		log:      common.ChainLogger.New("module", "account-pool"),
 		stable:   stable,
-		managers: make(map[types.Address]db.Manager),
+		managers: make(map[types.Address]*accountManager),
 	}
 }
 func NewAccountPool(stable Stable) AccountPool {

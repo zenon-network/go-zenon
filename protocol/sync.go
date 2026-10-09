@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
-	"github.com/zenon-network/go-zenon/p2p/discover"
 )
 
 const (
@@ -51,7 +50,7 @@ func (pm *ProtocolManager) syncTransactions(p *peer) {
 // the transactions in small packs to one peer at a time.
 func (pm *ProtocolManager) txsyncLoop() {
 	var (
-		pending = make(map[discover.NodeID]*txsync)
+		pending = make(map[string]*txsync)
 		sending = false               // whether a send is active
 		pack    = new(txsync)         // the pack that is being sent
 		done    = make(chan error, 1) // result of the send
@@ -68,7 +67,7 @@ func (pm *ProtocolManager) txsyncLoop() {
 		// Remove the transactions that will be sent.
 		s.txs = s.txs[:copy(s.txs, s.txs[len(pack.txs):])]
 		if len(s.txs) == 0 {
-			delete(pending, s.p.ID())
+			delete(pending, s.p.id)
 		}
 		// Send the pack in the background.
 		log.Debug("sending transactions", "peer-id", s.p.Peer.ID(), "num-blocks", len(pack.txs))
@@ -95,7 +94,7 @@ func (pm *ProtocolManager) txsyncLoop() {
 	for {
 		select {
 		case s := <-pm.txsyncCh:
-			pending[s.p.ID()] = s
+			pending[s.p.id] = s
 			if !sending {
 				send(s)
 			}
@@ -104,7 +103,7 @@ func (pm *ProtocolManager) txsyncLoop() {
 			// Stop tracking peers that cause send failures.
 			if err != nil {
 				log.Info("tx send failed", "peer-id", pack.p.Peer.ID(), "reason", err)
-				delete(pending, pack.p.ID())
+				delete(pending, pack.p.id)
 			}
 			// Schedule the next send.
 			if s := pick(); s != nil {
