@@ -21,6 +21,13 @@ import (
 func activatePtlc(t *testing.T, z mock.MockZenon) {
 	t.Helper()
 
+	startPtlcActivation(t, z)
+	z.InsertMomentumsTo(20)
+}
+
+func startPtlcActivation(t *testing.T, z mock.MockZenon) uint64 {
+	t.Helper()
+
 	oldSporkId := types.PtlcSpork.SporkId
 	oldImplemented := types.ImplementedSporksMap[oldSporkId]
 	var activatedSporkId types.Hash
@@ -61,7 +68,9 @@ func activatePtlc(t *testing.T, z mock.MockZenon) {
 	types.PtlcSpork.SporkId = id
 	types.ImplementedSporksMap[id] = true
 	activatedSporkId = id
-	z.InsertMomentumsTo(20)
+
+	sporkList, _ = sporkAPI.GetAll(0, 10)
+	return sporkList.List[0].EnforcementHeight
 }
 
 func ptlcUnlockMessage(z mock.MockZenon, pointType uint8, id types.Hash, destination types.Address) []byte {
