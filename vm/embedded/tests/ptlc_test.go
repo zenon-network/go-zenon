@@ -283,18 +283,7 @@ func TestPtlc_unlock(t *testing.T) {
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	defer z.CallContract(&nom.AccountBlock{
-		Address:   g.User2.Address,
-		ToAddress: types.PtlcContract,
-		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId,
-			wrong_signature[1:],
-		),
-		TokenStandard: types.ZnnTokenStandard,
-		Amount:        big.NewInt(0 * g.Zexp),
-	}).Error(t, constants.ErrInvalidPointSignature)
-	z.InsertNewMomentum()
-	z.InsertNewMomentum()
+	unlockPtlcRefusedAtSend(t, z, g.User2, ptlcId, wrong_signature[1:])
 
 	old_message := crypto.Hash(common.JoinBytes(ptlcId.Bytes(), g.User2.Address.Bytes()))
 	old_signature := g.User2.Sign(old_message)

@@ -48,6 +48,15 @@ func isEmbeddedDestination(address types.Address) bool {
 	return false
 }
 
+func isPtlcWitnessSize(size int) bool {
+	for _, witnessSize := range definition.PointTypeWitnessSizes {
+		if size == int(witnessSize) {
+			return true
+		}
+	}
+	return false
+}
+
 func verifyBIP340Signature(message, pointLock, signature []byte) error {
 	s, err := schnorr.ParseSignature(signature)
 	if err != nil {
@@ -396,6 +405,10 @@ func (p *UnlockPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		return constants.ErrInvalidTokenOrAmount
 	}
 
+	if !isPtlcWitnessSize(len(param.Signature)) {
+		return constants.ErrInvalidPointSignature
+	}
+
 	block.Data, err = definition.ABIPtlc.PackMethod(p.MethodName, param.Id, param.Signature)
 	return err
 }
@@ -430,6 +443,10 @@ func (p *ProxyUnlockPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error
 
 	if !isZeroAmount(block.Amount) {
 		return constants.ErrInvalidTokenOrAmount
+	}
+
+	if !isPtlcWitnessSize(len(param.Signature)) {
+		return constants.ErrInvalidPointSignature
 	}
 
 	block.Data, err = definition.ABIPtlc.PackMethod(p.MethodName, param.Id, param.Destination, param.Signature)

@@ -79,6 +79,20 @@ func unlockPtlcAs(t *testing.T, z mock.MockZenon, caller *wallet.KeyPair, id typ
 	call.Error(t, expected)
 }
 
+func unlockPtlcRefusedAtSend(t *testing.T, z mock.MockZenon, caller *wallet.KeyPair, id types.Hash, witness []byte) {
+	t.Helper()
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:   caller.Address,
+		ToAddress: types.PtlcContract,
+		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
+			id,
+			witness,
+		),
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+	}, constants.ErrInvalidPointSignature, mock.NoVmChanges)
+}
+
 func proxyUnlockPtlcAs(t *testing.T, z mock.MockZenon, caller *wallet.KeyPair, id types.Hash, destination types.Address, witness []byte, expected error) {
 	t.Helper()
 	call := z.CallContract(&nom.AccountBlock{
@@ -153,11 +167,11 @@ func TestPtlc_pointLock_unlock(t *testing.T) {
 	var wrong btcec.ModNScalar
 	wrong.SetInt(123456788)
 	unlockPtlcAs(t, z, g.User2, id, scalarBytes(&wrong), constants.ErrInvalidPointScalar)
-	unlockPtlcAs(t, z, g.User2, id, secret[1:], constants.ErrInvalidPointScalar)
+	unlockPtlcRefusedAtSend(t, z, g.User2, id, secret[1:])
 	unlockPtlcAs(t, z, g.User2, id, make([]byte, 32), constants.ErrInvalidPointScalar)
 	order := btcec.S256().N.Bytes()
 	unlockPtlcAs(t, z, g.User2, id, order, constants.ErrInvalidPointScalar)
-	unlockPtlcAs(t, z, g.User2, id, append([]byte{0}, secret...), constants.ErrInvalidPointScalar)
+	unlockPtlcRefusedAtSend(t, z, g.User2, id, append([]byte{0}, secret...))
 	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 10*g.Zexp)
 
 	proxyUnlockPtlcAs(t, z, g.User3, id, g.User2.Address, secret, nil)
