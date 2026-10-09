@@ -41,8 +41,8 @@ func activatePtlc(t *testing.T, z mock.MockZenon) {
 		Address:   g.Spork.Address,
 		ToAddress: types.SporkContract,
 		Data: definition.ABISpork.PackMethodPanic(definition.SporkCreateMethodName,
-			"spork-ptlc",              // name
-			"activate spork for ptlc", // description
+			"spork-ptlc",
+			"activate spork for ptlc",
 		),
 	}, nil, mock.SkipVmChanges)
 	z.InsertNewMomentum()
@@ -54,7 +54,7 @@ func activatePtlc(t *testing.T, z mock.MockZenon) {
 		Address:   g.Spork.Address,
 		ToAddress: types.SporkContract,
 		Data: definition.ABISpork.PackMethodPanic(definition.SporkActivateMethodName,
-			id, // id
+			id,
 		),
 	}, nil, mock.SkipVmChanges)
 	z.InsertNewMomentum()
@@ -187,15 +187,14 @@ t=2001-09-09T01:49:50+0000 lvl=dbug msg="invalid create - amount must be positiv
 `)
 	activatePtlc(t, z)
 
-	// user 1 creates a ptlc for user 2
 	z.InsertSendBlock(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
-			int64(genesisTimestamp+300), // expiration time
-			definition.PointTypeED25519, // point type
-			g.User2.Public,              // point lock
-			types.ZeroAddress,           // destination
+			int64(genesisTimestamp+300),
+			definition.PointTypeED25519,
+			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0),
@@ -219,15 +218,14 @@ func TestPtlc_unlock(t *testing.T) {
 	defer z.StopPanic()
 	activatePtlc(t, z)
 
-	// user 1 creates a ptlc for user 2
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
-			int64(genesisTimestamp+300), // expiration time
-			definition.PointTypeED25519, // point type
-			g.User2.Public,              // point lock
-			types.ZeroAddress,           // destination
+			int64(genesisTimestamp+300),
+			definition.PointTypeED25519,
+			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -258,19 +256,17 @@ func TestPtlc_unlock(t *testing.T) {
 	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 10*g.Zexp)
 	z.ExpectBalance(types.PtlcContract, types.QsrTokenStandard, 0*g.Zexp)
 
-	// user 1 tries to reclaim unexpired
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
-			ptlcId, // entry id
+			ptlcId,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
 	}).Error(t, constants.ReclaimNotDue)
 	z.InsertNewMomentum()
 
-	// user 2 tries to unlock with wrong signature
 	wrong_message := ptlcUnlockMessage(z, definition.PointTypeED25519, ptlcId, g.User2.Address)
 	wrong_message[0] ^= 1
 	wrong_signature := g.User2.Sign(wrong_message)
@@ -278,8 +274,8 @@ func TestPtlc_unlock(t *testing.T) {
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId,          // entry id
-			wrong_signature, // signature
+			ptlcId,
+			wrong_signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -287,13 +283,12 @@ func TestPtlc_unlock(t *testing.T) {
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	// user 2 tries to unlock with wrong signature
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId,              // entry id
-			wrong_signature[1:], // signature
+			ptlcId,
+			wrong_signature[1:],
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -301,15 +296,14 @@ func TestPtlc_unlock(t *testing.T) {
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	// user 2 tries to unlock with a pre-domain-separation signature
 	old_message := crypto.Hash(common.JoinBytes(ptlcId.Bytes(), g.User2.Address.Bytes()))
 	old_signature := g.User2.Sign(old_message)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId,        // entry id
-			old_signature, // signature
+			ptlcId,
+			old_signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -317,15 +311,14 @@ func TestPtlc_unlock(t *testing.T) {
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	// user2 unlocks with correct signature
 	mh := ptlcUnlockMessage(z, definition.PointTypeED25519, ptlcId, g.User2.Address)
 	signature := g.User2.Sign(mh)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId,    // entry id
-			signature, // signature
+			ptlcId,
+			signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -354,15 +347,14 @@ func TestPtlc_proxy_unlock(t *testing.T) {
 	defer z.StopPanic()
 	activatePtlc(t, z)
 
-	// user 1 creates a ptlc for user 2
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
-			int64(genesisTimestamp+300), // expiration time
-			definition.PointTypeED25519, // point type
-			g.User2.Public,              // point lock
-			types.ZeroAddress,           // destination
+			int64(genesisTimestamp+300),
+			definition.PointTypeED25519,
+			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -395,15 +387,14 @@ func TestPtlc_proxy_unlock(t *testing.T) {
 
 	unlock_message := ptlcUnlockMessage(z, definition.PointTypeED25519, ptlcId, g.User2.Address)
 
-	// user 3 tries to proxy unlock for user 2 with wrong signature
 	wrong_signature := g.User3.Sign(unlock_message)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User3.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName,
-			ptlcId,          // entry id
-			g.User2.Address, // destination
-			wrong_signature, // signature
+			ptlcId,
+			g.User2.Address,
+			wrong_signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -413,14 +404,13 @@ func TestPtlc_proxy_unlock(t *testing.T) {
 
 	right_signature := g.User2.Sign(unlock_message)
 
-	// user 3 tries to proxy unlock for user 2 with wrong destination
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User3.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName,
-			ptlcId,          // entry id
-			g.User3.Address, // destination
-			right_signature, // signature
+			ptlcId,
+			g.User3.Address,
+			right_signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -428,14 +418,13 @@ func TestPtlc_proxy_unlock(t *testing.T) {
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	// user3 proxy unlocks for user 2 with correct signature
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User3.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName,
-			ptlcId,          // entry id
-			g.User2.Address, // destination
-			right_signature, // signature
+			ptlcId,
+			g.User2.Address,
+			right_signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -545,15 +534,14 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 `)
 	activatePtlc(t, z)
 
-	// user 1 creates a ptlc for user 2
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
-			int64(genesisTimestamp+300), // expiration time
-			definition.PointTypeED25519, // point type
-			g.User2.Public,              // point lock
-			types.ZeroAddress,           // destination
+			int64(genesisTimestamp+300),
+			definition.PointTypeED25519,
+			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.QsrTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -584,15 +572,14 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 0*g.Zexp)
 	z.ExpectBalance(types.PtlcContract, types.QsrTokenStandard, 10*g.Zexp)
 
-	// user2 tries to unlock expired with correct signature
 	mh := ptlcUnlockMessage(z, definition.PointTypeED25519, ptlcId, g.User2.Address)
 	signature := g.User2.Sign(mh)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId,    // entry id
-			signature, // signature
+			ptlcId,
+			signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -600,12 +587,11 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	// user 1 reclaims expired
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
-			ptlcId, // entry id
+			ptlcId,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -639,18 +625,15 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg="invalid create - cannot create already 
 	activatePtlc(t, z)
 
 	z.InsertMomentumsTo(30)
-	// Sun Sep 09 2001 01:51:40 GMT+0000
-	// check the time in the logs
 
-	// user 1 creates a ptlc for user 2
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
-			int64(genesisTimestamp+300), // expiration time
-			definition.PointTypeED25519, // point type
-			g.User2.Public,              // point lock
-			types.ZeroAddress,           // destination
+			int64(genesisTimestamp+300),
+			definition.PointTypeED25519,
+			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -670,15 +653,14 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg="invalid unlock - entry is expired" modu
 `)
 	activatePtlc(t, z)
 
-	// user 1 creates a ptlc for user 2
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
-			int64(genesisTimestamp+300), // expiration time
-			definition.PointTypeED25519, // point type
-			g.User2.Public,              // point lock
-			types.ZeroAddress,           // destination
+			int64(genesisTimestamp+300),
+			definition.PointTypeED25519,
+			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -689,18 +671,15 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg="invalid unlock - entry is expired" modu
 	ptlcId := types.HexToHashPanic("b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da")
 
 	z.InsertMomentumsTo(30)
-	// Sun Sep 09 2001 01:51:40 GMT+0000
-	// check the time in the logs
 
-	// user2 tries to unlock expired with correct signature
 	mh := ptlcUnlockMessage(z, definition.PointTypeED25519, ptlcId, g.User2.Address)
 	signature := g.User2.Sign(mh)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId,    // entry id
-			signature, // signature
+			ptlcId,
+			signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -720,15 +699,14 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 `)
 	activatePtlc(t, z)
 
-	// user 1 creates a ptlc for user 2
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
-			int64(genesisTimestamp+300), // expiration time
-			definition.PointTypeED25519, // point type
-			g.User2.Public,              // point lock
-			types.ZeroAddress,           // destination
+			int64(genesisTimestamp+300),
+			definition.PointTypeED25519,
+			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -739,15 +717,12 @@ t=2001-09-09T01:51:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 	ptlcId := types.HexToHashPanic("b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da")
 
 	z.InsertMomentumsTo(30)
-	// Sun Sep 09 2001 01:51:40 GMT+0000
-	// check the time in the logs
 
-	// user 1 reclaims expired
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
-			ptlcId, // entry id
+			ptlcId,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -771,15 +746,14 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 `)
 	activatePtlc(t, z)
 
-	// user 1 creates a ptlc for user 2
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
-			int64(genesisTimestamp+300), // expiration time
-			definition.PointTypeED25519, // point type
-			g.User2.Public,              // point lock
-			types.ZeroAddress,           // destination
+			int64(genesisTimestamp+300),
+			definition.PointTypeED25519,
+			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -789,63 +763,57 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg=reclaimed module=embedded contract=ptlc 
 
 	ptlcId := types.HexToHashPanic("b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da")
 
-	// user 2 tries to reclaim unexpired
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
-			ptlcId, // entry id
+			ptlcId,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
 	}).Error(t, constants.ErrPermissionDenied)
 	z.InsertNewMomentum()
 
-	// user 3 tries to reclaim unexpired
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User3.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
-			ptlcId, // entry id
+			ptlcId,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
 	}).Error(t, constants.ErrPermissionDenied)
 	z.InsertNewMomentum()
 
-	// expire the entry
 	z.InsertMomentumsTo(40)
 
-	// user 2 tries to reclaim expired
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
-			ptlcId, // entry id
+			ptlcId,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
 	}).Error(t, constants.ErrPermissionDenied)
 	z.InsertNewMomentum()
 
-	// user 3 tries to reclaim expired
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User3.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
-			ptlcId, // entry id
+			ptlcId,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
 	}).Error(t, constants.ErrPermissionDenied)
 	z.InsertNewMomentum()
 
-	// user 1 reclaims expired
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
-			ptlcId, // entry id
+			ptlcId,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -881,30 +849,27 @@ t=2001-09-09T01:50:10+0000 lvl=dbug msg="invalid reclaim - entry does not exist"
 
 	nonexistentId := types.HexToHashPanic("7efdcca315f86cdb04e84113bfc5f003fa49c4b3f9b287cd3b4a08d8ccdf6ffc")
 
-	// get ptlcinfo rpc nonexistent
 	common.Json(ptlcApi.GetById(nonexistentId)).Error(t, constants.ErrDataNonExistent)
 
-	// unlock nonexistent
 	mh := ptlcUnlockMessage(z, definition.PointTypeED25519, nonexistentId, g.User2.Address)
 	signature := g.User2.Sign(mh)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			nonexistentId, // entry id
-			signature,     // signature
+			nonexistentId,
+			signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
 	}).Error(t, constants.ErrDataNonExistent)
 	z.InsertNewMomentum()
 
-	// reclaim nonexistent
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
-			nonexistentId, // entry id
+			nonexistentId,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -918,15 +883,14 @@ func TestPtlc_nonexistent_after_unlock(t *testing.T) {
 	defer z.StopPanic()
 	activatePtlc(t, z)
 
-	// user 1 creates a ptlc for user 2
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
-			int64(genesisTimestamp+300), // expiration time
-			definition.PointTypeED25519, // point type
-			g.User2.Public,              // point lock
-			types.ZeroAddress,           // destination
+			int64(genesisTimestamp+300),
+			definition.PointTypeED25519,
+			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -936,15 +900,14 @@ func TestPtlc_nonexistent_after_unlock(t *testing.T) {
 
 	ptlcId := types.HexToHashPanic("b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da")
 
-	// user2 unlocks with correct signature
 	mh := ptlcUnlockMessage(z, definition.PointTypeED25519, ptlcId, g.User2.Address)
 	signature := g.User2.Sign(mh)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId,    // entry id
-			signature, // signature
+			ptlcId,
+			signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -952,28 +915,25 @@ func TestPtlc_nonexistent_after_unlock(t *testing.T) {
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 
-	// get ptlcinfo rpc nonexistent
 	common.Json(ptlcApi.GetById(ptlcId)).Error(t, constants.ErrDataNonExistent)
 
-	// unlock nonexistent
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId,    // entry id
-			signature, // signature
+			ptlcId,
+			signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
 	}).Error(t, constants.ErrDataNonExistent)
 	z.InsertNewMomentum()
 
-	// reclaim nonexistent
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
-			ptlcId, // entry id
+			ptlcId,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -995,15 +955,14 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg="invalid reclaim - entry does not exist"
 `)
 	activatePtlc(t, z)
 
-	// user 1 creates a ptlc for user 2
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
-			int64(genesisTimestamp+300), // expiration time
-			definition.PointTypeED25519, // point type
-			g.User2.Public,              // point lock
-			types.ZeroAddress,           // destination
+			int64(genesisTimestamp+300),
+			definition.PointTypeED25519,
+			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -1013,42 +972,38 @@ t=2001-09-09T01:53:40+0000 lvl=dbug msg="invalid reclaim - entry does not exist"
 
 	ptlcId := types.HexToHashPanic("b228343cbc272f38186bb6bf8fcbb49843194d0ef48df2d652561b3fe9bb62da")
 
-	// user1 reclaims
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
-			ptlcId, // entry id
+			ptlcId,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
 	}).Error(t, nil)
 	z.InsertNewMomentum()
 
-	// get ptlcinfo rpc nonexistent
 	common.Json(ptlcApi.GetById(ptlcId)).Error(t, constants.ErrDataNonExistent)
 
-	// unlock nonexistent
 	mh := ptlcUnlockMessage(z, definition.PointTypeED25519, ptlcId, g.User2.Address)
 	signature := g.User2.Sign(mh)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId,    // entry id
-			signature, // signature
+			ptlcId,
+			signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
 	}).Error(t, constants.ErrDataNonExistent)
 	z.InsertNewMomentum()
 
-	// reclaim nonexistent
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName,
-			ptlcId, // entry id
+			ptlcId,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -1066,15 +1021,14 @@ t=2001-09-09T01:50:00+0000 lvl=dbug msg="invalid create - cannot create already 
 `)
 	activatePtlc(t, z)
 
-	// user tries to create expired ptlc
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
-			int64(genesisTimestamp-300), // expiration time
-			definition.PointTypeED25519, // point type
-			g.User2.Public,              // point lock
-			types.ZeroAddress,           // destination
+			int64(genesisTimestamp-300),
+			definition.PointTypeED25519,
+			g.User2.Public,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -1095,8 +1049,6 @@ t=2001-09-09T01:50:00+0000 lvl=dbug msg="invalid create - cannot create already 
 	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 0*g.Zexp)
 	z.ExpectBalance(types.PtlcContract, types.QsrTokenStandard, 0*g.Zexp)
 }
-
-// BIP340 Testing
 
 func TestPtlc_createRejectsInvalidBIP340Point(t *testing.T) {
 	z := mock.NewMockZenon(t)
@@ -1132,15 +1084,14 @@ func TestPtlc_unlockBIP340(t *testing.T) {
 	prv2, pub2 := btcec.PrivKeyFromBytes(g.Secp2PrvKey)
 	pub2bip340 := schnorr.SerializePubKey(pub2)
 
-	// user 1 creates a ptlc for user 2 using BIP340 point type
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User1.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreatePtlcMethodName,
-			int64(genesisTimestamp+300), // expiration time
-			definition.PointTypeBIP340,  // point type
-			pub2bip340,                  // point lock
-			types.ZeroAddress,           // destination
+			int64(genesisTimestamp+300),
+			definition.PointTypeBIP340,
+			pub2bip340,
+			types.ZeroAddress,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(10 * g.Zexp),
@@ -1173,29 +1124,27 @@ func TestPtlc_unlockBIP340(t *testing.T) {
 `)
 	mh := ptlcUnlockMessage(z, definition.PointTypeBIP340, ptlcId, g.User2.Address)
 
-	// user 2 tries to unlock with wrong signature type
 	wrong_signature := g.User2.Sign(mh)
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId,          // entry id
-			wrong_signature, // signature
+			ptlcId,
+			wrong_signature,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
 	}).Error(t, constants.ErrInvalidPointSignature)
 	z.InsertNewMomentum()
 
-	// user 2 tries to unlock with wrong signature
 	wrong_signature2, _ := schnorr.Sign(prv1, mh)
 	ws2 := wrong_signature2.Serialize()
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId, // entry id
-			ws2,    // signature
+			ptlcId,
+			ws2,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),
@@ -1216,15 +1165,14 @@ func TestPtlc_unlockBIP340(t *testing.T) {
 	}).Error(t, constants.ErrInvalidPointSignature)
 	z.InsertNewMomentum()
 
-	// user2 unlocks with correct signature
 	signature, _ := schnorr.Sign(prv2, mh)
 	sig := signature.Serialize()
 	defer z.CallContract(&nom.AccountBlock{
 		Address:   g.User2.Address,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName,
-			ptlcId, // entry id
-			sig,    // signature
+			ptlcId,
+			sig,
 		),
 		TokenStandard: types.ZnnTokenStandard,
 		Amount:        big.NewInt(0 * g.Zexp),

@@ -2,10 +2,6 @@ package implementation
 
 import (
 	"bytes"
-	"math/big"
-	"reflect"
-	"sort"
-
 	eabi "github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
@@ -14,6 +10,9 @@ import (
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/vm/vm_context"
+	"math/big"
+	"reflect"
+	"sort"
 )
 
 var (

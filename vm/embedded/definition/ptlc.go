@@ -59,28 +59,18 @@ const (
 	PtlcUnlockMessageDomain = "zenon-ptlc-unlock:v1"
 )
 
-// The point types. The first two lock to a public key and are opened by a
-// signature over the unlock message, so the secret behind the lock never
-// reaches the chain: a swap moves it inside an adaptor signature. The third
-// locks to a bare point and is opened by its discrete logarithm, which the
-// claim publishes. It is the lock Lightning's PTLC design describes, offered
-// directly because this VM, unlike Bitcoin script, can multiply a point.
 const (
 	PointTypeED25519 uint8 = iota
 	PointTypeBIP340
 	PointTypeSecp256k1Point
 )
 
-// PointTypePubKeySizes is the size of each type's lock. The secp256k1 point is
-// stored compressed, so that one point has one encoding.
 var PointTypePubKeySizes = map[uint8]uint8{
 	PointTypeED25519:        32,
 	PointTypeBIP340:         32,
 	PointTypeSecp256k1Point: 33,
 }
 
-// PointTypeWitnessSizes is the size of what Unlock carries in its `signature`
-// field: a signature for the key types, the scalar for the point type.
 var PointTypeWitnessSizes = map[uint8]uint8{
 	PointTypeED25519:        64,
 	PointTypeBIP340:         64,
@@ -100,10 +90,6 @@ type CreatePtlcParam struct {
 	Destination    types.Address `json:"destination"`
 }
 
-// PtlcInfo is a stored entry. Destination is the only address an unlock may
-// pay; the zero address means any address the witness binds. A point lock
-// must have one, because its witness is a bare scalar that binds nothing, and
-// anyone who read it from a send block could otherwise claim the funds first.
 type PtlcInfo struct {
 	Id             types.Hash               `json:"id"`
 	TimeLocked     types.Address            `json:"timeLocked"`
@@ -115,9 +101,6 @@ type PtlcInfo struct {
 	Destination    types.Address            `json:"destination"`
 }
 
-// PtlcInfoMarshal is the RPC shape: the amount as a decimal string, as every
-// other embedded contract returns it, so that clients that parse the htlc
-// shape parse this one too.
 type PtlcInfoMarshal struct {
 	Id             types.Hash               `json:"id"`
 	TimeLocked     types.Address            `json:"timeLocked"`
@@ -221,11 +204,6 @@ func unmarshalPtlcInfoKey(key []byte) (*types.Hash, error) {
 	return h, nil
 }
 
-// GetPtlcUnlockMessage is what a key-type witness signs. It binds the chain,
-// the contract, the point type, the entry and the destination, so that a
-// signature made for one of them verifies for no other. The point type does
-// not sign anything: its witness is the scalar itself, and the entry's fixed
-// destination does the binding instead.
 func GetPtlcUnlockMessage(chainIdentifier uint64, pointType uint8, id types.Hash, destination types.Address) []byte {
 	return crypto.Hash(common.JoinBytes(
 		[]byte(PtlcUnlockMessageDomain),

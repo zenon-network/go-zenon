@@ -123,7 +123,6 @@ func TestPtlc_VerifySignatureStableErrors(t *testing.T) {
 	}
 	message := definition.GetPtlcUnlockMessage(chainIdentifier, info.PointType, id, destination)
 
-	// All-0xff is outside the secp256k1 field/order ranges, so ParseSignature fails before verification.
 	common.ExpectError(t, verifyPtlcSignature(info, chainIdentifier, id, destination, bytes.Repeat([]byte{0xff}, 64)), constants.ErrInvalidPointSignature)
 
 	signature, err := schnorr.Sign(privateKey, message)
@@ -420,7 +419,6 @@ func mustDecodeHex(t *testing.T, value string) []byte {
 	return decoded
 }
 
-// Selected BIP340 vectors from bitcoin/bips bip-0340/test-vectors.csv.
 func TestPtlc_BIP340OfficialVectors(t *testing.T) {
 	const (
 		message0 = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -740,8 +738,6 @@ func expectDefinedPtlcError(t *testing.T, err error) {
 
 	switch err {
 	case nil, constants.ErrInvalidPointType, constants.ErrInvalidPointLock, constants.ErrInvalidPointSignature,
-		// the point type's own two: a witness that is not the scalar, and a
-		// point lock that names no destination
 		constants.ErrInvalidPointScalar, constants.ErrInvalidDestination:
 	default:
 		t.Fatalf("unexpected PTLC error: %v", err)

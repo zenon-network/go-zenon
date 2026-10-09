@@ -12,12 +12,6 @@ import (
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
-// The secp256k1 point type at the level of the two functions that decide it:
-// checkPointLock, which says whether a lock may be created, and
-// verifyPointScalar, which says whether a witness opens it. The mock-chain
-// tests in vm/embedded/tests run the same rules through whole calls.
-
-// secp256k1 group order, big endian.
 var secp256k1Order = []byte{
 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
 	0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
@@ -32,8 +26,6 @@ func pointScalar(k uint32) []byte {
 
 func pointAmount() *big.Int { return big.NewInt(1) }
 
-// offCurveX is a compressed encoding whose x has no point above it. About
-// half of all x are such; the first small one is used.
 func offCurveX(t *testing.T) []byte {
 	t.Helper()
 	for x := byte(1); x != 0; x++ {
@@ -60,14 +52,11 @@ func TestPtlc_PointScalarRules(t *testing.T) {
 	secret := pointScalar(123456789)
 	lock := pointOf(secret)
 
-	// the negation of the secret opens the point with the other y, not this one
 	var neg btcec.ModNScalar
 	neg.SetByteSlice(secret)
 	neg.Negate()
 	negBytes := neg.Bytes()
 
-	// secret + n is the same number modulo the order, written another way: a
-	// witness has one encoding, so this is refused
 	plusOrder := make([]byte, 32)
 	carry := 0
 	for i := 31; i >= 0; i-- {
@@ -99,8 +88,6 @@ func TestPtlc_PointScalarRules(t *testing.T) {
 		}
 	}
 
-	// through the entry verifier, the chain, the id and the destination play
-	// no part: a scalar signs nothing, which is why the entry names who is paid
 	info := &definition.PtlcInfo{
 		Id: types.NewHash([]byte("point")), TimeLocked: User1.Address, TokenStandard: types.ZnnTokenStandard,
 		Amount: pointAmount(), ExpirationTime: 1000000000,
@@ -125,7 +112,7 @@ func TestPtlc_PointLockEncoding(t *testing.T) {
 		t.Fatal(err)
 	}
 	otherPrefix := append([]byte{}, lock...)
-	otherPrefix[0] ^= 1 // 02 <-> 03: the same x with the other y, a valid and different lock
+	otherPrefix[0] ^= 1
 	hybrid := append([]byte{}, lock...)
 	hybrid[0] = 0x06
 
@@ -152,8 +139,6 @@ func TestPtlc_PointLockEncoding(t *testing.T) {
 	}
 }
 
-// Which entries may exist. A point lock must name who it pays; a key lock may;
-// and nothing may name an embedded contract, which could not take the payout.
 func TestPtlc_DestinationRules(t *testing.T) {
 	point := pointOf(pointScalar(7))
 	bip340 := point[1:]
@@ -178,7 +163,6 @@ func TestPtlc_DestinationRules(t *testing.T) {
 		if err != c.want {
 			t.Errorf("%s: got %v, want %v", name, err, c.want)
 		}
-		// what may not be created may not be unlocked from storage either
 		stored := checkStoredPtlcInfo(&definition.PtlcInfo{
 			Amount: pointAmount(), ExpirationTime: 1000000000,
 			PointType: c.pointType, PointLock: c.lock, Destination: c.destination,
@@ -189,8 +173,6 @@ func TestPtlc_DestinationRules(t *testing.T) {
 	}
 }
 
-// A witness opens a point lock if and only if it is the canonical encoding of
-// the scalar behind it, whatever bytes are offered.
 func FuzzPtlcPointScalarWitness(f *testing.F) {
 	secret := pointScalar(987654321)
 	lock := pointOf(secret)
@@ -216,9 +198,6 @@ func FuzzPtlcPointScalarWitness(f *testing.F) {
 	})
 }
 
-// A point lock is accepted if and only if it is the compressed encoding of a
-// point on the curve, so that an accepted lock is one somebody can open and
-// one point is one lock.
 func FuzzPtlcPointLockEncoding(f *testing.F) {
 	f.Add(pointOf(pointScalar(7)))
 	f.Add(append([]byte{0x04}, bytes.Repeat([]byte{1}, 32)...))

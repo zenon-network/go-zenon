@@ -22,18 +22,11 @@ var (
 	ptlcLog = common.EmbeddedLogger.New("contract", "ptlc")
 )
 
-// The SEC 1 prefixes of a compressed point, by the parity of its y coordinate.
 const (
 	compressedPointEven = byte(0x02)
 	compressedPointOdd  = byte(0x03)
 )
 
-// This embedded contract locks funds to a point on a curve until a time. Two
-// point types lock to a public key and are opened by an ordinary ED25519 or
-// BIP-340 signature over a domain-separated unlock message; one locks to a
-// secp256k1 point and is opened by the scalar behind it. Which of the two
-// shapes a swap uses, and how the secret moves between chains inside an
-// adaptor signature, is the swap protocol's business, not the contract's.
 func isPositiveAmount(amount *big.Int) bool {
 	return amount != nil && amount.Sign() > 0
 }
@@ -70,10 +63,6 @@ func verifyBIP340Signature(message, pointLock, signature []byte) error {
 	return nil
 }
 
-// verifyPointScalar reports whether scalar is the discrete logarithm of the
-// compressed point lock. The scalar must be canonical: 32 bytes, nonzero and
-// below the group order, so that one secret has exactly one encoding and a
-// witness seen on chain is the same bytes everywhere.
 func verifyPointScalar(pointLock, scalar []byte) error {
 	if len(scalar) != int(definition.PointTypeWitnessSizes[definition.PointTypeSecp256k1Point]) {
 		return constants.ErrInvalidPointScalar
@@ -106,8 +95,6 @@ func checkPointLock(pointType uint8, pointLock []byte) error {
 			return constants.ErrInvalidPointLock
 		}
 	case definition.PointTypeSecp256k1Point:
-		// Compressed encoding only: two encodings of one point would be two
-		// locks, and a point not on the curve can never be opened.
 		if pointLock[0] != compressedPointEven && pointLock[0] != compressedPointOdd {
 			return constants.ErrInvalidPointLock
 		}
@@ -123,12 +110,9 @@ func checkPtlc(param definition.CreatePtlcParam) error {
 		return err
 	}
 
-	// A point lock's witness binds nothing, so the entry has to.
 	if param.PointType == definition.PointTypeSecp256k1Point && param.Destination.IsZero() {
 		return constants.ErrInvalidDestination
 	}
-	// A fixed destination is where the funds will go, with no data; an
-	// embedded contract cannot take such a send, and the funds would be lost.
 	if !param.Destination.IsZero() && isEmbeddedDestination(param.Destination) {
 		return constants.ErrInvalidDestination
 	}
@@ -169,9 +153,6 @@ func checkStoredPtlcInfo(ptlcInfo *definition.PtlcInfo) error {
 	return nil
 }
 
-// verifyPtlcWitness checks the witness of an unlock against the stored lock:
-// a signature over the unlock message for the key types, the scalar for the
-// point type. Every failure is one of the contract's own errors.
 func verifyPtlcWitness(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, id types.Hash, destination types.Address, witness []byte) error {
 	witnessSize, ok := definition.PointTypeWitnessSizes[ptlcInfo.PointType]
 	if !ok {
@@ -191,8 +172,6 @@ func verifyPtlcWitness(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, id
 		unlockMessage := definition.GetPtlcUnlockMessage(chainIdentifier, ptlcInfo.PointType, id, destination)
 		valid, err := wallet.VerifySignature(ed25519.PublicKey(ptlcInfo.PointLock), unlockMessage, witness)
 		if err != nil {
-			// Stored-state validation already checks ED25519 point-lock length;
-			// keep this mapping as defense in depth for direct verifier callers.
 			return constants.ErrInvalidPointLock
 		}
 		if !valid {
@@ -209,8 +188,6 @@ func verifyPtlcWitness(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, id
 	return constants.ErrInvalidPointType
 }
 
-// verifyPtlcSignature is the name the key-type verifier had before the point
-// type existed. Kept for the tests and tools that call it directly.
 func verifyPtlcSignature(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, id types.Hash, destination types.Address, signature []byte) error {
 	return verifyPtlcWitness(ptlcInfo, chainIdentifier, id, destination, signature)
 }
@@ -261,7 +238,6 @@ func (p *CreatePtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 	momentum, err := context.GetFrontierMomentum()
 	common.DealWithErr(err)
 
-	// can't create ptlc that is already expired
 	if momentum.Timestamp.Unix() >= param.ExpirationTime {
 		ptlcLog.Debug("invalid create - cannot create already expired", "address", sendBlock.Address, "time", momentum.Timestamp.Unix(), "expiration-time", param.ExpirationTime)
 		return nil, constants.ErrInvalidExpirationTime
@@ -327,7 +303,6 @@ func (p *ReclaimPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 		return nil, err
 	}
 
-	// only timelocked can reclaim
 	if ptlcInfo.TimeLocked != sendBlock.Address {
 		ptlcLog.Debug("invalid reclaim - permission denied", "id", ptlcInfo.Id, "address", sendBlock.Address)
 		return nil, constants.ErrPermissionDenied
@@ -336,7 +311,6 @@ func (p *ReclaimPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	momentum, err := context.GetFrontierMomentum()
 	common.DealWithErr(err)
 
-	// can only reclaim after the entry is expired
 	if momentum.Timestamp.Unix() < ptlcInfo.ExpirationTime {
 		ptlcLog.Debug("invalid reclaim - entry not expired", "id", ptlcInfo.Id, "address", sendBlock.Address, "time", momentum.Timestamp.Unix(), "expiration-time", ptlcInfo.ExpirationTime)
 		return nil, constants.ReclaimNotDue
@@ -357,7 +331,6 @@ func (p *ReclaimPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 	}, nil
 }
 
-// helper for Unlock and ProxyUnlock
 func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock, id types.Hash, destination types.Address, witness []byte) ([]*nom.AccountBlock, error) {
 	ptlcInfo, err := definition.GetPtlcInfo(context.Storage(), id)
 	if err == constants.ErrDataNonExistent {
@@ -371,7 +344,6 @@ func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock
 		return nil, err
 	}
 
-	// An entry with a fixed destination pays nowhere else, whoever asks.
 	if !ptlcInfo.Destination.IsZero() && destination != ptlcInfo.Destination {
 		ptlcLog.Debug("invalid unlock - wrong destination", "id", ptlcInfo.Id, "address", sendBlock.Address, "destination", destination, "expected", ptlcInfo.Destination)
 		return nil, constants.ErrPermissionDenied
@@ -380,7 +352,6 @@ func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock
 	momentum, err := context.GetFrontierMomentum()
 	common.DealWithErr(err)
 
-	// can only unlock before expiration time
 	if momentum.Timestamp.Unix() >= ptlcInfo.ExpirationTime {
 		ptlcLog.Debug("invalid unlock - entry is expired", "id", ptlcInfo.Id, "address", sendBlock.Address, "time", momentum.Timestamp.Unix(), "expiration-time", ptlcInfo.ExpirationTime)
 		return nil, constants.ErrExpired
@@ -442,7 +413,6 @@ func (p *UnlockPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 
 }
 
-// exact same as unlock but takes in an extra Destination param
 type ProxyUnlockPtlcMethod struct {
 	MethodName string
 }
