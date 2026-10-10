@@ -1,6 +1,7 @@
 package nom
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -289,6 +290,25 @@ func DeProtoAccountBlock(pb *AccountBlockProto) *AccountBlock {
 	}
 	return ab
 }
+
+// EqualBytes reports whether both blocks serialize to identical bytes. This is
+// stricter than comparing identifiers, because some stored fields are not part
+// of the hash.
+func (ab *AccountBlock) EqualBytes(other *AccountBlock) bool {
+	if ab == nil || other == nil {
+		return ab == other
+	}
+	abBytes, err := ab.Serialize()
+	if err != nil {
+		return false
+	}
+	otherBytes, err := other.Serialize()
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(abBytes, otherBytes)
+}
+
 func (ab *AccountBlock) Serialize() ([]byte, error) {
 	return proto.Marshal(ab.Proto())
 }
