@@ -41,7 +41,7 @@ func signatureHashForLog(signature []byte) string {
 }
 
 func isPayableDestination(address types.Address) bool {
-	return !address.IsZero() && !types.IsEmbeddedAddress(address)
+	return address[0] == types.UserAddrByte && !address.IsZero()
 }
 
 func isPtlcWitnessSize(size int) bool {

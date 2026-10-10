@@ -158,6 +158,12 @@ func TestPtlc_DestinationRules(t *testing.T) {
 		"ED25519 lock, an account":                        {definition.PointTypeED25519, User1.Public, User1.Address, nil},
 		"ED25519 lock, an embedded contract":              {definition.PointTypeED25519, User1.Public, types.PlasmaContract, constants.ErrInvalidDestination},
 		"BIP340 lock, an unregistered contract":           {definition.PointTypeBIP340, bip340, types.Address{types.ContractAddrByte, 1}, constants.ErrInvalidDestination},
+		"point lock, the first reserved type":             {definition.PointTypeSecp256k1Point, point, types.Address{types.ContractAddrByte + 1, 1}, constants.ErrInvalidDestination},
+		"point lock, the last reserved type":              {definition.PointTypeSecp256k1Point, point, types.Address{0xff, 1}, constants.ErrInvalidDestination},
+		"BIP340 lock, the first reserved type":            {definition.PointTypeBIP340, bip340, types.Address{types.ContractAddrByte + 1, 1}, constants.ErrInvalidDestination},
+		"BIP340 lock, the last reserved type":             {definition.PointTypeBIP340, bip340, types.Address{0xff, 1}, constants.ErrInvalidDestination},
+		"ED25519 lock, the first reserved type":           {definition.PointTypeED25519, User1.Public, types.Address{types.ContractAddrByte + 1, 1}, constants.ErrInvalidDestination},
+		"ED25519 lock, the last reserved type":            {definition.PointTypeED25519, User1.Public, types.Address{0xff, 1}, constants.ErrInvalidDestination},
 		"a bad lock is reported before a bad destination": {definition.PointTypeSecp256k1Point, point[1:], types.ZeroAddress, constants.ErrInvalidPointLock},
 	} {
 		err := checkPtlc(definition.CreatePtlcParam{ExpirationTime: 1000000000, PointType: c.pointType, PointLock: c.lock, Destination: c.destination})

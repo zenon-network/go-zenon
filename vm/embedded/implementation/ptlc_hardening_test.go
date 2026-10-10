@@ -18,6 +18,8 @@ import (
 
 var (
 	unregisteredContract = types.Address{types.ContractAddrByte, 0xde, 0xad, 0xbe, 0xef}
+	firstReservedAddress = types.Address{types.ContractAddrByte + 1, 0xde, 0xad, 0xbe, 0xef}
+	lastReservedAddress  = types.Address{0xff, 0xde, 0xad, 0xbe, 0xef}
 
 	ed25519SmallOrderLocks = map[string]string{
 		"identity":                   "0100000000000000000000000000000000000000000000000000000000000000",
@@ -187,6 +189,8 @@ func TestPtlc_ProxyUnlockRejectsUnpayableDestination(t *testing.T) {
 		"the zero address":         {types.ZeroAddress, constants.ErrInvalidDestination},
 		"an embedded contract":     {types.PtlcContract, constants.ErrInvalidDestination},
 		"an unregistered contract": {unregisteredContract, constants.ErrInvalidDestination},
+		"the first reserved type":  {firstReservedAddress, constants.ErrInvalidDestination},
+		"the last reserved type":   {lastReservedAddress, constants.ErrInvalidDestination},
 	} {
 		data := definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName, id, c.destination, bytes.Repeat([]byte{1}, 64))
 		if err := method.ValidateSendBlock(&nom.AccountBlock{Amount: big.NewInt(0), Data: data}); err != c.want {
@@ -201,6 +205,8 @@ func TestPtlc_WildcardLockDoesNotPayUnpayableDestination(t *testing.T) {
 		"the zero address":         types.ZeroAddress,
 		"an embedded contract":     types.PtlcContract,
 		"an unregistered contract": unregisteredContract,
+		"the first reserved type":  firstReservedAddress,
+		"the last reserved type":   lastReservedAddress,
 	} {
 		id := types.NewHash([]byte(name))
 		ctx := newTestPtlcContext(chainIdentifier, 100)

@@ -19,6 +19,8 @@ func TestPtlc_sendBlockRefusals(t *testing.T) {
 	activatePtlc(t, z)
 
 	unregisteredContract := types.Address{types.ContractAddrByte, 0xde, 0xad, 0xbe, 0xef}
+	firstReserved := types.Address{types.ContractAddrByte + 1, 0xde, 0xad, 0xbe, 0xef}
+	lastReserved := types.Address{0xff, 0xde, 0xad, 0xbe, 0xef}
 	identityKey := append([]byte{1}, make([]byte, 31)...)
 
 	create := func(pointLock []byte, destination types.Address) *nom.AccountBlock {
@@ -36,7 +38,9 @@ func TestPtlc_sendBlockRefusals(t *testing.T) {
 		}
 	}
 
-	z.InsertSendBlock(create(g.User2.Public, unregisteredContract), constants.ErrInvalidDestination, mock.NoVmChanges)
+	for _, destination := range []types.Address{unregisteredContract, firstReserved, lastReserved} {
+		z.InsertSendBlock(create(g.User2.Public, destination), constants.ErrInvalidDestination, mock.NoVmChanges)
+	}
 	z.InsertSendBlock(create(identityKey, types.ZeroAddress), constants.ErrInvalidPointLock, mock.NoVmChanges)
 
 	ptlcId := z.InsertSendBlock(create(g.User2.Public, types.ZeroAddress), nil, mock.SkipVmChanges).Hash
@@ -65,7 +69,7 @@ func TestPtlc_sendBlockRefusals(t *testing.T) {
 		z.InsertSendBlock(proxyUnlock(g.User2.Address, witness), constants.ErrInvalidPointSignature, mock.NoVmChanges)
 	}
 
-	for _, destination := range []types.Address{types.ZeroAddress, types.PtlcContract, unregisteredContract} {
+	for _, destination := range []types.Address{types.ZeroAddress, types.PtlcContract, unregisteredContract, firstReserved, lastReserved} {
 		signature := g.User2.Sign(ptlcUnlockMessage(z, definition.PointTypeED25519, ptlcId, destination))
 		z.InsertSendBlock(proxyUnlock(destination, signature), constants.ErrInvalidDestination, mock.NoVmChanges)
 	}
