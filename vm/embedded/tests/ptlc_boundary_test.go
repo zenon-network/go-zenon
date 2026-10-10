@@ -104,7 +104,7 @@ func TestPtlc_enforcementHeightBoundary(t *testing.T) {
 	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 10*g.Zexp)
 }
 
-func TestPtlc_createExpiresBetweenSendAndReceive(t *testing.T) {
+func TestPtlc_createExpiresBeforeConfirmation(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	ptlcApi := embedded.NewPtlcApi(z)
 	defer z.StopPanic()
@@ -132,7 +132,7 @@ func TestPtlc_createExpiresBetweenSendAndReceive(t *testing.T) {
 	z.InsertNewMomentum()
 	expired.Error(t, constants.ErrInvalidExpirationTime)
 	if receivedAt := ptlcFrontier(t, z).Timestamp.Unix(); receivedAt <= sentAt+1 {
-		t.Fatalf("the chain did not pass the expiration: %d", receivedAt)
+		t.Fatalf("the confirming momentum did not pass the expiration: %d", receivedAt)
 	}
 
 	autoreceive(t, z, g.User1.Address)
@@ -147,7 +147,7 @@ func TestPtlc_createExpiresBetweenSendAndReceive(t *testing.T) {
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 	if _, err := ptlcApi.GetById(block.Hash); err != nil {
-		t.Fatalf("a create that is still in time at receive was not stored: %v", err)
+		t.Fatalf("a create confirmed in time was not stored: %v", err)
 	}
 	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 10*g.Zexp)
 }
