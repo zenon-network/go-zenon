@@ -380,10 +380,11 @@ func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.Detail
 //
 // How many blocks a momentum may carry is not checked here: before dynamic
 // plasma it is a fixed count, after it a plasma budget, and which rule
-// applies is known only when the momentum is verified against the chain it
-// extends. The momentum verifier owns that check (ErrMContentTooBig). The
-// work here is linear in the list, which the protocol message size bounds.
-// The supplied momentum is not modified.
+// applies is known only against the chain the momentum extends. That check
+// (verifier.MaxMomentumContent) runs in insertMomentum, when the frontier is
+// the momentum's previous, before any block reaches the pool, and again in
+// the momentum verifier. The work here is linear in the list, which the
+// protocol message size bounds. The supplied momentum is not modified.
 func validatePrefetchedBlocks(detailed *nom.DetailedMomentum) error {
 	if detailed == nil || detailed.Momentum == nil {
 		return errors.Errorf("missing momentum")
@@ -439,6 +440,19 @@ func momentumAddresses(detailed *nom.DetailedMomentum) []types.Address {
 // frontierBefore is the canonical frontier the caller observed before the
 // call; it tells a commit failure apart from a failure after the commit.
 func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMomentum, frontierBefore types.HashHeight) error {
+	// How many blocks a momentum may list depends on the chain it extends,
+	// which is the frontier here. The verifier applies the same rule to the
+	// momentum later; applying it first keeps an oversized momentum's blocks
+	// out of the pool and the VM.
+	maxContent, err := verifier.MaxMomentumContent(c.chain.GetFrontierMomentumStore())
+	if err != nil {
+		return err
+	}
+	if uint64(len(detailed.AccountBlocks)) > maxContent {
+		log.Info("refusing momentum with too many account-blocks", "num-blocks", len(detailed.AccountBlocks), "max", maxContent, "momentum-identifier", detailed.Momentum.Identifier())
+		return verifier.ErrMContentTooBig
+	}
+
 	for _, block := range detailed.AccountBlocks {
 		if block.BlockType == nom.BlockTypeContractSend {
 			continue
