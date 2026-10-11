@@ -31,6 +31,10 @@ type rollbackCountingChain struct {
 	// fail after its cache update has already gone through, the way a store
 	// error would.
 	failCommitOf types.Hash
+	// failAfterCommitOf, when set, lets the commit of the momentum with this
+	// hash go through and reports an error afterwards, so the momentum is on
+	// the canonical chain although the call failed.
+	failAfterCommitOf types.Hash
 }
 
 func (c *rollbackCountingChain) RollbackTo(insertLocker sync.Locker, identifier types.HashHeight) error {
@@ -42,7 +46,13 @@ func (c *rollbackCountingChain) AddMomentumTransaction(insertLocker sync.Locker,
 	if !c.failCommitOf.IsZero() && transaction.Momentum.Hash == c.failCommitOf {
 		return errors.Errorf("injected commit failure for %v", transaction.Momentum.Identifier())
 	}
-	return c.Chain.AddMomentumTransaction(insertLocker, transaction)
+	if err := c.Chain.AddMomentumTransaction(insertLocker, transaction); err != nil {
+		return err
+	}
+	if !c.failAfterCommitOf.IsZero() && transaction.Momentum.Hash == c.failAfterCommitOf {
+		return errors.Errorf("injected failure after commit of %v", transaction.Momentum.Identifier())
+	}
+	return nil
 }
 
 // chainSnapshot is everything a failed side-chain insert must leave alone.
@@ -929,4 +939,51 @@ func TestInsertChain_ForkHeadIsJudgedByItsOwnElection(t *testing.T) {
 	common.FailIfErr(t, err)
 	common.Expect(t, counting.rollbacks, 1)
 	expectFrontierAt(t, z.Chain(), fork[len(fork)-1].Momentum)
+}
+
+// TestInsertChain_PostCommitFailureCountsCommittedPrefix pins that the
+// restore decision counts the momentums that are on the chain, not the index
+// of the one that failed: when the failing candidate was committed before its
+// error surfaced, it belongs to the prefix. At the boundary that is the
+// difference between keeping a replacement longer than the removed branch and
+// wrongly rolling it back.
+func TestInsertChain_PostCommitFailureCountsCommittedPrefix(t *testing.T) {
+	cases := []struct {
+		name     string
+		failing  int // index of the candidate whose commit succeeds and then errors
+		restored bool
+	}{
+		{"prefix as long as removed branch is restored", 1, true},
+		{"prefix longer than removed branch is kept", 2, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newForkFixture(t, 7, 9)
+			defer f.z.StopPanic()
+			common.Expect(t, f.removed, 2)
+			counting, bridge := newSideChainBridge(f.z)
+
+			counting.failAfterCommitOf = f.fork[tc.failing].Momentum.Hash
+			index, err := bridge.InsertChain(f.fork)
+			if err == nil {
+				t.Fatal("expected the side chain to be rejected")
+			}
+			// The failing index is reported as such, whatever was kept.
+			common.Expect(t, index, tc.failing)
+			if tc.restored {
+				common.Expect(t, counting.rollbacks, 2)
+				expectChainEquals(t, f.z.Chain(), f.original)
+			} else {
+				common.Expect(t, counting.rollbacks, 1)
+				expectFrontierAt(t, f.z.Chain(), f.fork[tc.failing].Momentum)
+			}
+
+			// With the fault gone the rest of the fork lands on whatever
+			// the node kept.
+			counting.failAfterCommitOf = types.Hash{}
+			_, err = bridge.InsertChain(f.fork)
+			common.FailIfErr(t, err)
+			expectFrontierAt(t, f.z.Chain(), f.fork[len(f.fork)-1].Momentum)
+		})
+	}
 }

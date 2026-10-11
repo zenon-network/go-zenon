@@ -276,32 +276,32 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 			return 0, errors.Errorf("unable to rollback to %v. Reason:%v", target.Identifier(), err)
 		}
 
-		index, err := c.insertMomentums(insert, momentums)
+		failed, committed, err := c.insertMomentums(insert, momentums)
 		if err != nil {
-			// index is also how many candidates were committed. Once that
+			// committed is how many candidates are on the chain. Once that
 			// prefix is longer than the branch it replaced, the node sits on a
 			// valid chain longer than the one it had, so the prefix stays.
 			// A restore only happens while the prefix is at most as long as
 			// the removed branch, which the depth check above bounds to 30;
 			// rolling that far back always fits in the cache's rollback
 			// window, whereas the committed prefix has no such bound.
-			if index > len(removed) {
-				log.Info("side-chain replacement failed after exceeding the removed branch, keeping the applied prefix", "reason", err, "target", target.Identifier(), "num-applied", index, "num-removed", len(removed))
-				return index + start, err
+			if committed > len(removed) {
+				log.Info("side-chain replacement failed after exceeding the removed branch, keeping the applied prefix", "reason", err, "target", target.Identifier(), "num-applied", committed, "num-removed", len(removed))
+				return failed + start, err
 			}
 			log.Info("side-chain replacement failed, restoring original branch", "reason", err, "target", target.Identifier(), "num-momentums", len(removed))
 			if restoreErr := c.restoreBranch(insert, target.Identifier(), removed); restoreErr != nil {
 				log.Crit("chain state uncertain after failed side-chain restore, can't continue", "reason", restoreErr, "cause", err, "target", target.Identifier())
 				os.Exit(2)
 			}
-			return index + start, err
+			return failed + start, err
 		}
 		return 0, nil
 	}
 
-	index, err := c.insertMomentums(insert, momentums)
+	failed, _, err := c.insertMomentums(insert, momentums)
 	if err != nil {
-		return index + start, err
+		return failed + start, err
 	}
 	return 0, nil
 }
@@ -331,9 +331,12 @@ func (c chainBridge) restoreBranch(insert sync.Locker, target types.HashHeight, 
 	return nil
 }
 
-// insertMomentums applies and commits the momentums one by one. The returned
-// index identifies the momentum that failed.
-func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.DetailedMomentum) (int, error) {
+// insertMomentums applies and commits the momentums one by one. On error,
+// failed is the index of the momentum that failed and committed is how many
+// of the momentums are on the canonical chain. The two differ by one when
+// the failing momentum was committed before its error surfaced, so callers
+// that reason about the committed prefix must use committed, not failed.
+func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.DetailedMomentum) (failed, committed int, err error) {
 	for index, supplied := range momentums {
 		// The caller keeps using its own objects concurrently (the fetcher
 		// broadcasts the same DetailedMomentum while importing it), and the
@@ -354,38 +357,44 @@ func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.Detail
 				// snapshot predates that commit, so putting it back would
 				// resurrect pool state that no longer links to the chain.
 				log.Error("momentum committed despite insert error; not restoring account-pool", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
-			} else if restoreErr := c.chain.RestoreUncommitted(insert, snapshot); restoreErr != nil {
+				return index, index + 1, err
+			}
+			if restoreErr := c.chain.RestoreUncommitted(insert, snapshot); restoreErr != nil {
 				log.Error("error while restoring account-pool after failed momentum", "reason", restoreErr, "momentum-identifier", detailed.Momentum.Identifier())
 			}
-			return index, err
+			return index, index, err
 		}
 	}
 
-	return 0, nil
+	return 0, len(momentums), nil
 }
 
 // validatePrefetchedBlocks rejects a detailed momentum whose block list is not
-// exactly the momentum's content, in content order: no nil entries, no more
-// entries than a momentum may hold, and the block at each index matching the
-// content header at the same index by address, hash and height. Every producer
-// of a DetailedMomentum emits the blocks in content order, which is also the
-// order they must be applied in, so a mismatch is malformed input rather than
-// a legitimate alternative layout. A content header listed twice is rejected
-// here as well, so that no duplicate reaches the pool before the verifier
-// sees it. The supplied momentum is not modified.
+// exactly the momentum's content, in content order: no nil entries and the
+// block at each index matching the content header at the same index by
+// address, hash and height. Every producer of a DetailedMomentum emits the
+// blocks in content order, which is also the order they must be applied in,
+// so a mismatch is malformed input rather than a legitimate alternative
+// layout. A content header listed twice is rejected here as well, so that no
+// duplicate reaches the pool before the verifier sees it.
+//
+// How many blocks a momentum may carry is not checked here: before dynamic
+// plasma it is a fixed count, after it a plasma budget, and which rule
+// applies is known only when the momentum is verified against the chain it
+// extends. The momentum verifier owns that check (ErrMContentTooBig). The
+// work here is linear in the list, which the protocol message size bounds.
+// The supplied momentum is not modified.
 func validatePrefetchedBlocks(detailed *nom.DetailedMomentum) error {
 	if detailed == nil || detailed.Momentum == nil {
 		return errors.Errorf("missing momentum")
 	}
 	blocks := detailed.AccountBlocks
 	content := detailed.Momentum.Content
-	if len(blocks) > chain.MaxAccountBlocksInMomentum {
-		return errors.Errorf("too many prefetched account-blocks: %v > %v", len(blocks), chain.MaxAccountBlocksInMomentum)
-	}
 	if len(blocks) != len(content) {
 		return errors.Errorf("prefetched account-blocks (%v) do not match momentum content (%v)", len(blocks), len(content))
 	}
 
+	seen := make(map[types.HashHeight]struct{}, len(content))
 	for index, header := range content {
 		if header == nil {
 			return errors.Errorf("momentum content header at index %v is nil", index)
@@ -397,13 +406,10 @@ func validatePrefetchedBlocks(detailed *nom.DetailedMomentum) error {
 		if block.Address != header.Address || block.Identifier() != header.Identifier() {
 			return errors.Errorf("prefetched account-block at index %v (%v) does not match momentum content header %v", index, block.Header(), header)
 		}
-		// Content is bounded to MaxAccountBlocksInMomentum entries, so a
-		// pairwise scan stays cheap and needs no allocation.
-		for _, earlier := range content[:index] {
-			if earlier.Identifier() == header.Identifier() {
-				return errors.Errorf("duplicate momentum content header %v", header)
-			}
+		if _, duplicate := seen[header.Identifier()]; duplicate {
+			return errors.Errorf("duplicate momentum content header %v", header)
 		}
+		seen[header.Identifier()] = struct{}{}
 	}
 	return nil
 }
