@@ -120,8 +120,10 @@ func makeEndpoint(addr *net.UDPAddr, tcpPort uint16) rpcEndpoint {
 
 func nodeFromRPC(rn rpcNode) (n *Node, valid bool) {
 	// TODO: don't accept localhost, LAN addresses from internet hosts
-	// TODO: check public key is on secp256k1 curve
 	if rn.IP.IsMulticast() || rn.IP.IsUnspecified() || rn.UDP == 0 {
+		return nil, false
+	}
+	if _, err := rn.ID.Pubkey(); err != nil {
 		return nil, false
 	}
 	return newNode(rn.ID, rn.IP, rn.UDP, rn.TCP), true

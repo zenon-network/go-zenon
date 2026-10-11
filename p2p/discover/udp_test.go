@@ -1,7 +1,9 @@
 package discover
 
 import (
+	"bytes"
 	"crypto/ecdsa"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -14,14 +16,15 @@ import (
 // fakeConn is a datagram socket that never delivers anything on its own:
 // reads block until Close and writes are recorded by destination and packet
 // type. Test packets are fed to the real decoder through udp.handlePacket
-// instead. pingSent, when set, runs after each outbound ping is recorded so
-// that a test can answer the ping from the write itself.
+// instead. The packet hooks run after outbound packets are recorded so a
+// test can answer from the write itself, after udp registered its reply.
 type fakeConn struct {
-	mu        sync.Mutex
-	closed    chan struct{}
-	closeOnce sync.Once
-	sent      map[string][]byte // destination -> packet types written
-	pingSent  func(addr *net.UDPAddr)
+	mu           sync.Mutex
+	closed       chan struct{}
+	closeOnce    sync.Once
+	sent         map[string][]byte // destination -> packet types written
+	pingSent     func(addr *net.UDPAddr)
+	findnodeSent func(packet []byte, addr *net.UDPAddr)
 }
 
 func newFakeConn() *fakeConn {
@@ -36,9 +39,17 @@ func (c *fakeConn) ReadFromUDP(b []byte) (int, *net.UDPAddr, error) {
 func (c *fakeConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
 	c.mu.Lock()
 	c.sent[addr.String()] = append(c.sent[addr.String()], b[headSize])
+	pingSent, findnodeSent := c.pingSent, c.findnodeSent
 	c.mu.Unlock()
-	if b[headSize] == pingPacket && c.pingSent != nil {
-		c.pingSent(addr)
+	switch b[headSize] {
+	case pingPacket:
+		if pingSent != nil {
+			pingSent(addr)
+		}
+	case findnodePacket:
+		if findnodeSent != nil {
+			findnodeSent(b, addr)
+		}
 	}
 	return len(b), nil
 }
@@ -302,6 +313,274 @@ func (s *sender) ping(t *testing.T, u *testUDP) {
 	t.Helper()
 	if err := s.deliver(u, pingPacket, s.pingPacket(u)); err != nil {
 		t.Fatalf("ping from %v rejected: %v", s.addr, err)
+	}
+}
+
+// rpcNodeTestIDs returns the secp256k1 generator and the nonzero point
+// (1, 1), which does not satisfy the curve equation y^2 = x^3 + 7.
+func rpcNodeTestIDs() (valid, offCurve NodeID) {
+	valid = MustHexID("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798" +
+		"483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8")
+	offCurve[len(offCurve)/2-1], offCurve[len(offCurve)-1] = 1, 1
+	return valid, offCurve
+}
+
+func TestNodeFromRPCValidatesID(t *testing.T) {
+	validID, offCurveID := rpcNodeTestIDs()
+	if _, err := validID.Pubkey(); err != nil {
+		t.Fatalf("valid secp256k1 fixture rejected: %v", err)
+	}
+	if _, err := offCurveID.Pubkey(); err == nil {
+		t.Fatal("off-curve fixture represents a public key")
+	}
+
+	tests := []struct {
+		name  string
+		id    NodeID
+		ip    net.IP
+		udp   uint16
+		tcp   uint16
+		valid bool
+	}{
+		{"zero identity", NodeID{}, net.IPv4(192, 0, 2, 1), 30301, 30303, false},
+		{"nonzero off-curve identity", offCurveID, net.IPv4(192, 0, 2, 1), 30301, 30303, false},
+		{"IPv4", validID, net.IPv4(192, 0, 2, 1), 30301, 30303, true},
+		{"IPv6", validID, net.ParseIP("2001:db8::1"), 30301, 30303, true},
+		{"IPv4 loopback", validID, net.IPv4(127, 0, 0, 1), 30301, 30303, true},
+		{"IPv6 loopback", validID, net.IPv6loopback, 30301, 30303, true},
+		{"IPv4 private", validID, net.IPv4(10, 0, 0, 1), 30301, 30303, true},
+		{"IPv6 private", validID, net.ParseIP("fd00::1"), 30301, 30303, true},
+		{"zero TCP port", validID, net.IPv4(192, 0, 2, 1), 30301, 0, true},
+		{"IPv4 multicast", validID, net.IPv4(224, 0, 0, 1), 30301, 30303, false},
+		{"IPv6 multicast", validID, net.ParseIP("ff02::1"), 30301, 30303, false},
+		{"IPv4 unspecified", validID, net.IPv4zero, 30301, 30303, false},
+		{"IPv6 unspecified", validID, net.IPv6zero, 30301, 30303, false},
+		{"zero UDP port", validID, net.IPv4(192, 0, 2, 1), 0, 30303, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n, valid := nodeFromRPC(rpcNode{ID: tt.id, IP: tt.ip, UDP: tt.udp, TCP: tt.tcp})
+			if valid != tt.valid {
+				t.Fatalf("nodeFromRPC valid=%v, want %v", valid, tt.valid)
+			}
+			if !tt.valid {
+				if n != nil {
+					t.Errorf("rejected RPC node returned %v", n)
+				}
+				return
+			}
+			if n == nil {
+				t.Fatal("accepted RPC node returned nil")
+			}
+			wantIP := tt.ip
+			if ip4 := wantIP.To4(); ip4 != nil {
+				wantIP = ip4
+			}
+			if n.ID != tt.id || !bytes.Equal(n.IP, wantIP) || n.UDP != tt.udp || n.TCP != tt.tcp {
+				t.Errorf("RPC fields changed: got %+v, want ID=%v IP=%v UDP=%d TCP=%d", n, tt.id, wantIP, tt.udp, tt.tcp)
+			}
+		})
+	}
+}
+
+// discoveryBondRecorder completes valid bonds immediately. Rejected identities
+// are recorded and fail immediately, so an accidental ingress acceptance is
+// observable without waiting for network timeouts.
+type discoveryBondRecorder struct {
+	mu      sync.Mutex
+	validID NodeID
+	pings   map[NodeID]int
+}
+
+func (r *discoveryBondRecorder) ping(id NodeID, _ *net.UDPAddr) error {
+	r.mu.Lock()
+	r.pings[id]++
+	r.mu.Unlock()
+	if id != r.validID {
+		return errUnknownNode
+	}
+	return nil
+}
+
+func (r *discoveryBondRecorder) waitping(id NodeID) error {
+	if id != r.validID {
+		return errUnknownNode
+	}
+	return nil
+}
+
+func (r *discoveryBondRecorder) findnode(NodeID, *net.UDPAddr, NodeID) ([]*Node, error) {
+	return nil, errUnknownNode
+}
+
+func (r *discoveryBondRecorder) close() {}
+
+func TestFindnodeRejectsInvalidNeighborIDsBeforeBonding(t *testing.T) {
+	u := newTestUDP(t, false)
+	defer u.close(t, 5*time.Second)
+	peer := newSender(t, 40000)
+	validID, offCurveID := rpcNodeTestIDs()
+	validRPC := rpcNode{ID: validID, IP: net.IP{10, 0, 0, 2}, UDP: 30301, TCP: 30303}
+
+	// A complete raw bucket includes only one usable node. Counting accepted
+	// nodes instead would wait for respTimeout despite receiving every reply.
+	raw := make([]rpcNode, bucketSize)
+	for i := range raw {
+		id := NodeID{}
+		if i%2 != 0 {
+			id = offCurveID
+		}
+		raw[i] = rpcNode{ID: id, IP: net.IP{192, 0, 2, byte(i + 1)}, UDP: uint16(31000 + i), TCP: uint16(32000 + i)}
+	}
+	raw[len(raw)-1] = validRPC
+	// FINDNODE targets are arbitrary 512-bit values, including off-curve ones.
+	target := offCurveID
+	repliesDone := make(chan error, 1)
+	u.conn.mu.Lock()
+	u.conn.findnodeSent = func(buf []byte, addr *net.UDPAddr) {
+		request, fromID, _, err := decodePacket(buf)
+		if err != nil {
+			repliesDone <- fmt.Errorf("decode outbound FINDNODE: %w", err)
+			return
+		}
+		query, ok := request.(*findnode)
+		if !ok || fromID != u.tab.self.ID || addr.String() != peer.addr.String() {
+			repliesDone <- fmt.Errorf("unexpected outbound FINDNODE: packet=%T from=%v to=%v", request, fromID, addr)
+			return
+		}
+		if query.Target != target {
+			repliesDone <- fmt.Errorf("FINDNODE target changed: got %v, want %v", query.Target, target)
+			return
+		}
+		for start := 0; start < len(raw); start += maxNeighbors {
+			end := start + maxNeighbors
+			if end > len(raw) {
+				end = len(raw)
+			}
+			if err := peer.deliver(u, neighborsPacket, &neighbors{
+				Nodes:      raw[start:end],
+				Expiration: uint64(time.Now().Add(expiration).Unix()),
+			}); err != nil {
+				repliesDone <- fmt.Errorf("deliver neighbors %d:%d: %w", start, end, err)
+				return
+			}
+		}
+		repliesDone <- nil
+	}
+	u.conn.mu.Unlock()
+
+	type findnodeResult struct {
+		nodes []*Node
+		err   error
+	}
+	findnodeDone := make(chan findnodeResult, 1)
+	go func() {
+		nodes, err := u.udp.findnode(peer.id(), peer.addr, target)
+		findnodeDone <- findnodeResult{nodes, err}
+	}()
+	var found findnodeResult
+	select {
+	case found = <-findnodeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("FINDNODE did not complete")
+	}
+	var replyErr error
+	select {
+	case replyErr = <-repliesDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("signed neighbor delivery did not complete")
+	}
+
+	// Bond the actual ingress result on an independent in-memory table. The
+	// transport has no network or goroutines; bondall and its wait group are
+	// both joined before checking for any attempted ping or database write.
+	recorder := &discoveryBondRecorder{validID: validID, pings: make(map[NodeID]int)}
+	tab := newTable(recorder, u.tab.self.ID, u.conn.LocalAddr().(*net.UDPAddr), "")
+	defer tab.Close()
+	versionBefore, err := tab.db.lvl.Has(nodeDBVersionKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bondsDone := make(chan []*Node, 1)
+	go func() {
+		bonded := tab.bondall(found.nodes)
+		tab.wg.Wait()
+		bondsDone <- bonded
+	}()
+	var bonded []*Node
+	select {
+	case bonded = <-bondsDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("bonding ingress results did not complete")
+	}
+
+	// Check side effects first: an ingress count failure must not conceal
+	// invalid identities reaching ping or the zero-ID global key namespace.
+	recorder.mu.Lock()
+	pingCounts := make(map[NodeID]int, len(recorder.pings))
+	for id, count := range recorder.pings {
+		pingCounts[id] = count
+	}
+	recorder.mu.Unlock()
+	for _, id := range []NodeID{{}, offCurveID} {
+		if count := pingCounts[id]; count != 0 {
+			t.Errorf("invalid neighbor %v reached bonding ping %d times", id, count)
+		}
+		for _, field := range []string{nodeDBDiscoverRoot, nodeDBDiscoverPing, nodeDBDiscoverPong} {
+			present, err := tab.db.lvl.Has(makeKey(id, field), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if present {
+				t.Errorf("invalid neighbor %v wrote database field %q", id, field)
+			}
+		}
+	}
+	globalPing, err := tab.db.lvl.Has([]byte(nodeDBDiscoverPing), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if globalPing {
+		t.Error("invalid zero identity wrote lastping into the global namespace")
+	}
+	versionAfter, err := tab.db.lvl.Has(nodeDBVersionKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if versionAfter != versionBefore {
+		t.Errorf("database version-marker presence changed: before=%v after=%v", versionBefore, versionAfter)
+	}
+	for _, field := range []string{nodeDBDiscoverRoot, nodeDBDiscoverPing, nodeDBDiscoverPong} {
+		present, err := tab.db.lvl.Has(makeKey(validID, field), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !present {
+			t.Errorf("valid neighbor has no database field %q", field)
+		}
+	}
+	if got := tab.db.node(validID); got == nil {
+		t.Error("valid neighbor was not persisted")
+	} else if got.ID != validRPC.ID || !bytes.Equal(got.IP, validRPC.IP) || got.UDP != validRPC.UDP || got.TCP != validRPC.TCP {
+		t.Errorf("persisted neighbor fields changed: got %+v, want %+v", got, validRPC)
+	}
+	if count := pingCounts[validID]; count != 1 {
+		t.Errorf("valid neighbor reached bonding ping %d times, want 1", count)
+	}
+	if len(bonded) != 1 || bonded[0].ID != validID {
+		t.Errorf("bonded neighbors=%v, want only the valid identity", bonded)
+	}
+	if found.err != nil {
+		t.Errorf("FINDNODE returned %v after receiving a full raw bucket", found.err)
+	}
+	if replyErr != nil {
+		t.Error(replyErr)
+	}
+	if len(found.nodes) != 1 || found.nodes[0].ID != validID {
+		t.Errorf("FINDNODE returned %d nodes, want only the valid identity", len(found.nodes))
+	}
+	if count := u.conn.count(peer.addr, findnodePacket); count != 1 {
+		t.Errorf("sent %d FINDNODE requests, want 1", count)
 	}
 }
 
