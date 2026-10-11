@@ -23,7 +23,13 @@ func NewPatch() Patch {
 		Batch: new(leveldb.Batch),
 	}
 }
-func NewPatchFromDump(data []byte) (Patch, error) {
+func NewPatchFromDump(data []byte) (patchResult Patch, errResult error) {
+	defer func() {
+		if r := recover(); r != nil {
+			patchResult = nil
+			errResult = fmt.Errorf("invalid patch dump: %v", r)
+		}
+	}()
 	p := &patch{
 		Batch: new(leveldb.Batch),
 	}

@@ -83,11 +83,14 @@ func (h *Hash) Proto() *HashProto {
 		Hash: h[:],
 	}
 }
-func DeProtoHash(pb *HashProto) *Hash {
+func DeProtoHash(pb *HashProto) (*Hash, error) {
+	if pb == nil {
+		return nil, fmt.Errorf("invalid DeProto - nil hash proto")
+	}
 	if len(pb.Hash) != HashSize {
-		panic(fmt.Sprintf("invalid DeProto - wanted hash size %v but got %v", HashSize, len(pb.Hash)))
+		return nil, fmt.Errorf("invalid DeProto - wanted hash size %v but got %v", HashSize, len(pb.Hash))
 	}
 	h := new(Hash)
 	copy(h[:], pb.Hash)
-	return h
+	return h, nil
 }

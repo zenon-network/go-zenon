@@ -1,6 +1,8 @@
 package types
 
 import (
+	"fmt"
+
 	"google.golang.org/protobuf/proto"
 
 	"github.com/zenon-network/go-zenon/common"
@@ -32,11 +34,18 @@ func (b *HashHeight) Proto() *HashHeightProto {
 		Height: b.Height,
 	}
 }
-func DeProtoHashHeight(pb *HashHeightProto) *HashHeight {
-	return &HashHeight{
-		Hash:   *DeProtoHash(pb.Hash),
-		Height: pb.Height,
+func DeProtoHashHeight(pb *HashHeightProto) (*HashHeight, error) {
+	if pb == nil {
+		return nil, fmt.Errorf("invalid DeProto - nil hash height proto")
 	}
+	h, err := DeProtoHash(pb.Hash)
+	if err != nil {
+		return nil, err
+	}
+	return &HashHeight{
+		Hash:   *h,
+		Height: pb.Height,
+	}, nil
 }
 func (b *HashHeight) Serialize() []byte {
 	data, err := proto.Marshal(b.Proto())
@@ -48,5 +57,5 @@ func DeserializeHashHeight(data []byte) (*HashHeight, error) {
 	if err := proto.Unmarshal(data, pb); err != nil {
 		return nil, err
 	}
-	return DeProtoHashHeight(pb), nil
+	return DeProtoHashHeight(pb)
 }

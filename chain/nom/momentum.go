@@ -2,6 +2,7 @@ package nom
 
 import (
 	"crypto/ed25519"
+	"fmt"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -131,24 +132,43 @@ func (m *Momentum) Proto() *MomentumProto {
 		NextWorkPrice:   m.NextWorkPrice,
 	}
 }
-func DeProtoMomentum(pb *MomentumProto) *Momentum {
+func DeProtoMomentum(pb *MomentumProto) (*Momentum, error) {
+	if pb == nil {
+		return nil, fmt.Errorf("invalid DeProto - nil momentum proto")
+	}
+	hash, err := types.DeProtoHash(pb.Hash)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hash: %w", err)
+	}
+	prevHash, err := types.DeProtoHash(pb.PreviousHash)
+	if err != nil {
+		return nil, fmt.Errorf("invalid previous hash: %w", err)
+	}
+	changesHash, err := types.DeProtoHash(pb.ChangesHash)
+	if err != nil {
+		return nil, fmt.Errorf("invalid changes hash: %w", err)
+	}
+	content, err := DeProtoMomentumContent(pb.Content)
+	if err != nil {
+		return nil, fmt.Errorf("invalid content: %w", err)
+	}
 	m := &Momentum{
 		Version:         pb.Version,
 		ChainIdentifier: pb.ChainIdentifier,
-		Hash:            *types.DeProtoHash(pb.Hash),
-		PreviousHash:    *types.DeProtoHash(pb.PreviousHash),
+		Hash:            *hash,
+		PreviousHash:    *prevHash,
 		Height:          pb.Height,
 		TimestampUnix:   pb.Timestamp,
 		Data:            pb.Data,
-		Content:         DeProtoMomentumContent(pb.Content),
-		ChangesHash:     *types.DeProtoHash(pb.ChangesHash),
+		Content:         content,
+		ChangesHash:     *changesHash,
 		PublicKey:       pb.PublicKey,
 		Signature:       pb.Signature,
 		NextFusionPrice: pb.NextFusionPrice,
 		NextWorkPrice:   pb.NextWorkPrice,
 	}
 	m.EnsureCache()
-	return m
+	return m, nil
 }
 func (m *Momentum) Serialize() ([]byte, error) {
 	pb := m.Proto()
@@ -163,5 +183,5 @@ func DeserializeMomentum(data []byte) (*Momentum, error) {
 	if err := proto.Unmarshal(data, pb); err != nil {
 		return nil, err
 	}
-	return DeProtoMomentum(pb), nil
+	return DeProtoMomentum(pb)
 }
