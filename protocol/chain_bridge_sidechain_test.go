@@ -808,16 +808,24 @@ func TestInsertChain_PendingPoolAfterRestore(t *testing.T) {
 	}
 	expectChainEquals(t, f.z.Chain(), f.original)
 
+	// The pool is left as the rollback and the failed insert left it. The
+	// block pending before the side chain arrived is dropped by the
+	// rollback (tracked in #104). The block carried by the failing
+	// candidate was force-inserted before the momentum failed and is put
+	// back with the per-momentum pool snapshot, so it does not stay pending
+	// either: a rejected candidate leaves nothing of itself in the pool.
 	uncommitted := f.z.Chain().GetAllUncommittedAccountBlocks()
-	common.Expect(t, len(uncommitted), len(carried))
-	for i, block := range carried {
-		common.Expect(t, uncommitted[i].Hash, block.Hash)
-	}
 	for _, block := range uncommitted {
 		if block.Hash == pending.Hash {
 			t.Fatal("block pending before the side chain survived the rollback")
 		}
+		for _, carriedBlock := range carried {
+			if block.Hash == carriedBlock.Hash {
+				t.Fatal("block carried by the rejected candidate stayed pending")
+			}
+		}
 	}
+	common.Expect(t, len(uncommitted), 0)
 }
 
 // TestInsertChain_SecondForkAtSameForkPointReplacesFirst replaces the

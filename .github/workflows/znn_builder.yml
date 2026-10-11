@@ -122,6 +122,7 @@ jobs:
           file: build/*
           release_name: ${{ env.GOZENON_VERSION }}
           tag: ${{ env.GOZENON_VERSION }}-alphanet
+          target_commit: ${{ github.sha }}
           file_glob: true
           overwrite: true
           body: ""
@@ -185,6 +186,7 @@ jobs:
           file: universal/*
           release_name: ${{ env.GOZENON_VERSION }}
           tag: ${{ env.GOZENON_VERSION }}-alphanet
+          target_commit: ${{ github.sha }}
           overwrite: true
           file_glob: true
           body: ""
