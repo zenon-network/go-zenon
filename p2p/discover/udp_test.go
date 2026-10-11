@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"sync"
 	"testing"
@@ -325,8 +326,36 @@ func rpcNodeTestIDs() (valid, offCurve NodeID) {
 	return valid, offCurve
 }
 
+// nonCanonicalRPCNodeIDs adds the field prime to X and Y, respectively,
+// of two valid points with small coordinates. Both encodings fit in a
+// NodeID, but neither is a canonical secp256k1 public key encoding.
+func nonCanonicalRPCNodeIDs(t *testing.T) [2]NodeID {
+	t.Helper()
+	ids := [2]NodeID{
+		MustHexID("0000000000000000000000000000000000000000000000000000000000000001" +
+			"4218f20ae6c646b363db68605822fb14264ca8d2587fdd6fbc750d587e76a7ee"),
+		MustHexID("1fe1e5ef3fceb5c135ab7741333ce5a6e80d68167653f6b2b24bcbcfaaaff507" +
+			"0000000000000000000000000000000000000000000000000000000000000001"),
+	}
+	p := crypto.S256().Params().P
+	for i := range ids {
+		if _, err := ids[i].Pubkey(); err != nil {
+			t.Fatalf("canonical point fixture %d rejected: %v", i, err)
+		}
+		coordinate := ids[i][i*32 : (i+1)*32]
+		value := new(big.Int).SetBytes(coordinate)
+		value.Add(value, p)
+		if value.BitLen() > len(coordinate)*8 {
+			t.Fatalf("non-canonical fixture %d does not fit in a NodeID", i)
+		}
+		value.FillBytes(coordinate)
+	}
+	return ids
+}
+
 func TestNodeFromRPCValidatesID(t *testing.T) {
 	validID, offCurveID := rpcNodeTestIDs()
+	nonCanonicalIDs := nonCanonicalRPCNodeIDs(t)
 	if _, err := validID.Pubkey(); err != nil {
 		t.Fatalf("valid secp256k1 fixture rejected: %v", err)
 	}
@@ -344,6 +373,8 @@ func TestNodeFromRPCValidatesID(t *testing.T) {
 	}{
 		{"zero identity", NodeID{}, net.IPv4(192, 0, 2, 1), 30301, 30303, false},
 		{"nonzero off-curve identity", offCurveID, net.IPv4(192, 0, 2, 1), 30301, 30303, false},
+		{"non-canonical X coordinate", nonCanonicalIDs[0], net.IPv4(192, 0, 2, 1), 30301, 30303, false},
+		{"non-canonical Y coordinate", nonCanonicalIDs[1], net.IPv4(192, 0, 2, 1), 30301, 30303, false},
 		{"IPv4", validID, net.IPv4(192, 0, 2, 1), 30301, 30303, true},
 		{"IPv6", validID, net.ParseIP("2001:db8::1"), 30301, 30303, true},
 		{"IPv4 loopback", validID, net.IPv4(127, 0, 0, 1), 30301, 30303, true},
@@ -420,6 +451,7 @@ func TestFindnodeRejectsInvalidNeighborIDsBeforeBonding(t *testing.T) {
 	defer u.close(t, 5*time.Second)
 	peer := newSender(t, 40000)
 	validID, offCurveID := rpcNodeTestIDs()
+	nonCanonicalIDs := nonCanonicalRPCNodeIDs(t)
 	validRPC := rpcNode{ID: validID, IP: net.IP{10, 0, 0, 2}, UDP: 30301, TCP: 30303}
 
 	// A complete raw bucket includes only one usable node. Counting accepted
@@ -427,8 +459,13 @@ func TestFindnodeRejectsInvalidNeighborIDsBeforeBonding(t *testing.T) {
 	raw := make([]rpcNode, bucketSize)
 	for i := range raw {
 		id := NodeID{}
-		if i%2 != 0 {
+		switch i % 4 {
+		case 1:
 			id = offCurveID
+		case 2:
+			id = nonCanonicalIDs[0]
+		case 3:
+			id = nonCanonicalIDs[1]
 		}
 		raw[i] = rpcNode{ID: id, IP: net.IP{192, 0, 2, byte(i + 1)}, UDP: uint16(31000 + i), TCP: uint16(32000 + i)}
 	}
@@ -522,7 +559,7 @@ func TestFindnodeRejectsInvalidNeighborIDsBeforeBonding(t *testing.T) {
 		pingCounts[id] = count
 	}
 	recorder.mu.Unlock()
-	for _, id := range []NodeID{{}, offCurveID} {
+	for _, id := range []NodeID{{}, offCurveID, nonCanonicalIDs[0], nonCanonicalIDs[1]} {
 		if count := pingCounts[id]; count != 0 {
 			t.Errorf("invalid neighbor %v reached bonding ping %d times", id, count)
 		}

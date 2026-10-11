@@ -123,7 +123,14 @@ func nodeFromRPC(rn rpcNode) (n *Node, valid bool) {
 	if rn.IP.IsMulticast() || rn.IP.IsUnspecified() || rn.UDP == 0 {
 		return nil, false
 	}
-	if _, err := rn.ID.Pubkey(); err != nil {
+	pub, err := rn.ID.Pubkey()
+	if err != nil {
+		return nil, false
+	}
+	// The pinned BitCurve predicate reduces coordinates modulo P. Reject
+	// non-canonical encodings even when that predicate accepts the point.
+	p := pub.Curve.Params().P
+	if pub.X.Cmp(p) >= 0 || pub.Y.Cmp(p) >= 0 {
 		return nil, false
 	}
 	return newNode(rn.ID, rn.IP, rn.UDP, rn.TCP), true
