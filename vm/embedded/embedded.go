@@ -236,7 +236,7 @@ var (
 )
 
 // buildEmbeddedVariants precomputes the merged contract map for every
-// combination of the 4 sporks GetEmbeddedMethod consults, so a call
+// combination of the 5 sporks GetEmbeddedMethod consults, so a call
 // only ever does an array lookup rather than rebuilding the map (10
 // contracts, ~60 method structs) from scratch every time. Runs once,
 // lazily, guarded by embeddedVariantsOnce.
