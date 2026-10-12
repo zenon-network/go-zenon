@@ -20,6 +20,7 @@ func (m *stopRecordingManager) Get(types.HashHeight) db.DB         { return nil 
 func (m *stopRecordingManager) GetPatch(types.HashHeight) db.Patch { return nil }
 func (m *stopRecordingManager) Add(db.Transaction) error           { return nil }
 func (m *stopRecordingManager) Pop() error                         { return nil }
+func (m *stopRecordingManager) Rebase(db.DB) error                 { return nil }
 func (m *stopRecordingManager) Location() string                   { return "stop-recording" }
 func (m *stopRecordingManager) Stop() error {
 	m.stopCalls++
