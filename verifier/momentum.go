@@ -196,24 +196,52 @@ func (rmv *rawMomentumVerifier) nextWorkPrice() error {
 	}
 	return nil
 }
+
+// MaxMomentumContent is the most account blocks a momentum extending the
+// store's frontier may list. Before dynamic plasma it is a fixed count; once
+// the spork is active it is derived from the per-momentum plasma budget plus
+// the contract-block cap, since there is no fixed block count there. The
+// verifier applies it to the momentum's content; the chain bridge applies it
+// to a momentum's prefetched blocks before any of them reaches the pool.
+func MaxMomentumContent(momentumStore store.Momentum) (uint64, error) {
+	isDynamicPlasmaActive, err := momentumStore.IsSporkActive(types.DynamicPlasmaSpork)
+	if err != nil {
+		return 0, err
+	}
+	if !isDynamicPlasmaActive {
+		return uint64(chain.MaxAccountBlocksInMomentum), nil
+	}
+	config, err := momentumStore.GetPlasmaVariables()
+	if err != nil {
+		return 0, err
+	}
+	return maxContentUnderPlasma(config), nil
+}
+
+// maxContentUnderPlasma is the block count the plasma budget allows: the
+// user blocks the base-plasma budget pays for plus the contract-block cap.
+func maxContentUnderPlasma(config *definition.PlasmaVariables) uint64 {
+	return config.MaxBasePlasmaInMomentum/constants.AccountBlockBasePlasma + dp.MaxContractBlocks(config)
+}
+
 func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 	// Cheap upper bound on content size before any allocation sized from
 	// attacker-supplied content. On the legacy path this is a fixed
 	// constant; on the dynamic-plasma path it's derived from the
 	// per-momentum plasma cap plus the contract-block count cap, since
-	// there's no fixed block count there.
+	// there's no fixed block count there. The same rule is exported as
+	// MaxMomentumContent for callers that apply it before the verifier.
 	var config *definition.PlasmaVariables
+	maxContent := uint64(chain.MaxAccountBlocksInMomentum)
 	if isDynamicPlasmaActive {
 		var err error
 		config, err = rmv.momentumStore.GetPlasmaVariables()
 		if err != nil {
 			return err
 		}
-		maxContent := config.MaxBasePlasmaInMomentum/constants.AccountBlockBasePlasma + dp.MaxContractBlocks(config)
-		if uint64(len(rmv.momentum.Content)) > maxContent {
-			return ErrMContentTooBig
-		}
-	} else if len(rmv.momentum.Content) > chain.MaxAccountBlocksInMomentum {
+		maxContent = maxContentUnderPlasma(config)
+	}
+	if uint64(len(rmv.momentum.Content)) > maxContent {
 		return ErrMContentTooBig
 	}
 

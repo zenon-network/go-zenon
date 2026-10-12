@@ -68,6 +68,19 @@ func (c chainBridge) AddAccountBlocks(blocks []*nom.AccountBlock) error {
 	}
 	return nil
 }
+
+// poolHoldsSameBytes reports whether the account pool's frontier chain already
+// contains this exact block. A pool copy that matches by identifier but not by
+// bytes must not be reused, because the stored bytes feed into the momentum
+// changes-hash and the momentum was built from the copy passed in here.
+func (c chainBridge) poolHoldsSameBytes(block *nom.AccountBlock) bool {
+	stored, err := c.chain.GetFrontierAccountStore(block.Address).ByHeight(block.Height)
+	if err != nil || stored == nil {
+		return false
+	}
+	return stored.EqualBytes(block)
+}
+
 func (c chainBridge) GetTransactions() []*nom.AccountBlock {
 	blocks := c.chain.GetAllUncommittedAccountBlocks()
 	return blocks
@@ -130,6 +143,22 @@ func (c chainBridge) VerifyMomentum(detailed *nom.DetailedMomentum) error {
 }
 
 func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error) {
+	// Cheap structural check on peer-supplied data before anything below
+	// indexes or dereferences it, before anything is sized from it, before
+	// any rollback and before any pool state is touched. The verifier
+	// repeats the semantic checks later; this only bounds the input and
+	// checks that the blocks are the momentum's content, in content order.
+	// The wire decoder never yields an empty batch or a nil entry; those
+	// cases guard callers.
+	if len(momentums) == 0 {
+		return 0, errors.Errorf("no momentums to insert")
+	}
+	for index, detailed := range momentums {
+		if err := validatePrefetchedBlocks(detailed); err != nil {
+			log.Error("malformed prefetched account-blocks", "reason", err, "index", index)
+			return index, err
+		}
+	}
 	a := momentums[0]
 	b := momentums[len(momentums)-1]
 	log.Info("start inserting chain", "num-momentums", len(momentums), "start-identifier", a.Momentum.Identifier(), "end-identifier", b.Momentum.Identifier())
@@ -247,32 +276,32 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 			return 0, errors.Errorf("unable to rollback to %v. Reason:%v", target.Identifier(), err)
 		}
 
-		index, err := c.insertMomentums(insert, momentums)
+		failed, committed, err := c.insertMomentums(insert, momentums)
 		if err != nil {
-			// index is also how many candidates were committed. Once that
+			// committed is how many candidates are on the chain. Once that
 			// prefix is longer than the branch it replaced, the node sits on a
 			// valid chain longer than the one it had, so the prefix stays.
 			// A restore only happens while the prefix is at most as long as
 			// the removed branch, which the depth check above bounds to 30;
 			// rolling that far back always fits in the cache's rollback
 			// window, whereas the committed prefix has no such bound.
-			if index > len(removed) {
-				log.Info("side-chain replacement failed after exceeding the removed branch, keeping the applied prefix", "reason", err, "target", target.Identifier(), "num-applied", index, "num-removed", len(removed))
-				return index + start, err
+			if committed > len(removed) {
+				log.Info("side-chain replacement failed after exceeding the removed branch, keeping the applied prefix", "reason", err, "target", target.Identifier(), "num-applied", committed, "num-removed", len(removed))
+				return failed + start, err
 			}
 			log.Info("side-chain replacement failed, restoring original branch", "reason", err, "target", target.Identifier(), "num-momentums", len(removed))
 			if restoreErr := c.restoreBranch(insert, target.Identifier(), removed); restoreErr != nil {
 				log.Crit("chain state uncertain after failed side-chain restore, can't continue", "reason", restoreErr, "cause", err, "target", target.Identifier())
 				os.Exit(2)
 			}
-			return index + start, err
+			return failed + start, err
 		}
 		return 0, nil
 	}
 
-	index, err := c.insertMomentums(insert, momentums)
+	failed, _, err := c.insertMomentums(insert, momentums)
 	if err != nil {
-		return index + start, err
+		return failed + start, err
 	}
 	return 0, nil
 }
@@ -302,51 +331,175 @@ func (c chainBridge) restoreBranch(insert sync.Locker, target types.HashHeight, 
 	return nil
 }
 
-// insertMomentums applies and commits the momentums one by one. The returned
-// index identifies the momentum that failed.
-func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.DetailedMomentum) (int, error) {
-	for index, detailed := range momentums {
-		for _, block := range detailed.AccountBlocks {
-			if block.BlockType == nom.BlockTypeContractSend {
-				continue
-			}
-			if patch := c.chain.GetPatch(block.Address, block.Identifier()); patch != nil {
-				// already applied
-				continue
-			}
-			transaction, err := c.supervisor.ApplyBlock(block)
-			if err != nil {
-				log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
-				return index, err
-			}
-			if err := c.chain.ForceAddAccountBlockTransaction(insert, transaction); err != nil {
-				log.Error("error while inserting account-block in pool", "reason", err, "account-block-header", block.Header())
-				return index, err
-			}
-		}
+// insertMomentums applies and commits the momentums one by one. On error,
+// failed is the index of the momentum that failed and committed is how many
+// of the momentums are on the canonical chain. The two differ by one when
+// the failing momentum was committed before its error surfaced, so callers
+// that reason about the committed prefix must use committed, not failed.
+func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.DetailedMomentum) (failed, committed int, err error) {
+	for index, supplied := range momentums {
+		// The caller keeps using its own objects concurrently (the fetcher
+		// broadcasts the same DetailedMomentum while importing it), and the
+		// VM writes computed plasma fields onto whatever block it applies,
+		// so insert works on private copies of the blocks. Copies are made
+		// one momentum at a time so a batch that fails early does not pay
+		// for the momentums it never reaches.
+		detailed := &nom.DetailedMomentum{Momentum: supplied.Momentum, AccountBlocks: copyAccountBlocks(supplied.AccountBlocks)}
 
-		transaction, err := c.supervisor.ApplyMomentum(detailed)
-		if err != nil {
-			return index, err
-		}
-		if err := c.chain.UpdateCache(insert, detailed, transaction.Changes); err != nil {
-			log.Error("error while inserting cache", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
-			return index, err
-		}
-		if err := c.chain.AddMomentumTransaction(insert, transaction); err != nil {
-			log.Error("error while inserting momentum", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
-			var uncertain *chain.ErrCanonicalStateUncertain
-			if errors.As(err, &uncertain) {
-				log.Crit("canonical chain state uncertain after failed momentum insertion, can't continue", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
-				os.Exit(2)
+		// Blocks are force-inserted into the pool before the momentum itself
+		// is validated, so keep a snapshot of every account the momentum
+		// touches and put it back if anything fails.
+		snapshot := c.chain.SnapshotUncommitted(insert, momentumAddresses(detailed))
+		frontierBefore := c.chain.GetFrontierMomentumStore().Identifier()
+		if err := c.insertMomentum(insert, detailed, frontierBefore); err != nil {
+			if c.chain.GetFrontierMomentumStore().Identifier() != frontierBefore {
+				// The momentum was committed before the error surfaced. The
+				// snapshot predates that commit, so putting it back would
+				// resurrect pool state that no longer links to the chain.
+				log.Error("momentum committed despite insert error; not restoring account-pool", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+				return index, index + 1, err
 			}
-			if rollbackErr := c.chain.RollbackCacheTo(insert, detailed.Momentum.Previous()); rollbackErr != nil {
-				log.Crit("cache rollback failed after failed momentum insertion, can't continue", "reason", rollbackErr, "cause", err, "momentum-identifier", detailed.Momentum.Identifier())
-				os.Exit(2)
+			if restoreErr := c.chain.RestoreUncommitted(insert, snapshot); restoreErr != nil {
+				log.Error("error while restoring account-pool after failed momentum", "reason", restoreErr, "momentum-identifier", detailed.Momentum.Identifier())
 			}
-			return index, err
+			return index, index, err
 		}
 	}
 
-	return 0, nil
+	return 0, len(momentums), nil
+}
+
+// validatePrefetchedBlocks rejects a detailed momentum whose block list is not
+// exactly the momentum's content, in content order: no nil entries and the
+// block at each index matching the content header at the same index by
+// address, hash and height. Every producer of a DetailedMomentum emits the
+// blocks in content order, which is also the order they must be applied in,
+// so a mismatch is malformed input rather than a legitimate alternative
+// layout. A content header listed twice is rejected here as well, so that no
+// duplicate reaches the pool before the verifier sees it.
+//
+// How many blocks a momentum may carry is not checked here: before dynamic
+// plasma it is a fixed count, after it a plasma budget, and which rule
+// applies is known only against the chain the momentum extends. That check
+// (verifier.MaxMomentumContent) runs in insertMomentum, when the frontier is
+// the momentum's previous, before any block reaches the pool, and again in
+// the momentum verifier. The work here is linear in the list, which the
+// protocol message size bounds. The supplied momentum is not modified.
+func validatePrefetchedBlocks(detailed *nom.DetailedMomentum) error {
+	if detailed == nil || detailed.Momentum == nil {
+		return errors.Errorf("missing momentum")
+	}
+	blocks := detailed.AccountBlocks
+	content := detailed.Momentum.Content
+	if len(blocks) != len(content) {
+		return errors.Errorf("prefetched account-blocks (%v) do not match momentum content (%v)", len(blocks), len(content))
+	}
+
+	seen := make(map[types.HashHeight]struct{}, len(content))
+	for index, header := range content {
+		if header == nil {
+			return errors.Errorf("momentum content header at index %v is nil", index)
+		}
+		block := blocks[index]
+		if block == nil {
+			return errors.Errorf("prefetched account-block at index %v is nil", index)
+		}
+		if block.Address != header.Address || block.Identifier() != header.Identifier() {
+			return errors.Errorf("prefetched account-block at index %v (%v) does not match momentum content header %v", index, block.Header(), header)
+		}
+		if _, duplicate := seen[header.Identifier()]; duplicate {
+			return errors.Errorf("duplicate momentum content header %v", header)
+		}
+		seen[header.Identifier()] = struct{}{}
+	}
+	return nil
+}
+
+// copyAccountBlocks returns deep copies of the blocks, descendants included,
+// so nothing downstream writes to objects the caller still shares.
+func copyAccountBlocks(blocks []*nom.AccountBlock) []*nom.AccountBlock {
+	copied := make([]*nom.AccountBlock, len(blocks))
+	for index, block := range blocks {
+		copied[index] = block.Copy()
+	}
+	return copied
+}
+
+// momentumAddresses lists each account whose pool state the momentum's blocks
+// can modify.
+func momentumAddresses(detailed *nom.DetailedMomentum) []types.Address {
+	addresses := make([]types.Address, 0, len(detailed.AccountBlocks))
+	for _, block := range detailed.AccountBlocks {
+		addresses = append(addresses, block.Address)
+	}
+	return addresses
+}
+
+// insertMomentum applies the momentum's blocks to the pool, then validates and
+// commits the momentum with its cache state. Under the caller's insert lock.
+// frontierBefore is the canonical frontier the caller observed before the
+// call; it tells a commit failure apart from a failure after the commit.
+func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMomentum, frontierBefore types.HashHeight) error {
+	// How many blocks a momentum may list depends on the chain it extends,
+	// which is the frontier here. The verifier applies the same rule to the
+	// momentum later; applying it first keeps an oversized momentum's blocks
+	// out of the pool and the VM.
+	maxContent, err := verifier.MaxMomentumContent(c.chain.GetFrontierMomentumStore())
+	if err != nil {
+		return err
+	}
+	if uint64(len(detailed.AccountBlocks)) > maxContent {
+		log.Info("refusing momentum with too many account-blocks", "num-blocks", len(detailed.AccountBlocks), "max", maxContent, "momentum-identifier", detailed.Momentum.Identifier())
+		return verifier.ErrMContentTooBig
+	}
+
+	for _, block := range detailed.AccountBlocks {
+		if block.BlockType == nom.BlockTypeContractSend {
+			continue
+		}
+		if c.poolHoldsSameBytes(block) {
+			// already applied
+			continue
+		}
+		transaction, err := c.supervisor.ApplyBlock(block)
+		if err != nil {
+			log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
+			return err
+		}
+		if err := c.chain.ForceAddAccountBlockTransaction(insert, transaction); err != nil {
+			log.Error("error while inserting account-block in pool", "reason", err, "account-block-header", block.Header())
+			return err
+		}
+	}
+
+	transaction, err := c.supervisor.ApplyMomentum(detailed)
+	if err != nil {
+		return err
+	}
+	if err := c.chain.UpdateCache(insert, detailed, transaction.Changes); err != nil {
+		log.Error("error while inserting cache", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+		return err
+	}
+	if err := c.chain.AddMomentumTransaction(insert, transaction); err != nil {
+		log.Error("error while inserting momentum", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+		var uncertain *chain.ErrCanonicalStateUncertain
+		if errors.As(err, &uncertain) {
+			log.Crit("canonical chain state uncertain after failed momentum insertion, can't continue", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+			os.Exit(2)
+		}
+		if c.chain.GetFrontierMomentumStore().Identifier() != frontierBefore {
+			// The momentum is on the canonical chain although the call
+			// reported an error, so the cache state applied above belongs
+			// to the chain as it now is and stays; the caller skips the
+			// pool restore for the same reason.
+			log.Error("momentum committed despite insert error; keeping its cache state", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
+			return err
+		}
+		if rollbackErr := c.chain.RollbackCacheTo(insert, detailed.Momentum.Previous()); rollbackErr != nil {
+			log.Crit("cache rollback failed after failed momentum insertion, can't continue", "reason", rollbackErr, "cause", err, "momentum-identifier", detailed.Momentum.Identifier())
+			os.Exit(2)
+		}
+		return err
+	}
+	return nil
 }

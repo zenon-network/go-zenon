@@ -34,8 +34,30 @@ var (
 	// ABISpork is abi definition of token contract
 	ABISpork = abi.JSONToABIContract(strings.NewReader(jsonSpork))
 
+	// Original authorization window. Kept unchanged so historical
+	// execution results are preserved.
 	CommunitySporkAddressStartHeight uint64 = 10109240 // Targeting 2025-04-16 12:00:00 UTC
 	CommunitySporkAddressEndHeight   uint64 = 13243712 // Targeting 2026-04-16 12:00:00 UTC
+
+	// Renewal authorization window. The start is projected from the observed
+	// mainnet rate of ~11.46s per momentum (frontier 14310887 at
+	// 2026-09-30 10:05:50 UTC) and sits ~30 days after the planned v0.0.9
+	// release so operators have time to upgrade. The end was projected from
+	// frontier 14228943 at 2026-09-19 16:57:40 UTC at ~11.35s per momentum.
+	// At the nominal 10s rate the window would open around 2026-10-30 and
+	// close around 2028-06-24 instead.
+	//
+	// Rollout: the check runs in the contract receive at the height of the
+	// momentum that confirmed the send. Nodes without this window regenerate
+	// that receive with ErrPermissionDenied and reject any momentum that
+	// confirms a community spork send inside [RenewalStart, RenewalEnd). The
+	// chain therefore diverges only when such a send is confirmed while
+	// un-upgraded nodes are still producing or validating momentums. Do not
+	// send community spork transactions until the network runs a release that
+	// includes this window; every node should upgrade before
+	// CommunitySporkAddressRenewalStartHeight so that the window can be used.
+	CommunitySporkAddressRenewalStartHeight uint64 = 14567887 // Targeting 2026-11-03 12:00:00 UTC
+	CommunitySporkAddressRenewalEndHeight   uint64 = 19791986 // Targeting 2028-09-19 12:00:00 UTC
 )
 
 const (
