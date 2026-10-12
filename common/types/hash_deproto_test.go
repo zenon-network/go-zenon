@@ -55,14 +55,22 @@ func TestDeserializeHashHeight_Malformed(t *testing.T) {
 // TestDeserializeAccountHeader_Malformed verifies that DeserializeAccountHeader
 // returns an error instead of panicking on malformed input.
 func TestDeserializeAccountHeader_Malformed(t *testing.T) {
-	// Valid protobuf with AccountHeaderProto containing a nil HashHeight
-	pb := &AccountHeaderProto{}
+	// Build a valid account header, then corrupt only the HashHeight.Hash field.
+	valid := &AccountHeader{
+		Address: Address{1, 2, 3},
+		HashHeight: HashHeight{
+			Hash:   Hash{4, 5, 6},
+			Height: 42,
+		},
+	}
+	pb := valid.Proto()
+	pb.HashHeight.Hash = &HashProto{Hash: []byte{1, 2, 3, 4, 5}} // wrong length
 	data, err := proto.Marshal(pb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = DeserializeAccountHeader(data)
 	if err == nil {
-		t.Fatal("expected error for AccountHeaderProto with nil HashHeight, got nil")
+		t.Fatal("expected error for AccountHeaderProto with wrong-length HashHeight.Hash, got nil")
 	}
 }

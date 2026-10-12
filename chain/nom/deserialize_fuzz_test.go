@@ -29,12 +29,19 @@ func TestDeserializeAccountBlock_MalformedHash(t *testing.T) {
 // returns an error instead of panicking when the protobuf has a wrong-length
 // hash field. Previously this caused a nil-pointer panic in DeProtoHash.
 func TestDeserializeMomentum_MalformedHash(t *testing.T) {
-	// MomentumProto with previousHash of wrong length (5 bytes)
-	pb := &MomentumProto{
-		Version:      1,
-		Height:       42,
-		PreviousHash: &types.HashProto{Hash: []byte{1, 2, 3, 4, 5}},
+	// Build a valid momentum, then corrupt only the PreviousHash field.
+	valid := &Momentum{
+		Version:         1,
+		ChainIdentifier: 1,
+		Hash:            types.Hash{1},
+		PreviousHash:    types.Hash{2},
+		Height:          42,
+		TimestampUnix:   1000000,
+		Content:         MomentumContent{},
+		ChangesHash:     types.Hash{3},
 	}
+	pb := valid.Proto()
+	pb.PreviousHash = &types.HashProto{Hash: []byte{1, 2, 3, 4, 5}} // wrong length
 	data, err := proto.Marshal(pb)
 	if err != nil {
 		t.Fatal(err)

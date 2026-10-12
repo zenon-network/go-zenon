@@ -3,8 +3,10 @@ package momentum
 import (
 	"testing"
 
+	"google.golang.org/protobuf/proto"
 	"github.com/pkg/errors"
 
+	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 )
@@ -41,4 +43,47 @@ func TestAddAccountBlockTransactionPropagatesApplyError(t *testing.T) {
 	if err := store.AddAccountBlockTransaction(header, patch); !errors.Is(err, errForcedApply) {
 		t.Fatalf("expected forced apply error to propagate, got %v", err)
 	}
+}
+
+// TestIdentifier_MalformedFrontierMomentum verifies that Identifier() does
+// not silently return a zero HashHeight when the frontier momentum record in
+// the store is corrupt.  With valid frontier metadata pointing at a height
+// whose serialized momentum is malformed (wrong-length hash), the old code
+// took the nil-frontier branch and returned zero; the fixed code must
+// surface the deserialization error via DealWithErr (panic).
+func TestIdentifier_MalformedFrontierMomentum(t *testing.T) {
+	mem := db.NewMemDB()
+
+	// Build a momentum proto that will fail DeProtoHash on PreviousHash.
+	valid := &nom.Momentum{
+		Version:         1,
+		ChainIdentifier: 1,
+		Hash:            types.Hash{1},
+		PreviousHash:    types.Hash{2},
+		Height:          1,
+		TimestampUnix:   1000000,
+		Content:         nom.MomentumContent{},
+		ChangesHash:     types.Hash{3},
+	}
+	pb := valid.Proto()
+	pb.PreviousHash = &types.HashProto{Hash: []byte{1, 2, 3, 4, 5}} // wrong length
+	badData, err := proto.Marshal(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	version := types.HashHeight{Hash: types.Hash{1}, Height: 1}
+	if err := db.SetFrontier(mem, version, badData); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(nil, mem)
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic from DealWithErr on malformed frontier momentum, got nil")
+		}
+	}()
+	_ = store.Identifier()
 }
