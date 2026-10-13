@@ -34,21 +34,20 @@ import (
 //
 // The entry points for incoming messages are:
 //
-//    h.handleMsg(message)
-//    h.handleBatch(message)
+//	h.handleMsg(message)
+//	h.handleBatch(message)
 //
 // Outgoing calls use the requestOp struct. Register the request before sending it
 // on the connection:
 //
-//    op := &requestOp{ids: ...}
-//    h.addRequestOp(op)
+//	op := &requestOp{ids: ...}
+//	h.addRequestOp(op)
 //
 // Now send the request, then wait for the reply to be delivered through handleMsg:
 //
-//    if err := op.wait(...); err != nil {
-//        h.removeRequestOp(op) // timeout, etc.
-//    }
-//
+//	if err := op.wait(...); err != nil {
+//	    h.removeRequestOp(op) // timeout, etc.
+//	}
 type handler struct {
 	reg            *serviceRegistry
 	unsubscribeCb  *callback
@@ -62,6 +61,14 @@ type handler struct {
 	log            log.Logger
 	allowSubscribe bool
 
+	// callSlots bounds the number of concurrently executing calls per
+	// connection. Slots are acquired by Client.read before dispatching
+	// call messages and released here when the call goroutines complete.
+	// The handler never blocks on this semaphore; acquisition in the read
+	// goroutine applies TCP backpressure without stalling the dispatch
+	// loop.
+	callSlots chan struct{}
+
 	subLock    sync.Mutex
 	serverSubs map[ID]*Subscription
 	// pendingSubs counts subscribe calls that have been accepted against the
@@ -73,9 +80,34 @@ type handler struct {
 	maxServerSubs int
 }
 
+// maxConcurrentCallsPerConn bounds how many calls may be executing at once
+// on a single connection. Slots are acquired in Client.read before a call
+// message is dispatched; when all slots are taken the read goroutine blocks,
+// which stops reading from the network and applies TCP backpressure to the
+// peer. The dispatch loop is never blocked by this limit.
+//
+// A slot is held until the method returns and its reply write finishes or
+// times out (defaultWriteTimeout). A non-reading peer is not disconnected —
+// closing the codec on a write error is a separate change, and aggregate and
+// idle limits belong to the deployment. When the read goroutine is blocked
+// waiting for a slot it cannot read subsequent messages, including
+// .unsubscribe. A client that has saturated the connection cannot shed its
+// own load until at least one in-flight call completes.
+const maxConcurrentCallsPerConn = 64
+
 type callProc struct {
 	ctx       context.Context
 	notifiers []*Notifier
+}
+
+// releaseCallSlot returns one call slot to the semaphore. It is a no-op
+// when callSlots is nil, which is the case for handlers created outside a
+// Client (e.g. HTTP serveSingleRequest) where the semaphore does not apply.
+func (h *handler) releaseCallSlot() {
+	if h.callSlots == nil {
+		return
+	}
+	<-h.callSlots
 }
 
 func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *serviceRegistry, maxServerSubs int) *handler {
@@ -104,7 +136,9 @@ func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *
 }
 
 // handleBatch executes all messages in a batch and returns the responses.
-func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
+// slotAcquired reports whether Client.read acquired a batch-level call slot
+// for this batch (true when at least one message needed one).
+func (h *handler) handleBatch(msgs []*jsonrpcMessage, slotAcquired bool) {
 	// Emit error response for empty batches:
 	if len(msgs) == 0 {
 		h.startCallProc(func(cp *callProc) {
@@ -123,8 +157,13 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 	if len(calls) == 0 {
 		return
 	}
-	// Process calls on a goroutine because they may block indefinitely:
+	// Process calls on a goroutine because they may block indefinitely.
+	// Release the batch-level slot when the batch completes, but only if
+	// Client.read actually acquired one (slotAcquired).
 	h.startCallProc(func(cp *callProc) {
+		if slotAcquired {
+			defer h.releaseCallSlot()
+		}
 		answers := make([]*jsonrpcMessage, 0, len(msgs))
 		responseBytes := 0
 		for i, msg := range calls {
@@ -162,12 +201,18 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 	})
 }
 
-// handleMsg handles a single message.
-func (h *handler) handleMsg(msg *jsonrpcMessage) {
+// handleMsg handles a single message. slotAcquired reports whether
+// Client.read acquired a call slot for this message.
+func (h *handler) handleMsg(msg *jsonrpcMessage, slotAcquired bool) {
 	if ok := h.handleImmediate(msg); ok {
 		return
 	}
 	h.startCallProc(func(cp *callProc) {
+		defer func() {
+			if slotAcquired {
+				h.releaseCallSlot()
+			}
+		}()
 		answer := h.handleCallMsg(cp, msg)
 		h.addSubscriptions(cp.notifiers)
 		if answer != nil {
