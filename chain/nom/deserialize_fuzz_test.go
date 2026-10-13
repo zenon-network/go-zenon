@@ -1,6 +1,7 @@
 package nom
 
 import (
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -49,5 +50,8 @@ func TestDeserializeMomentum_MalformedHash(t *testing.T) {
 	_, err = DeserializeMomentum(data)
 	if err == nil {
 		t.Fatal("expected error for MomentumProto with wrong-length PreviousHash, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid previous hash") {
+		t.Fatalf("expected error to mention 'invalid previous hash', got: %v", err)
 	}
 }

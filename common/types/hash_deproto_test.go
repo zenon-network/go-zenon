@@ -1,6 +1,7 @@
 package types
 
 import (
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -72,5 +73,9 @@ func TestDeserializeAccountHeader_Malformed(t *testing.T) {
 	_, err = DeserializeAccountHeader(data)
 	if err == nil {
 		t.Fatal("expected error for AccountHeaderProto with wrong-length HashHeight.Hash, got nil")
+	}
+	// DeProtoAccountHeader forwards the unwrapped DeProtoHash error.
+	if !strings.Contains(err.Error(), "wanted hash size 32 but got 5") {
+		t.Fatalf("expected hash-size error from DeProtoHash, got: %v", err)
 	}
 }

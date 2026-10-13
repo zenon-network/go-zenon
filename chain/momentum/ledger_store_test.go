@@ -1,10 +1,11 @@
 package momentum
 
 import (
+	"strings"
 	"testing"
 
-	"google.golang.org/protobuf/proto"
 	"github.com/pkg/errors"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common/db"
@@ -83,6 +84,14 @@ func TestIdentifier_MalformedFrontierMomentum(t *testing.T) {
 		r := recover()
 		if r == nil {
 			t.Fatal("expected panic from DealWithErr on malformed frontier momentum, got nil")
+		}
+		// The panic value must identify the malformed field, not just be any error.
+		msg, ok := r.(error)
+		if !ok {
+			t.Fatalf("expected error panic, got %T: %v", r, r)
+		}
+		if !strings.Contains(msg.Error(), "invalid previous hash") {
+			t.Fatalf("expected panic to mention 'invalid previous hash', got: %v", msg)
 		}
 	}()
 	_ = store.Identifier()
