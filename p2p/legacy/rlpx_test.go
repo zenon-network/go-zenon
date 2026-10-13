@@ -385,9 +385,11 @@ func TestHandshakeBoundRejectsOversizedHeader(t *testing.T) {
 	defer responder.fd.Close()
 
 	// The responder's frame RW is still in handshake phase. Send an
-	// authenticated oversized header from the initiator.
+	// authenticated oversized header from the initiator and close the
+	// initiator's end so a regression fails at once with EOF.
 	go func() {
 		_ = writeOversizedFrame(initiator.rw, baseProtocolMaxMsgSize+100)
+		initiator.fd.Close()
 	}()
 
 	_, err := responder.ReadMsg()
@@ -435,7 +437,7 @@ func TestProtoHandshakePromotesFrameLimit(t *testing.T) {
 	msg := p2p.Msg{
 		Code:    0x10,
 		Size:    uint32(len(payload)),
-		Payload: bytesReader(payload),
+		Payload: bytes.NewReader(payload),
 	}
 
 	writeErr := make(chan error, 1)
@@ -472,6 +474,11 @@ func TestHandshakeFailureNoPromotion(t *testing.T) {
 		initiator.fd.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		p2p.SendItems(initiator.rw, discMsg, p2p.DiscTooManyPeers)
 	}()
+	// Read the disconnect frame so the initiator's write goroutine
+	// finishes rather than waiting for handshakeTimeout.
+	go func() {
+		initiator.rw.ReadMsg()
+	}()
 
 	_, err := responder.doProtoHandshake(protoHandshakeMsg(prv1))
 	if err == nil {
@@ -484,9 +491,12 @@ func TestHandshakeFailureNoPromotion(t *testing.T) {
 	initiator.fd.SetWriteDeadline(time.Time{})
 
 	// The responder's frame RW must still be in handshake phase: an
-	// oversized header is still rejected.
+	// oversized header is still rejected. The initiator's end of the
+	// pipe is closed as soon as the header is written so that a
+	// regression in the bound check fails at once with EOF.
 	go func() {
 		_ = writeOversizedFrame(initiator.rw, baseProtocolMaxMsgSize+100)
+		initiator.fd.Close()
 	}()
 	_, err = responder.ReadMsg()
 	if err == nil {
@@ -540,9 +550,8 @@ func TestSetupConnPromotesFrameLimit(t *testing.T) {
 		t.Fatal("peer not admitted")
 	}
 	cli.raiseFrameLimit() // client side only, so it can write 4 KiB
-	fd.SetDeadline(time.Now().Add(5 * time.Second))
 	big := payloadOf(4096)
-	if err := cli.WriteMsg(p2p.Msg{Code: pingMsg, Size: uint32(len(big)), Payload: bytesReader(big)}); err != nil {
+	if err := cli.WriteMsg(p2p.Msg{Code: pingMsg, Size: uint32(len(big)), Payload: bytes.NewReader(big)}); err != nil {
 		t.Fatal(err)
 	}
 	for {
@@ -573,7 +582,7 @@ func TestHandshakeBoundWriteRejectsOversized(t *testing.T) {
 	msg := p2p.Msg{
 		Code:    0x10,
 		Size:    uint32(len(largePayload)),
-		Payload: bytesReader(largePayload),
+		Payload: bytes.NewReader(largePayload),
 	}
 	err := writer.WriteMsg(msg)
 	if err == nil {
@@ -674,7 +683,7 @@ func TestWriteOverflowRejected(t *testing.T) {
 		msg := p2p.Msg{
 			Code:    0x10,
 			Size:    size,
-			Payload: bytesReader(nil),
+			Payload: bytes.NewReader(nil),
 		}
 		err := writer.WriteMsg(msg)
 		if err == nil {
@@ -699,7 +708,7 @@ func TestFrameRWWriteBoundAfterRaise(t *testing.T) {
 	msg := p2p.Msg{
 		Code:    0x10,
 		Size:    maxFrameSize + 1,
-		Payload: bytesReader(nil),
+		Payload: bytes.NewReader(nil),
 	}
 	err := writer.WriteMsg(msg)
 	if err == nil {
@@ -733,23 +742,4 @@ func writeOversizedFrame(writer *rlpxFrameRW, fsize uint32) error {
 	}
 	// Do NOT write the body — ReadMsg should reject based on the header alone.
 	return nil
-}
-
-// bytesReader returns an io.Reader over a byte slice.
-func bytesReader(b []byte) io.Reader {
-	return &sliceReader{b: b, i: 0}
-}
-
-type sliceReader struct {
-	b []byte
-	i int
-}
-
-func (r *sliceReader) Read(p []byte) (n int, err error) {
-	if r.i >= len(r.b) {
-		return 0, io.EOF
-	}
-	n = copy(p, r.b[r.i:])
-	r.i += n
-	return n, nil
 }
