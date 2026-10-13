@@ -36,7 +36,7 @@ const (
 	// does once the reply holds downloader.MaxBlockFetch blocks. It does not
 	// bound the work a found block costs (a momentum read plus one read per
 	// account block). The size of the reply is capped separately by
-	// softResponseLimit (2 MB), which stops the handler once the encoded
+	// SoftResponseLimit (2 MB), which stops the handler once the encoded
 	// reply exceeds that limit.
 	//
 	// The value is twice the reply cap downloader.MaxBlockFetch, which
@@ -48,13 +48,22 @@ const (
 	// this code never names more than the reply cap in one message.
 	MaxBlocksRequest = 256
 
-	// softResponseLimit is the target maximum cumulative size of a GetBlocks
+	// SoftResponseLimit is the target maximum cumulative size of a GetBlocks
 	// reply. The handler stops appending blocks once the encoded reply
 	// exceeds this limit, which bounds the read and encode work a single
 	// request can cause. It is not a hard wire cap: the reply is one message,
 	// and both transports reject frames above their own limit (10 MiB in
 	// libp2p; 10 MiB plus a frame header on legacy RLPx).
-	softResponseLimit = 2 * 1024 * 1024 // 2 MB, matching go-ethereum
+	SoftResponseLimit = 2 * 1024 * 1024 // 2 MB, matching go-ethereum
+
+	// MaxDetailedMomentumWireSize is the largest RLP-encoded DetailedMomentum
+	// the pillar content selector may produce. It is derived from the wire
+	// cap so that a GetBlocks reply can always carry one full momentum plus
+	// the soft reply prefix: gatherBlocksForReply appends a momentum before
+	// checking SoftResponseLimit, so a reply can hold up to SoftResponseLimit
+	// bytes of earlier momentums plus one more. The margin covers the RLP
+	// list header of the reply body.
+	MaxDetailedMomentumWireSize = ProtocolMaxMsgSize - SoftResponseLimit - 4096
 )
 
 // eth protocol message codes

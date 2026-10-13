@@ -5,10 +5,63 @@ import (
 	"container/heap"
 	"sort"
 
+	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/inconshreveable/log15"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/dp"
+	"github.com/zenon-network/go-zenon/protocol"
 )
+
+var log = log15.New("module", "pillar")
+
+// MaxDetailedMomentumSize bounds the RLP-encoded size of a DetailedMomentum
+// that the content selector produces.  It is derived from the wire cap so
+// that a GetBlocks reply can always carry one full momentum plus the soft
+// reply prefix (see protocol.MaxDetailedMomentumWireSize).  See issue #131
+// for the analysis that motivated this budget.
+const MaxDetailedMomentumSize = protocol.MaxDetailedMomentumWireSize
+
+// blockWireSize returns the exact RLP-encoded size of block, including its
+// descendant blocks, by measuring rather than estimating.  This is exact
+// because the selector cannot assume canonical field lengths for blocks it
+// did not build itself (issue #131 review).
+func blockWireSize(block *nom.AccountBlock) int {
+	sz := len(rlpEncoded(block))
+	for _, d := range block.DescendantBlocks {
+		sz += blockWireSize(d)
+	}
+	return sz
+}
+
+// rlpEncoded returns the RLP encoding of block, or nil on failure.
+func rlpEncoded(block *nom.AccountBlock) []byte {
+	encoded, err := rlp.EncodeToBytes(block)
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
+// rlpEncodedMomentum returns the RLP encoding of a Momentum, or nil on failure.
+func rlpEncodedMomentum(m *nom.Momentum) []byte {
+	encoded, err := rlp.EncodeToBytes(m)
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
+// contentEntrySize returns the RLP-encoded size of one AccountHeader entry
+// in the Momentum.Content list.
+func contentEntrySize() int {
+	entry := &types.AccountHeader{}
+	encoded, err := rlp.EncodeToBytes(entry)
+	if err != nil {
+		return 80 // fallback
+	}
+	return len(encoded)
+}
 
 type ContentSelector interface {
 	Content(blocks []*nom.AccountBlock) []*nom.AccountBlock
@@ -118,6 +171,11 @@ func (h *groupHeap) Pop() interface{} {
 func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*nom.AccountBlock {
 	contractBlockCount := 0
 	basePlasma := uint64(0)
+	// Start with the RLP-encoded size of an empty Momentum header.  The
+	// Momentum.Data field is always empty for this producer, so the header
+	// size is constant.  Content entries are added per committed block.
+	momentumHeader := &nom.Momentum{Version: 2, Content: nom.MomentumContent{}}
+	sizeEstimate := len(rlpEncodedMomentum(momentumHeader))
 	toCommit := make([]*nom.AccountBlock, 0, len(blocks))
 	contractBatch := make([]*nom.AccountBlock, 0, int(cs.plasma.MaxContractBlocksInMomentum()))
 	skippedAddresses := make(map[types.Address]bool)
@@ -140,6 +198,23 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 				contractBatch = contractBatch[:0]
 				continue
 			}
+			// Byte-budget check: drop the entire contract batch if it would
+			// push the RLP-encoded DetailedMomentum size over the limit.
+			// Each committed block also adds a content entry (AccountHeader)
+			// to the momentum.
+			batchSize := 0
+			for _, b := range contractBatch {
+				batchSize += blockWireSize(b) + contentEntrySize()
+			}
+			if sizeEstimate+batchSize > MaxDetailedMomentumSize {
+				log.Debug("content selector: dropping contract batch over byte budget", "addresses", len(contractBatch))
+				for _, dropped := range contractBatch {
+					skippedAddresses[dropped.Address] = true
+				}
+				contractBatch = contractBatch[:0]
+				continue
+			}
+			sizeEstimate += batchSize
 			toCommit = append(toCommit, contractBatch...)
 			contractBlockCount += len(contractBatch)
 			contractBatch = contractBatch[:0]
@@ -158,6 +233,18 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 				skippedAddresses[block.Address] = true
 				continue
 			}
+			// Byte-budget check: skip this block (and all its descendants)
+			// if it would push the RLP-encoded DetailedMomentum size over the
+			// limit.  This is defense-in-depth for issue #131: without it a
+			// pillar could produce a momentum whose account blocks exceed
+			// ProtocolMaxMsgSize, making the momentum untransferable.
+			blockSize := blockWireSize(block) + contentEntrySize()
+			if sizeEstimate+blockSize > MaxDetailedMomentumSize {
+				log.Debug("content selector: skipping block over byte budget", "address", block.Address, "height", block.Height)
+				skippedAddresses[block.Address] = true
+				continue
+			}
+			sizeEstimate += blockSize
 			basePlasma += block.BasePlasma
 			toCommit = append(toCommit, block)
 		}
