@@ -115,15 +115,17 @@ func (ms *momentumStore) AddAccountBlockTransaction(header types.AccountHeader, 
 }
 func (ms *momentumStore) Identifier() types.HashHeight {
 	frontier, err := ms.GetFrontierMomentum()
-	if frontier == nil || err == leveldb.ErrNotFound {
+	if err != nil && err != leveldb.ErrNotFound {
+		// A deserialization or I/O error must not be silently swallowed.
+		common.DealWithErr(err)
+	}
+	if frontier == nil {
 		return types.HashHeight{
 			Height: 0,
 			Hash:   types.ZeroHash,
 		}
-	} else {
-		common.DealWithErr(err)
-		return frontier.Identifier()
 	}
+	return frontier.Identifier()
 }
 
 func NewStore(genesis store.Genesis, db db.DB) store.Momentum {

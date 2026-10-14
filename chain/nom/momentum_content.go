@@ -2,6 +2,7 @@ package nom
 
 import (
 	"bytes"
+	"fmt"
 	"sort"
 
 	"github.com/zenon-network/go-zenon/common/types"
@@ -19,12 +20,16 @@ func (mc *MomentumContent) Proto() []*types.AccountHeaderProto {
 	}
 	return list
 }
-func DeProtoMomentumContent(content []*types.AccountHeaderProto) []*types.AccountHeader {
+func DeProtoMomentumContent(content []*types.AccountHeaderProto) ([]*types.AccountHeader, error) {
 	list := make([]*types.AccountHeader, len(content))
 	for i := range content {
-		list[i] = types.DeProtoAccountHeader(content[i])
+		header, err := types.DeProtoAccountHeader(content[i])
+		if err != nil {
+			return nil, fmt.Errorf("invalid momentum content at index %d: %w", i, err)
+		}
+		list[i] = header
 	}
-	return list
+	return list, nil
 }
 func (mc *MomentumContent) Bytes() []byte {
 	arr := ([]*types.AccountHeader)(*mc)

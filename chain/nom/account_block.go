@@ -261,20 +261,43 @@ func (ab *AccountBlock) Proto() *AccountBlockProto {
 
 	return pb
 }
-func DeProtoAccountBlock(pb *AccountBlockProto) *AccountBlock {
+func DeProtoAccountBlock(pb *AccountBlockProto) (*AccountBlock, error) {
+	if pb == nil {
+		return nil, fmt.Errorf("invalid DeProto - nil account block proto")
+	}
+	hash, err := types.DeProtoHash(pb.Hash)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hash: %w", err)
+	}
+	prevHash, err := types.DeProtoHash(pb.PreviousHash)
+	if err != nil {
+		return nil, fmt.Errorf("invalid previous hash: %w", err)
+	}
+	momentumAck, err := types.DeProtoHashHeight(pb.MomentumAcknowledged)
+	if err != nil {
+		return nil, fmt.Errorf("invalid momentum acknowledged: %w", err)
+	}
+	fromBlockHash, err := types.DeProtoHash(pb.FromBlockHash)
+	if err != nil {
+		return nil, fmt.Errorf("invalid from block hash: %w", err)
+	}
+	changesHash, err := types.DeProtoHash(pb.ChangesHash)
+	if err != nil {
+		return nil, fmt.Errorf("invalid changes hash: %w", err)
+	}
 	ab := &AccountBlock{
 		Version:              pb.Version,
 		ChainIdentifier:      pb.ChainIdentifier,
 		BlockType:            pb.BlockType,
-		Hash:                 *types.DeProtoHash(pb.Hash),
-		PreviousHash:         *types.DeProtoHash(pb.PreviousHash),
+		Hash:                 *hash,
+		PreviousHash:         *prevHash,
 		Height:               pb.Height,
-		MomentumAcknowledged: *types.DeProtoHashHeight(pb.MomentumAcknowledged),
+		MomentumAcknowledged: *momentumAck,
 		Address:              *types.DeProtoAddress(pb.Address),
 		ToAddress:            *types.DeProtoAddress(pb.ToAddress),
 		Amount:               common.BytesToBigInt(pb.Amount),
 		TokenStandard:        types.BytesToZTSPanic(pb.TokenStandard),
-		FromBlockHash:        *types.DeProtoHash(pb.FromBlockHash),
+		FromBlockHash:        *fromBlockHash,
 		DescendantBlocks:     make([]*AccountBlock, len(pb.DescendantBlocks)),
 		Data:                 pb.Data,
 		FusedPlasma:          pb.FusedPlasma,
@@ -283,16 +306,20 @@ func DeProtoAccountBlock(pb *AccountBlockProto) *AccountBlock {
 		BasePlasma:           pb.BasePlasma,
 		TotalPlasma:          pb.TotalPlasma,
 
-		ChangesHash: *types.DeProtoHash(pb.ChangesHash),
+		ChangesHash: *changesHash,
 
 		PublicKey: pb.PublicKey,
 		Signature: pb.Signature,
 	}
 
 	for index, dBlockProto := range pb.DescendantBlocks {
-		ab.DescendantBlocks[index] = DeProtoAccountBlock(dBlockProto)
+		dBlock, err := DeProtoAccountBlock(dBlockProto)
+		if err != nil {
+			return nil, fmt.Errorf("invalid descendant block at index %d: %w", index, err)
+		}
+		ab.DescendantBlocks[index] = dBlock
 	}
-	return ab
+	return ab, nil
 }
 
 // EqualBytes reports whether both blocks serialize to identical bytes. This is
@@ -321,7 +348,7 @@ func DeserializeAccountBlock(data []byte) (*AccountBlock, error) {
 	if err := proto.Unmarshal(data, pb); err != nil {
 		return nil, err
 	}
-	return DeProtoAccountBlock(pb), nil
+	return DeProtoAccountBlock(pb)
 }
 
 type AccountBlockMarshal struct {
