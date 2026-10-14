@@ -390,10 +390,27 @@ func (abvt *accountBlockTransactionVerifier) all() error {
 	if err := abvt.producer(); err != nil {
 		return err
 	}
+	if err := abvt.plasmaFields(); err != nil {
+		return err
+	}
 	if err := abvt.descendantBlocks(); err != nil {
 		return err
 	}
 
+	return nil
+}
+func (abvt *accountBlockTransactionVerifier) plasmaFields() error {
+	block := abvt.transaction.Block
+	// BasePlasma and TotalPlasma are serialized but excluded from ComputeHash,
+	// so the hash check above does not bind them. A contract receive is produced
+	// by the VM, which never sets either field; a peer could raise them under an
+	// honest hash, and a node that stored the altered copy would then compute a
+	// divergent momentum changes-hash. Require both to be zero. The parent's
+	// ChangesHash is legitimately non-zero and is already revalidated by the VM.
+	// Enforced unconditionally.
+	if isContractReceive(block) && (block.BasePlasma != 0 || block.TotalPlasma != 0) {
+		return ErrABPlasmaMustBeZero
+	}
 	return nil
 }
 func (abvt *accountBlockTransactionVerifier) signature() error {
@@ -459,6 +476,36 @@ func (abvt *accountBlockTransactionVerifier) descendantBlocks() error {
 			accountStore:  abvt.accountStore,
 			momentumStore: abvt.momentumStore,
 		}).all(); err != nil {
+			return DescendantVerifyError(err)
+		}
+		// Bind the descendant's content and credentials to its hash, the same
+		// transaction-level checks the top-level block gets. The parent only
+		// commits to each descendant's hash, not its content, so without this a
+		// peer can change a descendant's amount, recipient, or data (or pad its
+		// signature/public key) while keeping its hash. Enforced unconditionally.
+		child := &accountBlockTransactionVerifier{
+			transaction:   &nom.AccountBlockTransaction{Block: dBlock},
+			accountStore:  abvt.accountStore,
+			momentumStore: abvt.momentumStore,
+		}
+		if err := child.hash(); err != nil {
+			return DescendantVerifyError(err)
+		}
+		if err := child.signature(); err != nil {
+			return DescendantVerifyError(err)
+		}
+		if err := child.producer(); err != nil {
+			return DescendantVerifyError(err)
+		}
+		// ComputeHash excludes ChangesHash, BasePlasma and TotalPlasma, so the
+		// hash check above does not bind them. A descendant is always a contract
+		// send the VM generates with these zero, so require that; otherwise a
+		// peer could alter these serialized fields under an honest hash and
+		// poison the stored patch.
+		if dBlock.ChangesHash != types.ZeroHash || dBlock.BasePlasma != 0 || dBlock.TotalPlasma != 0 {
+			return DescendantVerifyError(errors.Errorf("descendant carries a non-canonical changes-hash or plasma field"))
+		}
+		if err := child.descendantBlocks(); err != nil {
 			return DescendantVerifyError(err)
 		}
 	}
