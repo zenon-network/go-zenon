@@ -251,16 +251,28 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		if request.Amount > uint64(downloader.MaxHashFetch) {
 			request.Amount = uint64(downloader.MaxHashFetch)
 		}
+		if request.Amount == 0 {
+			return p.SendBlockHashes(nil)
+		}
 		// Calculate the last block that should be retrieved, and short circuit if unavailable
 		last, err := pm.chainman.GetBlockByNumber(request.Number + request.Amount - 1)
 		if err != nil {
 			return err
 		}
 		if last == nil {
+			// The requested range runs past the frontier; clamp to the frontier and
+			// re-bound the count. Compare against the frontier before the subtraction
+			// so Height - Number cannot underflow, and re-cap to MaxHashFetch because
+			// the frontier can be far beyond the originally capped request.
 			last = pm.chainman.CurrentBlock()
+			if last.Height < request.Number {
+				return p.SendBlockHashes(nil)
+			}
 			request.Amount = last.Height - request.Number + 1
-		}
-		if last.Height < request.Number {
+			if request.Amount > uint64(downloader.MaxHashFetch) {
+				request.Amount = uint64(downloader.MaxHashFetch)
+			}
+		} else if last.Height < request.Number {
 			return p.SendBlockHashes(nil)
 		}
 		// Retrieve the hashes from the last block backwards, reverse and return
