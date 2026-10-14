@@ -194,17 +194,18 @@ func TestContent_ByteBudget_CumulativeContractBatches(t *testing.T) {
 // TestContent_ByteBudget_OversizedNonDataField verifies that a block with an
 // oversized non-Data field (e.g. PublicKey) on a nested descendant is
 // correctly measured by the RLP-based size check. With the old
-// estimate-based approach, this block would pass the estimate at ~2 KB
-// while the real RLP is much larger. The selected content's RLP must stay
-// under the budget.
+// estimate-based approach (perBlockFixedSize + len(Data)), this block would
+// pass at ~612 bytes while the real RLP exceeds the budget. The block must
+// be skipped.
 func TestContent_ByteBudget_OversizedNonDataField(t *testing.T) {
 	cs := newTestContentSelector()
 	addr1 := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
 
-	// Parent block with small Data, but descendant has 1 MiB PublicKey.
-	// The old estimate (perBlockFixedSize + len(Data)) would be ~512 bytes
-	// for the descendant. The real RLP is dominated by the 1 MiB PublicKey.
-	bigKey := make([]byte, 1024*1024)
+	// Parent block with small Data, but descendant has a 9 MiB PublicKey.
+	// The old estimate (perBlockFixedSize + len(Data)) would be ~612 bytes
+	// for the descendant. The real RLP is dominated by the 9 MiB PublicKey,
+	// which exceeds the ~8 MiB budget.
+	bigKey := make([]byte, 9*1024*1024)
 	block := &nom.AccountBlock{
 		Height:    1,
 		BlockType: nom.BlockTypeUserSend,
@@ -215,33 +216,22 @@ func TestContent_ByteBudget_OversizedNonDataField(t *testing.T) {
 				Height:    2,
 				BlockType: nom.BlockTypeUserSend,
 				Address:   addr1,
-				PublicKey: bigKey, // 1 MiB non-Data field on nested block
+				PublicKey: bigKey, // 9 MiB non-Data field on nested block
 				Data:      make([]byte, 100),
 			},
 		},
 	}
 
-	// Verify the RLP sizes are indeed large.
+	// Verify the RLP size indeed exceeds the budget.
 	encoded, _ := rlp.EncodeToBytes(block)
-	t.Logf("parent block with 1 MiB PublicKey descendant: RLP size %d", len(encoded))
+	t.Logf("parent block with 9 MiB PublicKey descendant: RLP size %d, budget %d", len(encoded), MaxDetailedMomentumSize)
+	if len(encoded) <= MaxDetailedMomentumSize {
+		t.Fatalf("test setup: block RLP %d should exceed budget %d", len(encoded), MaxDetailedMomentumSize)
+	}
 
-	// The block should be committed (1 MiB + overhead < budget).
+	// The block must be skipped (real RLP > budget).
 	toCommit := cs.filterBlocksToCommit([]*nom.AccountBlock{block})
-	common.Expect(t, len(toCommit), 1)
-
-	// Verify the selected content's RLP is under the budget.
-	dm := &nom.DetailedMomentum{
-		Momentum:      &nom.Momentum{Version: 2, Content: nom.MomentumContent{}},
-		AccountBlocks: toCommit,
-	}
-	dmEncoded, err := rlp.EncodeToBytes(dm)
-	if err != nil {
-		t.Fatalf("RLP encode failed: %v", err)
-	}
-	if len(dmEncoded) > MaxDetailedMomentumSize {
-		t.Errorf("selected DetailedMomentum RLP size %d exceeds budget %d", len(dmEncoded), MaxDetailedMomentumSize)
-	}
-	t.Logf("selected content RLP size %d, budget %d", len(dmEncoded), MaxDetailedMomentumSize)
+	common.Expect(t, len(toCommit), 0)
 }
 
 // TestContent_ByteBudget_BlockWireSize verifies that blockWireSize returns
@@ -257,7 +247,9 @@ func TestContent_ByteBudget_BlockWireSize(t *testing.T) {
 	dataEncoded, _ := rlp.EncodeToBytes(withData)
 	common.Expect(t, blockWireSize(withData), len(dataEncoded))
 
-	// Block with descendants
+	// Block with descendants — rlp.EncodeToBytes already includes
+	// DescendantBlocks, so blockWireSize must equal the encoded length
+	// of the parent alone (not parent + each descendant again).
 	withDesc := &nom.AccountBlock{
 		Data: make([]byte, 500),
 		DescendantBlocks: []*nom.AccountBlock{
@@ -265,10 +257,6 @@ func TestContent_ByteBudget_BlockWireSize(t *testing.T) {
 			{Data: make([]byte, 200)},
 		},
 	}
-	// blockWireSize = parent RLP + descendant1 RLP + descendant2 RLP
-	desc1Encoded, _ := rlp.EncodeToBytes(withDesc.DescendantBlocks[0])
-	desc2Encoded, _ := rlp.EncodeToBytes(withDesc.DescendantBlocks[1])
 	parentEncoded, _ := rlp.EncodeToBytes(withDesc)
-	expectedSize := len(parentEncoded) + len(desc1Encoded) + len(desc2Encoded)
-	common.Expect(t, blockWireSize(withDesc), expectedSize)
+	common.Expect(t, blockWireSize(withDesc), len(parentEncoded))
 }

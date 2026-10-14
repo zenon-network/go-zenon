@@ -27,11 +27,9 @@ const MaxDetailedMomentumSize = protocol.MaxDetailedMomentumWireSize
 // because the selector cannot assume canonical field lengths for blocks it
 // did not build itself (issue #131 review).
 func blockWireSize(block *nom.AccountBlock) int {
-	sz := len(rlpEncoded(block))
-	for _, d := range block.DescendantBlocks {
-		sz += blockWireSize(d)
-	}
-	return sz
+	// rlp.EncodeToBytes already includes DescendantBlocks in the encoding,
+	// so no recursion is needed.
+	return len(rlpEncoded(block))
 }
 
 // rlpEncoded returns the RLP encoding of block, or nil on failure.

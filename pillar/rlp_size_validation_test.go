@@ -66,10 +66,9 @@ func TestContent_ByteBudget_MeasuredSizeIsExact(t *testing.T) {
 		t.Fatalf("RLP encode of block with descendants failed: %v", err)
 	}
 	descMeasured := blockWireSize(withDesc)
-	// blockWireSize = parent RLP + each descendant RLP
-	d1Encoded, _ := rlp.EncodeToBytes(withDesc.DescendantBlocks[0])
-	d2Encoded, _ := rlp.EncodeToBytes(withDesc.DescendantBlocks[1])
-	descActual := len(descEncoded) + len(d1Encoded) + len(d2Encoded)
+	// rlp.EncodeToBytes already includes DescendantBlocks in the encoding,
+	// so the actual size is just the encoded parent.
+	descActual := len(descEncoded)
 	if descMeasured != descActual {
 		t.Errorf("block with descendants: measured (%d) != actual RLP size (%d)", descMeasured, descActual)
 	}
