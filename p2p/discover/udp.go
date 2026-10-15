@@ -120,8 +120,17 @@ func makeEndpoint(addr *net.UDPAddr, tcpPort uint16) rpcEndpoint {
 
 func nodeFromRPC(rn rpcNode) (n *Node, valid bool) {
 	// TODO: don't accept localhost, LAN addresses from internet hosts
-	// TODO: check public key is on secp256k1 curve
 	if rn.IP.IsMulticast() || rn.IP.IsUnspecified() || rn.UDP == 0 {
+		return nil, false
+	}
+	pub, err := rn.ID.Pubkey()
+	if err != nil {
+		return nil, false
+	}
+	// The pinned BitCurve predicate reduces coordinates modulo P. Reject
+	// non-canonical encodings even when that predicate accepts the point.
+	p := pub.Curve.Params().P
+	if pub.X.Cmp(p) >= 0 || pub.Y.Cmp(p) >= 0 {
 		return nil, false
 	}
 	return newNode(rn.ID, rn.IP, rn.UDP, rn.TCP), true
