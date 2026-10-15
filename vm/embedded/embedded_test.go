@@ -19,6 +19,7 @@ func getAllEmbedded() map[types.Address]*embeddedImplementation {
 	applyBridgeAndLiquidityDiffs(contractsMap)
 	applyHtlcDiffs(contractsMap)
 	applyDynamicPlasmaDiffs(contractsMap)
+	applyPtlcDiffs(contractsMap)
 	return contractsMap
 }
 
@@ -93,6 +94,10 @@ func TestDumpContractsABIMethods(t *testing.T) {
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"CancelFuse", "id":"f9ca9dc3", "signature":"CancelFuse(hash)"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"Fuse", "id":"5ac942e8", "signature":"Fuse(address)"}
 {"address":"z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp", "name":"SetVariables", "id":"15db3894", "signature":"SetVariables(uint64,uint64,uint64,uint8,uint8)"}
+{"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"Create", "id":"22cec8ee", "signature":"Create(int64,uint8,bytes,address)"}
+{"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"ProxyUnlock", "id":"8bffc216", "signature":"ProxyUnlock(hash,address,bytes)"}
+{"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"Reclaim", "id":"7e003c8d", "signature":"Reclaim(hash)"}
+{"address":"z1qxemdeddedxptlcxxxxxxxxxxxxxxxxx6lqady", "name":"Unlock", "id":"d33791d3", "signature":"Unlock(hash,bytes)"}
 {"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"CollectReward", "id":"af43d3f0", "signature":"CollectReward()"}
 {"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"Delegate", "id":"7c2d5d6e", "signature":"Delegate(string)"}
 {"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"DepositQsr", "id":"d49577f4", "signature":"DepositQsr()"}

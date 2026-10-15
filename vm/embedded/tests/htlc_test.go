@@ -17,10 +17,6 @@ import (
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
-const (
-	genesisTimestamp = 1000000000
-)
-
 var (
 	// iykyk
 	preimageZ, _ = hex.DecodeString("b7845adcd41eec4e4fa1cc75a868014811b575942c6e4a72551bc01f63705634")
