@@ -59,8 +59,7 @@ func hashCounts(blocks []*AccountBlock) map[types.Hash]int {
 // sentinel revoke, HTLC reclaim) produces a descendant send that the pool
 // commits as its own account block at its own height, and the producer lists
 // every pending height, so the momentum content carries the descendant and
-// its parent as separate entries. Flattening the parent's DescendantBlocks on
-// top of that listed the descendant twice.
+// its parent as separate entries; each must reach a subscription exactly once.
 func TestInsertMomentum_DescendantNotifiedOnce(t *testing.T) {
 	server := GetSubscribeServer(noopChain{})
 	if err := server.Init(); err != nil {
