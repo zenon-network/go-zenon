@@ -55,7 +55,7 @@ type AccountBlock struct {
 	FromHash  types.Hash    `json:"fromHash"`
 }
 
-func newAccountBlock(block *nom.AccountBlock) []*AccountBlock {
+func newAccountBlockFiltered(block *nom.AccountBlock, topLevelBlocks map[types.Hash]bool) []*AccountBlock {
 	all := make([]*AccountBlock, 1, len(block.DescendantBlocks)+1)
 	all[0] = &AccountBlock{
 		BlockType: block.BlockType,
@@ -65,10 +65,35 @@ func newAccountBlock(block *nom.AccountBlock) []*AccountBlock {
 		ToAddress: block.ToAddress,
 		FromHash:  block.FromBlockHash,
 	}
+	// A descendant the momentum lists on its own is already an event of its
+	// own; expanding it here again is what produced the duplicate refund
+	// notifications of #53. A descendant the momentum does not list is still
+	// expanded, so the stream stays complete for either content layout.
 	for _, dBlock := range block.DescendantBlocks {
-		all = append(all, newAccountBlock(dBlock)...)
+		if !topLevelBlocks[dBlock.Hash] {
+			all = append(all, newAccountBlockFiltered(dBlock, topLevelBlocks)...)
+		}
 	}
 	return all
+}
+
+// accountBlockEvents flattens the account blocks a momentum lists into the
+// events to broadcast, in content order, each block once. The pool commits a
+// contract receive's descendants at their own heights and the producer lists
+// every pending height, so a descendant normally appears as its own entry
+// next to its parent; the verifier accepts a content that lists only the
+// parent as well, in which case the descendant is reached through the
+// parent's batch.
+func accountBlockEvents(blocks []*nom.AccountBlock) []*AccountBlock {
+	listed := make(map[types.Hash]bool, len(blocks))
+	for _, block := range blocks {
+		listed[block.Hash] = true
+	}
+	events := make([]*AccountBlock, 0, len(blocks))
+	for _, block := range blocks {
+		events = append(events, newAccountBlockFiltered(block, listed)...)
+	}
+	return events
 }
 
 type Api struct {
@@ -215,10 +240,7 @@ func (s *Server) InsertMomentum(detailed *nom.DetailedMomentum) {
 		s.log.Error("can't insert momentum for broadcast", "reason", "channel is full", "momentum-identifier", detailed.Momentum.Identifier())
 	}
 
-	abEvents := make([]*AccountBlock, 0, len(detailed.AccountBlocks))
-	for _, block := range detailed.AccountBlocks {
-		abEvents = append(abEvents, newAccountBlock(block)...)
-	}
+	abEvents := accountBlockEvents(detailed.AccountBlocks)
 	select {
 	case s.acCh <- abEvents:
 	default:
