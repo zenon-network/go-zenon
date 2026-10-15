@@ -17,6 +17,8 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/inconshreveable/log15"
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/connmgr"
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
@@ -31,6 +33,417 @@ import (
 type syncBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer
+}
+
+// capacityTestConn and capacityTestStream model one shared connection and
+// independently resettable streams. No sockets or production test hooks are
+// needed to drive the real protocol handshake and both admission paths.
+type capacityTestConn struct {
+	network.Conn
+	remote peer.ID
+	done   chan struct{}
+	once   sync.Once
+}
+
+func (c *capacityTestConn) RemotePeer() peer.ID { return c.remote }
+func (c *capacityTestConn) Close() error {
+	c.once.Do(func() { close(c.done) })
+	return nil
+}
+func (c *capacityTestConn) RemoteMultiaddr() ma.Multiaddr {
+	a, _ := ma.NewMultiaddr("/ip4/127.0.0.1/tcp/1")
+	return a
+}
+func (c *capacityTestConn) LocalMultiaddr() ma.Multiaddr { return c.RemoteMultiaddr() }
+
+type capacityTestStream struct {
+	*mockStream
+	conn       *capacityTestConn
+	done       chan struct{}
+	once       sync.Once
+	readGate   <-chan struct{}
+	mu         sync.Mutex
+	resetCount int
+}
+
+func (s *capacityTestStream) Conn() network.Conn { return s.conn }
+func (s *capacityTestStream) Read(p []byte) (int, error) {
+	select {
+	case <-s.conn.done:
+		return 0, errors.New("peer connection closed")
+	case <-s.done:
+		return 0, errors.New("stream reset")
+	default:
+	}
+	if s.readBuf.Len() != 0 {
+		return s.mockStream.Read(p)
+	}
+	if s.readGate != nil {
+		select {
+		case <-s.conn.done:
+			return 0, errors.New("peer connection closed")
+		case <-s.done:
+			return 0, errors.New("stream reset")
+		case <-s.readGate:
+		}
+	}
+	return s.mockStream.Read(p)
+}
+func (s *capacityTestStream) Write(p []byte) (int, error) {
+	select {
+	case <-s.conn.done:
+		return 0, errors.New("peer connection closed")
+	case <-s.done:
+		return 0, errors.New("stream reset")
+	default:
+		return s.mockStream.Write(p)
+	}
+}
+func (s *capacityTestStream) Reset() error {
+	s.mu.Lock()
+	s.resetCount++
+	s.mu.Unlock()
+	s.once.Do(func() { close(s.done) })
+	return nil
+}
+func (s *capacityTestStream) Close() error {
+	s.once.Do(func() { close(s.done) })
+	return nil
+}
+func (s *capacityTestStream) resets() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resetCount
+}
+
+type capacityTestNetwork struct {
+	network.Network
+	srv        *Server
+	conn       *capacityTestConn
+	mu         sync.Mutex
+	closeCount int
+	underLock  bool
+}
+
+func (n *capacityTestNetwork) ClosePeer(id peer.ID) error {
+	held := !n.srv.peerMu.TryLock()
+	if !held {
+		n.srv.peerMu.Unlock()
+	}
+	n.mu.Lock()
+	n.closeCount++
+	n.underLock = held
+	n.mu.Unlock()
+	if id == n.conn.remote {
+		return n.conn.Close()
+	}
+	return fmt.Errorf("unexpected peer close: %s", id)
+}
+func (n *capacityTestNetwork) closes() (int, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.closeCount, n.underLock
+}
+func (n *capacityTestNetwork) Connectedness(id peer.ID) network.Connectedness {
+	select {
+	case <-n.conn.done:
+		return network.NotConnected
+	default:
+		return network.Connected
+	}
+}
+
+type capacityTestHost struct {
+	host.Host
+	net          *capacityTestNetwork
+	stream       *capacityTestStream
+	connectCalls int
+	streamCalls  int
+	dialReserved bool
+}
+
+func (h *capacityTestHost) Network() network.Network { return h.net }
+func (h *capacityTestHost) ConnManager() connmgr.ConnManager {
+	return &connmgr.NullConnMgr{}
+}
+func (h *capacityTestHost) Connect(_ context.Context, info peer.AddrInfo) error {
+	h.connectCalls++
+	h.net.srv.peerMu.RLock()
+	_, h.dialReserved = h.net.srv.dialing[info.ID.String()]
+	h.net.srv.peerMu.RUnlock()
+	return nil
+}
+func (h *capacityTestHost) NewStream(_ context.Context, _ peer.ID, _ ...protocol.ID) (network.Stream, error) {
+	h.streamCalls++
+	return h.stream, nil
+}
+
+func newCapacityTestStream(t *testing.T, conn *capacityTestConn, hs *protoHandshake) *capacityTestStream {
+	t.Helper()
+	s := &capacityTestStream{mockStream: newMockStream(), conn: conn, done: make(chan struct{})}
+	if hs != nil {
+		raw, err := buildRawMessage(handshakeMsg, hs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.readBuf.Write(raw)
+	}
+	return s
+}
+
+func newCapacityTestServer(t *testing.T) (*Server, *capacityTestHost, *protoHandshake) {
+	t.Helper()
+	key, remoteKey := mustGenKey(t), mustGenKey(t)
+	id, err := PeerIDFromECDSA(remoteKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := &Server{
+		PrivateKey: key, MaxPeers: 1, MaxPendingPeers: 2, ctx: ctx,
+		peerMap: make(map[string]*Peer), dialing: make(map[string]struct{}),
+		pendingPeers: make(map[string]struct{}),
+		ourHandshake: &protoHandshake{Version: baseProtocolVersion, ID: PubkeyToNodeID(&key.PublicKey)},
+	}
+	hs := &protoHandshake{Version: baseProtocolVersion, Name: "capacity-test", ID: PubkeyToNodeID(&remoteKey.PublicKey)}
+	conn := &capacityTestConn{remote: id, done: make(chan struct{})}
+	n := &capacityTestNetwork{srv: srv, conn: conn}
+	h := &capacityTestHost{net: n, stream: newCapacityTestStream(t, conn, hs)}
+	srv.host = h
+	t.Cleanup(func() {
+		cancel()
+		conn.Close()
+		done := make(chan struct{})
+		go func() { srv.loopWG.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("adopted peer lifecycle did not finish")
+		}
+	})
+	return srv, h, hs
+}
+
+// assertCapacityConnectionUsable reads a separate competing stream after
+// rejection. Checking ClosePeer's call count alone would miss collateral
+// damage to the shared connection.
+func assertCapacityConnectionUsable(t *testing.T, conn *capacityTestConn) {
+	t.Helper()
+	s := newCapacityTestStream(t, conn, nil)
+	raw, err := buildRawMessage(pingMsg, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.readBuf.Write(raw)
+	msg, err := NewStreamRW(s).ReadMsg()
+	if err != nil || msg.Code != pingMsg {
+		t.Fatalf("competing stream did not survive: code=%d err=%v", msg.Code, err)
+	}
+}
+
+func TestCapacityRejectInbound(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		dialKey    string
+		duplicate  bool
+		wantCloses int
+	}{
+		{name: "untracked", wantCloses: 1},
+		{name: "same_peer_dial", dialKey: "same", wantCloses: 0},
+		{name: "unrelated_peer_dial", dialKey: "other", wantCloses: 1},
+		{name: "duplicate_at_capacity", duplicate: true, wantCloses: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, h, hs := newCapacityTestServer(t)
+			peerKey := h.net.conn.remote.String()
+			occupantKey := "occupant"
+			if tc.duplicate {
+				occupantKey = peerKey
+			}
+			occupant := NewPeer(hs.ID, "occupant", nil)
+			srv.peerMap[occupantKey] = occupant
+			if tc.dialKey != "" {
+				dialKey := "unrelated"
+				if tc.dialKey == "same" {
+					dialKey = peerKey
+				}
+				srv.dialing[dialKey] = struct{}{}
+			}
+			rejected := newCapacityTestStream(t, h.net.conn, hs)
+			srv.handleStream(rejected)
+
+			if got := rejected.resets(); got != 1 {
+				t.Fatalf("rejected stream reset %d times, want 1", got)
+			}
+			if got, held := h.net.closes(); got != tc.wantCloses || (got != 0 && !held) {
+				t.Errorf("ClosePeer count=%d under peerMu=%v, want count=%d with lock held", got, held, tc.wantCloses)
+			}
+			if srv.peerMap[occupantKey] != occupant || len(srv.peerMap) != 1 {
+				t.Error("capacity rejection replaced or added an adopted peer")
+			}
+			if len(srv.pendingPeers) != 0 {
+				t.Error("inbound pending-handshake slot leaked")
+			}
+			wantDialing := 0
+			if tc.dialKey != "" {
+				wantDialing = 1
+			}
+			if len(srv.dialing) != wantDialing {
+				t.Error("inbound rejection changed outbound dial reservations")
+			}
+			if tc.wantCloses == 0 {
+				assertCapacityConnectionUsable(t, h.net.conn)
+			} else if h.net.Connectedness(h.net.conn.remote) != network.NotConnected {
+				t.Error("untracked rejected peer retained its connection")
+			}
+		})
+	}
+}
+
+func TestCapacityRejectOutbound(t *testing.T) {
+	for _, early := range []bool{false, true} {
+		name := "capacity_filled_during_handshake"
+		if early {
+			name = "already_full_before_dial"
+		}
+		t.Run(name, func(t *testing.T) {
+			srv, h, hs := newCapacityTestServer(t)
+			fill := func() {
+				srv.peerMu.Lock()
+				srv.peerMap["occupant"] = NewPeer(hs.ID, "occupant", nil)
+				srv.peerMu.Unlock()
+			}
+			if early {
+				fill()
+			} else {
+				srv.testDialAdoptHook = fill
+			}
+			err := srv.dialPeer(peer.AddrInfo{ID: h.net.conn.remote})
+			if err == nil || !strings.Contains(err.Error(), "max peers reached") {
+				t.Fatalf("dial error=%v, want capacity rejection", err)
+			}
+			if got, _ := h.net.closes(); got != 0 {
+				t.Errorf("ClosePeer called %d times while outbound dial was tracked", got)
+			}
+			wantAttempts, wantResets := 1, 1
+			if early {
+				wantAttempts, wantResets = 0, 0
+			}
+			if h.connectCalls != wantAttempts || h.streamCalls != wantAttempts || h.stream.resets() != wantResets {
+				t.Errorf("Connect=%d NewStream=%d Reset=%d, want %d/%d/%d",
+					h.connectCalls, h.streamCalls, h.stream.resets(), wantAttempts, wantAttempts, wantResets)
+			}
+			if !early && !h.dialReserved {
+				t.Error("outbound dial did not reserve its peer before Connect")
+			}
+			if len(srv.dialing) != 0 || len(srv.pendingPeers) != 0 || len(srv.peerMap) != 1 {
+				t.Error("capacity rejection leaked state or exceeded the peer limit")
+			}
+			assertCapacityConnectionUsable(t, h.net.conn)
+		})
+	}
+}
+
+// The gate places the real dial after its handshake and before adoption.
+// A concurrent inbound MaxPeers rejection must not destroy that dial; once
+// capacity is available again, the same dial can adopt without reconnecting.
+func TestCapacityRejectPreservesInFlightDial(t *testing.T) {
+	srv, h, hs := newCapacityTestServer(t)
+	inAdopt, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	h.stream.readGate = make(chan struct{})
+	srv.testDialAdoptHook = func() {
+		close(inAdopt)
+		<-release
+	}
+	dialResult, dialDone := make(chan error, 1), make(chan struct{})
+	go func() {
+		dialResult <- srv.dialPeer(peer.AddrInfo{ID: h.net.conn.remote})
+		close(dialDone)
+	}()
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		select {
+		case <-dialDone:
+		case <-time.After(5 * time.Second):
+			t.Error("in-flight dial did not finish")
+		}
+	})
+	select {
+	case <-inAdopt:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dial did not reach adoption gate")
+	}
+	srv.peerMu.Lock()
+	srv.peerMap["occupant"] = NewPeer(hs.ID, "occupant", nil)
+	srv.peerMu.Unlock()
+	rejected := newCapacityTestStream(t, h.net.conn, hs)
+	srv.handleStream(rejected)
+	if got := rejected.resets(); got != 1 {
+		t.Fatalf("rejected inbound stream reset %d times, want 1", got)
+	}
+	if got, _ := h.net.closes(); got != 0 {
+		t.Errorf("in-flight dial connection closed %d times", got)
+	}
+	srv.peerMu.RLock()
+	_, reserved := srv.dialing[h.net.conn.remote.String()]
+	slots := len(srv.pendingPeers)
+	srv.peerMu.RUnlock()
+	if !reserved || slots != 0 {
+		t.Error("inbound rejection disturbed the dial or leaked its pending slot")
+	}
+	assertCapacityConnectionUsable(t, h.net.conn)
+
+	srv.peerMu.Lock()
+	delete(srv.peerMap, "occupant")
+	srv.peerMu.Unlock()
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-dialResult:
+		if err != nil {
+			t.Fatalf("same in-flight dial failed after capacity became available: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("dial did not finish after gate release")
+	}
+	srv.peerMu.RLock()
+	adopted := srv.peerMap[h.net.conn.remote.String()] != nil
+	count, dialing := len(srv.peerMap), len(srv.dialing)
+	srv.peerMu.RUnlock()
+	if !adopted || count != 1 || dialing != 0 || !h.dialReserved || h.connectCalls != 1 {
+		t.Fatalf("adopted=%v peers=%d dialing=%d reserved=%v connects=%d",
+			adopted, count, dialing, h.dialReserved, h.connectCalls)
+	}
+	assertCapacityConnectionUsable(t, h.net.conn)
+}
+
+func TestCapacityAdmissionBelowLimit(t *testing.T) {
+	for _, inbound := range []bool{true, false} {
+		name := "outbound"
+		if inbound {
+			name = "inbound"
+		}
+		t.Run(name, func(t *testing.T) {
+			srv, h, _ := newCapacityTestServer(t)
+			h.stream.readGate = make(chan struct{})
+			if inbound {
+				srv.handleStream(h.stream)
+			} else if err := srv.dialPeer(peer.AddrInfo{ID: h.net.conn.remote}); err != nil {
+				t.Fatal(err)
+			}
+			srv.peerMu.RLock()
+			adopted := srv.peerMap[h.net.conn.remote.String()] != nil
+			count, pending, dialing := len(srv.peerMap), len(srv.pendingPeers), len(srv.dialing)
+			srv.peerMu.RUnlock()
+			if !adopted || count != 1 || pending != 0 || dialing != 0 {
+				t.Fatalf("adopted=%v peers=%d pending=%d dialing=%d", adopted, count, pending, dialing)
+			}
+			if got, _ := h.net.closes(); got != 0 || h.stream.resets() != 0 {
+				t.Error("below-limit admission reset a stream or closed its peer")
+			}
+			assertCapacityConnectionUsable(t, h.net.conn)
+		})
+	}
 }
 
 func (s *syncBuffer) Write(p []byte) (int, error) {

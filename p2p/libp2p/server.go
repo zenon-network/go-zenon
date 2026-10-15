@@ -915,12 +915,15 @@ func (srv *Server) handleStream(s network.Stream) {
 		return
 	}
 	if len(srv.peerMap) >= srv.MaxPeers {
-		// The duplicate check above already ruled out an adopted peer,
-		// so dropping the host-level connection here is safe: it makes
-		// MaxPeers a bound on libp2p resources, not just on adopted
-		// Zenon streams. Closing under peerMu keeps the check and the
-		// teardown atomic against a concurrent adoption.
-		_ = srv.host.Network().ClosePeer(remotePeer)
+		// The duplicate check ruled out an adopted peer, but our own
+		// outbound dial may still share this connection. Reset only this
+		// stream while that dial is in flight; close genuinely untracked
+		// peers to reclaim their host-level resources. Keep the decision
+		// and close under peerMu, atomic against dial reservation/adoption.
+		_, dialing := srv.dialing[peerKey]
+		if !dialing {
+			_ = srv.host.Network().ClosePeer(remotePeer)
+		}
 		srv.peerMu.Unlock()
 		common.P2PLogger.Debug("max peers reached, rejecting connection")
 		s.Reset()
@@ -1120,12 +1123,14 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 		return fmt.Errorf("duplicate peer %s", info.ID)
 	}
 	if len(srv.peerMap) >= srv.MaxPeers {
-		// The duplicate check above already ruled out an adopted peer,
-		// so closing the host connection here is safe and keeps MaxPeers
-		// bounding actual libp2p resources rather than just adopted
-		// streams. Closing under peerMu keeps the check and the teardown
-		// atomic against a concurrent adoption.
-		_ = srv.host.Network().ClosePeer(info.ID)
+		// As in handleStream, a dial in flight vetoes peer-wide teardown:
+		// reject only this stream, without closing other streams sharing
+		// the connection. The dial reservation is released by the defer
+		// above. Keep the decision and close under peerMu.
+		_, dialing := srv.dialing[peerKey]
+		if !dialing {
+			_ = srv.host.Network().ClosePeer(info.ID)
+		}
 		srv.peerMu.Unlock()
 		s.Reset()
 		return fmt.Errorf("max peers reached")
