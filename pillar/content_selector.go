@@ -44,12 +44,23 @@ func contentEntrySize(block *nom.AccountBlock) int {
 	return len(encoded)
 }
 
+// listPrefixAllowance bounds the RLP list-prefix growth that the byte
+// budget cannot predict from per-block measurements alone.  The final
+// DetailedMomentum contains four nested lists (DetailedMomentum,
+// Momentum, Content, AccountBlocks).  As entries are added the payload
+// grows, which can widen each list prefix by up to 3 bytes (from the
+// 1-byte empty-list form to the 4-byte 0xF9+3-byte-length form used for
+// payloads > 65535 bytes).  16 bytes covers all four lists with margin.
+const listPrefixAllowance = 16
+
 // worstCaseMomentumHeaderSize returns the RLP-encoded size of a fully
-// populated momentum header with every field at its maximum width.  This
-// is the worst-case baseline for the byte budget: any real momentum the
-// producer signs will be at most this size, so starting the budget from
-// here guarantees the final DetailedMomentum fits within
-// protocol.MaxDetailedMomentumWireSize.
+// populated momentum header with every field at its maximum width and an
+// empty Content list.  This is the worst-case baseline for the byte
+// budget: any real momentum the producer signs will be at most this size,
+// so starting the budget from here guarantees the final DetailedMomentum
+// fits within protocol.MaxDetailedMomentumWireSize.  The caller must add
+// listPrefixAllowance to account for list-prefix growth when Content and
+// AccountBlocks are populated.
 func worstCaseMomentumHeaderSize() int {
 	m := &nom.Momentum{
 		Version:         2,
@@ -181,11 +192,13 @@ func (h *groupHeap) Pop() interface{} {
 func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*nom.AccountBlock {
 	contractBlockCount := 0
 	basePlasma := uint64(0)
-	// Start from the worst-case populated momentum header size so the
-	// budget accounts for the largest possible header encoding at
-	// production/signing time.  Any real momentum will be at most this
-	// size, so the estimate is always conservative.
-	sizeEstimate := worstCaseMomentumHeaderSize()
+	// Start from the worst-case populated momentum header size plus the
+	// list-prefix allowance so the budget accounts for both the largest
+	// possible header encoding at production/signing time and the
+	// RLP list-prefix growth when Content and AccountBlocks are populated.
+	// Any real momentum will be at most this size, so the estimate is
+	// always conservative.
+	sizeEstimate := worstCaseMomentumHeaderSize() + listPrefixAllowance
 	toCommit := make([]*nom.AccountBlock, 0, len(blocks))
 	contractBatch := make([]*nom.AccountBlock, 0, int(cs.plasma.MaxContractBlocksInMomentum()))
 	skippedAddresses := make(map[types.Address]bool)

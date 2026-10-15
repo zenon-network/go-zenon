@@ -299,3 +299,128 @@ func TestContent_ByteBudget_SignedMomentumBoundary(t *testing.T) {
 			len(encoded), protocol.MaxDetailedMomentumWireSize, len(toCommit))
 	}
 }
+
+// TestContent_ByteBudget_MaxWidthFinalEncoding is an independent oracle that
+// encodes the selector's actual output at the admission boundary with
+// maximum-width fields.  It builds a DetailedMomentum from the selector's
+// chosen blocks using a worst-case momentum header (max-uint64 height,
+// timestamp, chain ID, prices; real 33-byte pubkey, 64-byte signature) and
+// verifies the RLP-encoded result fits within MaxDetailedMomentumWireSize.
+// This test discriminates against an under-counted byte budget: setting
+// listPrefixAllowance to 0 must make it fail.
+func TestContent_ByteBudget_MaxWidthFinalEncoding(t *testing.T) {
+	cs := newTestContentSelector()
+	addr := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+
+	// Build a block whose data size brings the selector's estimate to just
+	// under the budget.  Use max-width scalar fields on the momentum so the
+	// header baseline is the worst case.
+	baseline := worstCaseMomentumHeaderSize() + listPrefixAllowance
+
+	// Binary-search for the largest data size the selector admits.
+	fitSize := 0
+	overSize := protocol.MaxDetailedMomentumWireSize
+	for overSize-fitSize > 1 {
+		mid := (fitSize + overSize) / 2
+		probe := &nom.AccountBlock{
+			Version: 1, BlockType: nom.BlockTypeUserSend, Height: 1,
+			Address: addr, Data: make([]byte, mid),
+			FusedPlasma: 21000, BasePlasma: 21000, TotalPlasma: 21000,
+		}
+		probe.Hash = probe.ComputeHash()
+		if baseline+blockWireSize(probe)+contentEntrySize(probe) <= protocol.MaxDetailedMomentumWireSize {
+			fitSize = mid
+		} else {
+			overSize = mid
+		}
+	}
+
+	// Build the admitted block.
+	fitBlock := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeUserSend, Height: 1,
+		Address: addr, Data: make([]byte, fitSize),
+		FusedPlasma: 21000, BasePlasma: 21000, TotalPlasma: 21000,
+	}
+	fitBlock.Hash = fitBlock.ComputeHash()
+
+	// Run the selector.
+	toCommit := cs.Content([]*nom.AccountBlock{fitBlock})
+	if len(toCommit) != 1 {
+		t.Fatalf("selector rejected block at fitSize=%d (budget=%d)", fitSize, protocol.MaxDetailedMomentumWireSize)
+	}
+
+	// Build the actual DetailedMomentum the producer would create: worst-case
+	// header fields, populated Content from the selected blocks.
+	content := nom.NewMomentumContent(toCommit)
+	worstMom := &nom.Momentum{
+		Version:         2,
+		ChainIdentifier: ^uint64(0),
+		Hash:            types.Hash{0xff},
+		PreviousHash:    types.Hash{0xff},
+		Height:          ^uint64(0),
+		TimestampUnix:   ^uint64(0),
+		Data:            []byte{},
+		Content:         content,
+		ChangesHash:     types.Hash{0xff},
+		PublicKey:       make([]byte, 32),
+		Signature:       make([]byte, 64),
+		NextFusionPrice: ^uint64(0),
+		NextWorkPrice:   ^uint64(0),
+	}
+	dm := &nom.DetailedMomentum{
+		Momentum:      worstMom,
+		AccountBlocks: toCommit,
+	}
+	encoded, err := rlp.EncodeToBytes(dm)
+	if err != nil {
+		t.Fatalf("RLP encode failed: %v", err)
+	}
+
+	t.Logf("max-width final encoding: %d bytes, budget=%d, data=%d, allowance=%d",
+		len(encoded), protocol.MaxDetailedMomentumWireSize, fitSize, listPrefixAllowance)
+
+	if len(encoded) > protocol.MaxDetailedMomentumWireSize {
+		t.Errorf("max-width DetailedMomentum RLP size %d exceeds budget %d (allowance=%d, data=%d)",
+			len(encoded), protocol.MaxDetailedMomentumWireSize, listPrefixAllowance, fitSize)
+	}
+
+	// Descendant-batch case: a contract send with a descendant receive.
+	contractSend := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractSend, Height: 1,
+		Address: types.PillarContract, Data: make([]byte, fitSize/2),
+	}
+	contractSend.Hash = contractSend.ComputeHash()
+	contractRecv := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractReceive, Height: 2,
+		Address: types.PillarContract, Data: make([]byte, fitSize/2),
+		DescendantBlocks: []*nom.AccountBlock{
+			{
+				Version: 1, BlockType: nom.BlockTypeUserSend, Height: 3,
+				Address: addr, Data: make([]byte, 100),
+			},
+		},
+	}
+	contractRecv.Hash = contractRecv.ComputeHash()
+
+	toCommit2 := cs.Content([]*nom.AccountBlock{contractSend, contractRecv})
+	if len(toCommit2) == 0 {
+		t.Log("descendant-batch case: selector rejected all blocks (acceptable at boundary)")
+	} else {
+		content2 := nom.NewMomentumContent(toCommit2)
+		worstMom2 := *worstMom
+		worstMom2.Content = content2
+		dm2 := &nom.DetailedMomentum{
+			Momentum:      &worstMom2,
+			AccountBlocks: toCommit2,
+		}
+		encoded2, err := rlp.EncodeToBytes(dm2)
+		if err != nil {
+			t.Fatalf("RLP encode descendant batch: %v", err)
+		}
+		t.Logf("descendant-batch encoding: %d bytes, budget=%d", len(encoded2), protocol.MaxDetailedMomentumWireSize)
+		if len(encoded2) > protocol.MaxDetailedMomentumWireSize {
+			t.Errorf("descendant-batch DetailedMomentum RLP size %d exceeds budget %d",
+				len(encoded2), protocol.MaxDetailedMomentumWireSize)
+		}
+	}
+}

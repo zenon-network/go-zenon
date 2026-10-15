@@ -79,7 +79,7 @@ func TestContent_ByteBudget_EnvelopeCoversPopulatedMomentum(t *testing.T) {
 		}
 
 		// Selector's estimate (replicates filterBlocksToCommit's arithmetic)
-		estimate := worstCaseMomentumHeaderSize()
+		estimate := worstCaseMomentumHeaderSize() + listPrefixAllowance
 		for _, b := range blocks {
 			estimate += blockWireSize(b) + contentEntrySize(b)
 		}
@@ -120,8 +120,9 @@ func TestContent_ByteBudget_BoundaryAtBudget(t *testing.T) {
 	cs := newTestContentSelector()
 	addr := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
 
-	// Compute the data size that brings the total estimate just under the budget
-	baseline := worstCaseMomentumHeaderSize()
+	// Compute the data size that brings the total estimate just under the budget.
+	// The selector starts from worstCaseMomentumHeaderSize() + listPrefixAllowance.
+	baseline := worstCaseMomentumHeaderSize() + listPrefixAllowance
 
 	// Find the data size where the selector's estimate crosses the budget.
 	// Binary search for the boundary.
