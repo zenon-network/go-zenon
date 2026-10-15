@@ -8,6 +8,7 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/dp"
+	"github.com/zenon-network/go-zenon/protocol"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
@@ -24,7 +25,7 @@ func newTestContentSelector() *contentSelector {
 }
 
 // TestContent_ByteBudget_SkipsOversizedBlock verifies that a user block whose
-// RLP-encoded size would exceed MaxDetailedMomentumSize is skipped, and its
+// RLP-encoded size would exceed the budget is skipped, and its
 // address is marked skipped so descendants are also excluded.
 func TestContent_ByteBudget_SkipsOversizedBlock(t *testing.T) {
 	cs := newTestContentSelector()
@@ -32,7 +33,7 @@ func TestContent_ByteBudget_SkipsOversizedBlock(t *testing.T) {
 	addr2 := types.ParseAddressPanic("z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj")
 
 	// A block with Data large enough to exceed the budget.
-	bigData := make([]byte, MaxDetailedMomentumSize)
+	bigData := make([]byte, protocol.MaxDetailedMomentumWireSize)
 
 	toCommit := cs.filterBlocksToCommit([]*nom.AccountBlock{
 		{Height: 1, BlockType: nom.BlockTypeUserSend, BasePlasma: 21000, FusedPlasma: 21000, Address: addr1, Data: bigData},
@@ -51,7 +52,7 @@ func TestContent_ByteBudget_SkipsChildOfOversizedAncestor(t *testing.T) {
 	cs := newTestContentSelector()
 	addr1 := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
 
-	bigData := make([]byte, MaxDetailedMomentumSize)
+	bigData := make([]byte, protocol.MaxDetailedMomentumWireSize)
 
 	toCommit := cs.filterBlocksToCommit([]*nom.AccountBlock{
 		// Ancestor exceeds byte budget.
@@ -69,7 +70,7 @@ func TestContent_ByteBudget_SkipsChildOfOversizedAncestor(t *testing.T) {
 func TestContent_ByteBudget_DropsOversizedContractBatch(t *testing.T) {
 	cs := newTestContentSelector()
 
-	bigData := make([]byte, MaxDetailedMomentumSize)
+	bigData := make([]byte, protocol.MaxDetailedMomentumWireSize)
 
 	toCommit := cs.filterBlocksToCommit([]*nom.AccountBlock{
 		{Height: 1, BlockType: nom.BlockTypeContractSend, Address: types.PillarContract, Data: bigData},
@@ -141,10 +142,10 @@ func TestContent_ByteBudget_CumulativeUserBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RLP encode failed: %v", err)
 	}
-	if len(encoded) > MaxDetailedMomentumSize {
-		t.Errorf("selected DetailedMomentum RLP size %d exceeds budget %d", len(encoded), MaxDetailedMomentumSize)
+	if len(encoded) > protocol.MaxDetailedMomentumWireSize {
+		t.Errorf("selected DetailedMomentum RLP size %d exceeds budget %d", len(encoded), protocol.MaxDetailedMomentumWireSize)
 	}
-	t.Logf("cumulative user blocks: committed %d blocks, RLP size %d, budget %d", len(toCommit), len(encoded), MaxDetailedMomentumSize)
+	t.Logf("cumulative user blocks: committed %d blocks, RLP size %d, budget %d", len(toCommit), len(encoded), protocol.MaxDetailedMomentumWireSize)
 }
 
 // TestContent_ByteBudget_CumulativeContractBatches verifies that the byte
@@ -185,26 +186,22 @@ func TestContent_ByteBudget_CumulativeContractBatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RLP encode failed: %v", err)
 	}
-	if len(encoded) > MaxDetailedMomentumSize {
-		t.Errorf("selected DetailedMomentum RLP size %d exceeds budget %d", len(encoded), MaxDetailedMomentumSize)
+	if len(encoded) > protocol.MaxDetailedMomentumWireSize {
+		t.Errorf("selected DetailedMomentum RLP size %d exceeds budget %d", len(encoded), protocol.MaxDetailedMomentumWireSize)
 	}
-	t.Logf("cumulative contract batches: committed %d blocks, RLP size %d, budget %d", len(toCommit), len(encoded), MaxDetailedMomentumSize)
+	t.Logf("cumulative contract batches: committed %d blocks, RLP size %d, budget %d", len(toCommit), len(encoded), protocol.MaxDetailedMomentumWireSize)
 }
 
 // TestContent_ByteBudget_OversizedNonDataField verifies that a block with an
 // oversized non-Data field (e.g. PublicKey) on a nested descendant is
-// correctly measured by the RLP-based size check. With the old
-// estimate-based approach (perBlockFixedSize + len(Data)), this block would
-// pass at ~612 bytes while the real RLP exceeds the budget. The block must
-// be skipped.
+// correctly measured by the RLP-based size check. The block must be skipped.
 func TestContent_ByteBudget_OversizedNonDataField(t *testing.T) {
 	cs := newTestContentSelector()
 	addr1 := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
 
 	// Parent block with small Data, but descendant has a 9 MiB PublicKey.
-	// The old estimate (perBlockFixedSize + len(Data)) would be ~612 bytes
-	// for the descendant. The real RLP is dominated by the 9 MiB PublicKey,
-	// which exceeds the ~8 MiB budget.
+	// The real RLP is dominated by the 9 MiB PublicKey, which exceeds the
+	// ~8 MiB budget.
 	bigKey := make([]byte, 9*1024*1024)
 	block := &nom.AccountBlock{
 		Height:    1,
@@ -224,9 +221,9 @@ func TestContent_ByteBudget_OversizedNonDataField(t *testing.T) {
 
 	// Verify the RLP size indeed exceeds the budget.
 	encoded, _ := rlp.EncodeToBytes(block)
-	t.Logf("parent block with 9 MiB PublicKey descendant: RLP size %d, budget %d", len(encoded), MaxDetailedMomentumSize)
-	if len(encoded) <= MaxDetailedMomentumSize {
-		t.Fatalf("test setup: block RLP %d should exceed budget %d", len(encoded), MaxDetailedMomentumSize)
+	t.Logf("parent block with 9 MiB PublicKey descendant: RLP size %d, budget %d", len(encoded), protocol.MaxDetailedMomentumWireSize)
+	if len(encoded) <= protocol.MaxDetailedMomentumWireSize {
+		t.Fatalf("test setup: block RLP %d should exceed budget %d", len(encoded), protocol.MaxDetailedMomentumWireSize)
 	}
 
 	// The block must be skipped (real RLP > budget).
@@ -234,29 +231,71 @@ func TestContent_ByteBudget_OversizedNonDataField(t *testing.T) {
 	common.Expect(t, len(toCommit), 0)
 }
 
-// TestContent_ByteBudget_BlockWireSize verifies that blockWireSize returns
-// the exact RLP-encoded size of a block including its descendants.
-func TestContent_ByteBudget_BlockWireSize(t *testing.T) {
-	// Empty block
-	empty := &nom.AccountBlock{}
-	emptyEncoded, _ := rlp.EncodeToBytes(empty)
-	common.Expect(t, blockWireSize(empty), len(emptyEncoded))
+// TestContent_ByteBudget_SignedMomentumBoundary verifies that when ~2000
+// small user blocks are selected and wrapped in a real signed momentum, the
+// RLP-encoded DetailedMomentum stays within the wire-size budget.  This
+// catches the case where the empty-momentum baseline plus a fixed envelope
+// overhead underestimates the true populated header size.
+func TestContent_ByteBudget_SignedMomentumBoundary(t *testing.T) {
+	cs := newTestContentSelector()
 
-	// Block with Data
-	withData := &nom.AccountBlock{Data: make([]byte, 1000)}
-	dataEncoded, _ := rlp.EncodeToBytes(withData)
-	common.Expect(t, blockWireSize(withData), len(dataEncoded))
+	const numBlocks = 2000
+	const blockHeight = 1 << 30 // 2^30: exercises multi-byte RLP height encoding
 
-	// Block with descendants — rlp.EncodeToBytes already includes
-	// DescendantBlocks, so blockWireSize must equal the encoded length
-	// of the parent alone (not parent + each descendant again).
-	withDesc := &nom.AccountBlock{
-		Data: make([]byte, 500),
-		DescendantBlocks: []*nom.AccountBlock{
-			{Data: make([]byte, 300)},
-			{Data: make([]byte, 200)},
-		},
+	addr1 := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	addr2 := types.ParseAddressPanic("z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj")
+
+	blocks := make([]*nom.AccountBlock, 0, numBlocks)
+	for i := 0; i < numBlocks; i++ {
+		addr := addr1
+		if i%2 == 1 {
+			addr = addr2
+		}
+		b := &nom.AccountBlock{
+			Version:         1,
+			ChainIdentifier: 1,
+			BlockType:       nom.BlockTypeUserSend,
+			Height:          blockHeight + uint64(i),
+			Address:         addr,
+			Data:            make([]byte, 100),
+			FusedPlasma:     21000,
+			BasePlasma:      21000,
+			TotalPlasma:     21000,
+		}
+		b.Hash = b.ComputeHash()
+		blocks = append(blocks, b)
 	}
-	parentEncoded, _ := rlp.EncodeToBytes(withDesc)
-	common.Expect(t, blockWireSize(withDesc), len(parentEncoded))
+
+	toCommit := cs.filterBlocksToCommit(blocks)
+	t.Logf("selected %d of %d blocks", len(toCommit), numBlocks)
+
+	// Wrap in a real signed momentum using NewMomentumContent.
+	content := nom.NewMomentumContent(toCommit)
+	momentum := &nom.Momentum{
+		Version:         2,
+		ChainIdentifier: 1,
+		Hash:            types.Hash{0x01},
+		PreviousHash:    types.Hash{0x02},
+		Height:          14419042,
+		TimestampUnix:   1728867600,
+		Content:         content,
+		ChangesHash:     types.Hash{0x03},
+		PublicKey:       make([]byte, 32),
+		Signature:       make([]byte, 64),
+		NextFusionPrice: 1000000,
+		NextWorkPrice:   500000,
+	}
+	dm := &nom.DetailedMomentum{
+		Momentum:      momentum,
+		AccountBlocks: toCommit,
+	}
+	encoded, err := rlp.EncodeToBytes(dm)
+	if err != nil {
+		t.Fatalf("RLP encode failed: %v", err)
+	}
+	t.Logf("signed momentum DetailedMomentum: RLP size %d, budget %d, blocks %d", len(encoded), protocol.MaxDetailedMomentumWireSize, len(toCommit))
+	if len(encoded) > protocol.MaxDetailedMomentumWireSize {
+		t.Errorf("signed momentum DetailedMomentum RLP size %d exceeds budget %d (%d blocks)",
+			len(encoded), protocol.MaxDetailedMomentumWireSize, len(toCommit))
+	}
 }
