@@ -66,6 +66,7 @@ type Manager interface {
 	// versions are pending, or if any pending version cannot be rebuilt
 	// on the new stable.  No mutation has occurred on error; the caller
 	// can drop the manager.
+	// Callers must serialize Rebase with Add.
 	Rebase(newStableDB DB) error
 
 	// Stop releases the manager's resources. It is idempotent: the first call
@@ -231,8 +232,6 @@ func (m *memdbManager) Pop() error {
 // reference to the deleted committed overlay as its read-through base,
 // so the overlay chain would grow by one level per committed block and
 // never shrink, causing unbounded memory growth across momentums.
-//
-// m.stableDB is write-only: it is never read by any manager method.
 func (m *memdbManager) Rebase(newStableDB DB) error {
 	m.changes.Lock()
 	defer m.changes.Unlock()

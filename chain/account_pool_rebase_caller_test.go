@@ -106,8 +106,9 @@ func buildStableDB(t *testing.T, blocks []*nom.AccountBlock, patches []map[strin
 // values are visible, pending values survive, and the retained overlay depth
 // equals the number of pending blocks — not the total number of blocks ever
 // added.  The existing
-// TestRebuildRebasesManagerInPlace uses fakeStable which returns an empty
-// DB, so Rebase takes its same-identifier fast path; this test proves the
+// TestRebuildRebasesManagerInPlace uses fakeStable whose GetStableAccountDB
+// returns a new empty DB on every call, so Rebase always sees a different DB
+// object and runs the full rebuild path; this test proves the
 // advancing-floor overlay reconstruction path stays bounded across repeated
 // commits.
 func TestRebuildAdvancingStableOverlayReconstruction(t *testing.T) {
@@ -289,6 +290,53 @@ func TestRebuildNoUncommittedChanges(t *testing.T) {
 		}
 	})
 
+	t.Run("stable above frontier", func(t *testing.T) {
+		addr := types.Address{0, 46}
+		stable := &advancingStable{stableDB: db.NewMemDB()}
+		ap := newAccountPool(stable)
+
+		manager := ap.getAccountManager(addr)
+		block := &nom.AccountBlock{
+			Address:     addr,
+			BlockType:   nom.BlockTypeUserSend,
+			Height:      1,
+			TotalPlasma: 100,
+			BasePlasma:  100,
+		}
+		block.Hash = block.ComputeHash()
+		applyState(t, manager, block, map[string]string{testAppKeyK1: "v1"})
+
+		// Advance the stable store past the manager's frontier.
+		committed := &nom.AccountBlock{
+			Address:     addr,
+			BlockType:   nom.BlockTypeUserSend,
+			Height:      1,
+			TotalPlasma: 100,
+			BasePlasma:  100,
+		}
+		committed.Hash = committed.ComputeHash()
+		next := &nom.AccountBlock{
+			Address:      addr,
+			BlockType:    nom.BlockTypeUserSend,
+			Height:       2,
+			TotalPlasma:  100,
+			BasePlasma:   100,
+			PreviousHash: committed.Hash,
+		}
+		next.Hash = next.ComputeHash()
+		stable.stableDB = buildStableDB(t, []*nom.AccountBlock{committed, next},
+			[]map[string]string{{testAppKeyK1: "v1"}, {testAppKeyK2: "next"}}, 2)
+
+		if err := ap.rebuild(&nom.DetailedMomentum{
+			Momentum: &nom.Momentum{Height: 2, Hash: types.Hash{2}},
+		}); err != nil {
+			t.Fatalf("rebuild returned error for stable-above-frontier case: %v", err)
+		}
+		if _, ok := ap.managers[addr]; ok {
+			t.Fatal("manager should have been dropped when stable passed frontier")
+		}
+	})
+
 	t.Run("fork at same height", func(t *testing.T) {
 		addr := types.Address{0, 45}
 		stable := &advancingStable{stableDB: db.NewMemDB()}
@@ -314,8 +362,12 @@ func TestRebuildNoUncommittedChanges(t *testing.T) {
 			Height:      1,
 			TotalPlasma: 200,
 			BasePlasma:  200,
+			Data:        []byte("fork"),
 		}
 		otherBlock.Hash = otherBlock.ComputeHash()
+		if otherBlock.Hash == block.Hash {
+			t.Fatal("otherBlock must differ from block in Data so ComputeHash produces a distinct hash")
+		}
 		stable.stableDB = buildStableDB(t, []*nom.AccountBlock{otherBlock},
 			[]map[string]string{{testAppKeyK2: "other"}}, 1)
 
@@ -328,4 +380,84 @@ func TestRebuildNoUncommittedChanges(t *testing.T) {
 			t.Fatal("manager should have been dropped when stable caught up to frontier on a fork")
 		}
 	})
+}
+
+// TestRebuildPreservesEmbeddedBlocks verifies that rebuild preserves
+// DescendantBlocks on pending account blocks.  After rebuilds on an
+// unchanged stable, the block returned by BlockByHeight must still
+// contain its descendants.  This is a regression guard for the #82
+// bugs where rebuild lost pending state.
+func TestRebuildPreservesEmbeddedBlocks(t *testing.T) {
+	addr := types.Address{0, 47}
+	stable := &advancingStable{stableDB: db.NewMemDB()}
+	ap := newAccountPool(stable)
+
+	// h2: descendant at height 1 (added to DB first via GetCommits).
+	// Its Previous must match the zero frontier.
+	h2 := &nom.AccountBlock{
+		Address:     addr,
+		BlockType:   nom.BlockTypeUserReceive,
+		Height:      1,
+		TotalPlasma: 100,
+		BasePlasma:  100,
+	}
+	h2.Hash = h2.ComputeHash()
+
+	// h1: user send at height 2.  Added to DB after h2, so its Previous
+	// must match h2's Identifier.
+	h1 := &nom.AccountBlock{
+		Address:      addr,
+		BlockType:    nom.BlockTypeUserSend,
+		Height:       2,
+		TotalPlasma:  100,
+		BasePlasma:   100,
+		PreviousHash: h2.Hash,
+	}
+	h1.Hash = h1.ComputeHash()
+
+	// Link h2 as a descendant of h1.
+	h1.DescendantBlocks = []*nom.AccountBlock{h2}
+
+	// Apply h1 (with descendants) to the manager.
+	manager := ap.getAccountManager(addr)
+	applyState(t, manager, h1, map[string]string{testAppKeyK1: "h1"})
+
+	// Run three rebuilds on an unchanged stable.
+	for i := 0; i < 3; i++ {
+		if err := ap.rebuild(&nom.DetailedMomentum{
+			Momentum: &nom.Momentum{Height: 1, Hash: types.Hash{1}},
+		}); err != nil {
+			t.Fatalf("rebuild %d returned error: %v", i+1, err)
+		}
+	}
+
+	// Verify h1 survived with correct state.
+	manager, ok := ap.managers[addr]
+	if !ok {
+		t.Fatal("manager missing after rebuilds")
+	}
+	if got := readValue(t, manager, testAppKeyK1); got != "h1" {
+		t.Errorf("h1 value = %q, want %q", got, "h1")
+	}
+
+	// Verify h1 is in the blocks map at height 2 with its descendant.
+	block, err := manager.BlockByHeight(2)
+	if err != nil {
+		t.Fatalf("BlockByHeight(2) after rebuilds: %v", err)
+	}
+	if len(block.DescendantBlocks) != 1 {
+		t.Fatalf("h1 has %d descendants after rebuild, want 1", len(block.DescendantBlocks))
+	}
+	if block.DescendantBlocks[0].Hash != h2.Hash {
+		t.Errorf("descendant block digest = %v, want %v", block.DescendantBlocks[0].Hash, h2.Hash)
+	}
+
+	// Verify h2 is also in the blocks map at height 1.
+	block2, err := manager.BlockByHeight(1)
+	if err != nil {
+		t.Fatalf("BlockByHeight(1) after rebuilds: %v", err)
+	}
+	if block2.Hash != h2.Hash {
+		t.Errorf("block2 hash = %v, want %v", block2.Hash, h2.Hash)
+	}
 }

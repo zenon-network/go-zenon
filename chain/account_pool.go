@@ -568,11 +568,10 @@ func (ap *accountPool) rebuild(detailed *nom.DetailedMomentum) error {
 			}
 		}
 
-		// Rebase left the DB manager reusable but this address's manager still
-		// describes the pre-rollback state, so publish a fresh one over the
-		// rebased DB. Rebuilt addresses therefore hold a different manager
-		// instance than before, which is what callers and the rollback
-		// regression test rely on to tell "rebuilt" from "left untouched".
+		// Publish a new wrapper over the rebased DB and pruned blocks map.
+		// The new wrapper holds the same db and blocks map as the old one,
+		// but the replacement instance is what lets the failure-isolation
+		// test tell rebuilt addresses from untouched ones.
 		// An empty manager is a map entry with nothing in it until the next
 		// rebuild, so only re-register the address when blocks survived.
 		if len(oldManager.blocks) == 0 {
