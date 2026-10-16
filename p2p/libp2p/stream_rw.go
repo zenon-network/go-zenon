@@ -25,7 +25,7 @@ const initialPayloadBuffer = 64 * 1024
 
 // StreamRW wraps a libp2p bidirectional stream to implement p2p.MsgReadWriter.
 //
-// Wire format (replaces RLPX framing):
+// Wire format:
 //
 //	[4 bytes: message code, big-endian uint32]
 //	[4 bytes: payload length, big-endian uint32]

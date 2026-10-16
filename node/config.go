@@ -208,34 +208,18 @@ type NetConfig struct {
 	ListenHost string
 	ListenPort int
 
-	// P2PBackend selects which transport backend to start: "auto"
-	// (default, spork-gated), "libp2p" (skip oracle, start libp2p
-	// directly), or "legacy" (start legacy, never swap). The
-	// "libp2p" value lets a fresh node bootstrap from a post-activation
-	// network where no legacy peers remain (issue #105).
-	P2PBackend string
-
 	MinPeers          int
 	MinConnectedPeers int
 	MaxPeers          int
 	MaxPendingPeers   int
 
-	// Seeders is the legacy bootstrap list (enode:// format), used by
-	// the devp2p/RLPX backend pre-activation. Existing operator configs
-	// populate this field.
-	Seeders []string
-
-	// BootstrapPeers is the libp2p bootstrap list (multiaddr format),
-	// used by the libp2p backend post-activation. New field; operators
-	// add it to config.json when the spork-gated rollout begins. Omitted
-	// configs fall back to p2p.DefaultBootstrapPeers.
+	// BootstrapPeers is the libp2p bootstrap list (multiaddr format).
+	// Omitted configs fall back to p2p.DefaultBootstrapPeers.
 	BootstrapPeers []string
 
-	// NATPortMap enables UPnP / NAT-PMP port mapping for the libp2p
-	// backend. Default false (matches the pre-libp2p network: legacy
-	// had NAT mapping unconfigured in the standard wiring path, so it
-	// was effectively off). Home operators behind a NATting router can
-	// opt-in by setting this to true in config.json.
+	// NATPortMap enables UPnP / NAT-PMP port mapping. Default false.
+	// Home operators behind a NATting router can opt-in by setting this
+	// to true in config.json.
 	NATPortMap bool
 
 	// PeerstoreDir is an optional override for the libp2p peer-database
@@ -269,7 +253,7 @@ type Config struct {
 
 // Clone returns a deep copy of c that shares no mutable state with the
 // original. Slices (RPC endpoints, virtual hosts, CORS domains, WS
-// origins, net seeders and bootstrap peers) are copied so that mutating
+// origins and bootstrap peers) are copied so that mutating
 // the clone — e.g. a JSON overlay writing into the struct — never
 // modifies the package-level DefaultNodeConfig's backing arrays.
 func (c *Config) Clone() *Config {
@@ -282,7 +266,6 @@ func (c *Config) Clone() *Config {
 	out.RPC.HTTPVirtualHosts = cloneSlice(c.RPC.HTTPVirtualHosts)
 	out.RPC.HTTPCors = cloneSlice(c.RPC.HTTPCors)
 	out.RPC.WSOrigins = cloneSlice(c.RPC.WSOrigins)
-	out.Net.Seeders = cloneSlice(c.Net.Seeders)
 	out.Net.BootstrapPeers = cloneSlice(c.Net.BootstrapPeers)
 	if c.Net.PeerstoreDir != nil {
 		dir := *c.Net.PeerstoreDir
@@ -440,7 +423,7 @@ func (c *Config) makeNetConfig() *p2p.Net {
 	networkDataDir := filepath.Join(c.DataPath, p2p.DefaultNetDirName)
 	privateKeyFile := filepath.Join(c.DataPath, p2p.DefaultNetPrivateKeyFile)
 
-	// Default the libp2p peerstore to a sibling of the legacy nodeDb
+	// Default the libp2p peerstore to <DataPath>/network/libp2p-peerstore
 	// unless the operator set an explicit override in config.json. An
 	// explicit empty string disables peer persistence rather than
 	// falling back to the default path.
@@ -455,12 +438,9 @@ func (c *Config) makeNetConfig() *p2p.Net {
 		MaxPendingPeers:   c.Net.MaxPendingPeers,
 		MinConnectedPeers: c.Net.MinConnectedPeers,
 		Name:              fmt.Sprintf("%v %v", metadata.Version, c.Name),
-		Seeders:           c.Net.Seeders,
 		BootstrapPeers:    c.Net.BootstrapPeers,
 		NATPortMap:        c.Net.NATPortMap,
 		PeerstoreDir:      peerstoreDir,
-		NodeDatabase:      networkDataDir,
-		P2PBackend:        p2p.P2PBackend(c.Net.P2PBackend),
 		ListenAddr:        c.Net.ListenHost,
 		ListenPort:        c.Net.ListenPort,
 	}

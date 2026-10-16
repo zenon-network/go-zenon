@@ -16,21 +16,15 @@
 
 // Package p2p is the transport-neutral surface of the networking layer:
 // the Server interface, its configuration, the message and protocol
-// types and the disconnect reasons. Two backends implement it, the
-// devp2p stack in p2p/legacy and the libp2p stack in p2p/libp2p, and
-// p2p/switcher selects between them by spork.
+// types and the disconnect reasons. The libp2p stack in p2p/libp2p
+// implements it.
 package p2p
 
 import "github.com/zenon-network/go-zenon/p2p/discover"
 
-// Server is the application-level view of the p2p layer. Both the legacy
-// (devp2p/RLPX) and libp2p backends implement this interface; the rest of
-// the codebase (node, rpc) holds a Server interface and does not care
-// which transport is active.
-//
-// In production, node.go constructs a switcher.Server (p2p/switcher/)
-// which owns both backends and swaps between them when the libp2p
-// activation spork's EnforcementHeight is reached on the local chain.
+// Server is the application-level view of the p2p layer. The libp2p
+// server implements this interface; the rest of the codebase (node, rpc)
+// holds a Server interface and does not depend on the concrete type.
 type Server interface {
 	// Start launches the server. Returns when the listener is ready or
 	// with an error describing why startup failed.

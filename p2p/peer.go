@@ -22,13 +22,11 @@ import (
 	"github.com/zenon-network/go-zenon/p2p/discover"
 )
 
-// Peer is the application-level view of a remote node. The legacy
-// (devp2p/RLPX) and libp2p backends each provide their own concrete
-// implementation; the subprotocol code in protocol/ only sees this
-// interface, so it works unchanged against either backend.
+// Peer is the application-level view of a remote node. The libp2p
+// server provides the concrete implementation; the subprotocol code in
+// protocol/ only sees this interface.
 type Peer interface {
-	// ID returns the peer's Zenon node identity. The same secp256k1 key
-	// is used regardless of which transport is active.
+	// ID returns the peer's Zenon node identity (a secp256k1 public key).
 	ID() discover.NodeID
 
 	// Name returns the peer-advertised node name (from the protocol
@@ -40,8 +38,7 @@ type Peer interface {
 	Caps() []Cap
 
 	// RemoteAddr is the remote endpoint of the connection. The concrete
-	// net.Addr type is backend-specific (TCP/UDP for legacy, a
-	// multiaddr-backed wrapper for libp2p).
+	// net.Addr is a multiaddr-backed wrapper.
 	RemoteAddr() net.Addr
 
 	// Disconnect requests termination of the connection with the given
