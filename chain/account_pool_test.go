@@ -163,6 +163,8 @@ func (m *fakeAccountManagerDB) Pop() error {
 	return nil
 }
 
+func (m *fakeAccountManagerDB) Rebase(db.DB) error { return nil }
+
 func (m *fakeAccountManagerDB) Stop() error {
 	return nil
 }
@@ -488,7 +490,9 @@ func TestAccountPool_DeleteMomentumKeepsValidReceives(t *testing.T) {
 
 // Rebuild must drop blocks whose MomentumAcknowledged is above the new
 // frontier (can happen after a deep rollback) and all subsequent blocks
-// on the same account chain.
+// on the same account chain.  The DB manager must be truncated to match:
+// the surviving DB frontier, removal of suffix application writes, and
+// successful replacement insertion.
 func TestAccountPool_RebuildDropsBlocksAboveFrontier(t *testing.T) {
 	ap := newAccountPool(fakeStable{})
 
@@ -524,12 +528,11 @@ func TestAccountPool_RebuildDropsBlocksAboveFrontier(t *testing.T) {
 	}
 	block3.Hash = block3.ComputeHash()
 
-	for _, block := range []*nom.AccountBlock{block1, block2, block3} {
-		common.FailIfErr(t, manager.Add(&nom.AccountBlockTransaction{
-			Block:   block,
-			Changes: db.NewPatch(),
-		}))
-	}
+	// Use non-empty application patches so DB-level state assertions are
+	// meaningful.
+	applyState(t, manager, block1, map[string]string{testAppKeyK1: "v1"})
+	applyState(t, manager, block2, map[string]string{testAppKeyK2: "v2"})
+	applyState(t, manager, block3, map[string]string{testAppKeyShared: "v3"})
 
 	common.Expect(t, len(ap.managers), 1)
 
@@ -549,7 +552,7 @@ func TestAccountPool_RebuildDropsBlocksAboveFrontier(t *testing.T) {
 		t.Fatal("manager should survive rebuild with valid prefix")
 	}
 
-	// Only block1 should survive.
+	// Only block1 should survive in the blocks map.
 	_, err := surviving.BlockByHeight(1)
 	common.FailIfErr(t, err)
 
@@ -558,5 +561,47 @@ func TestAccountPool_RebuildDropsBlocksAboveFrontier(t *testing.T) {
 	}
 	if _, err := surviving.BlockByHeight(3); err == nil {
 		t.Fatal("block3 should have been dropped (builds on dropped block2)")
+	}
+
+	// The DB frontier must be truncated to height 1, matching the blocks map.
+	frontierID := db.GetFrontierIdentifier(surviving.db.Frontier())
+	if frontierID.Height != 1 {
+		t.Fatalf("DB frontier height = %d, want 1 — DB manager not truncated to match pruned blocks map",
+			frontierID.Height)
+	}
+
+	// Suffix application writes must be removed from the DB.
+	if got := readValue(t, surviving, testAppKeyK2); got != "" {
+		t.Fatalf("%s = %q, want empty — block2 application write still visible after suffix pruning",
+			testAppKeyK2, got)
+	}
+	if got := readValue(t, surviving, testAppKeyShared); got != "" {
+		t.Fatalf("%s = %q, want empty — block3 application write still visible after suffix pruning",
+			testAppKeyShared, got)
+	}
+
+	// Prefix application writes must be retained.
+	if got := readValue(t, surviving, testAppKeyK1); got != "v1" {
+		t.Fatalf("%s = %q, want %q — prefix application state was lost",
+			testAppKeyK1, got, "v1")
+	}
+
+	// Replacement insertion on top of the truncated manager must succeed.
+	replacement := &nom.AccountBlock{
+		Address:              addr,
+		BlockType:            nom.BlockTypeUserSend,
+		Height:               2,
+		PreviousHash:         block1.Hash,
+		MomentumAcknowledged: types.HashHeight{Hash: types.Hash{4}, Height: 6},
+	}
+	replacement.Hash = replacement.ComputeHash()
+	applyState(t, surviving, replacement, map[string]string{testAppKeyK2: "v2-new"})
+
+	if got := readValue(t, surviving, testAppKeyK2); got != "v2-new" {
+		t.Fatalf("%s = %q after replacement, want %q", testAppKeyK2, got, "v2-new")
+	}
+	if got := readValue(t, surviving, testAppKeyK1); got != "v1" {
+		t.Fatalf("%s = %q after replacement, want %q — prefix state lost",
+			testAppKeyK1, got, "v1")
 	}
 }
