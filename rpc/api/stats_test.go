@@ -17,17 +17,17 @@ func TestRemoteHost(t *testing.T) {
 		want string
 	}{
 		{
-			name: "legacy IPv4 host:port",
+			name: "IPv4 host:port",
 			addr: fakeAddr{network: "tcp", addr: "192.168.1.10:35995"},
 			want: "192.168.1.10",
 		},
 		{
-			name: "legacy IPv6 host:port",
+			name: "IPv6 host:port",
 			addr: fakeAddr{network: "tcp", addr: "[2001:db8::1]:35995"},
 			want: "2001:db8::1",
 		},
 		{
-			name: "legacy address with no port",
+			name: "address with no port",
 			addr: fakeAddr{network: "tcp", addr: "192.168.1.10"},
 			want: "192.168.1.10",
 		},

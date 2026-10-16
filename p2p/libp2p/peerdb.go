@@ -58,9 +58,8 @@ const (
 // (or any graceful shutdown followed by a slow restart). Records here
 // have no libp2p-managed lifetime; we decide when they expire.
 //
-// Same design lineage as the legacy stack's p2p/discover/database.go
-// nodeDB (own LevelDB, last-seen stamps, fail counters, age expiry),
-// reshaped for libp2p: keyed by peer.ID, storing multiaddrs.
+// Design: own LevelDB, last-seen stamps, fail counters, age expiry,
+// keyed by peer.ID and storing multiaddrs.
 type peerDB struct {
 	db *leveldb.DB
 
@@ -86,8 +85,8 @@ type peerDBRecord struct {
 
 // openPeerDB opens (creating if needed) the peer database at path and
 // runs one expiry pass. Corrupted databases are recovered rather than
-// failing startup, mirroring the legacy nodeDB's behaviour — losing
-// warm-bootstrap candidates is strictly better than refusing to boot.
+// failing startup: losing warm-bootstrap candidates is strictly
+// better than refusing to boot.
 func openPeerDB(path string) (*peerDB, error) {
 	db, err := leveldb.OpenFile(path, nil)
 	if _, corrupted := err.(*lerrors.ErrCorrupted); corrupted {

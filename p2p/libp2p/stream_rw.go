@@ -19,7 +19,7 @@ const maxMessageSize = 10 * 1024 * 1024 // 10MB, matching ProtocolMaxMsgSize
 
 // StreamRW wraps a libp2p bidirectional stream to implement p2p.MsgReadWriter.
 //
-// Wire format (replaces RLPX framing):
+// Wire format:
 //
 //	[4 bytes: message code, big-endian uint32]
 //	[4 bytes: payload length, big-endian uint32]

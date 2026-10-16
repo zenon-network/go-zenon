@@ -25,10 +25,10 @@ var (
 	// the locally-generated hash (see vm/embedded/tests/spork_test.go
 	// for the existing pattern).
 
-	// Libp2pSpork gates the activation of the libp2p networking stack.
-	// Until this spork's EnforcementHeight is reached on a node's local
-	// chain, the legacy (devp2p/RLPX) backend is in use; at activation,
-	// every node atomically switches to the libp2p backend.
+	// Libp2pSpork has no runtime effect: libp2p is the only transport.
+	// It stays in ImplementedSporksMap because a node halts on any
+	// activated spork missing from that map (chain/momentum_pool.go),
+	// and chains such as the devnet genesis activate this one.
 	Libp2pSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000001")
 
 	// DynamicPlasmaSpork gates the activation of the dynamic plasma pricing
