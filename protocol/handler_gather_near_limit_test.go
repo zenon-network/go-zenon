@@ -108,13 +108,21 @@ func TestGatherBlocks_NearSoftLimit(t *testing.T) {
 		t.Errorf("fit case: reply size %d exceeds soft limit %d", replySize1, SoftResponseLimit)
 	}
 
-	// --- Case 2: all numBlocks — the last one should push over ---
-	stream2 := streamFromHashes(t, hashes)
+	// --- Case 2: all numBlocks + a trailing sentinel — the last real block
+	// should trigger the stop; the sentinel must NOT be consumed.  Without a
+	// sentinel, EOF masks removal of the soft-limit break (the stream ends
+	// after the crossing hash either way). ---
+	sentinelHash := types.NewHash([]byte{'s', 'e', 'n', 't', byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0)})
+	allHashes := append(append([]types.Hash{}, hashes...), sentinelHash)
+	stream2 := streamFromHashes(t, allHashes)
 	got2, hashCount2, err := gatherBlocksForReply(stream2, func(h types.Hash) *nom.DetailedMomentum {
 		for _, b := range blocks {
 			if b.Momentum.Hash == h {
 				return b
 			}
+		}
+		if h == sentinelHash {
+			t.Error("sentinel hash was looked up — the soft-limit stop is not working")
 		}
 		return nil
 	})

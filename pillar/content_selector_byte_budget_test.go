@@ -1,6 +1,7 @@
 package pillar
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/rlp"
@@ -624,8 +625,8 @@ func TestContent_ByteBudget_ContractBatchAdmission(t *testing.T) {
 	recvOK.Hash = recvOK.ComputeHash()
 
 	toCommit := cs.Content([]*nom.AccountBlock{sendOK, recvOK})
-	if len(toCommit) == 0 {
-		t.Fatalf("admitted case: selector rejected the entire batch (fitSize=%d), want both blocks committed", fitSize)
+	if len(toCommit) != 2 {
+		t.Fatalf("admitted case: selector committed %d blocks, want exactly 2 (send+receive)", len(toCommit))
 	}
 
 	// Verify the descendant block is present in the committed output.
@@ -1013,6 +1014,24 @@ func TestContent_ByteBudget_ListPrefixAllowanceCrossing(t *testing.T) {
 		TotalPlasma:     21000,
 	}
 	probe.Hash = probe.ComputeHash()
+
+	// Stabilize ordering: the probe must sort after all setup blocks so that
+	// its rejection is caused by the cumulative byte budget, not by an
+	// early position in the priority order.  The selector breaks price ties
+	// by larger hash; verify the probe's hash is smaller than every setup
+	// block's hash (so it sorts last, not first).
+	for _, b := range blocks {
+		if bytes.Compare(probe.Hash.Bytes()[:], b.Hash.Bytes()[:]) > 0 {
+			t.Logf("WARNING: probe hash > setup block hash — probe may sort early; rejection assertion may not isolate the byte budget")
+		}
+	}
+
+	// Control: the probe alone (no setup blocks) must be admitted, proving
+	// that rejection in the full set is due to the cumulative estimate.
+	toCommitAlone := cs.Content([]*nom.AccountBlock{probe})
+	if len(toCommitAlone) != 1 {
+		t.Fatalf("control: probe alone admitted %d blocks, want 1 (probe must be admissible in isolation)", len(toCommitAlone))
+	}
 
 	probeBlocks := append(append([]*nom.AccountBlock{}, blocks...), probe)
 	toCommitProbe := cs.Content(probeBlocks)
