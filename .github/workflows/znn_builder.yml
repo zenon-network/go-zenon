@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - name: Ensure SHA pinned actions
         uses: zgosalvez/github-actions-ensure-sha-pinned-actions@2d6823da4039243036c86d76f503c84e2ded2517
   version:
@@ -37,6 +39,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Determine version
         id: version
         env:
@@ -50,6 +53,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
@@ -85,6 +90,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - name: Build znnd
         uses: crazy-max/ghaction-xgo@acf46aa99b919eb9ef6bba89dfd13bafa680667f
         with:
@@ -241,8 +248,15 @@ jobs:
           cd ..
       - name: Merge all checksums
         run: |
-          cat slice-checksums/SHA256CHECKSUMS.txt universal/UNIVERSAL_CHECKSUMS.txt > SHA256CHECKSUMS.txt
+          cat slice-checksums/SHA256CHECKSUMS.txt universal/UNIVERSAL_CHECKSUMS.txt > universal/SHA256CHECKSUMS.txt
           rm universal/UNIVERSAL_CHECKSUMS.txt
+      - name: Verify merged checksums
+        run: |
+          cd universal
+          for f in znnd-darwin-universal.tar.gz libznn-darwin-universal.tar.gz; do
+            grep "  $f\$" SHA256CHECKSUMS.txt | shasum -a 256 -c -
+          done
+          test "$(wc -l < SHA256CHECKSUMS.txt)" -eq "$(( $(wc -l < ../slice-checksums/SHA256CHECKSUMS.txt) + 2 ))"
       - name: Upload universal Darwin binaries
         if: needs.version.outputs.publish == 'true'
         uses: svenstaro/upload-release-action@04733e069f2d7f7f0b4aebc4fbdbce8613b03ccd
