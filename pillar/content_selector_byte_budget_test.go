@@ -424,3 +424,410 @@ func TestContent_ByteBudget_MaxWidthFinalEncoding(t *testing.T) {
 		}
 	}
 }
+
+// TestContent_ByteBudget_ManyHeadersNearBudget verifies that with ~1100+
+// small user blocks the selector still admits a substantial portion and the
+// final RLP-encoded DetailedMomentum stays within the wire-size budget.
+// Unlike SignedMomentumBoundary (which tops out at ~838K), this test
+// approaches the admission boundary by using blocks large enough that the
+// cumulative estimate nears MaxDetailedMomentumWireSize, and then proves
+// that a probe block sized to push the total over IS rejected.
+func TestContent_ByteBudget_ManyHeadersNearBudget(t *testing.T) {
+	cs := newTestContentSelector()
+
+	const numBlocks = 1150
+	const blockHeight = 1 << 30 // 2^30: multi-byte RLP height encoding
+
+	addr1 := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	addr2 := types.ParseAddressPanic("z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj")
+
+	// Size each block so that the cumulative estimate approaches the budget.
+	// With 1150 blocks we need roughly (budget - baseline) / 1150 per block.
+	baseline := worstCaseMomentumHeaderSize() + listPrefixAllowance
+	perBlockBudget := (protocol.MaxDetailedMomentumWireSize - baseline) / numBlocks
+
+	// Account for RLP overhead: a block with Data of size D has an RLP
+	// encoding of roughly D + ~120 bytes (fields + list prefix).  The
+	// content entry adds ~50 bytes.  Solve for D.
+	dataSize := perBlockBudget - 200 // conservative: overhead < 200 per block
+	if dataSize < 100 {
+		t.Fatalf("test setup: dataSize %d too small, increase numBlocks or budget", dataSize)
+	}
+
+	blocks := make([]*nom.AccountBlock, 0, numBlocks)
+	for i := 0; i < numBlocks; i++ {
+		addr := addr1
+		if i%2 == 1 {
+			addr = addr2
+		}
+		b := &nom.AccountBlock{
+			Version:         1,
+			ChainIdentifier: 1,
+			BlockType:       nom.BlockTypeUserSend,
+			Height:          blockHeight + uint64(i),
+			Address:         addr,
+			Data:            make([]byte, dataSize),
+			FusedPlasma:     21000,
+			BasePlasma:      21000,
+			TotalPlasma:     21000,
+		}
+		b.Hash = b.ComputeHash()
+		blocks = append(blocks, b)
+	}
+
+	// Run the full selector (sort + filter).
+	toCommit := cs.Content(blocks)
+	t.Logf("selector admitted %d of %d blocks (dataSize=%d, perBlockBudget=%d)",
+		len(toCommit), numBlocks, dataSize, perBlockBudget)
+
+	// The selector must admit a substantial portion.
+	if len(toCommit) < 1000 {
+		t.Fatalf("selector admitted only %d blocks, want at least 1000", len(toCommit))
+	}
+
+	// Build the actual DetailedMomentum with a worst-case header.
+	content := nom.NewMomentumContent(toCommit)
+	worstMom := &nom.Momentum{
+		Version:         2,
+		ChainIdentifier: ^uint64(0),
+		Hash:            types.Hash{0xff},
+		PreviousHash:    types.Hash{0xff},
+		Height:          ^uint64(0),
+		TimestampUnix:   ^uint64(0),
+		Data:            []byte{},
+		Content:         content,
+		ChangesHash:     types.Hash{0xff},
+		PublicKey:       make([]byte, 32),
+		Signature:       make([]byte, 64),
+		NextFusionPrice: ^uint64(0),
+		NextWorkPrice:   ^uint64(0),
+	}
+	dm := &nom.DetailedMomentum{
+		Momentum:      worstMom,
+		AccountBlocks: toCommit,
+	}
+	encoded, err := rlp.EncodeToBytes(dm)
+	if err != nil {
+		t.Fatalf("RLP encode failed: %v", err)
+	}
+	t.Logf("many-headers encoding: %d bytes, budget=%d, blocks=%d",
+		len(encoded), protocol.MaxDetailedMomentumWireSize, len(toCommit))
+	if len(encoded) > protocol.MaxDetailedMomentumWireSize {
+		t.Errorf("many-headers DetailedMomentum RLP size %d exceeds budget %d (%d blocks)",
+			len(encoded), protocol.MaxDetailedMomentumWireSize, len(toCommit))
+	}
+
+	// Positive admission control: a probe block sized to push the total over
+	// the budget MUST be rejected by the selector.
+	probeDataSize := protocol.MaxDetailedMomentumWireSize // definitely over
+	probe := &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeUserSend,
+		Height:          blockHeight + uint64(numBlocks),
+		Address:         addr1,
+		Data:            make([]byte, probeDataSize),
+		FusedPlasma:     21000,
+		BasePlasma:      21000,
+		TotalPlasma:     21000,
+	}
+	probe.Hash = probe.ComputeHash()
+
+	allBlocks := append(append([]*nom.AccountBlock{}, blocks...), probe)
+	toCommit2 := cs.Content(allBlocks)
+
+	// The probe must not be in the committed output.
+	for _, b := range toCommit2 {
+		if b == probe {
+			t.Fatal("probe block (sized to exceed budget) was admitted by the selector")
+		}
+	}
+	// The count should be the same as before (probe rejected, no other changes).
+	if len(toCommit2) != len(toCommit) {
+		t.Errorf("admission count changed after adding probe: got %d, want %d", len(toCommit2), len(toCommit))
+	}
+}
+
+// TestContent_ByteBudget_ContractBatchAdmission verifies that a contract
+// send+receive batch with a descendant, sized to just fit the budget, is
+// admitted in full (both blocks committed, descendant present in output),
+// and that the same batch sized to just exceed the budget is rejected
+// entirely (zero blocks committed).  This replaces the vacuous
+// descendant-batch case in MaxWidthFinalEncoding which logged "all blocks
+// rejected" and still passed.
+func TestContent_ByteBudget_ContractBatchAdmission(t *testing.T) {
+	cs := newTestContentSelector()
+	userAddr := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+
+	baseline := worstCaseMomentumHeaderSize() + listPrefixAllowance
+
+	// Binary-search for the largest contract-send Data size such that
+	// send + receive (with descendant) fits within the budget.
+	//
+	// The batch is: ContractSend(Data=D) + ContractReceive(Data=D, Descendant=UserSend(Data=100))
+	// The selector processes embedded blocks as a batch: it accumulates
+	// until a non-ContractSend block, then checks the total batch size.
+	fitSize := 0
+	overSize := protocol.MaxDetailedMomentumWireSize
+	for overSize-fitSize > 1 {
+		mid := (fitSize + overSize) / 2
+		send := &nom.AccountBlock{
+			Version: 1, BlockType: nom.BlockTypeContractSend, Height: 1,
+			Address: types.PillarContract, Data: make([]byte, mid),
+		}
+		send.Hash = send.ComputeHash()
+		recv := &nom.AccountBlock{
+			Version: 1, BlockType: nom.BlockTypeContractReceive, Height: 2,
+			Address: types.PillarContract, Data: make([]byte, mid),
+			DescendantBlocks: []*nom.AccountBlock{
+				{
+					Version: 1, BlockType: nom.BlockTypeUserSend, Height: 3,
+					Address: userAddr, Data: make([]byte, 100),
+				},
+			},
+		}
+		recv.Hash = recv.ComputeHash()
+
+		batchSize := 0
+		for _, b := range []*nom.AccountBlock{send, recv} {
+			sz := blockWireSize(b)
+			if sz < 0 {
+				t.Fatalf("RLP encode failed for batch probe")
+			}
+			batchSize += sz + contentEntrySize(b)
+		}
+		if baseline+batchSize <= protocol.MaxDetailedMomentumWireSize {
+			fitSize = mid
+		} else {
+			overSize = mid
+		}
+	}
+
+	t.Logf("descendant batch boundary: fitSize=%d, baseline=%d, budget=%d", fitSize, baseline, protocol.MaxDetailedMomentumWireSize)
+
+	// --- Admitted case: batch at fitSize should be committed ---
+	sendOK := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractSend, Height: 1,
+		Address: types.PillarContract, Data: make([]byte, fitSize),
+	}
+	sendOK.Hash = sendOK.ComputeHash()
+	recvOK := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractReceive, Height: 2,
+		Address: types.PillarContract, Data: make([]byte, fitSize),
+		DescendantBlocks: []*nom.AccountBlock{
+			{
+				Version: 1, BlockType: nom.BlockTypeUserSend, Height: 3,
+				Address: userAddr, Data: make([]byte, 100),
+			},
+		},
+	}
+	recvOK.Hash = recvOK.ComputeHash()
+
+	toCommit := cs.Content([]*nom.AccountBlock{sendOK, recvOK})
+	if len(toCommit) == 0 {
+		t.Fatalf("admitted case: selector rejected the entire batch (fitSize=%d), want both blocks committed", fitSize)
+	}
+
+	// Verify the descendant block is present in the committed output.
+	foundDescendant := false
+	for _, b := range toCommit {
+		for _, d := range b.DescendantBlocks {
+			if d.Height == 3 && d.Address == userAddr {
+				foundDescendant = true
+			}
+		}
+	}
+	if !foundDescendant {
+		t.Error("admitted case: descendant block not found in committed output")
+	}
+
+	// Build the DetailedMomentum and check the final encoding.
+	content := nom.NewMomentumContent(toCommit)
+	worstMom := &nom.Momentum{
+		Version:         2,
+		ChainIdentifier: ^uint64(0),
+		Hash:            types.Hash{0xff},
+		PreviousHash:    types.Hash{0xff},
+		Height:          ^uint64(0),
+		TimestampUnix:   ^uint64(0),
+		Data:            []byte{},
+		Content:         content,
+		ChangesHash:     types.Hash{0xff},
+		PublicKey:       make([]byte, 32),
+		Signature:       make([]byte, 64),
+		NextFusionPrice: ^uint64(0),
+		NextWorkPrice:   ^uint64(0),
+	}
+	dm := &nom.DetailedMomentum{
+		Momentum:      worstMom,
+		AccountBlocks: toCommit,
+	}
+	encoded, err := rlp.EncodeToBytes(dm)
+	if err != nil {
+		t.Fatalf("RLP encode failed: %v", err)
+	}
+	t.Logf("descendant-batch admitted: %d blocks, RLP=%d, budget=%d", len(toCommit), len(encoded), protocol.MaxDetailedMomentumWireSize)
+	if len(encoded) > protocol.MaxDetailedMomentumWireSize {
+		t.Errorf("descendant-batch DetailedMomentum RLP size %d exceeds budget %d",
+			len(encoded), protocol.MaxDetailedMomentumWireSize)
+	}
+
+	// --- Rejected case: batch at overSize must be rejected entirely ---
+	sendOver := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractSend, Height: 1,
+		Address: types.PillarContract, Data: make([]byte, overSize),
+	}
+	sendOver.Hash = sendOver.ComputeHash()
+	recvOver := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractReceive, Height: 2,
+		Address: types.PillarContract, Data: make([]byte, overSize),
+		DescendantBlocks: []*nom.AccountBlock{
+			{
+				Version: 1, BlockType: nom.BlockTypeUserSend, Height: 3,
+				Address: userAddr, Data: make([]byte, 100),
+			},
+		},
+	}
+	recvOver.Hash = recvOver.ComputeHash()
+
+	toCommitOver := cs.Content([]*nom.AccountBlock{sendOver, recvOver})
+	if len(toCommitOver) != 0 {
+		t.Errorf("rejected case: selector committed %d blocks from an over-budget batch, want 0", len(toCommitOver))
+	}
+
+	// --- Two-batch cumulative case: each batch fits alone, but together they
+	// exceed the budget.  Without batch-size accumulation the second batch
+	// would be admitted and the final RLP would exceed the budget. ---
+	halfFit := fitSize / 2 // each batch is ~half the admitted size
+
+	// Batch A: PillarContract send+receive with descendant.
+	sendA := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractSend, Height: 1,
+		Address: types.PillarContract, Data: make([]byte, halfFit),
+	}
+	sendA.Hash = sendA.ComputeHash()
+	recvA := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractReceive, Height: 2,
+		Address: types.PillarContract, Data: make([]byte, halfFit),
+		DescendantBlocks: []*nom.AccountBlock{
+			{
+				Version: 1, BlockType: nom.BlockTypeUserSend, Height: 3,
+				Address: userAddr, Data: make([]byte, 100),
+			},
+		},
+	}
+	recvA.Hash = recvA.ComputeHash()
+
+	// Batch B: StakeContract send+receive with descendant.
+	sendB := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractSend, Height: 1,
+		Address: types.StakeContract, Data: make([]byte, halfFit),
+	}
+	sendB.Hash = sendB.ComputeHash()
+	recvB := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractReceive, Height: 2,
+		Address: types.StakeContract, Data: make([]byte, halfFit),
+		DescendantBlocks: []*nom.AccountBlock{
+			{
+				Version: 1, BlockType: nom.BlockTypeUserSend, Height: 3,
+				Address: userAddr, Data: make([]byte, 100),
+			},
+		},
+	}
+	recvB.Hash = recvB.ComputeHash()
+
+	toCommitTwo := cs.Content([]*nom.AccountBlock{sendA, recvA, sendB, recvB})
+	t.Logf("two-batch cumulative: committed %d blocks (batch A=2 + batch B=2 = 4 if all admitted)", len(toCommitTwo))
+
+	// With accumulation, the first batch (~half budget) is admitted and the
+	// second (~half budget) is also admitted since half + half < budget.
+	// Actually both fit: halfFit = fitSize/2, so 2*halfFit ≈ fitSize < budget.
+	// Both batches should be admitted.
+	if len(toCommitTwo) == 0 {
+		t.Fatal("two-batch cumulative: selector rejected all blocks, want at least batch A committed")
+	}
+
+	// Build the DetailedMomentum and verify it fits.
+	contentTwo := nom.NewMomentumContent(toCommitTwo)
+	worstMomTwo := &nom.Momentum{
+		Version:         2,
+		ChainIdentifier: ^uint64(0),
+		Hash:            types.Hash{0xff},
+		PreviousHash:    types.Hash{0xff},
+		Height:          ^uint64(0),
+		TimestampUnix:   ^uint64(0),
+		Data:            []byte{},
+		Content:         contentTwo,
+		ChangesHash:     types.Hash{0xff},
+		PublicKey:       make([]byte, 32),
+		Signature:       make([]byte, 64),
+		NextFusionPrice: ^uint64(0),
+		NextWorkPrice:   ^uint64(0),
+	}
+	dmTwo := &nom.DetailedMomentum{
+		Momentum:      worstMomTwo,
+		AccountBlocks: toCommitTwo,
+	}
+	encodedTwo, err := rlp.EncodeToBytes(dmTwo)
+	if err != nil {
+		t.Fatalf("RLP encode two-batch: %v", err)
+	}
+	t.Logf("two-batch cumulative: %d blocks, RLP=%d, budget=%d", len(toCommitTwo), len(encodedTwo), protocol.MaxDetailedMomentumWireSize)
+	if len(encodedTwo) > protocol.MaxDetailedMomentumWireSize {
+		t.Errorf("two-batch DetailedMomentum RLP size %d exceeds budget %d",
+			len(encodedTwo), protocol.MaxDetailedMomentumWireSize)
+	}
+
+	// Now the discriminating case: two batches at ~fitSize each (not halfFit).
+	// Each fits alone (as proven by the admitted case above).  Together they
+	// must exceed the budget, so the second batch must be rejected.
+	sendC := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractSend, Height: 1,
+		Address: types.PillarContract, Data: make([]byte, fitSize),
+	}
+	sendC.Hash = sendC.ComputeHash()
+	recvC := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractReceive, Height: 2,
+		Address: types.PillarContract, Data: make([]byte, fitSize),
+		DescendantBlocks: []*nom.AccountBlock{
+			{
+				Version: 1, BlockType: nom.BlockTypeUserSend, Height: 3,
+				Address: userAddr, Data: make([]byte, 100),
+			},
+		},
+	}
+	recvC.Hash = recvC.ComputeHash()
+
+	sendD := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractSend, Height: 1,
+		Address: types.StakeContract, Data: make([]byte, fitSize),
+	}
+	sendD.Hash = sendD.ComputeHash()
+	recvD := &nom.AccountBlock{
+		Version: 1, BlockType: nom.BlockTypeContractReceive, Height: 2,
+		Address: types.StakeContract, Data: make([]byte, fitSize),
+		DescendantBlocks: []*nom.AccountBlock{
+			{
+				Version: 1, BlockType: nom.BlockTypeUserSend, Height: 3,
+				Address: userAddr, Data: make([]byte, 100),
+			},
+		},
+	}
+	recvD.Hash = recvD.ComputeHash()
+
+	toCommitCD := cs.Content([]*nom.AccountBlock{sendC, recvC, sendD, recvD})
+	t.Logf("two-full-batch: committed %d blocks (want 2: batch C admitted, batch D rejected)", len(toCommitCD))
+
+	// Batch C (PillarContract) should be admitted; batch D (StakeContract)
+	// should be rejected because C already consumed ~full budget.
+	if len(toCommitCD) > 2 {
+		t.Errorf("two-full-batch: selector committed %d blocks, want at most 2 (batch C only)", len(toCommitCD))
+	}
+
+	// Verify batch D blocks are NOT in the output.
+	for _, b := range toCommitCD {
+		if b.Address == types.StakeContract {
+			t.Error("two-full-batch: StakeContract block was admitted despite budget being consumed by PillarContract batch")
+		}
+	}
+}
