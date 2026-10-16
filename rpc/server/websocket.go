@@ -252,8 +252,16 @@ func newWebsocketCodec(conn *websocket.Conn) ServerCodec {
 	}
 	wc.wg.Add(1)
 	go func() {
-		wc.pingLoop()
+		err := wc.pingLoop()
+		// Leave the wait group before aborting: abort closes the
+		// connection, an embedding's Close may re-enter Server.Stop, and
+		// Stop's close of this codec joins the ping goroutine. Counted as
+		// finished first, that join returns instead of waiting for the
+		// goroutine that is running it.
 		wc.wg.Done()
+		if err != nil {
+			wc.jsonCodec.abort(err)
+		}
 	}()
 	return wc
 }
@@ -277,15 +285,18 @@ func (wc *websocketCodec) writeJSON(ctx context.Context, v interface{}) error {
 	return err
 }
 
-// pingLoop sends periodic ping frames when the connection is idle.
-func (wc *websocketCodec) pingLoop() {
+// pingLoop sends periodic ping frames when the connection is idle. It
+// returns nil when the codec closes, or the error of a ping that could not
+// be written: replies and notifications cannot be written then either, and
+// the caller aborts the codec once this goroutine has left the wait group.
+func (wc *websocketCodec) pingLoop() error {
 	var timer = time.NewTimer(wsPingInterval)
 	defer timer.Stop()
 
 	for {
 		select {
 		case <-wc.closed():
-			return
+			return nil
 		case <-wc.pingReset:
 			if !timer.Stop() {
 				<-timer.C
@@ -297,12 +308,7 @@ func (wc *websocketCodec) pingLoop() {
 			err := wc.conn.WriteMessage(websocket.PingMessage, nil)
 			wc.jsonCodec.encMu.Unlock()
 			if err != nil {
-				// A ping that cannot be written means replies and
-				// notifications cannot be either. abort does not wait for
-				// this goroutine; close, run by the connection's
-				// lifecycle, does, after closed() lets the loop exit.
-				wc.jsonCodec.abort(err)
-				return
+				return err
 			}
 			timer.Reset(wsPingInterval)
 		}

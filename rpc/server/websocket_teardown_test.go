@@ -13,10 +13,12 @@ import (
 )
 
 // bigResult returns a payload large enough that a peer which stopped reading
-// makes the server's write block until its deadline.
+// makes the server's write block until its deadline. Loopback socket buffers
+// can absorb several MiB (and grow under load), so the reply is well past
+// that: 4 MiB fitted entirely in one full-suite run and no timeout fired.
 type bigResult struct{}
 
-func (bigResult) Blob() string { return strings.Repeat("x", 4<<20) }
+func (bigResult) Blob() string { return strings.Repeat("x", 32<<20) }
 
 func setWriteTimeout(t *testing.T, d time.Duration) {
 	t.Helper()
@@ -148,5 +150,96 @@ func TestWebsocketPingFailureTearsDownConnection(t *testing.T) {
 	awaitClosed(t, codec.closed(), "server codec closed after a ping write failed")
 	if err := codec.failed(); err == nil {
 		t.Fatal("codec closed without a recorded terminal error")
+	}
+}
+
+// stopOnCloseListener hands out connections whose Close calls Server.Stop,
+// the way an embedding's connection type might (issue #116). The WebSocket
+// upgrade hijacks exactly these connections.
+type stopOnCloseListener struct {
+	net.Listener
+	srv *Server
+}
+
+func (l *stopOnCloseListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &stopOnCloseNetConn{Conn: c, srv: l.srv}, nil
+}
+
+type stopOnCloseNetConn struct {
+	net.Conn
+	srv *Server
+}
+
+func (c *stopOnCloseNetConn) Close() error {
+	c.srv.Stop()
+	return c.Conn.Close()
+}
+
+// wsServerStopOnClose is wsServer over connections whose Close re-enters
+// Server.Stop, and reports when each ServeCodec returns.
+func wsServerStopOnClose(t *testing.T, srv *Server) (url string, codecs <-chan *websocketCodec, served <-chan struct{}) {
+	t.Helper()
+	codecCh := make(chan *websocketCodec, 8)
+	servedCh := make(chan struct{}, 8)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		codec := newWebsocketCodec(conn).(*websocketCodec)
+		codecCh <- codec
+		srv.ServeCodec(codec, 0)
+		servedCh <- struct{}{}
+	})
+	ts := httptest.NewUnstartedServer(h)
+	ts.Listener = &stopOnCloseListener{Listener: ts.Listener, srv: srv}
+	ts.Start()
+	t.Cleanup(ts.Close)
+	return "ws" + strings.TrimPrefix(ts.URL, "http"), codecCh, servedCh
+}
+
+// The ping goroutine's abort closes the connection; if that Close re-enters
+// Server.Stop, Stop closes this codec too, and the WebSocket close joins
+// the ping goroutine. That goroutine must already count as finished, or it
+// waits for itself and ServeCodec never returns. Fails if the ping
+// goroutine aborts before it has left the wait group.
+func TestWebsocketPingAbortSurvivesReentrantStop(t *testing.T) {
+	prevInterval, prevTimeout := wsPingInterval, wsPingWriteTimeout
+	wsPingInterval, wsPingWriteTimeout = 20*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { wsPingInterval, wsPingWriteTimeout = prevInterval, prevTimeout })
+
+	srv := NewServer()
+	if err := srv.RegisterName("test", issue116Probe{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	url, codecs, served := wsServerStopOnClose(t, srv)
+
+	peer := dialRaw(t, url)
+	codec := awaitCodec(t, codecs)
+	go func() {
+		for {
+			if _, _, err := peer.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+	wrapped, ok := codec.conn.NetConn().(*stopOnCloseNetConn)
+	if !ok {
+		t.Fatalf("server connection is %T, want *stopOnCloseNetConn", codec.conn.NetConn())
+	}
+	if err := wrapped.Conn.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	awaitClosed(t, codec.closed(), "server codec closed after a ping write failed")
+	select {
+	case <-served:
+	case <-time.After(teardownTestTimeout):
+		t.Fatal("ServeCodec did not return: the ping goroutine joined itself through the re-entered Stop")
 	}
 }

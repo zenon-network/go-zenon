@@ -141,22 +141,25 @@ func TestTeardownUnderConcurrentChurn(t *testing.T) {
 		conns  = 6
 		rounds = 20
 	)
-	var wg sync.WaitGroup
-	broadcasting := make(chan struct{})
-	wg.Add(1)
+	// The broadcaster runs until every connection goroutine is done: a
+	// round that waits for its write to fail on the next broadcast must
+	// get one. Every 5 ms keeps the momentum channel from overflowing.
+	stopBroadcasting := make(chan struct{})
+	broadcasterDone := make(chan struct{})
 	go func() {
-		defer wg.Done()
+		defer close(broadcasterDone)
 		for h := uint64(1); ; h++ {
 			select {
-			case <-broadcasting:
+			case <-stopBroadcasting:
 				return
 			default:
 			}
 			server.InsertMomentum(momentumAt(h))
-			time.Sleep(time.Millisecond)
+			time.Sleep(5 * time.Millisecond)
 		}
 	}()
 
+	var wg sync.WaitGroup
 	for c := 0; c < conns; c++ {
 		wg.Add(1)
 		go func(c int) {
@@ -190,9 +193,8 @@ func TestTeardownUnderConcurrentChurn(t *testing.T) {
 			}
 		}(c)
 	}
-	// Let the connections finish before stopping the broadcaster.
-	time.Sleep(200 * time.Millisecond)
-	close(broadcasting)
 	wg.Wait()
+	close(stopBroadcasting)
+	<-broadcasterDone
 	waitLive(t, server, 0)
 }

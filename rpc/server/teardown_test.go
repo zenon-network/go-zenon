@@ -20,11 +20,13 @@ const teardownTestTimeout = 5 * time.Second
 // or hold. The test reads and writes the other end.
 type scriptedConn struct {
 	net.Conn
-	mu      sync.Mutex
-	failErr error
-	gate    chan struct{}
-	writes  int
-	closes  atomic.Int32
+	mu           sync.Mutex
+	failErr      error
+	failAfter    int   // when > 0, writes numbered above it fail with failAfterErr
+	failAfterErr error //
+	gate         chan struct{}
+	writes       int
+	closes       atomic.Int32
 }
 
 func newScriptedConn(t *testing.T) (*scriptedConn, net.Conn) {
@@ -37,8 +39,11 @@ func newScriptedConn(t *testing.T) (*scriptedConn, net.Conn) {
 
 func (c *scriptedConn) Write(p []byte) (int, error) {
 	c.mu.Lock()
-	err, gate := c.failErr, c.gate
 	c.writes++
+	err, gate := c.failErr, c.gate
+	if err == nil && c.failAfter > 0 && c.writes > c.failAfter {
+		err = c.failAfterErr
+	}
 	c.mu.Unlock()
 	if err != nil {
 		return 0, err
@@ -57,6 +62,14 @@ func (c *scriptedConn) Close() error {
 func (c *scriptedConn) failWrites(err error) {
 	c.mu.Lock()
 	c.failErr = err
+	c.mu.Unlock()
+}
+
+// failWritesAfter lets the first n writes through and fails every later
+// one with err. Decided inside Write, so it cannot race a write in flight.
+func (c *scriptedConn) failWritesAfter(n int, err error) {
+	c.mu.Lock()
+	c.failAfter, c.failAfterErr = n, err
 	c.mu.Unlock()
 }
 

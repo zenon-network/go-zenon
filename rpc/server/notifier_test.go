@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -193,11 +194,14 @@ func TestActivationFlushFailureThroughHandler(t *testing.T) {
 			svc := &subscriptionTestService{notifyBeforeReturn: 2}
 			srv := newSubscriptionTestServer(t, svc)
 			conn, client, codec := serveScripted(t, srv)
+			// The response write(s) succeed; the write after them, the
+			// flush, fails. Decided by write number, before the request is
+			// sent, so it cannot race the server's first flush write.
+			conn.failWritesAfter(tc.replies, errTransport)
 
 			if _, err := client.Write([]byte(tc.request)); err != nil {
 				t.Fatal(err)
 			}
-			// Read the response(s); the next write is the flush.
 			dec := json.NewDecoder(client)
 			var raw json.RawMessage
 			for i := 0; i < tc.replies; i++ {
@@ -205,12 +209,47 @@ func TestActivationFlushFailureThroughHandler(t *testing.T) {
 					t.Fatalf("response %d: %v", i+1, err)
 				}
 			}
-			conn.failWrites(errTransport)
 
 			awaitClosed(t, codec.closed(), "codec closed after the flush failed")
 			if err := codec.failed(); !errors.Is(err, errTransport) {
 				t.Fatalf("codec recorded %v, want %v", err, errTransport)
 			}
 		})
+	}
+}
+
+// An overflow while activate is writing a detached batch fails the
+// notifier, and activate must keep that failure: it must not find the
+// cleared buffer empty and move to active, which would silently drop the
+// overflowed messages and then resume delivery. Fails if activate's drain
+// loop does not re-check the state after re-acquiring the lock.
+func TestOverflowDuringFlushStaysFailed(t *testing.T) {
+	conn, client := newScriptedConn(t)
+	go io.Copy(io.Discard, client) // let the released batch write complete
+	n, sub := newTestNotifier(t, conn)
+	if err := n.Notify(sub.ID, "buffered"); err != nil {
+		t.Fatal(err)
+	}
+	release := conn.gateWrites()
+	activated := make(chan error, 1)
+	go func() { activated <- n.activate() }()
+	// Give activate time to detach its batch and block on the gated write.
+	time.Sleep(50 * time.Millisecond)
+
+	for i := 0; i < maxPendingNotifications; i++ {
+		if err := n.Notify(sub.ID, i); err != nil {
+			t.Fatalf("notification %d during the flush: %v", i+1, err)
+		}
+	}
+	if err := n.Notify(sub.ID, "overflow"); !errors.Is(err, ErrNotificationBufferFull) {
+		t.Fatalf("overflow during the flush: got %v, want %v", err, ErrNotificationBufferFull)
+	}
+
+	release()
+	if err := <-activated; !errors.Is(err, ErrNotificationBufferFull) {
+		t.Fatalf("activate after an overflow during its flush: got %v, want %v", err, ErrNotificationBufferFull)
+	}
+	if err := n.Notify(sub.ID, "later"); !errors.Is(err, ErrNotificationBufferFull) {
+		t.Fatalf("Notify after the overflow: got %v, want %v", err, ErrNotificationBufferFull)
 	}
 }

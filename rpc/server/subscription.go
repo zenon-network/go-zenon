@@ -254,6 +254,14 @@ func (n *Notifier) activate() error {
 			}
 		}
 		n.mu.Lock()
+		// A Notify that overflowed the buffer while the batch was being
+		// written has failed the notifier and cleared the buffer; the
+		// failure stands, the empty buffer does not mean the flush is done.
+		if n.state != notifierFlushing {
+			err := n.failErr
+			n.mu.Unlock()
+			return err
+		}
 	}
 	n.state = notifierActive
 	n.mu.Unlock()
