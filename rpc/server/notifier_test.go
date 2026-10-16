@@ -253,6 +253,9 @@ func TestOverflowDuringFlushStaysFailed(t *testing.T) {
 	}
 	codec := n.h.conn.(*jsonCodec)
 	awaitClosed(t, codec.closed(), "connection torn down after the overflow")
+	if err := codec.failed(); !errors.Is(err, ErrNotificationBufferFull) {
+		t.Fatalf("codec recorded %v, want %v", err, ErrNotificationBufferFull)
+	}
 
 	release()
 	if err := <-activated; !errors.Is(err, ErrNotificationBufferFull) {

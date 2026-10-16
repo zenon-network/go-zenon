@@ -189,10 +189,11 @@ func (n *Notifier) Notify(id ID, data interface{}) error {
 			n.fail(ErrNotificationBufferFull)
 			n.mu.Unlock()
 			// The client holds an ID that can never deliver and cannot be
-			// told so, and the subscribe response has not been written in
-			// all this time: the connection is treated as failed and torn
-			// down, outside the notifier's lock, so the subscription is
-			// reclaimed like any other terminal failure.
+			// told so, and the connection's writer has fallen this far
+			// behind on its activation (the subscribe response, or the
+			// buffered messages after it): the connection is treated as
+			// failed and torn down, outside the notifier's lock, so the
+			// subscription is reclaimed like any other terminal failure.
 			if c, ok := n.h.conn.(interface{ abort(error) }); ok {
 				c.abort(ErrNotificationBufferFull)
 			}

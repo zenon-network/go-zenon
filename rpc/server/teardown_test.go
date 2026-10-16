@@ -220,10 +220,11 @@ func TestAbortReentrantStopNoDeadlock(t *testing.T) {
 	}
 }
 
-// While one goroutine's write fails and aborts the codec, other writers
-// either complete or get an error; none of them starts a transport write
-// after the failure was recorded, and the connection is closed once.
-// Run with -race -count=20.
+// While one goroutine's write fails and aborts the codec, every other
+// writer gets an error too (a writer already queued on the encoder lock
+// may still reach the closed connection; one that has not yet taken the
+// lock is refused by the recorded failure), and the connection is closed
+// once. Run with -race -count=20.
 func TestConcurrentWritesDuringAbort(t *testing.T) {
 	conn, client := newScriptedConn(t)
 	codec := NewCodec(conn).(*jsonCodec)
