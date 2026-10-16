@@ -40,6 +40,25 @@ var (
 	// DefaultMaxSubscriptionsPerConn server subscriptions unless the
 	// server configures another limit; see Server.SetMaxSubscriptionsPerConn.
 	ErrTooManySubscriptions = errors.New("too many subscriptions on this connection")
+	// ErrNotificationBufferFull is returned by Notify when more than
+	// maxPendingNotifications arrive before the subscription is activated.
+	// The notifier is then failed: nothing it buffered is delivered.
+	ErrNotificationBufferFull = errors.New("too many notifications buffered before the subscription was activated")
+)
+
+// maxPendingNotifications bounds the notifications a notifier holds between
+// the subscription's creation and the moment its ID has been written to the
+// client. The window is a response write long; the bound is a safety net.
+const maxPendingNotifications = 128
+
+// notifierState is the delivery state of a Notifier.
+type notifierState uint8
+
+const (
+	notifierBuffering notifierState = iota // before activation: messages wait in buffer
+	notifierFlushing                       // activate is writing the buffer; new messages join it
+	notifierActive                         // messages are written as they arrive
+	notifierFailed                         // terminal: nothing is written again
 )
 
 // DefaultMaxSubscriptionsPerConn bounds the server subscriptions one connection can
@@ -106,7 +125,8 @@ type Notifier struct {
 	sub          *Subscription
 	buffer       []json.RawMessage
 	callReturned bool
-	activated    bool
+	state        notifierState
+	failErr      error // the error that moved state to notifierFailed
 }
 
 // CreateSubscription returns a new subscription that is coupled to the
@@ -128,19 +148,20 @@ func (n *Notifier) CreateSubscription() *Subscription {
 
 // Notify sends a notification to the client with the given data as payload.
 //
-// Once the notifier has been activated, an error writing the notification is
-// returned to the caller. Notify does not close the connection and does not
-// uninstall the subscription; it is up to the caller to decide whether to
-// unsubscribe or close. The connection is closed only by its own lifecycle:
-// a read-side failure such as the peer disconnecting, or Server.Stop at
-// shutdown.
+// Before the subscription is activated the encoded message is buffered, up to
+// maxPendingNotifications; the buffer is written by activate, after the
+// subscription ID has gone to the client, and before any later message. Once
+// active, Notify writes the message and returns the write error, if any.
 //
-// Before activation the encoded message is buffered and nil is returned. The
-// buffer is flushed by activate, whose error the RPC handler discards, so
-// notifications sent during the pre-activation window can fail silently.
+// A terminal failure (a failed flush, an overflowed buffer, or a write error
+// once active) moves the notifier to a failed state: every later call returns
+// that error without writing. The connection itself is torn down by the
+// codec on its first terminal transport failure; Notify does not close it
+// and does not uninstall the subscription, the connection's lifecycle does.
 //
-// Notify panics if called before a subscription has been created, or with an ID
-// that does not match the subscription.
+// Notify never waits behind a write in progress: the mutex is held only to
+// decide the state. It panics if called before a subscription has been
+// created, or with an ID that does not match the subscription.
 func (n *Notifier) Notify(id ID, data interface{}) error {
 	enc, err := json.Marshal(data)
 	if err != nil {
@@ -148,18 +169,47 @@ func (n *Notifier) Notify(id ID, data interface{}) error {
 	}
 
 	n.mu.Lock()
-	defer n.mu.Unlock()
-
 	if n.sub == nil {
+		n.mu.Unlock()
 		panic("can't Notify before subscription is created")
 	} else if n.sub.ID != id {
+		n.mu.Unlock()
 		panic("Notify with wrong ID")
 	}
-	if n.activated {
-		return n.send(n.sub, enc)
+	switch n.state {
+	case notifierFailed:
+		err := n.failErr
+		n.mu.Unlock()
+		return err
+	case notifierBuffering, notifierFlushing:
+		if len(n.buffer) >= maxPendingNotifications {
+			n.fail(ErrNotificationBufferFull)
+			n.mu.Unlock()
+			return ErrNotificationBufferFull
+		}
+		n.buffer = append(n.buffer, enc)
+		n.mu.Unlock()
+		return nil
 	}
-	n.buffer = append(n.buffer, enc)
+	sub := n.sub
+	n.mu.Unlock()
+
+	if err := n.send(sub, enc); err != nil {
+		n.mu.Lock()
+		if n.state != notifierFailed {
+			n.fail(err)
+		}
+		n.mu.Unlock()
+		return err
+	}
 	return nil
+}
+
+// fail moves the notifier to its terminal state. The caller holds n.mu.
+func (n *Notifier) fail(err error) {
+	n.state = notifierFailed
+	n.failErr = err
+	n.buffer = nil
 }
 
 // Closed returns a channel that is closed when the RPC connection is closed.
@@ -177,19 +227,36 @@ func (n *Notifier) takeSubscription() *Subscription {
 	return n.sub
 }
 
-// activate is called after the subscription ID was sent to client. Notifications are
-// buffered before activation. This prevents notifications being sent to the client before
-// the subscription ID is sent to the client.
+// activate is called after the subscription ID was sent to the client. It
+// writes everything buffered so far, including messages that arrive while
+// it is writing, and only then lets Notify write directly, so no message
+// overtakes an earlier one. The buffer is written without holding n.mu. A
+// write error is terminal: the rest of the buffer is dropped and the error
+// is returned; the codec has already begun tearing the connection down.
 func (n *Notifier) activate() error {
 	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	for _, data := range n.buffer {
-		if err := n.send(n.sub, data); err != nil {
-			return err
-		}
+	if n.state != notifierBuffering {
+		err := n.failErr
+		n.mu.Unlock()
+		return err
 	}
-	n.activated = true
+	n.state = notifierFlushing
+	for len(n.buffer) > 0 {
+		pending, sub := n.buffer, n.sub
+		n.buffer = nil
+		n.mu.Unlock()
+		for _, data := range pending {
+			if err := n.send(sub, data); err != nil {
+				n.mu.Lock()
+				n.fail(err)
+				n.mu.Unlock()
+				return err
+			}
+		}
+		n.mu.Lock()
+	}
+	n.state = notifierActive
+	n.mu.Unlock()
 	return nil
 }
 

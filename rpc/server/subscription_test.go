@@ -21,6 +21,9 @@ type subscriptionTestService struct {
 	// the RPC server recovers into an error response.
 	panicBeforeCreate bool
 	panicAfterCreate  bool
+	// notifyBeforeReturn sends that many notifications before the call
+	// returns, into the notifier's pre-activation buffer.
+	notifyBeforeReturn int
 }
 
 var errServiceRejected = errors.New("service rejected the subscription")
@@ -46,6 +49,11 @@ func (s *subscriptionTestService) Events(ctx context.Context) (*Subscription, er
 	}
 	if s.panicAfterCreate {
 		panic("service panicked after creating the subscription")
+	}
+	for i := 0; i < s.notifyBeforeReturn; i++ {
+		if err := notifier.Notify(sub.ID, i); err != nil {
+			return nil, err
+		}
 	}
 	return sub, nil
 }
