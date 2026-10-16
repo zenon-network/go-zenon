@@ -42,7 +42,8 @@ var (
 	ErrTooManySubscriptions = errors.New("too many subscriptions on this connection")
 	// ErrNotificationBufferFull is returned by Notify when more than
 	// maxPendingNotifications arrive before the subscription is activated.
-	// The notifier is then failed: nothing it buffered is delivered.
+	// The notifier is then failed and the connection is torn down: nothing
+	// it buffered is delivered, and the subscription is reclaimed.
 	ErrNotificationBufferFull = errors.New("too many notifications buffered before the subscription was activated")
 )
 
@@ -155,12 +156,14 @@ func (n *Notifier) CreateSubscription() *Subscription {
 //
 // A terminal failure (a failed flush, an overflowed buffer, or a write error
 // once active) moves the notifier to a failed state: every later call returns
-// that error without writing. The connection itself is torn down by the
-// codec on its first terminal transport failure; Notify does not close it
-// and does not uninstall the subscription, the connection's lifecycle does.
+// that error without writing. The connection is torn down by the codec on
+// its first terminal transport failure, and by Notify on an overflow; the
+// subscription is uninstalled by the connection's lifecycle, never here.
 //
-// Notify never waits behind a write in progress: the mutex is held only to
-// decide the state. It panics if called before a subscription has been
+// Notify does not hold the mutex across a write: it is held only to decide
+// the state, so a flush in progress does not block it. Once active, the
+// write is serialized with the connection's other writes by the codec, as
+// any write is. Notify panics if called before a subscription has been
 // created, or with an ID that does not match the subscription.
 func (n *Notifier) Notify(id ID, data interface{}) error {
 	enc, err := json.Marshal(data)
@@ -185,6 +188,14 @@ func (n *Notifier) Notify(id ID, data interface{}) error {
 		if len(n.buffer) >= maxPendingNotifications {
 			n.fail(ErrNotificationBufferFull)
 			n.mu.Unlock()
+			// The client holds an ID that can never deliver and cannot be
+			// told so, and the subscribe response has not been written in
+			// all this time: the connection is treated as failed and torn
+			// down, outside the notifier's lock, so the subscription is
+			// reclaimed like any other terminal failure.
+			if c, ok := n.h.conn.(interface{ abort(error) }); ok {
+				c.abort(ErrNotificationBufferFull)
+			}
 			return ErrNotificationBufferFull
 		}
 		n.buffer = append(n.buffer, enc)
@@ -199,6 +210,7 @@ func (n *Notifier) Notify(id ID, data interface{}) error {
 		if n.state != notifierFailed {
 			n.fail(err)
 		}
+		err = n.failErr // the first failure, if another landed meanwhile
 		n.mu.Unlock()
 		return err
 	}
@@ -247,8 +259,14 @@ func (n *Notifier) activate() error {
 		n.mu.Unlock()
 		for _, data := range pending {
 			if err := n.send(sub, data); err != nil {
+				// The first failure stands: an overflow meanwhile has
+				// already failed the notifier and torn the connection
+				// down, and this write failed because of that.
 				n.mu.Lock()
-				n.fail(err)
+				if n.state != notifierFailed {
+					n.fail(err)
+				}
+				err = n.failErr
 				n.mu.Unlock()
 				return err
 			}

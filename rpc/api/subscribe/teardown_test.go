@@ -132,8 +132,85 @@ func TestTerminalWriteFailureReclaimsSubscriptionsOnce(t *testing.T) {
 	}
 }
 
-// Subscribes, unsubscribes, broadcasts, connection failures and shutdown
-// interleave without a race or a leaked slot. Run under -race.
+// heldConn is the server side of a net.Pipe whose writes wait at a gate.
+// reached is closed when the first write arrives at it.
+type heldConn struct {
+	net.Conn
+	gate    chan struct{}
+	reached chan struct{}
+	once    sync.Once
+}
+
+func (c *heldConn) Write(p []byte) (int, error) {
+	c.once.Do(func() { close(c.reached) })
+	<-c.gate
+	return c.Conn.Write(p)
+}
+
+// A subscription whose pre-activation buffer overflows on an otherwise
+// healthy transport is not left installed and silent: the subscribe
+// response is held, broadcasts pile up until the bound is crossed, and the
+// connection is torn down so its slot comes back; a peer that subscribes
+// afterwards is served. Fails if an overflow only fails the notifier.
+func TestOverflowBeforeActivationTearsDownConnection(t *testing.T) {
+	server, rpcServer := startTestServer(t)
+
+	serverEnd, clientEnd := net.Pipe()
+	t.Cleanup(func() { serverEnd.Close(); clientEnd.Close() })
+	conn := &heldConn{Conn: serverEnd, gate: make(chan struct{}), reached: make(chan struct{})}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(conn.gate) }) }
+	t.Cleanup(release)
+	served := make(chan struct{})
+	go func() {
+		rpcServer.ServeCodec(rpc.NewCodec(conn), 0)
+		close(served)
+	}()
+	req := `{"jsonrpc":"2.0","id":1,"method":"ledger.subscribe","params":["momentums"]}`
+	if _, err := clientEnd.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-conn.reached: // the response write is held; the entry is queued or installed
+	case <-time.After(5 * time.Second):
+		t.Fatal("the subscribe response was never written")
+	}
+	waitLive(t, server, 1)
+
+	// Broadcast until the buffer overflows and the slot comes back. The
+	// bound is private to rpc/server; 512 is well past it.
+	for h := uint64(1); h <= 512 && liveCount(server) == 1; h++ {
+		server.mCh <- &Momentum{Height: h}
+	}
+	waitLive(t, server, 0)
+	release() // lets the held response write fail and the handler finish
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ServeCodec did not return after the overflow")
+	}
+
+	// A new peer is served and the count stays exact.
+	healthy := rpc.DialInProc(rpcServer)
+	t.Cleanup(healthy.Close)
+	events := make(chan interface{}, 8)
+	if _, err := healthy.Subscribe(context.Background(), "ledger", events, "momentums"); err != nil {
+		t.Fatal(err)
+	}
+	waitLive(t, server, 1)
+	server.InsertMomentum(momentumAt(1000))
+	select {
+	case <-events:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a peer subscribing after the overflow did not receive the momentum")
+	}
+	if got := liveCount(server); got != 1 {
+		t.Fatalf("live subscriptions = %d, want 1", got)
+	}
+}
+
+// Subscribes, broadcasts, write failures and plain disconnects interleave
+// across connections without a race or a leaked slot. Run under -race.
 func TestTeardownUnderConcurrentChurn(t *testing.T) {
 	server, rpcServer := startTestServer(t)
 

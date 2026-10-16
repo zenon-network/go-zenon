@@ -96,6 +96,13 @@ func TestPreActivationBufferIsBounded(t *testing.T) {
 	if conn.writeCount() != 0 {
 		t.Fatal("an overflowed buffer was flushed")
 	}
+	// The client holds an ID that can never deliver: the connection is torn
+	// down so the subscription is reclaimed like any other terminal failure.
+	codec := n.h.conn.(*jsonCodec)
+	awaitClosed(t, codec.closed(), "connection torn down after the overflow")
+	if err := codec.failed(); !errors.Is(err, ErrNotificationBufferFull) {
+		t.Fatalf("codec recorded %v, want %v", err, ErrNotificationBufferFull)
+	}
 }
 
 // Notify never waits behind a write in progress. While activate is blocked
@@ -108,12 +115,12 @@ func TestNotifyDoesNotBlockBehindFlush(t *testing.T) {
 	if err := n.Notify(sub.ID, "buffered-1"); err != nil {
 		t.Fatal(err)
 	}
-	release := conn.gateWrites()
+	reached, release := conn.gateWrites()
+	t.Cleanup(release)
 
 	activated := make(chan error, 1)
 	go func() { activated <- n.activate() }()
-	// Give activate time to reach the gated write.
-	time.Sleep(50 * time.Millisecond)
+	issue116AwaitDone(t, reached, "activate reaching the gated write")
 
 	done := make(chan error, 1)
 	go func() { done <- n.Notify(sub.ID, "buffered-2") }()
@@ -230,11 +237,11 @@ func TestOverflowDuringFlushStaysFailed(t *testing.T) {
 	if err := n.Notify(sub.ID, "buffered"); err != nil {
 		t.Fatal(err)
 	}
-	release := conn.gateWrites()
+	reached, release := conn.gateWrites()
+	t.Cleanup(release)
 	activated := make(chan error, 1)
 	go func() { activated <- n.activate() }()
-	// Give activate time to detach its batch and block on the gated write.
-	time.Sleep(50 * time.Millisecond)
+	issue116AwaitDone(t, reached, "activate reaching the gated write")
 
 	for i := 0; i < maxPendingNotifications; i++ {
 		if err := n.Notify(sub.ID, i); err != nil {
@@ -244,6 +251,8 @@ func TestOverflowDuringFlushStaysFailed(t *testing.T) {
 	if err := n.Notify(sub.ID, "overflow"); !errors.Is(err, ErrNotificationBufferFull) {
 		t.Fatalf("overflow during the flush: got %v, want %v", err, ErrNotificationBufferFull)
 	}
+	codec := n.h.conn.(*jsonCodec)
+	awaitClosed(t, codec.closed(), "connection torn down after the overflow")
 
 	release()
 	if err := <-activated; !errors.Is(err, ErrNotificationBufferFull) {
