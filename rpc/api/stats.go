@@ -77,7 +77,7 @@ type ProcessInfoResponse struct {
 func (api *StatsApi) ProcessInfo() (*ProcessInfoResponse, error) {
 	return &ProcessInfoResponse{
 		Version: metadata.Version,
-		Commit:  metadata.GitCommit,
+		Commit:  metadata.CommitHash(),
 	}, nil
 }
 
