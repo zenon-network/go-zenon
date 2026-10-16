@@ -1123,10 +1123,10 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 		return fmt.Errorf("duplicate peer %s", info.ID)
 	}
 	if len(srv.peerMap) >= srv.MaxPeers {
-		// As in handleStream, a dial in flight vetoes peer-wide teardown:
-		// reject only this stream, without closing other streams sharing
-		// the connection. The dial reservation is released by the defer
-		// above. Keep the decision and close under peerMu.
+		// As in handleStream, a dial in flight vetoes peer-wide teardown.
+		// This caller always holds its own reservation here, so this guard
+		// never closes the peer; the connection is left to the connection
+		// manager. The defer above releases the reservation.
 		_, dialing := srv.dialing[peerKey]
 		if !dialing {
 			_ = srv.host.Network().ClosePeer(info.ID)
