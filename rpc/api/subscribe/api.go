@@ -65,10 +65,9 @@ func newAccountBlockFiltered(block *nom.AccountBlock, topLevelBlocks map[types.H
 		ToAddress: block.ToAddress,
 		FromHash:  block.FromBlockHash,
 	}
-	// A descendant the momentum lists on its own is already an event of its
-	// own; expanding it here again is what produced the duplicate refund
-	// notifications of #53. A descendant the momentum does not list is still
-	// expanded, so the stream stays complete for either content layout.
+	// A descendant the momentum also lists is emitted at its own entry, so it
+	// is skipped here. An unlisted descendant is expanded after its parent, so
+	// the stream stays complete for either content layout.
 	for _, dBlock := range block.DescendantBlocks {
 		if !topLevelBlocks[dBlock.Hash] {
 			all = append(all, newAccountBlockFiltered(dBlock, topLevelBlocks)...)
