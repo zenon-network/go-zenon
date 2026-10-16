@@ -5,6 +5,7 @@ import (
 	"net"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -399,6 +400,139 @@ func TestExpireNodesKeepsBondCompletedDuringSweep(t *testing.T) {
 		}
 		if db.node(id) == nil {
 			t.Errorf("%s: node record of the bond completed during the sweep was removed", target.name)
+		}
+	}
+}
+
+// close must not return, and must not close the store, while a sweep still
+// holds its iterator: goleveldb requires outstanding iterators to be released
+// before Close. The sweep here is the one started by openNodeDB, paused at the
+// seam with its iterator open. Fails if close stops joining the expirer, or
+// closes the store before the join. Covered for a database that has bonded
+// and for one that never has, since the sweep runs from open in both.
+func TestCloseWaitsForRunningSweep(t *testing.T) {
+	for _, bonded := range []bool{true, false} {
+		name := "never bonded"
+		if bonded {
+			name = "bonded"
+		}
+		t.Run(name, func(t *testing.T) {
+			defer func(cycle time.Duration) { nodeDBCleanupCycle = cycle }(nodeDBCleanupCycle)
+			nodeDBCleanupCycle = 10 * time.Millisecond
+
+			db, err := newNodeDB("", Version, newTestNodeID(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bonded {
+				db.markBonded()
+			}
+
+			// The sweep is already running and reads the seam under db.mu,
+			// so install it under the same lock, and before anything is
+			// stored that a sweep could reclaim. The entry notification is
+			// buffered: the sweep may reach the seam before the test is
+			// receiving, and must not drop it.
+			inSweep := make(chan struct{}, 1)
+			releaseSweep := make(chan struct{})
+			var once sync.Once
+			release := func() { once.Do(func() { close(releaseSweep) }) }
+			t.Cleanup(release)
+			db.mu.Lock()
+			db.beforeDelete = func(NodeID) {
+				select {
+				case inSweep <- struct{}{}:
+				default:
+				}
+				<-releaseSweep
+			}
+			db.mu.Unlock()
+
+			// A stale unanswered ping is reclaimed whether or not a bond has
+			// succeeded, so the sweep reaches the seam in both cases.
+			stale := newTestNodeID(t)
+			if err := db.updateLastPing(stale, time.Now().Add(-2*nodeDBNodeExpiration)); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-inSweep:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the running sweep never reached the seam")
+			}
+
+			closed := make(chan struct{})
+			go func() {
+				db.close()
+				close(closed)
+			}()
+			select {
+			case <-closed:
+				t.Fatal("close returned while the sweep still held its iterator")
+			case <-time.After(200 * time.Millisecond):
+			}
+			if _, err := db.lvl.Has(nodeDBVersionKey, nil); err != nil {
+				t.Fatalf("store was closed under the running sweep: %v", err)
+			}
+
+			release()
+			select {
+			case <-closed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("close did not return after the sweep finished")
+			}
+		})
+	}
+}
+
+// Once shutdown has begun, a sweep stops between identities instead of
+// finishing a pass over the whole database, so that close is not held up by
+// a large store. The identity being decided when quit closes is still
+// handled; the ones after it are left alone. Fails if the sweep stops
+// checking quit between identities.
+func TestExpireNodesStopsBetweenIdentitiesOnQuit(t *testing.T) {
+	db := newTestNodeDB(t)
+	// quit is closed by the seam below, so close() cannot be used. Cleanup
+	// closes it too if the seam never ran, then joins the expirer the way
+	// close does before the store goes away; otherwise a failure before the
+	// seam would wait on the expirer until the suite timeout.
+	var stopOnce sync.Once
+	stop := func() { stopOnce.Do(func() { close(db.quit) }) }
+	t.Cleanup(func() {
+		stop()
+		db.wg.Wait()
+		db.lvl.Close()
+	})
+
+	const n = 4
+	ids := make([]NodeID, n)
+	for i := range ids {
+		ids[i] = newTestNodeID(t)
+		if err := db.updateLastPing(ids[i], time.Now().Add(-2*nodeDBNodeExpiration)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var deleting []NodeID
+	db.beforeDelete = func(id NodeID) {
+		deleting = append(deleting, id)
+		if len(deleting) == 1 {
+			stop() // shutdown begins while this identity is being decided
+		}
+	}
+	if err := db.expireNodes(); err != nil {
+		t.Fatalf("a sweep cut short by shutdown reported an error: %v", err)
+	}
+	if len(deleting) != 1 {
+		t.Fatalf("sweep decided %d identities after quit closed, want 1", len(deleting))
+	}
+	for _, id := range ids {
+		if id == deleting[0] {
+			if db.hasEntries(id) {
+				t.Errorf("the identity being decided when quit closed was not deleted")
+			}
+			continue
+		}
+		if !db.hasEntries(id) {
+			t.Errorf("an identity after the quit point was deleted by the stopped sweep")
 		}
 	}
 }
