@@ -37,6 +37,13 @@ var (
 	// to version 2 with adaptive fusion/work prices.
 	DynamicPlasmaSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000002")
 
+	// MultisigSpork gates enforcement of the protocol-level mutable multisig accounts
+	// (verifier's stateful signature() check, see verifier/account_block.go). Dormant in this
+	// phase: the embedded.go/vm_context wiring that lets governance activate it on-chain lands
+	// later; until then no on-chain spork can match this placeholder, so IsSporkActive always
+	// returns false.
+	MultisigSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000003")
+
 	ImplementedSporksMap = map[Hash]bool{
 		AcceleratorSpork.SporkId:        true,
 		HtlcSpork.SporkId:               true,
@@ -44,6 +51,7 @@ var (
 		BridgeAndLiquiditySpork.SporkId: true,
 		Libp2pSpork.SporkId:             true,
 		DynamicPlasmaSpork.SporkId:      true,
+		MultisigSpork.SporkId:           true,
 	}
 )
 

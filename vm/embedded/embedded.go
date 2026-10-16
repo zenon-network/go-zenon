@@ -56,6 +56,16 @@ func applyPtlcDiffs(contracts map[types.Address]*embeddedImplementation) {
 	}
 }
 
+func applyMultisigDiffs(contracts map[types.Address]*embeddedImplementation) {
+	contracts[types.MultisigContract] = &embeddedImplementation{
+		map[string]Method{
+			cabi.CreateMultisigMethodName: &implementation.CreateMultisigMethod{MethodName: cabi.CreateMultisigMethodName},
+			cabi.ChangePolicyMethodName:   &implementation.ChangePolicyMethod{MethodName: cabi.ChangePolicyMethodName},
+		},
+		cabi.ABIMultisig,
+	}
+}
+
 func applyHtlcDiffs(contracts map[types.Address]*embeddedImplementation) {
 	contracts[types.HtlcContract] = &embeddedImplementation{
 		map[string]Method{
@@ -226,6 +236,7 @@ const (
 	htlcSporkBit
 	dynamicPlasmaSporkBit
 	ptlcSporkBit
+	multisigSporkBit
 
 	embeddedVariantCombinations
 )
@@ -236,7 +247,7 @@ var (
 )
 
 // buildEmbeddedVariants precomputes the merged contract map for every
-// combination of the 5 sporks GetEmbeddedMethod consults, so a call
+// combination of the 6 sporks GetEmbeddedMethod consults, so a call
 // only ever does an array lookup rather than rebuilding the map (10
 // contracts, ~60 method structs) from scratch every time. Runs once,
 // lazily, guarded by embeddedVariantsOnce.
@@ -257,6 +268,9 @@ func buildEmbeddedVariants() {
 		}
 		if key&ptlcSporkBit != 0 {
 			applyPtlcDiffs(contractsMap)
+		}
+		if key&multisigSporkBit != 0 {
+			applyMultisigDiffs(contractsMap)
 		}
 		embeddedVariants[key] = contractsMap
 	}
@@ -288,6 +302,9 @@ func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Addres
 	}
 	if context.IsPtlcSporkEnforced() {
 		key |= ptlcSporkBit
+	}
+	if context.IsMultisigSporkEnforced() {
+		key |= multisigSporkBit
 	}
 	// No change for NoPillarRegSpork
 	contractsMap := embeddedVariants[key]
