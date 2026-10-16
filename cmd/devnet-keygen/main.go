@@ -11,7 +11,6 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain/genesis"
 	"github.com/zenon-network/go-zenon/common/types"
-	"github.com/zenon-network/go-zenon/p2p/discover"
 	"github.com/zenon-network/go-zenon/p2p/libp2p"
 	"github.com/zenon-network/go-zenon/wallet"
 
@@ -40,7 +39,7 @@ type pillarSpec struct {
 	IP            string // static IPv4 on the znnd-devnet bridge
 	ProducerIndex uint32
 	OwnerIndex    uint32
-	IsBootstrap   bool // bootstrap pillars start with no seeders + MinPeers=0
+	IsBootstrap   bool // the bootstrap pillar starts with MinPeers=0 and is the sync node's only bootstrap peer
 }
 
 var pillars = []pillarSpec{
@@ -62,11 +61,12 @@ var relays = []relaySpec{
 	{Role: "observer", Dir: filepath.Join(devnetDir, "observer"), IP: "172.30.0.14", MinPeers: 1, MinConnectedPeers: 3},
 }
 
-// clientSpec describes a non-pillar, non-relay node that joins the devnet like a
-// brand-new node would: it seeds from the bootstrap pillar only and discovers
-// every other peer through the discovery DHT. Clients are never dialled by the
-// rest of the network, so they get no committed p2p key (znnd generates a random
-// identity at first start) and never appear in any other node's seeder list.
+// clientSpec describes a non-pillar, non-relay node that joins the devnet
+// like a brand-new node would: it bootstraps from the bootstrap pillar
+// only and discovers every other peer through the discovery DHT. Clients
+// are never dialled by the rest of the network, so they get no committed
+// p2p key (znnd generates a random identity at first start) and never
+// appear in any other node's `BootstrapPeers` list.
 type clientSpec struct {
 	Role              string
 	Dir               string
@@ -188,20 +188,17 @@ func run(force bool) error {
 		}
 	}
 
-	// Pass 2: load each p2p key, build bootstrap addresses in both formats.
-	// The switcher uses the legacy (enode://) list pre-activation and the
-	// libp2p (multiaddr) list post-activation. The two formats are derived
-	// from the same secp256k1 network-private-key.
+	// Pass 2: load each pillar's p2p key and derive its libp2p multiaddr
+	// from the secp256k1 network-private-key.
 	maddrs := make(map[string]string, len(pillars))
-	enodes := make(map[string]string, len(pillars)+len(relays))
-	var bootstrapMaddr, bootstrapEnode string
+	var bootstrapMaddr string
 	hasBootstrap := false
 	for _, p := range pillars {
 		k, err := crypto.LoadECDSA(filepath.Join(p.Dir, "network-private-key"))
 		if err != nil {
 			return fmt.Errorf("load p2p key for %s: %w", p.Role, err)
 		}
-		// libp2p multiaddr (post-activation bootstrap)
+		// libp2p multiaddr
 		pid, err := libp2p.PeerIDFromECDSA(k)
 		if err != nil {
 			return fmt.Errorf("derive libp2p peer ID for %s: %w", p.Role, err)
@@ -209,26 +206,10 @@ func run(force bool) error {
 		maddr := fmt.Sprintf("/ip4/%s/tcp/35995/p2p/%s", p.IP, pid)
 		maddrs[p.Role] = maddr
 
-		// Legacy enode URL (pre-activation bootstrap). discover.PubkeyID
-		// gives us the 64-byte uncompressed-pubkey representation that
-		// devp2p uses to identify peers.
-		nodeID := discover.PubkeyID(&k.PublicKey)
-		enode := fmt.Sprintf("enode://%x@%s:35995", nodeID[:], p.IP)
-		enodes[p.Role] = enode
-
 		if p.IsBootstrap {
-			bootstrapEnode = enode
 			bootstrapMaddr = maddr
 			hasBootstrap = true
 		}
-	}
-	for _, r := range relays {
-		k, err := crypto.LoadECDSA(filepath.Join(r.Dir, "network-private-key"))
-		if err != nil {
-			return fmt.Errorf("load p2p key for %s: %w", r.Role, err)
-		}
-		nodeID := discover.PubkeyID(&k.PublicKey)
-		enodes[r.Role] = fmt.Sprintf("enode://%x@%s:35995", nodeID[:], r.IP)
 	}
 	if !hasBootstrap {
 		return fmt.Errorf("no bootstrap pillar configured")
@@ -236,19 +217,16 @@ func run(force bool) error {
 
 	// Pass 3: write per-node configs.
 	//
-	// Every pillar gets the FULL mesh in both bootstrap lists (excluding
+	// Every pillar gets the FULL mesh in the BootstrapPeers list (excluding
 	// itself) so the mesh re-forms after any single-node restart.
 	allMaddrs := make([]string, 0, len(pillars))
-	allEnodes := make([]string, 0, len(pillars))
 	for _, p := range pillars {
 		allMaddrs = append(allMaddrs, maddrs[p.Role])
-		allEnodes = append(allEnodes, enodes[p.Role])
 	}
 	minConnected := len(pillars)
 	for _, p := range pillars {
 		producer := addrs[p.ProducerIndex]
 		bootstrapPeers := excludeEntry(allMaddrs, maddrs[p.Role])
-		seeders := excludeEntry(allEnodes, enodes[p.Role])
 		// MinPeers gates protocol-layer sync start: the bootstrap
 		// pillar is the first node up at genesis and cannot wait for
 		// peers; the others wait for at least one.
@@ -257,18 +235,19 @@ func run(force bool) error {
 			minPeers = 0
 		}
 		cfgPath := filepath.Join(p.Dir, "config.json")
-		if err := writePillarConfig(cfgPath, p.Role, producer, p.ProducerIndex, seeders, bootstrapPeers, minPeers, minConnected); err != nil {
+		if err := writePillarConfig(cfgPath, p.Role, producer, p.ProducerIndex, bootstrapPeers, minPeers, minConnected); err != nil {
 			return err
 		}
 	}
 	for _, r := range relays {
-		if err := writeRelayConfig(filepath.Join(r.Dir, "config.json"), r.Role, relaySeedersExcept(enodes, r.Role), allMaddrs, r.MinPeers, r.MinConnectedPeers); err != nil {
+		if err := writeRelayConfig(filepath.Join(r.Dir, "config.json"), r.Role, allMaddrs, r.MinPeers, r.MinConnectedPeers); err != nil {
 			return err
 		}
 	}
-	// Clients join as new nodes: a single bootstrap seeder, discover the rest.
+	// Clients join as new nodes: they bootstrap from the bootstrap pillar
+	// only and discover the rest.
 	for _, c := range clients {
-		if err := writeRelayConfig(filepath.Join(c.Dir, "config.json"), c.Role, []string{bootstrapEnode}, []string{bootstrapMaddr}, c.MinPeers, c.MinConnectedPeers); err != nil {
+		if err := writeRelayConfig(filepath.Join(c.Dir, "config.json"), c.Role, []string{bootstrapMaddr}, c.MinPeers, c.MinConnectedPeers); err != nil {
 			return err
 		}
 	}
@@ -294,11 +273,8 @@ func run(force bool) error {
 	for _, p := range pillars {
 		fmt.Printf("%s multiaddr: %s\n", p.Role, maddrs[p.Role])
 	}
-	for _, r := range relays {
-		fmt.Printf("%s enode: %s\n", r.Role, enodes[r.Role])
-	}
 	for _, c := range clients {
-		fmt.Printf("%s: new-node client, seeds from bootstrap %s (no committed identity)\n", c.Role, bootstrapEnode)
+		fmt.Printf("%s: new-node client, bootstraps from %s (no committed identity)\n", c.Role, bootstrapMaddr)
 	}
 	return nil
 }
@@ -355,7 +331,7 @@ func excludeEntry(entries []string, self string) []string {
 	return out
 }
 
-func writePillarConfig(path, name string, producer types.Address, producerIdx uint32, seeders, bootstrapPeers []string, minPeers, minConnected int) error {
+func writePillarConfig(path, name string, producer types.Address, producerIdx uint32, bootstrapPeers []string, minPeers, minConnected int) error {
 	cfg := map[string]any{
 		"DataPath":    "/root/.znn",
 		"WalletPath":  "/root/.znn/wallet",
@@ -385,14 +361,13 @@ func writePillarConfig(path, name string, producer types.Address, producerIdx ui
 			"ListenPort":        35995,
 			"MinPeers":          minPeers,
 			"MinConnectedPeers": minConnected,
-			"Seeders":           seeders,
 			"BootstrapPeers":    bootstrapPeers,
 		},
 	}
 	return writeJSON(path, cfg)
 }
 
-func writeRelayConfig(path, name string, seeders, bootstrapPeers []string, minPeers, minConnectedPeers int) error {
+func writeRelayConfig(path, name string, bootstrapPeers []string, minPeers, minConnectedPeers int) error {
 	cfg := map[string]any{
 		"DataPath":    "/root/.znn",
 		"WalletPath":  "/root/.znn/wallet",
@@ -416,34 +391,10 @@ func writeRelayConfig(path, name string, seeders, bootstrapPeers []string, minPe
 			"ListenPort":        35995,
 			"MinPeers":          minPeers,
 			"MinConnectedPeers": minConnectedPeers,
-			"Seeders":           seeders,
 			"BootstrapPeers":    bootstrapPeers,
 		},
 	}
 	return writeJSON(path, cfg)
-}
-
-func pillarSeedersExcept(enodes map[string]string, self string) []string {
-	seeders := make([]string, 0, len(pillars)-1)
-	for _, p := range pillars {
-		if p.Role != self {
-			seeders = append(seeders, enodes[p.Role])
-		}
-	}
-	return seeders
-}
-
-func relaySeedersExcept(enodes map[string]string, self string) []string {
-	seeders := make([]string, 0, len(pillars)+len(relays)-1)
-	for _, p := range pillars {
-		seeders = append(seeders, enodes[p.Role])
-	}
-	for _, r := range relays {
-		if r.Role != self {
-			seeders = append(seeders, enodes[r.Role])
-		}
-	}
-	return seeders
 }
 
 func writeJSON(path string, v any) error {

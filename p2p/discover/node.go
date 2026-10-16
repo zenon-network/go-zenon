@@ -23,16 +23,12 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"math/rand"
 	"net"
 	"net/url"
 	"strconv"
 	"strings"
 
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/secp256k1"
-
-	"github.com/zenon-network/go-zenon/common/types"
 )
 
 const nodeIDBits = 512
@@ -42,13 +38,6 @@ type Node struct {
 	IP       net.IP // len 4 for IPv4 or 16 for IPv6
 	UDP, TCP uint16 // port numbers
 	ID       NodeID // the node's public key
-
-	// This is a cached copy of sha3(ID) which is used for node
-	// distance calculations. This is part of Node in order to make it
-	// possible to write tests that need a node at a certain distance.
-	// In those tests, the content of sha will not actually correspond
-	// with ID.
-	sha types.Hash
 }
 
 func newNode(id NodeID, ip net.IP, udpPort, tcpPort uint16) *Node {
@@ -60,12 +49,7 @@ func newNode(id NodeID, ip net.IP, udpPort, tcpPort uint16) *Node {
 		UDP: udpPort,
 		TCP: tcpPort,
 		ID:  id,
-		sha: types.BytesToHashPanic(crypto.Keccak256(id[:])),
 	}
-}
-
-func (n *Node) addr() *net.UDPAddr {
-	return &net.UDPAddr{IP: n.IP, Port: int(n.UDP)}
 }
 
 // The string representation of a Node is a URL.
@@ -98,7 +82,7 @@ func (n *Node) String() string {
 // a node with IP address 10.3.58.6, TCP listening port 30303
 // and UDP discovery port 30301.
 //
-//    enode://<hex node id>@10.3.58.6:30303?discport=30301
+//	enode://<hex node id>@10.3.58.6:30303?discport=30301
 func ParseNode(rawurl string) (*Node, error) {
 	var (
 		id               NodeID
@@ -215,107 +199,4 @@ func (id NodeID) Pubkey() (*ecdsa.PublicKey, error) {
 		return nil, errors.New("not a point on the S256 curve")
 	}
 	return p, nil
-}
-
-// recoverNodeID computes the public key used to sign the
-// given hash from the signature.
-func recoverNodeID(hash, sig []byte) (id NodeID, err error) {
-	pubkey, err := secp256k1.RecoverPubkey(hash, sig)
-	if err != nil {
-		return id, err
-	}
-	if len(pubkey)-1 != len(id) {
-		return id, fmt.Errorf("recovered pubkey has %d bits, want %d bits", len(pubkey)*8, (len(id)+1)*8)
-	}
-	for i := range id {
-		id[i] = pubkey[i+1]
-	}
-	return id, nil
-}
-
-// distcmp compares the distances a->target and b->target.
-// Returns -1 if a is closer to target, 1 if b is closer to target
-// and 0 if they are equal.
-func distcmp(target, a, b types.Hash) int {
-	for i := range target {
-		da := a[i] ^ target[i]
-		db := b[i] ^ target[i]
-		if da > db {
-			return 1
-		} else if da < db {
-			return -1
-		}
-	}
-	return 0
-}
-
-// table of leading zero counts for bytes [0..255]
-var lzcount = [256]int{
-	8, 7, 6, 6, 5, 5, 5, 5,
-	4, 4, 4, 4, 4, 4, 4, 4,
-	3, 3, 3, 3, 3, 3, 3, 3,
-	3, 3, 3, 3, 3, 3, 3, 3,
-	2, 2, 2, 2, 2, 2, 2, 2,
-	2, 2, 2, 2, 2, 2, 2, 2,
-	2, 2, 2, 2, 2, 2, 2, 2,
-	2, 2, 2, 2, 2, 2, 2, 2,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-}
-
-// logdist returns the logarithmic distance between a and b, log2(a ^ b).
-func logdist(a, b types.Hash) int {
-	lz := 0
-	for i := range a {
-		x := a[i] ^ b[i]
-		if x == 0 {
-			lz += 8
-		} else {
-			lz += lzcount[x]
-			break
-		}
-	}
-	return len(a)*8 - lz
-}
-
-// hashAtDistance returns a random hash such that logdist(a, b) == n
-func hashAtDistance(a types.Hash, n int) (b types.Hash) {
-	if n == 0 {
-		return a
-	}
-	// flip bit at position n, fill the rest with random bits
-	b = a
-	pos := len(a) - n/8 - 1
-	bit := byte(0x01) << (byte(n%8) - 1)
-	if bit == 0 {
-		pos++
-		bit = 0x80
-	}
-	b[pos] = a[pos]&^bit | ^a[pos]&bit // TODO: randomize end bits
-	for i := pos + 1; i < len(a); i++ {
-		b[i] = byte(rand.Intn(255))
-	}
-	return b
 }

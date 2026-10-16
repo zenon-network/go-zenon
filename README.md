@@ -12,7 +12,7 @@ make znnd
 
 ## Running `znnd`
 
-Since version `0.0.2`, `znnd` is configured with the Alphanet Genesis and default seeders.
+`znnd` embeds the Alphanet genesis and ships no default bootstrap peers, so operators set `Net.BootstrapPeers` (libp2p multiaddrs) in `config.json`.
 
 `--host` sets the P2P listen host (`Net.ListenHost`) and does not configure RPC; use `--http-addr` for HTTP JSON-RPC and `--ws-addr` for WebSocket RPC. On earlier versions `--host X` set the HTTP-RPC host instead: replace that use with `--http-addr X`, and pass `--host X` only when P2P should bind to `X`.
 

@@ -71,14 +71,14 @@ to the chain frontier. It is excluded from `make devnet-up` by the `sync`
 compose profile, so you bring the core network up first, let it produce
 momentums for a while, then activate the late joiner.
 
-**Auto peer discovery.** Unlike the RPC and observer nodes (which seed from
-every other node), the sync node is configured with a **single seeder — the
-bootstrap pillar** (`172.30.0.10`). It finds pillar 2/3, the RPC node, and
+**Auto peer discovery.** Unlike the RPC and observer nodes (which bootstrap
+from the three pillars), the sync node is configured with a **single
+bootstrap peer, the bootstrap pillar** (`172.30.0.10`). It finds pillar 2/3, the RPC node, and
 the observer on its own through the discovery DHT, exactly like a brand-new
 node joining with one known bootstrap address. It also ships **no committed
 p2p identity**: `znnd` generates a random `network-private-key` on first
-start, so nobody seeds *from* it and it never appears in another node's
-seeder list.
+start, so nobody bootstraps *from* it and it never appears in another node's
+`BootstrapPeers` list.
 
 Bring the core network up first (`make devnet-up`), then drive the late
 joiner with:
@@ -255,7 +255,7 @@ owners).
 
 ```
 docker/devnet/
-├── entrypoint.sh                       # role-aware seeder, runs in every container
+├── entrypoint.sh                       # role-aware entrypoint, runs in every container
 ├── genesis.json                        # ChainIdentifier 69, 3 pillars, dev allocations
 ├── observer/                           # non-pillar relay peer
 │   ├── config.json
@@ -279,7 +279,7 @@ docker/devnet/
 │   ├── config.json                     # no producer, public RPC ingress
 │   └── network-private-key
 └── syncnode/                           # cold late joiner (sync profile)
-    └── config.json                     # single bootstrap seeder, no committed key
+    └── config.json                     # single bootstrap peer, no committed key
 ```
 
 All keystores are encrypted with the password `devnet`.
@@ -296,10 +296,10 @@ make devnet-keys FORCE=1        # also rotate every keystore + p2p key
 go run ./cmd/devnet-keygen --verify-genesis docker/devnet/genesis.json
 ```
 
-`FORCE=1` will rotate every pillar's p2p key, which changes the enode
-URL baked into the seeders list of every other config file — that's
+`FORCE=1` will rotate every pillar's p2p key, which changes the multiaddr
+baked into the `BootstrapPeers` list of every other config file — that's
 fine because the keygen rewrites them all in the same run. This includes
-`syncnode/config.json`, whose single bootstrap seeder is rewritten to the
-rotated pillar 1 enode, so the late joiner keeps working after a rotation.
+`syncnode/config.json`, whose single bootstrap peer is rewritten to the
+rotated pillar 1 multiaddr, so the late joiner keeps working after a rotation.
 The sync node has no committed keystore or `network-private-key` — it joins
 with a fresh identity each time it syncs from genesis.

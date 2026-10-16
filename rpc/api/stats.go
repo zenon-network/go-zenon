@@ -101,8 +101,8 @@ func p2pPeerToPeer(peer p2p.Peer) (*Peer, error) {
 }
 
 // remoteHost extracts the host/IP portion of a peer's remote address.
-// Legacy peers report a "host:port" net.Addr; libp2p peers report a
-// multiaddr (e.g. "/ip4/1.2.3.4/tcp/35995"), which doesn't split on ":".
+// libp2p peers report a multiaddr (e.g. "/ip4/1.2.3.4/tcp/35995"),
+// which doesn't split on ":"; any other address is a plain "host:port".
 func remoteHost(addr net.Addr) string {
 	raw := addr.String()
 	if addr.Network() == "libp2p" {

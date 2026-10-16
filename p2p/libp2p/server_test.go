@@ -103,8 +103,7 @@ func freePortTCP(t *testing.T) int {
 // datastore, host, and DHT all live — and verifies nothing leaks: the
 // TCP listener is released, the peerstore datastore lock is released,
 // the server context is cancelled, and the same Server can Start()
-// again once the failure cause is gone. This is the scenario the
-// switcher's swap-retry path depends on.
+// again once the failure cause is gone.
 func TestStartFailureAfterHostReleasesResources(t *testing.T) {
 	port := freePortTCP(t)
 	psDir := filepath.Join(t.TempDir(), "ps")
@@ -186,6 +185,21 @@ func TestStartFailureBeforeHostCancelsContext(t *testing.T) {
 		t.Fatalf("second Start with valid dir: %v", err)
 	}
 	srv.Stop()
+}
+
+// TestStartRejectsNonPositiveMaxPeers verifies Start refuses a
+// non-positive MaxPeers before acquiring any resource.
+func TestStartRejectsNonPositiveMaxPeers(t *testing.T) {
+	srv := newTestServer(mustGenKey(t), "", t)
+	srv.MaxPeers = 0
+	err := srv.Start()
+	if err == nil {
+		srv.Stop()
+		t.Fatal("Start succeeded with MaxPeers=0; want error")
+	}
+	if !strings.Contains(err.Error(), "MaxPeers") {
+		t.Errorf("error %q does not mention MaxPeers", err)
+	}
 }
 
 // TestStartIsolationGuardrail verifies the Crit warning fires exactly
@@ -282,10 +296,10 @@ func dialUntilConnected(t *testing.T, srv *Server, target peer.AddrInfo, timeout
 	}
 }
 
-// TestDHTDiscoveryConnectsIndirectPeer is the regression test the July
-// 2026 review round asked for: a node bootstrapped to only one peer must
-// still reach MinConnectedPeers by discovering a second, indirect peer
-// through the DHT rather than staying bootstrap-only.
+// TestDHTDiscoveryConnectsIndirectPeer verifies that a node
+// bootstrapped to only one peer still reaches MinConnectedPeers by
+// discovering a second, indirect peer through the DHT rather than
+// staying bootstrap-only.
 //
 // Topology: A and B bootstrap to each other directly, so each ends up
 // with the other in its own DHT routing table. C is bootstrapped only to

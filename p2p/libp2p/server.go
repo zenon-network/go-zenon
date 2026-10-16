@@ -57,8 +57,7 @@ const (
 	// handshakeTimeout bounds the pre-adoption protocol handshake read,
 	// separately from the steady-state frameReadTimeout. The remote is
 	// unauthenticated at this point, so the deadline is kept short
-	// (matching the legacy backend's handshakeTimeout) to limit how long
-	// a stalled peer can occupy a pending-handshake slot.
+	// to limit how long a stalled peer can occupy a pending-handshake slot.
 	handshakeTimeout = 5 * time.Second
 
 	// zenonPeerProtectTag marks an adopted Zenon peer's connection as
@@ -122,9 +121,7 @@ type Server struct {
 	ListenAddr string
 
 	// NATPortMap controls whether libp2p attempts UPnP / NAT-PMP port
-	// mapping on the listening port. Default false (matches the
-	// pre-libp2p network: legacy's NAT field was nil in the standard
-	// wiring path, so UPnP/PMP probes never fired). Home operators
+	// mapping on the listening port. Default false. Home operators
 	// behind a NATting router can flip this on; data-center operators
 	// should leave it off to avoid spurious probes leaving their host.
 	NATPortMap bool
@@ -214,8 +211,7 @@ type Server struct {
 	// where every resource (context, datastore, host, DHT) is live but
 	// no dial goroutines have been launched. Returning an error aborts
 	// Start(), exercising the startup-cleanup path. Test-only; always
-	// nil in production (same pattern as the switcher's NewLegacy /
-	// NewLibp2p hooks).
+	// nil in production.
 	testStartHook func() error
 
 	// testRefreshHook, when non-nil, is invoked at the start of the
@@ -406,9 +402,9 @@ func (srv *Server) Stop() {
 // srv.running is never set on those paths, so Stop() would be a no-op
 // and a mid-construction failure (e.g. DHT creation failing after the
 // host is already listening) would otherwise leak the bound listener
-// and the datastore lock until process exit. The switcher's swap-retry
-// path depends on this: re-running Start() must not collide with a
-// leaked listener from the previous attempt.
+// and the datastore lock until process exit. Re-running Start() after a
+// failure must not collide with a leaked listener from the previous
+// attempt.
 //
 // Teardown order mirrors Stop(): context cancel → drain discovery
 // goroutines → DHT → host → drain handler goroutines → peer database, so
@@ -461,12 +457,10 @@ func (srv *Server) Start() (err error) {
 	}
 
 	// Every capacity check is len(srv.peerMap) >= srv.MaxPeers, so a
-	// non-positive value would accept no peers at all. The legacy backend
-	// reads zero as "accept only trusted/static peers"; this backend has
-	// no equivalent mode, so a non-positive value is a configuration
-	// error rather than something to reinterpret. The switcher rejects it
-	// before either backend starts; this check keeps a directly-embedded
-	// Server from silently running on the 60-peer preset instead.
+	// non-positive value would accept no peers at all. There is no mode
+	// that reinterprets it, so a non-positive value is a configuration
+	// error. The check keeps a directly-embedded Server from silently
+	// running on the 60-peer preset instead.
 	if srv.MaxPeers <= 0 {
 		return fmt.Errorf("Server.MaxPeers must be > 0 (got %d)", srv.MaxPeers)
 	}
@@ -509,12 +503,10 @@ func (srv *Server) Start() (err error) {
 
 	// Build libp2p options.
 	//
-	// NATPortMap is gated by srv.NATPortMap (default false) so we don't
-	// silently change behaviour for operators whose pre-libp2p nodes
-	// had no NAT mapping configured. UPnP / NAT-PMP probes can be
-	// undesirable on data-center hosts and on networks with strict
-	// outbound-traffic monitoring; opt-in keeps the principle of least
-	// surprise.
+	// NATPortMap is gated by srv.NATPortMap (default false). UPnP /
+	// NAT-PMP probes can be undesirable on data-center hosts and on
+	// networks with strict outbound-traffic monitoring; opt-in keeps the
+	// principle of least surprise.
 	opts := []libp2p.Option{
 		libp2p.Identity(privKey),
 		libp2p.ListenAddrs(listenMaddr),
@@ -599,7 +591,7 @@ func (srv *Server) Start() (err error) {
 	//     network without hammering peers with refresh queries.
 	//   - Started unconditionally rather than gated on
 	//     len(BootstrapPeers) > 0, so bootstrap nodes (which have no
-	//     seeders) also participate in discovery.
+	//     bootstrap peers) also participate in discovery.
 	if srv.Discovery {
 		srv.dht, err = dht.New(srv.ctx, srv.host,
 			dht.Mode(dht.ModeServer),
@@ -658,10 +650,10 @@ func (srv *Server) Start() (err error) {
 	// Guardrail: with no bootstrap entries and no remembered peers the
 	// node has no outbound path onto the network. That is legitimate
 	// for designated bootstrap nodes (they are the seed; inbound is
-	// their job) but network-fatal if it happens fleet-wide at the
-	// activation swap — so make it loud. Deliberately does not refuse
-	// to start: refusing would partition the node just as hard while
-	// also turning away inbound connections.
+	// their job) but network-fatal if it happens fleet-wide, so make it
+	// loud. Deliberately does not refuse to start: refusing would
+	// partition the node just as hard while also turning away inbound
+	// connections.
 	if !srv.NoDial && len(srv.BootstrapPeers) == 0 && warmDials == 0 {
 		common.P2PLogger.Crit("no libp2p bootstrap peers configured and no remembered peers; node is isolated until inbound peers arrive or Net.BootstrapPeers is populated")
 	}
@@ -690,8 +682,7 @@ func (srv *Server) Start() (err error) {
 	// surfaces those entries into the Zenon dial loop. Without it the
 	// DHT would fill its table but nothing would translate that into
 	// new application-protocol streams — the network would be
-	// effectively bootstrap-only after activation, which is what the
-	// PR review (point 1) flagged.
+	// effectively bootstrap-only.
 	if srv.Discovery && srv.dht != nil && !srv.NoDial {
 		srv.discoveryWG.Add(1)
 		go func() {
@@ -1352,8 +1343,8 @@ func (srv *Server) peerMaintenanceLoop() {
 // the peer-routing layer, which stays enabled.
 //
 // Without any of this, the Zenon peer set would be effectively
-// bootstrap-only after activation; if a node's configured bootstrap
-// entries went down, it would never discover replacements.
+// bootstrap-only; if a node's configured bootstrap entries went down,
+// it would never discover replacements.
 //
 // The loop is bounded:
 //   - Only runs when len(peerMap) < MinConnectedPeers, so a healthy

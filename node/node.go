@@ -8,12 +8,9 @@ import (
 
 	"github.com/prometheus/tsdb/fileutil"
 
-	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/common"
-	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/p2p"
 	"github.com/zenon-network/go-zenon/p2p/libp2p"
-	"github.com/zenon-network/go-zenon/p2p/switcher"
 	api "github.com/zenon-network/go-zenon/rpc"
 	rpc "github.com/zenon-network/go-zenon/rpc/server"
 	"github.com/zenon-network/go-zenon/wallet"
@@ -79,21 +76,9 @@ func NewNode(conf *Config) (*Node, error) {
 
 	netConfig := conf.makeNetConfig()
 
-	// Parse both bootstrap lists up front so a malformed entry is caught
-	// before the server starts. The switcher owns both: it picks which
-	// list to use based on the spork's current state on this node's
-	// local chain.
-
-	// Legacy: enode:// URLs → []*discover.Node.
-	legacyBootstrap, err := netConfig.Nodes()
-	if err != nil {
-		return nil, fmt.Errorf("parse legacy seeders: %w", err)
-	}
-
-	// libp2p: multiaddr strings → []peer.AddrInfo. ParseBootstrapPeers
-	// tolerates accidentally-pasted enode:// entries by skipping them
-	// with a warning, so this is robust to a partially-migrated config.
-	libp2pBootstrap, err := libp2p.ParseBootstrapPeers(netConfig.BootstrapPeers)
+	// ParseBootstrapPeers skips enode:// entries with a warning, so a
+	// config.json that still carries legacy-format entries boots.
+	bootstrapPeers, err := libp2p.ParseBootstrapPeers(netConfig.BootstrapPeers)
 	if err != nil {
 		return nil, fmt.Errorf("parse libp2p bootstrap peers: %w", err)
 	}
@@ -103,50 +88,20 @@ func NewNode(conf *Config) (*Node, error) {
 		return nil, fmt.Errorf("invalid p2p listen address: %w", err)
 	}
 
-	node.server = &switcher.Server{
+	node.server = &libp2p.Server{
 		PrivateKey:        netConfig.PrivateKey(),
 		Name:              netConfig.Name,
 		MaxPeers:          netConfig.MaxPeers,
 		MinConnectedPeers: netConfig.MinConnectedPeers,
 		MaxPendingPeers:   netConfig.MaxPendingPeers,
+		Discovery:         true,
+		BootstrapPeers:    bootstrapPeers,
+		NATPortMap:        netConfig.NATPortMap,
+		PeerstoreDir:      netConfig.PeerstoreDir,
 		ListenAddr:        listenAddr,
 		Protocols:         node.z.Protocol().SubProtocols,
-
-		// Per-backend bootstrap material — the switcher uses whichever
-		// matches the active backend at any given moment.
-		LegacyBootstrapNodes: legacyBootstrap,
-		NodeDatabase:         netConfig.NodeDatabase,
-		Libp2pBootstrapPeers: libp2pBootstrap,
-		NATPortMap:           netConfig.NATPortMap,
-		PeerstoreDir:         netConfig.PeerstoreDir,
-
-		// Backend override (issue #105). "libp2p" lets a fresh node
-		// bootstrap from a post-activation network where no legacy
-		// peers remain. Empty string defaults to auto (spork-gated).
-		P2PBackend: netConfig.P2PBackend,
-
-		// Activation gate. The switcher polls this on a 1s ticker; when
-		// it returns true (the libp2p spork's EnforcementHeight has
-		// passed on this node's local chain) the swap fires.
-		Oracle: &sporkOracle{chain: node.z.Chain()},
 	}
 	return node, nil
-}
-
-// sporkOracle is the node-side adapter implementing switcher.SporkOracle
-// over chain.Chain. Kept private to the node package since it's purely
-// wiring — the switcher takes the narrow interface so it doesn't pull
-// in the chain dependency.
-type sporkOracle struct {
-	chain chain.Chain
-}
-
-// IsLibp2pActive reports whether the libp2p activation spork has reached
-// its EnforcementHeight on this node's local chain. Cheap: a single
-// IsSporkActive lookup against the cached frontier momentum store.
-func (s *sporkOracle) IsLibp2pActive() bool {
-	active, _ := s.chain.GetFrontierMomentumStore().IsSporkActive(types.Libp2pSpork)
-	return active
 }
 
 func (node *Node) Start() error {
