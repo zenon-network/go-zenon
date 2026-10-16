@@ -1,0 +1,152 @@
+package server
+
+import (
+	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+// bigResult returns a payload large enough that a peer which stopped reading
+// makes the server's write block until its deadline.
+type bigResult struct{}
+
+func (bigResult) Blob() string { return strings.Repeat("x", 4<<20) }
+
+func setWriteTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := defaultWriteTimeout
+	defaultWriteTimeout = d
+	t.Cleanup(func() { defaultWriteTimeout = prev })
+}
+
+// wsServer serves srv over WebSocket and reports every codec it creates, so
+// a test can watch the server side of a connection.
+func wsServer(t *testing.T, srv *Server) (url string, codecs <-chan *websocketCodec) {
+	t.Helper()
+	ch := make(chan *websocketCodec, 8)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		codec := newWebsocketCodec(conn).(*websocketCodec)
+		ch <- codec
+		srv.ServeCodec(codec, 0)
+	})
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+	return "ws" + strings.TrimPrefix(ts.URL, "http"), ch
+}
+
+func dialRaw(t *testing.T, url string) *websocket.Conn {
+	t.Helper()
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
+
+func awaitCodec(t *testing.T, codecs <-chan *websocketCodec) *websocketCodec {
+	t.Helper()
+	select {
+	case c := <-codecs:
+		return c
+	case <-time.After(teardownTestTimeout):
+		t.Fatal("server never created a codec for the connection")
+		return nil
+	}
+}
+
+// A WebSocket peer that stops reading makes the server's reply write time
+// out. That is a terminal failure: the codec closes, ServeCodec returns,
+// and a second connection is unaffected. Fails if the write timeout no
+// longer aborts the codec.
+func TestWebsocketWriteTimeoutTearsDownConnection(t *testing.T) {
+	setWriteTimeout(t, 200*time.Millisecond)
+	srv := NewServer()
+	if err := srv.RegisterName("big", bigResult{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.RegisterName("test", issue116Probe{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	url, codecs := wsServer(t, srv)
+
+	stuck := dialRaw(t, url)
+	codec := awaitCodec(t, codecs)
+	// Request a large reply and never read it.
+	if err := stuck.WriteMessage(websocket.TextMessage, []byte(`{"jsonrpc":"2.0","id":1,"method":"big.blob"}`)); err != nil {
+		t.Fatal(err)
+	}
+	awaitClosed(t, codec.closed(), "server codec closed after the reply write timed out")
+	if err := codec.failed(); err == nil {
+		t.Fatal("codec closed without a recorded terminal error")
+	}
+
+	// A healthy peer on the same server is served normally. Its reply is
+	// small: the shortened write timeout is for the stuck peer's 4 MiB
+	// reply, and must not decide this peer's fate.
+	client, err := DialWebsocket(context.Background(), url, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var pong string
+	ctx, cancel := context.WithTimeout(context.Background(), teardownTestTimeout)
+	defer cancel()
+	if err := client.CallContext(ctx, &pong, "test.ping"); err != nil {
+		t.Fatalf("healthy connection failed after another was torn down: %v", err)
+	}
+	if pong != "pong" {
+		t.Fatalf("healthy connection answered %q, want pong", pong)
+	}
+}
+
+// A ping write that fails aborts the codec even though the peer's own
+// direction is still open: the server half-closes its write side, so the
+// next ping gets a broken pipe while reads would still block. Fails if
+// pingLoop keeps discarding ping errors.
+func TestWebsocketPingFailureTearsDownConnection(t *testing.T) {
+	prevInterval, prevTimeout := wsPingInterval, wsPingWriteTimeout
+	wsPingInterval, wsPingWriteTimeout = 20*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { wsPingInterval, wsPingWriteTimeout = prevInterval, prevTimeout })
+
+	srv := NewServer()
+	if err := srv.RegisterName("test", issue116Probe{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	url, codecs := wsServer(t, srv)
+
+	peer := dialRaw(t, url)
+	codec := awaitCodec(t, codecs)
+	// Keep the peer reading so its side never errors first.
+	go func() {
+		for {
+			if _, _, err := peer.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+	tcp, ok := codec.conn.NetConn().(*net.TCPConn)
+	if !ok {
+		t.Fatalf("server connection is %T, want *net.TCPConn", codec.conn.NetConn())
+	}
+	if err := tcp.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	awaitClosed(t, codec.closed(), "server codec closed after a ping write failed")
+	if err := codec.failed(); err == nil {
+		t.Fatal("codec closed without a recorded terminal error")
+	}
+}
