@@ -62,8 +62,9 @@ type nodeDB struct {
 	// written after the sweep has finished with that identity.
 	mu sync.RWMutex
 
-	bonded atomic.Bool   // A bond has succeeded, so node records may be expired
-	quit   chan struct{} // Channel to signal the expiring thread to stop
+	bonded atomic.Bool    // A bond has succeeded, so node records may be expired
+	quit   chan struct{}  // Channel to signal the expiring thread to stop
+	wg     sync.WaitGroup // Joins the expiring thread before the store is closed
 
 	beforeDelete func(id NodeID) // Test seam, called before an identity is deleted by a sweep
 }
@@ -144,7 +145,15 @@ func openNodeDB(lvl *leveldb.DB, self NodeID) *nodeDB {
 		self: self,
 		quit: make(chan struct{}),
 	}
-	go db.expirer(nodeDBCleanupCycle)
+	// Registered before it starts, so close always waits for it. The cycle
+	// is read here, not in the goroutine, so a caller that sets it sees it
+	// taken before openNodeDB returns.
+	cycle := nodeDBCleanupCycle
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		db.expirer(cycle)
+	}()
 	return db
 }
 
@@ -279,6 +288,11 @@ func (db *nodeDB) expirer(cycle time.Duration) {
 // timing metadata alone, and those entries expire on the same terms as a
 // node record whose last pong is old. Until a bond has succeeded, node
 // records are kept regardless of age (see markBonded).
+//
+// The sweep stops between identities once close has been called, so that
+// shutdown does not wait for a full pass over a large database. close joins
+// the sweep before closing the store, since the iterators held here must be
+// released first.
 func (db *nodeDB) expireNodes() error {
 	threshold := time.Now().Add(-nodeDBNodeExpiration)
 
@@ -305,6 +319,11 @@ func (db *nodeDB) expireNodes() error {
 			continue
 		}
 		lastID, checked = id, true
+		select {
+		case <-db.quit:
+			return nil
+		default:
+		}
 		if err := db.expireNode(id, threshold); err != nil {
 			return fmt.Errorf("expire node %v: %w", id, err)
 		}
@@ -415,11 +434,14 @@ func (db *nodeDB) querySeeds(n int) []*Node {
 	return nodes
 }
 
-// close flushes and closes the database files.
+// close flushes and closes the database files. A sweep in progress is told
+// to stop and joined first: it holds iterators, and the store must not be
+// closed under them.
 func (db *nodeDB) close() {
 	if db.seeder != nil {
 		db.seeder.Release()
 	}
 	close(db.quit)
+	db.wg.Wait()
 	db.lvl.Close()
 }

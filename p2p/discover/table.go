@@ -501,7 +501,11 @@ func (tab *Table) pingreplace(new *Node, b *bucket) {
 	if len(b.entries) == bucketSize {
 		oldest := b.entries[bucketSize-1]
 		if err := tab.ping(oldest.ID, oldest.addr()); err == nil {
-			// The node responded, we don't need to replace it.
+			// The node responded, we don't need to replace it. Write its
+			// record again: a sweep that ran while the ping was outstanding
+			// may have expired the old one, and the fresh pong alone does not
+			// make the node a seed after a restart.
+			tab.db.updateNode(oldest)
 			return
 		}
 	} else {
