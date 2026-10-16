@@ -138,8 +138,10 @@ func TestGetBlockHashesFromNumber_BoundsRecomputedAmount(t *testing.T) {
 		{"zero-one", 0, 1, 1, uint64(downloader.MaxHashFetch), false},
 		// Number past the frontier: answered empty without reaching the sink.
 		{"number-past-frontier", frontier + 5, 10, 0, 0, true},
-		// Number near MaxUint64: the Number+Amount-1 addition wraps, but the
-		// result cannot bypass the bound or reach the sink with a huge amount.
+		// Number near MaxUint64: Number+Amount-1 wraps to height 1, which
+		// exists, so the request is answered empty by the existing
+		// last.Height < Number branch rather than the frontier branch. This
+		// pins the wrap behaviour; it does not exercise the frontier guard.
 		{"addition-wrap", ^uint64(0) - 2, 5, 0, 0, true},
 	}
 
