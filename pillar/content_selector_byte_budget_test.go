@@ -831,3 +831,198 @@ func TestContent_ByteBudget_ContractBatchAdmission(t *testing.T) {
 		}
 	}
 }
+
+// TestContent_ByteBudget_ListPrefixAllowanceCrossing specifically targets the
+// RLP list-prefix boundary at 65,536 bytes to catch an undercounted
+// listPrefixAllowance.  With ~1,130 AccountHeaders in Momentum.Content the
+// cumulative header payload crosses the 65,536-byte boundary where the RLP
+// list prefix widens from 3 to 4 bytes.  The selector's estimate uses the
+// production listPrefixAllowance (16) to reserve headroom for this growth.
+//
+// The test binary-searches for the exact Data size of a final "filler" block
+// that the selector admits, then builds the actual worst-case
+// DetailedMomentum and verifies the RLP fits within the budget.  When
+// listPrefixAllowance is correct (16), the admitted content fits.  When it is
+// undercounted (e.g. 12), the selector admits 4 more bytes of content and the
+// final encoding exceeds the budget by 1 byte.
+func TestContent_ByteBudget_ListPrefixAllowanceCrossing(t *testing.T) {
+	cs := newTestContentSelector()
+	addr1 := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	addr2 := types.ParseAddressPanic("z1qqfmjdays57w488sta69ykc2ey7r6d0q9wdvtj")
+
+	// Use enough blocks so the cumulative Content list payload crosses the
+	// 65,536-byte RLP list-prefix boundary.  Each AccountHeader at height=127
+	// encodes to 58 bytes, so 1,131 headers give a payload of 65,598 bytes —
+	// just past the boundary where the prefix widens from 3 to 4 bytes.
+	const numHeaders = 1131
+	const blockDataSize = 7000 // large enough to consume most of the budget
+	const blockHeight = 127    // AccountHeader RLP = 58 bytes at this height
+
+	// Build the initial blocks that fill the Content list past the boundary.
+	blocks := make([]*nom.AccountBlock, 0, numHeaders+1)
+	for i := 0; i < numHeaders; i++ {
+		addr := addr1
+		if i%2 == 1 {
+			addr = addr2
+		}
+		b := &nom.AccountBlock{
+			Version:         1,
+			ChainIdentifier: 1,
+			BlockType:       nom.BlockTypeUserSend,
+			Height:          blockHeight,
+			Address:         addr,
+			Data:            make([]byte, blockDataSize),
+			FusedPlasma:     21000,
+			BasePlasma:      21000,
+			TotalPlasma:     21000,
+		}
+		b.Hash = b.ComputeHash()
+		blocks = append(blocks, b)
+	}
+
+	// Verify the Content list payload crosses the 65,536-byte boundary.
+	contentPayload := 0
+	for _, b := range blocks {
+		he := b.Header()
+		enc, err := rlp.EncodeToBytes(&he)
+		if err != nil {
+			t.Fatalf("RLP encode header: %v", err)
+		}
+		contentPayload += len(enc)
+	}
+	if contentPayload <= 65536 {
+		t.Fatalf("test setup: Content payload %d does not cross the 65,536-byte boundary; increase numHeaders", contentPayload)
+	}
+	t.Logf("Content list payload: %d bytes (crosses 65,536)", contentPayload)
+
+	// Compute the selector's size estimate for the initial blocks to find
+	// the remaining budget for a final filler block.
+	baseline := worstCaseMomentumHeaderSize() + listPrefixAllowance
+	estimate := baseline
+	for _, b := range blocks {
+		sz := blockWireSize(b)
+		if sz < 0 {
+			t.Fatalf("blockWireSize failed for setup block")
+		}
+		es := contentEntrySize(b)
+		if es < 0 {
+			t.Fatalf("contentEntrySize failed for setup block")
+		}
+		estimate += sz + es
+	}
+	remaining := protocol.MaxDetailedMomentumWireSize - estimate
+
+	// Binary-search for the largest filler Data size the selector admits.
+	fitSize := 0
+	overSize := remaining
+	for overSize-fitSize > 1 {
+		mid := (fitSize + overSize) / 2
+		probe := &nom.AccountBlock{
+			Version:         1,
+			ChainIdentifier: 1,
+			BlockType:       nom.BlockTypeUserSend,
+			Height:          blockHeight,
+			Address:         addr1,
+			Data:            make([]byte, mid),
+			FusedPlasma:     21000,
+			BasePlasma:      21000,
+			TotalPlasma:     21000,
+		}
+		probe.Hash = probe.ComputeHash()
+		cost := blockWireSize(probe) + contentEntrySize(probe)
+		if cost <= remaining {
+			fitSize = mid
+		} else {
+			overSize = mid
+		}
+	}
+
+	// Build the filler block at the admitted size and run the selector.
+	// Use a third address so that rejecting the probe (below) does not cascade
+	// to any of the setup blocks via the per-address skip rule.
+	addr3, err := types.BytesToAddress([]byte{0x03, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14})
+	if err != nil {
+		t.Fatalf("BytesToAddress: %v", err)
+	}
+	filler := &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeUserSend,
+		Height:          blockHeight,
+		Address:         addr3,
+		Data:            make([]byte, fitSize),
+		FusedPlasma:     21000,
+		BasePlasma:      21000,
+		TotalPlasma:     21000,
+	}
+	filler.Hash = filler.ComputeHash()
+
+	allBlocks := append(append([]*nom.AccountBlock{}, blocks...), filler)
+	toCommit := cs.Content(allBlocks)
+	if len(toCommit) != len(allBlocks) {
+		t.Fatalf("selector admitted %d of %d blocks; want all admitted at the boundary", len(toCommit), len(allBlocks))
+	}
+
+	// Build the worst-case DetailedMomentum and verify the RLP fits.
+	content := nom.NewMomentumContent(toCommit)
+	worstMom := &nom.Momentum{
+		Version:         2,
+		ChainIdentifier: ^uint64(0),
+		Hash:            types.Hash{0xff},
+		PreviousHash:    types.Hash{0xff},
+		Height:          ^uint64(0),
+		TimestampUnix:   ^uint64(0),
+		Data:            []byte{},
+		Content:         content,
+		ChangesHash:     types.Hash{0xff},
+		PublicKey:       make([]byte, 32),
+		Signature:       make([]byte, 64),
+		NextFusionPrice: ^uint64(0),
+		NextWorkPrice:   ^uint64(0),
+	}
+	dm := &nom.DetailedMomentum{
+		Momentum:      worstMom,
+		AccountBlocks: toCommit,
+	}
+	encoded, err := rlp.EncodeToBytes(dm)
+	if err != nil {
+		t.Fatalf("RLP encode failed: %v", err)
+	}
+
+	t.Logf("list-prefix crossing: %d blocks, Content payload=%d, filler data=%d, RLP=%d, budget=%d, allowance=%d",
+		len(toCommit), contentPayload, fitSize, len(encoded), protocol.MaxDetailedMomentumWireSize, listPrefixAllowance)
+
+	if len(encoded) > protocol.MaxDetailedMomentumWireSize {
+		t.Errorf("DetailedMomentum RLP size %d exceeds budget %d by %d bytes (allowance=%d, blocks=%d, filler=%d); "+
+			"listPrefixAllowance may be undercounted",
+			len(encoded), protocol.MaxDetailedMomentumWireSize,
+			len(encoded)-protocol.MaxDetailedMomentumWireSize,
+			listPrefixAllowance, len(toCommit), fitSize)
+	}
+
+	// Positive admission control: a filler block 1 byte larger must be rejected.
+	probe := &nom.AccountBlock{
+		Version:         1,
+		ChainIdentifier: 1,
+		BlockType:       nom.BlockTypeUserSend,
+		Height:          blockHeight,
+		Address:         addr3,
+		Data:            make([]byte, overSize),
+		FusedPlasma:     21000,
+		BasePlasma:      21000,
+		TotalPlasma:     21000,
+	}
+	probe.Hash = probe.ComputeHash()
+
+	probeBlocks := append(append([]*nom.AccountBlock{}, blocks...), probe)
+	toCommitProbe := cs.Content(probeBlocks)
+	for _, b := range toCommitProbe {
+		if b == probe {
+			t.Fatal("probe block (1 byte over the admitted size) was admitted by the selector")
+		}
+	}
+	// All setup blocks must still be admitted (the probe uses a distinct address).
+	if len(toCommitProbe) != len(blocks) {
+		t.Errorf("selector admitted %d blocks with probe, want %d (all setup blocks)", len(toCommitProbe), len(blocks))
+	}
+}
