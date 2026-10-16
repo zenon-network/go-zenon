@@ -56,8 +56,6 @@ type Manager interface {
 	// Versions at or below the new stable height are discarded; versions
 	// above it are preserved but their overlay chains are rebuilt directly
 	// on top of the new stable DB by re-applying every pending patch.
-	// Rebasing with the same DB object is a fast path: every version is
-	// left untouched.
 	// It is a no-op for managers that are their own stable store.
 	//
 	// Rebase returns an error if the new stable height is below the
@@ -254,17 +252,6 @@ func (m *memdbManager) Rebase(newStableDB DB) error {
 		return errors.Errorf(
 			"rebase: new stable height %d is below current stable height %d; no mutation has occurred",
 			newStableHeight, m.stableIdentifier.Height)
-	}
-
-	// Fast path: the new stable is the same DB object as the current
-	// stable and its identifier is unchanged.  No need to re-snapshot
-	// and re-apply all pending patches.  When the identifier matches but
-	// the DB object differs (e.g. the caller built a fresh stable DB),
-	// or the object was mutated in-place (same object, new identifier),
-	// fall through to the full rebuild so that versions[stable] and every
-	// pending overlay are re-parented onto the new state.
-	if newStableDB == m.stableDB && newStableIdentifier == m.stableIdentifier {
-		return nil
 	}
 
 	// Validate that the new stable DB is on the same chain: if the manager

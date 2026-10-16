@@ -65,8 +65,7 @@ func TestRebuildRebasesManagerInPlace(t *testing.T) {
 // advancingStable returns a stable account DB whose frontier advances as
 // blocks are committed, unlike fakeStable which always returns an empty DB.
 // This exercises the Rebase path where the stable floor actually moves,
-// forcing overlay reconstruction rather than taking the same-identifier
-// fast path.
+// forcing overlay reconstruction on every call.
 type advancingStable struct {
 	stableDB db.DB
 }
@@ -103,7 +102,7 @@ func buildStableDB(t *testing.T, blocks []*nom.AccountBlock, patches []map[strin
 
 // TestRebuildAdvancingStableOverlayReconstruction drives three successive
 // advancing-floor commit cycles and, after each one, checks that committed
-// values are visible, pending values survive, and the retained overlay depth
+// values are visible, pending values survive, and the retained version count
 // equals the number of pending blocks — not the total number of blocks ever
 // added.  The existing
 // TestRebuildRebasesManagerInPlace uses fakeStable whose GetStableAccountDB
@@ -192,7 +191,7 @@ func TestRebuildAdvancingStableOverlayReconstruction(t *testing.T) {
 			}
 		}
 
-		// Bounded retained overlay depth: the number of versions still
+		// Bounded version count: the number of versions still
 		// accessible through the manager must be exactly the stable (1) plus
 		// the pending blocks, not the total number of blocks ever added.
 		// If Rebase failed to sever committed overlays the count would grow
@@ -208,7 +207,7 @@ func TestRebuildAdvancingStableOverlayReconstruction(t *testing.T) {
 		// Accessible versions = pending blocks + the stable identifier itself.
 		if uint64(accessible) != pending+1 {
 			t.Fatalf("cycle %d: accessible versions = %d, want %d (1 stable + %d pending) — "+
-				"overlay depth is not bounded, committed versions were retained",
+				"version count is not bounded, committed versions were retained",
 				cycle, accessible, pending+1, pending)
 		}
 	}

@@ -1624,6 +1624,23 @@ func TestRebase_Table(t *testing.T) {
 		}
 		assertNoMutation(t, m, snap)
 	})
+
+	t.Run("rebase nil stable DB", func(t *testing.T) {
+		m := NewMemDBManager(NewMemDB()).(*memdbManager)
+
+		tA := newMockTransaction(1, m.Frontier())
+		common.DealWithErr(m.Add(tA))
+
+		snap := snapshotManager(m)
+		err := m.Rebase(nil)
+		if err == nil {
+			t.Fatal("expected error for nil stable DB")
+		}
+		if !strings.Contains(err.Error(), "nil") {
+			t.Fatalf("error text = %q, want it to mention nil", err.Error())
+		}
+		assertNoMutation(t, m, snap)
+	})
 }
 
 // TestRebase_AllPendingCommitted covers the most common Rebase: every
