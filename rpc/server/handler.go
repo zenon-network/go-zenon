@@ -87,9 +87,9 @@ type handler struct {
 // peer. The dispatch loop is never blocked by this limit.
 //
 // A slot is held until the method returns and its reply write finishes or
-// times out (defaultWriteTimeout). A non-reading peer is not disconnected —
-// closing the codec on a write error is a separate change, and aggregate and
-// idle limits belong to the deployment. When the read goroutine is blocked
+// times out (defaultWriteTimeout). A peer whose write fails terminally (a
+// timeout included) is disconnected by the codec on that first failure;
+// aggregate and idle limits belong to the deployment. When the read goroutine is blocked
 // waiting for a slot it cannot read subsequent messages, including
 // .unsubscribe. A client that has saturated the connection cannot shed its
 // own load until at least one in-flight call completes.
