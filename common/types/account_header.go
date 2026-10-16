@@ -31,8 +31,12 @@ func DeProtoAccountHeader(pb *AccountHeaderProto) (*AccountHeader, error) {
 	if err != nil {
 		return nil, err
 	}
+	address, err := DeProtoAddress(pb.Address)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address: %w", err)
+	}
 	return &AccountHeader{
-		Address:    *DeProtoAddress(pb.Address),
+		Address:    *address,
 		HashHeight: *hh,
 	}, nil
 }

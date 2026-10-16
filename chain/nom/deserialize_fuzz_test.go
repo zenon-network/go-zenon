@@ -55,3 +55,122 @@ func TestDeserializeMomentum_MalformedHash(t *testing.T) {
 		t.Fatalf("expected error to mention 'invalid previous hash', got: %v", err)
 	}
 }
+
+// TestDeserializeAccountBlock_MalformedNonce verifies that
+// DeserializeAccountBlock returns an error instead of panicking when the
+// protobuf has a wrong-length nonce field. Previously this caused a panic
+// in DeSerializeNonce.
+func TestDeserializeAccountBlock_MalformedNonce(t *testing.T) {
+	pb := validAccountBlockProto()
+	pb.Nonce = make([]byte, 4) // wrong length, should be 8
+	data, err := proto.Marshal(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = DeserializeAccountBlock(data)
+	if err == nil {
+		t.Fatal("expected error for AccountBlockProto with wrong-length Nonce, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid nonce") {
+		t.Fatalf("expected error to mention 'invalid nonce', got: %v", err)
+	}
+}
+
+// TestDeserializeAccountBlock_MalformedAddress verifies that
+// DeserializeAccountBlock returns an error instead of panicking when the
+// protobuf has a wrong-length address field. Previously this caused a panic
+// in DeProtoAddress.
+func TestDeserializeAccountBlock_MalformedAddress(t *testing.T) {
+	pb := validAccountBlockProto()
+	pb.Address = &types.AddressProto{Address: make([]byte, 10)} // wrong length
+	data, err := proto.Marshal(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = DeserializeAccountBlock(data)
+	if err == nil {
+		t.Fatal("expected error for AccountBlockProto with wrong-length Address, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid address") {
+		t.Fatalf("expected error to mention 'invalid address', got: %v", err)
+	}
+}
+
+// TestDeserializeAccountBlock_MalformedTokenStandard verifies that
+// DeserializeAccountBlock returns an error instead of panicking when the
+// protobuf has a wrong-length token standard field. Previously this caused
+// a panic in BytesToZTSPanic.
+func TestDeserializeAccountBlock_MalformedTokenStandard(t *testing.T) {
+	pb := validAccountBlockProto()
+	pb.TokenStandard = make([]byte, 5) // wrong length
+	data, err := proto.Marshal(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = DeserializeAccountBlock(data)
+	if err == nil {
+		t.Fatal("expected error for AccountBlockProto with wrong-length TokenStandard, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid token standard") {
+		t.Fatalf("expected error to mention 'invalid token standard', got: %v", err)
+	}
+}
+
+// TestDeserializeAccountBlock_MalformedToAddress verifies that
+// DeserializeAccountBlock returns an error instead of panicking when the
+// protobuf has a wrong-length to-address field.
+func TestDeserializeAccountBlock_MalformedToAddress(t *testing.T) {
+	pb := validAccountBlockProto()
+	pb.ToAddress = &types.AddressProto{Address: make([]byte, 15)} // wrong length
+	data, err := proto.Marshal(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = DeserializeAccountBlock(data)
+	if err == nil {
+		t.Fatal("expected error for AccountBlockProto with wrong-length ToAddress, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid to address") {
+		t.Fatalf("expected error to mention 'invalid to address', got: %v", err)
+	}
+}
+
+// TestDeserializeAccountBlock_ValidRoundTrip verifies that a valid
+// AccountBlock still round-trips correctly after the error-handling change.
+func TestDeserializeAccountBlock_ValidRoundTrip(t *testing.T) {
+	pb := validAccountBlockProto()
+	data, err := proto.Marshal(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ab, err := DeserializeAccountBlock(data)
+	if err != nil {
+		t.Fatalf("expected valid AccountBlockProto to deserialize, got: %v", err)
+	}
+	if ab.Version != 1 {
+		t.Fatalf("expected Version 1, got %d", ab.Version)
+	}
+	if ab.Height != 42 {
+		t.Fatalf("expected Height 42, got %d", ab.Height)
+	}
+}
+
+// validAccountBlockProto returns a minimal but valid AccountBlockProto for
+// use in regression tests.
+func validAccountBlockProto() *AccountBlockProto {
+	return &AccountBlockProto{
+		Version:              1,
+		ChainIdentifier:      1,
+		BlockType:            uint64(BlockTypeUserSend),
+		Hash:                 &types.HashProto{Hash: make([]byte, 32)},
+		PreviousHash:         &types.HashProto{Hash: make([]byte, 32)},
+		Height:               42,
+		MomentumAcknowledged: &types.HashHeightProto{Hash: &types.HashProto{Hash: make([]byte, 32)}, Height: 1},
+		FromBlockHash:        &types.HashProto{Hash: make([]byte, 32)},
+		Address:              &types.AddressProto{Address: make([]byte, types.AddressSize)},
+		ToAddress:            &types.AddressProto{Address: make([]byte, types.AddressSize)},
+		TokenStandard:        make([]byte, types.ZenonTokenStandardSize),
+		Nonce:                make([]byte, 8),
+		ChangesHash:          &types.HashProto{Hash: make([]byte, 32)},
+	}
+}
