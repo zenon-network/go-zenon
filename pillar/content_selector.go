@@ -5,10 +5,84 @@ import (
 	"container/heap"
 	"sort"
 
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/dp"
+	"github.com/zenon-network/go-zenon/protocol"
 )
+
+var log = common.PillarLogger.New("submodule", "content-selector")
+
+// blockWireSize returns the exact RLP-encoded size of block, including its
+// descendant blocks, by measuring rather than estimating.  This is exact
+// because the selector cannot assume canonical field lengths for blocks it
+// did not build itself (issue #131 review).  Returns -1 on encoding
+// failure so the caller can reject the block instead of treating it as
+// zero-size.
+func blockWireSize(block *nom.AccountBlock) int {
+	// rlp.EncodeToBytes already includes DescendantBlocks in the encoding,
+	// so no recursion is needed.
+	encoded, err := rlp.EncodeToBytes(block)
+	if err != nil {
+		return -1
+	}
+	return len(encoded)
+}
+
+// contentEntrySize returns the RLP-encoded size of the AccountHeader entry
+// that a block contributes to the Momentum.Content list.  It measures the
+// actual header from the block rather than using a synthetic worst-case
+// entry, so the budget tracks real bytes.
+func contentEntrySize(block *nom.AccountBlock) int {
+	h := block.Header()
+	encoded, err := rlp.EncodeToBytes(&h)
+	if err != nil {
+		return -1
+	}
+	return len(encoded)
+}
+
+// listPrefixAllowance bounds the RLP list-prefix growth that the byte
+// budget cannot predict from per-block measurements alone.  The final
+// DetailedMomentum contains four nested lists (DetailedMomentum,
+// Momentum, Content, AccountBlocks).  As entries are added the payload
+// grows, which can widen each list prefix by up to 3 bytes (from the
+// 1-byte empty-list form to the 4-byte 0xF9+3-byte-length form used for
+// payloads > 65535 bytes).  16 bytes covers all four lists with margin.
+const listPrefixAllowance = 16
+
+// worstCaseMomentumHeaderSize returns the RLP-encoded size of a fully
+// populated momentum header with every field at its maximum width and an
+// empty Content list.  This is the worst-case baseline for the byte
+// budget: any real momentum the producer signs will be at most this size,
+// so starting the budget from here guarantees the final DetailedMomentum
+// fits within protocol.MaxDetailedMomentumWireSize.  The caller must add
+// listPrefixAllowance to account for list-prefix growth when Content and
+// AccountBlocks are populated.
+func worstCaseMomentumHeaderSize() int {
+	m := &nom.Momentum{
+		Version:         2,
+		ChainIdentifier: ^uint64(0),
+		Hash:            types.Hash{0xff},
+		PreviousHash:    types.Hash{0xff},
+		Height:          ^uint64(0),
+		TimestampUnix:   ^uint64(0),
+		Data:            []byte{},
+		Content:         nom.MomentumContent{},
+		ChangesHash:     types.Hash{0xff},
+		PublicKey:       make([]byte, 32),
+		Signature:       make([]byte, 64),
+		NextFusionPrice: ^uint64(0),
+		NextWorkPrice:   ^uint64(0),
+	}
+	encoded, err := rlp.EncodeToBytes(m)
+	if err != nil {
+		return -1
+	}
+	return len(encoded)
+}
 
 type ContentSelector interface {
 	Content(blocks []*nom.AccountBlock) []*nom.AccountBlock
@@ -118,6 +192,13 @@ func (h *groupHeap) Pop() interface{} {
 func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*nom.AccountBlock {
 	contractBlockCount := 0
 	basePlasma := uint64(0)
+	// Start from the worst-case populated momentum header size plus the
+	// list-prefix allowance so the budget accounts for both the largest
+	// possible header encoding at production/signing time and the
+	// RLP list-prefix growth when Content and AccountBlocks are populated.
+	// Any real momentum will be at most this size, so the estimate is
+	// always conservative.
+	sizeEstimate := worstCaseMomentumHeaderSize() + listPrefixAllowance
 	toCommit := make([]*nom.AccountBlock, 0, len(blocks))
 	contractBatch := make([]*nom.AccountBlock, 0, int(cs.plasma.MaxContractBlocksInMomentum()))
 	skippedAddresses := make(map[types.Address]bool)
@@ -140,6 +221,37 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 				contractBatch = contractBatch[:0]
 				continue
 			}
+			// Byte-budget check: drop the entire contract batch if it would
+			// push the RLP-encoded DetailedMomentum size over the limit.
+			// Each committed block also adds a content entry (AccountHeader)
+			// to the momentum.
+			batchSize := 0
+			encodeFailed := false
+			for _, b := range contractBatch {
+				sz := blockWireSize(b)
+				if sz < 0 {
+					encodeFailed = true
+					break
+				}
+				batchSize += sz + contentEntrySize(b)
+			}
+			if encodeFailed {
+				log.Debug("content selector: dropping contract batch with unencodable block", "addresses", len(contractBatch))
+				for _, dropped := range contractBatch {
+					skippedAddresses[dropped.Address] = true
+				}
+				contractBatch = contractBatch[:0]
+				continue
+			}
+			if sizeEstimate+batchSize > protocol.MaxDetailedMomentumWireSize {
+				log.Debug("content selector: dropping contract batch over byte budget", "addresses", len(contractBatch))
+				for _, dropped := range contractBatch {
+					skippedAddresses[dropped.Address] = true
+				}
+				contractBatch = contractBatch[:0]
+				continue
+			}
+			sizeEstimate += batchSize
 			toCommit = append(toCommit, contractBatch...)
 			contractBlockCount += len(contractBatch)
 			contractBatch = contractBatch[:0]
@@ -158,6 +270,37 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 				skippedAddresses[block.Address] = true
 				continue
 			}
+			// Byte-budget check: skip this block (and all its descendants)
+			// if it would push the RLP-encoded DetailedMomentum size over the
+			// limit.  This is defense-in-depth for issue #131: without it a
+			// pillar could produce a momentum whose account blocks exceed
+			// ProtocolMaxMsgSize, making the momentum untransferable.
+			//
+			// Quick lower bound: if the raw field lengths already exceed
+			// the remaining budget, skip the expensive RLP encoding.
+			lowerBound := len(block.Data) + len(block.PublicKey) + len(block.Signature)
+			for _, d := range block.DescendantBlocks {
+				lowerBound += len(d.Data) + len(d.PublicKey) + len(d.Signature)
+			}
+			entrySize := contentEntrySize(block)
+			if sizeEstimate+lowerBound+entrySize > protocol.MaxDetailedMomentumWireSize {
+				log.Debug("content selector: skipping block over byte budget (lower bound)", "address", block.Address, "height", block.Height)
+				skippedAddresses[block.Address] = true
+				continue
+			}
+			wireSize := blockWireSize(block)
+			if wireSize < 0 {
+				log.Debug("content selector: skipping unencodable block", "address", block.Address, "height", block.Height)
+				skippedAddresses[block.Address] = true
+				continue
+			}
+			blockSize := wireSize + entrySize
+			if sizeEstimate+blockSize > protocol.MaxDetailedMomentumWireSize {
+				log.Debug("content selector: skipping block over byte budget", "address", block.Address, "height", block.Height)
+				skippedAddresses[block.Address] = true
+				continue
+			}
+			sizeEstimate += blockSize
 			basePlasma += block.BasePlasma
 			toCommit = append(toCommit, block)
 		}

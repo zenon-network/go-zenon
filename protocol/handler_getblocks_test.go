@@ -654,14 +654,14 @@ func TestGatherBlocks_ReplySizeCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode large block: %v", err)
 	}
-	t.Logf("large block encodes to %d bytes (soft limit %d)", len(encoded), softResponseLimit)
+	t.Logf("large block encodes to %d bytes (soft limit %d)", len(encoded), SoftResponseLimit)
 
 	// A fixture that no longer crosses the limit means this test stopped
 	// testing anything. Skip would report that as a pass, so fail instead:
 	// whoever changed the fixture or the limit has to look.
-	if len(encoded) <= softResponseLimit {
+	if len(encoded) <= SoftResponseLimit {
 		t.Fatalf("test block (%d bytes) does not exceed soft limit (%d), adjust test data",
-			len(encoded), softResponseLimit)
+			len(encoded), SoftResponseLimit)
 	}
 
 	// Trailing hash: if the loop did not stop after the large block, this
@@ -709,11 +709,11 @@ func TestGatherBlocks_CapAccumulates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode medium block: %v", err)
 	}
-	t.Logf("small=%d bytes, medium=%d bytes, soft limit=%d", len(smallEncoded), len(mediumEncoded), softResponseLimit)
+	t.Logf("small=%d bytes, medium=%d bytes, soft limit=%d", len(smallEncoded), len(mediumEncoded), SoftResponseLimit)
 
-	if len(smallEncoded)+len(mediumEncoded) <= softResponseLimit {
+	if len(smallEncoded)+len(mediumEncoded) <= SoftResponseLimit {
 		t.Fatalf("combined size (%d bytes) does not exceed soft limit (%d), adjust test data",
-			len(smallEncoded)+len(mediumEncoded), softResponseLimit)
+			len(smallEncoded)+len(mediumEncoded), SoftResponseLimit)
 	}
 
 	// Trailing hash: if the loop did not stop after the medium block, this
@@ -845,4 +845,21 @@ func TestGatherBlocks_MissingBlocksSkipped(t *testing.T) {
 	if hashCount != 3 {
 		t.Errorf("hashCount = %d, want 3", hashCount)
 	}
+}
+
+// TestMaxDetailedMomentumWireSize verifies that the derived budget leaves
+// enough room for a GetBlocks reply: a momentum at the budget plus a
+// SoftResponseLimit prefix must fit under ProtocolMaxMsgSize.
+func TestMaxDetailedMomentumWireSize(t *testing.T) {
+	// A GetBlocks reply can hold up to SoftResponseLimit bytes of earlier
+	// momentums plus one more momentum (gatherBlocksForReply appends before
+	// checking). So the worst-case reply is SoftResponseLimit + one momentum
+	// at the budget. That total must be under ProtocolMaxMsgSize.
+	total := MaxDetailedMomentumWireSize + SoftResponseLimit
+	if total > ProtocolMaxMsgSize {
+		t.Errorf("MaxDetailedMomentumWireSize (%d) + SoftResponseLimit (%d) = %d exceeds ProtocolMaxMsgSize (%d)",
+			MaxDetailedMomentumWireSize, SoftResponseLimit, total, ProtocolMaxMsgSize)
+	}
+	t.Logf("budget=%d, softLimit=%d, total=%d, maxMsg=%d, margin=%d",
+		MaxDetailedMomentumWireSize, SoftResponseLimit, total, ProtocolMaxMsgSize, ProtocolMaxMsgSize-total)
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 
@@ -31,6 +32,11 @@ var (
 	// state a user account chain can have to limit node resource consumption.
 	MaxUncommittedBlocksPerAccount uint64 = 500
 )
+
+// maxDetailedMomentumWireSize is the largest RLP-encoded DetailedMomentum
+// that fits in a protocol message.  It mirrors protocol.MaxDetailedMomentumWireSize
+// but is defined locally because chain cannot import protocol (import cycle).
+const maxDetailedMomentumWireSize = 10*1024*1024 - 2*1024*1024 - 4096 // 8,386,048
 
 type Stable interface {
 	GetStableAccountDB(address types.Address) db.DB
@@ -739,17 +745,80 @@ func (ap *accountPool) GetNewMomentumContent() []*nom.AccountBlock {
 func (ap *accountPool) filterBlocksToCommit(blocks []*nom.AccountBlock) []*nom.AccountBlock {
 	toCommit := make([]*nom.AccountBlock, 0, len(blocks))
 	batch := make([]*nom.AccountBlock, 0, MaxAccountBlocksInMomentum)
+	sizeEstimate := worstCaseMomentumHeaderSize()
 	for index := range blocks {
 		batch = append(batch, blocks[index])
 		if blocks[index].BlockType != nom.BlockTypeContractSend {
 			if len(toCommit)+len(batch) > MaxAccountBlocksInMomentum {
 				break
 			}
+			// Byte-budget check: stop adding blocks if the batch would
+			// push the RLP-encoded DetailedMomentum over the wire limit.
+			batchSize := 0
+			overBudget := false
+			for _, b := range batch {
+				sz := blockWireSize(b)
+				if sz < 0 {
+					overBudget = true
+					break
+				}
+				batchSize += sz + contentEntrySize(b)
+			}
+			if overBudget || sizeEstimate+batchSize > maxDetailedMomentumWireSize {
+				break
+			}
+			sizeEstimate += batchSize
 			toCommit = append(toCommit, batch...)
 			batch = batch[:0]
 		}
 	}
 	return toCommit
+}
+
+// worstCaseMomentumHeaderSize returns the RLP-encoded size of a fully
+// populated momentum header with every field at its maximum width.
+func worstCaseMomentumHeaderSize() int {
+	m := &nom.Momentum{
+		Version:         2,
+		ChainIdentifier: ^uint64(0),
+		Hash:            types.Hash{0xff},
+		PreviousHash:    types.Hash{0xff},
+		Height:          ^uint64(0),
+		TimestampUnix:   ^uint64(0),
+		Data:            []byte{},
+		Content:         nom.MomentumContent{},
+		ChangesHash:     types.Hash{0xff},
+		PublicKey:       make([]byte, 32),
+		Signature:       make([]byte, 64),
+		NextFusionPrice: ^uint64(0),
+		NextWorkPrice:   ^uint64(0),
+	}
+	encoded, err := rlp.EncodeToBytes(m)
+	if err != nil {
+		return -1
+	}
+	return len(encoded)
+}
+
+// blockWireSize returns the exact RLP-encoded size of block, including its
+// descendant blocks.  Returns -1 on encoding failure.
+func blockWireSize(block *nom.AccountBlock) int {
+	encoded, err := rlp.EncodeToBytes(block)
+	if err != nil {
+		return -1
+	}
+	return len(encoded)
+}
+
+// contentEntrySize returns the RLP-encoded size of the AccountHeader entry
+// that a block contributes to the Momentum.Content list.
+func contentEntrySize(block *nom.AccountBlock) int {
+	h := block.Header()
+	encoded, err := rlp.EncodeToBytes(&h)
+	if err != nil {
+		return -1
+	}
+	return len(encoded)
 }
 
 func (ap *accountPool) GetAllUncommittedAccountBlocks() []*nom.AccountBlock {
