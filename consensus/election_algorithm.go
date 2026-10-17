@@ -7,11 +7,16 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
+// AlgorithmConfig is the input of one producer selection: the pillar
+// delegations computed at the election's proof momentum and that
+// momentum's hash-height, whose height seeds the deterministic PRNG.
 type AlgorithmConfig struct {
 	delegations []*types.PillarDelegation
 	hashH       *types.HashHeight
 }
 
+// NewAlgorithmContext bundles the delegations and proof momentum
+// identifier into the AlgorithmConfig consumed by SelectProducers.
 func NewAlgorithmContext(delegations []*types.PillarDelegation, hashH *types.HashHeight) *AlgorithmConfig {
 	return &AlgorithmConfig{
 		delegations: delegations,
@@ -19,6 +24,10 @@ func NewAlgorithmContext(delegations []*types.PillarDelegation, hashH *types.Has
 	}
 }
 
+// ElectionAlgorithm fills the producer slots of one election tick:
+// SelectProducers picks NodeCount pillars from the delegations in the
+// context and returns them in slot order. The selection is a pure
+// function of its inputs, so every node computes the same schedule.
 type ElectionAlgorithm interface {
 	SelectProducers(context *AlgorithmConfig) []*types.PillarDelegation
 }
@@ -27,6 +36,8 @@ type electionAlgorithm struct {
 	group *Context
 }
 
+// NewElectionAlgorithm returns the production election algorithm,
+// parameterized by the consensus context's NodeCount and RandCount.
 func NewElectionAlgorithm(group *Context) *electionAlgorithm {
 	return &electionAlgorithm{
 		group: group,

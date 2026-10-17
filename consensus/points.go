@@ -10,6 +10,13 @@ import (
 	"github.com/zenon-network/go-zenon/consensus/storage"
 )
 
+// Points tracks pillar performance on two schedules anchored at
+// genesis: period points, one per election tick, and epoch points,
+// one per 24-hour epoch. Each point records, per pillar, the number
+// of momentums it was expected to produce (its elected slots), the
+// number it actually produced, and the delegated weight backing it —
+// the weights served by the pillar RPC API and used for reward
+// computations.
 type Points interface {
 	// MomentumEventListener is used to precompute points as momentums come, so API calls have hot data
 	chain.MomentumEventListener
