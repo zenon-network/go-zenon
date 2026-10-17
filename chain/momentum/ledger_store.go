@@ -1,3 +1,13 @@
+// Package momentum implements store.Momentum: the state of the
+// momentum ledger backed by one version of the momentum-chain
+// database. The momentum entries themselves are stored through the
+// common/db version helpers (SetFrontier, GetEntryByHeight,
+// GetEntryByHash), while everything derived from confirming account
+// blocks — per-address account state, account mailboxes, the
+// header-by-hash index, block confirmation heights and a cached ZNN
+// balance per address — lives in prefixed subsets of the same
+// database, so a momentum version pins the confirmed state of every
+// account chain.
 package momentum
 
 import (
@@ -128,6 +138,11 @@ func (ms *momentumStore) Identifier() types.HashHeight {
 	return frontier.Identifier()
 }
 
+// NewStore returns a store.Momentum that reads and writes through db,
+// which must be one version of the momentum-chain database (a
+// db.Manager frontier or historical snapshot); it panics if db is
+// nil. The genesis view supplies the chain identifier and the genesis
+// momentum.
 func NewStore(genesis store.Genesis, db db.DB) store.Momentum {
 	if db == nil {
 		panic("momentum store can't operate with nil db")
@@ -137,6 +152,10 @@ func NewStore(genesis store.Genesis, db db.DB) store.Momentum {
 		DB:      db,
 	}
 }
+
+// NewGenesisStore returns an empty in-memory store.Momentum with no
+// genesis configuration; it backs the momentum VM context used to
+// generate the genesis momentum itself.
 func NewGenesisStore() store.Momentum {
 	return &momentumStore{
 		Genesis: nil,
