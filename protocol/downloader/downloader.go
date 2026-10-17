@@ -38,8 +38,14 @@ const (
 var (
 	log = common.DownloaderLogger
 
-	MinHashFetch  = 512 // Minimum amount of hashes to not consider a peer stalling
-	MaxHashFetch  = 512 // Amount of hashes to be fetched per retrieval request
+	// MinHashFetch is retained from the upstream downloader but is not
+	// consulted: short, non-empty batches of fresh hashes are accepted.
+	MinHashFetch = 512 // Minimum amount of hashes to not consider a peer stalling
+	// MaxHashFetch is the number of hashes requested per retrieval
+	// request; peers must not be asked for (or answered with) more.
+	MaxHashFetch = 512 // Amount of hashes to be fetched per retrieval request
+	// MaxBlockFetch is the maximum number of momentums requested
+	// from (and served to) a peer per retrieval request.
 	MaxBlockFetch = 128 // Amount of blocks to be fetched per retrieval request
 
 	hashTTL         = 5 * time.Second  // Time it takes for a hash request to time out
@@ -101,6 +107,23 @@ type crossCheck struct {
 	parent types.Hash
 }
 
+// Downloader performs bulk momentum synchronisation against a single
+// remote peer at a time. A run (Synchronise) first locates the common
+// ancestor of the local and remote chains by scanning the most recent
+// hashes for a match, falling back to a binary search over the local
+// chain for the long-fork case where none of them matches. It then
+// runs two concurrent loops: one fetching batches of hashes forward
+// from the ancestor and scheduling them in the queue, the other
+// requesting the queued momentums, spreading the load over every
+// registered peer and throttling by capacity. Completed momentums are taken from the
+// queue in order and handed to the chain insert callback. Peers that
+// stall, deliver garbage or serve an invalid chain are dropped
+// through the peer drop callback.
+//
+// Only one run can be active at a time; concurrent Synchronise calls
+// return immediately. The protocol manager owns the peer registry
+// (RegisterPeer, UnregisterPeer) and triggers runs from its syncer
+// loop.
 type Downloader struct {
 	queue  *queue                     // Scheduler for selecting the hashes to download
 	peers  *peerSet                   // Set of active peers from which download can proceed
