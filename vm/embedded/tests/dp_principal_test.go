@@ -143,3 +143,46 @@ func TestDynamicPlasma_SetPlasmaVariables_SporkAddressIsCommunityAddress(t *test
 	insertMomentums(z, 2)
 	expectMaxBasePlasma(t, plasmaApi, 1050000)
 }
+
+// TestDynamicPlasma_SetPlasmaVariables_WindowJudgedAtConfirmation pins which
+// momentum a community-address window is judged at: the one that confirmed
+// the send, not the one that carries the receive. A send confirmed at the
+// last height inside a window is accepted although its receive lands one
+// height past the end, and a send confirmed at the height before a window
+// opens is refused although its receive lands inside. Pillar1 stands in for
+// the community spork address with the windows [30, 35) and [40, 45).
+func TestDynamicPlasma_SetPlasmaVariables_WindowJudgedAtConfirmation(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	plasmaApi := embedded.NewPlasmaApi(z)
+	defer z.StopPanic()
+	pinCommunitySporkWindow(t, g.Pillar1.Address, 30, 35, 40, 45)
+	activateDynamicPlasma(t, z)
+
+	// Confirmed at 29, received at 30: refused, the original window was
+	// still closed when the send was confirmed.
+	z.InsertMomentumsTo(28)
+	defer z.CallContract(setVariablesFrom(g.Pillar1.Address, 1050000)).Error(t, constants.ErrPermissionDenied)
+	insertMomentums(z, 2)
+	expectMaxBasePlasma(t, plasmaApi, definition.DefaultMaxBasePlasmaInMomentum)
+
+	// Confirmed at 34, received at 35: accepted, the send was confirmed at
+	// the last height inside the original window.
+	z.InsertMomentumsTo(33)
+	z.InsertSendBlock(setVariablesFrom(g.Pillar1.Address, 1050000), nil, mock.SkipVmChanges)
+	insertMomentums(z, 2)
+	expectMaxBasePlasma(t, plasmaApi, 1050000)
+
+	// Confirmed at 39, received at 40: refused, the renewal window was
+	// still closed when the send was confirmed.
+	z.InsertMomentumsTo(38)
+	defer z.CallContract(setVariablesFrom(g.Pillar1.Address, 1100000)).Error(t, constants.ErrPermissionDenied)
+	insertMomentums(z, 2)
+	expectMaxBasePlasma(t, plasmaApi, 1050000)
+
+	// Confirmed at 44, received at 45: accepted, the send was confirmed at
+	// the last height inside the renewal window.
+	z.InsertMomentumsTo(43)
+	z.InsertSendBlock(setVariablesFrom(g.Pillar1.Address, 1100000), nil, mock.SkipVmChanges)
+	insertMomentums(z, 2)
+	expectMaxBasePlasma(t, plasmaApi, 1100000)
+}
