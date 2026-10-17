@@ -84,6 +84,12 @@ func worstCaseMomentumHeaderSize() int {
 	return len(encoded)
 }
 
+// ContentSelector chooses which uncommitted account blocks a new
+// momentum confirms. Content orders the candidates (contract blocks
+// first, then user blocks by Dynamic Plasma price across addresses,
+// each address's chain in height order) and cuts the list at the
+// momentum's plasma budget, block-count cap and wire-size budget,
+// keeping contract batches whole.
 type ContentSelector interface {
 	Content(blocks []*nom.AccountBlock) []*nom.AccountBlock
 }
@@ -323,6 +329,9 @@ func (cs *contentSelector) compareBlockPriority(a, b *nom.AccountBlock) int {
 	}
 }
 
+// NewMomentumContentSelector returns a ContentSelector that prices and
+// budgets blocks with plasma, the Dynamic Plasma instance built from
+// the momentum being extended.
 func NewMomentumContentSelector(plasma dp.DynamicPlasma) ContentSelector {
 	return &contentSelector{
 		plasma: plasma,

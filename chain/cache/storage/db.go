@@ -1,3 +1,10 @@
+// Package storage is the LevelDB-backed store behind chain/cache: a
+// single key space of cache entries plus, per momentum height, the
+// rollback patch that undoes that height's writes. Add applies a
+// momentum's cache patch and records its inverse; Pop replays the
+// frontier's inverse. Only the last GetRollbackCacheSize inverses are
+// kept, which bounds how far the cache can be rolled back without being
+// rebuilt from the ledger.
 package storage
 
 import (
@@ -33,6 +40,10 @@ func getConsensusOpenFilesCacheCapacity() int {
 	}
 }
 
+// CacheManager is the versioned cache database. DB returns the cache
+// key space as a db.DB (nil after Stop); Add applies the patch of the
+// momentum identified by the argument and stores its rollback patch;
+// Pop undoes the frontier momentum using the stored rollback patch.
 type CacheManager interface {
 	DB() db.DB
 
@@ -53,6 +64,8 @@ type cacheManager struct {
 	stopped bool
 }
 
+// NewCacheDBManager opens (or creates) the cache database at
+// <dataDir>/cache. It panics if the database cannot be opened.
 func NewCacheDBManager(dataDir string) CacheManager {
 	opts := &opt.Options{OpenFilesCacheCapacity: getConsensusOpenFilesCacheCapacity()}
 	db, err := leveldb.OpenFile(path.Join(dataDir, "cache"), opts)
@@ -65,10 +78,15 @@ func NewCacheDBManager(dataDir string) CacheManager {
 	}
 }
 
+// GetRollbackCacheSize returns how many momentums' rollback patches the
+// cache keeps (100): the deepest rollback the cache can follow.
 func GetRollbackCacheSize() int {
 	return rollbackCacheSize
 }
 
+// GetFrontierIdentifier returns the identifier of the momentum the
+// cache in db is current at, or types.ZeroHashHeight for an empty
+// cache. Storage errors other than not-found panic.
 func GetFrontierIdentifier(db db.DB) types.HashHeight {
 	data, err := db.Get(frontierIdentifierKey)
 	if err == leveldb.ErrNotFound {

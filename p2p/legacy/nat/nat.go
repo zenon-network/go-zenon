@@ -30,8 +30,8 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 )
 
-// An implementation of nat.Interface can map local ports to ports
-// accessible from the Internet.
+// Interface is implemented by mechanisms that can map local ports to
+// ports accessible from the Internet.
 type Interface interface {
 	// These methods manage a mapping between a port on the local
 	// machine to a port that can be connected to from the internet.

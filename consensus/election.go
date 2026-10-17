@@ -14,6 +14,8 @@ import (
 )
 
 var (
+	// ErrElectionBeforeGenesis is returned when an election is
+	// requested for a time or tick before the genesis timestamp.
 	ErrElectionBeforeGenesis = errors.New("election time/tick before genesis timestamp")
 )
 
@@ -74,6 +76,20 @@ type electionManager struct {
 	algo  ElectionAlgorithm
 	db    *storage.DB
 }
+
+// ElectionReader exposes election results on the election-tick
+// schedule and is itself the Ticker of that schedule (one tick =
+// BlockTime * NodeCount seconds from genesis).
+//
+// Every tick's election is derived from a proof momentum: the latest
+// momentum before the end of tick-2 (one second past genesis for
+// ticks 0 and 1). Sampling two ticks back makes the input final
+// before the tick begins, so all nodes elect the same producers.
+//
+//   - ElectionByTime and ElectionByTick return the tick's producer
+//     schedule and the delegations it was computed from.
+//   - DelegationsByTick returns the detailed per-backer delegations
+//     at the tick's proof momentum.
 type ElectionReader interface {
 	common.Ticker
 	ElectionByTime(t time.Time) (*electionResult, error)

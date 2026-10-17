@@ -18,11 +18,16 @@ func (p *patch) Replay(pr PatchReplayer) error {
 	return p.Batch.Replay(pr)
 }
 
+// NewPatch returns a new, empty Patch.
 func NewPatch() Patch {
 	return &patch{
 		Batch: new(leveldb.Batch),
 	}
 }
+
+// NewPatchFromDump restores a Patch from the bytes produced by
+// Patch.Dump. A malformed dump returns an error instead of panicking,
+// so it is safe on data received from the network.
 func NewPatchFromDump(data []byte) (patchResult Patch, errResult error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -172,15 +177,27 @@ func RemoveKeys(patch Patch, keys [][]byte) (Patch, error) {
 	return filter.out, nil
 }
 
+// DebugPatch renders patch as one hex "key - value" (or
+// "key - DELETE") line per operation, in insertion order. It is meant
+// for tests and debugging and panics if the patch cannot be replayed.
 func DebugPatch(patch Patch) string {
 	pp := new(patchPrinter)
 	err := patch.Replay(pp)
 	common.DealWithErr(err)
 	return pp.dump
 }
+
+// PatchHash returns the SHA3-256 hash of the patch's serialized form.
+// The VM uses it to compute the ChangesHash committed in account
+// blocks and momentums, so the hash covers both the operations and
+// their order.
 func PatchHash(patch Patch) types.Hash {
 	return types.NewHash(patch.Dump())
 }
+
+// DebugDB renders the full contents of db as one hex "key - value"
+// line per pair, in ascending key order, skipping deletion markers.
+// It is meant for tests and debugging and panics on iteration errors.
 func DebugDB(db DB) string {
 	iterator := db.NewIterator([]byte{})
 	defer iterator.Release()
@@ -201,6 +218,9 @@ func DebugDB(db DB) string {
 	}
 	return s
 }
+
+// DumpDB copies the entire visible contents of db into a Patch of Put
+// operations, in ascending key order. It panics on iteration errors.
 func DumpDB(db DB) Patch {
 	p := NewPatch()
 	iterator := db.NewIterator(nil)
@@ -223,6 +243,9 @@ func DumpDB(db DB) Patch {
 	return p
 }
 
+// PrefixPatchValues returns a new Patch with every Put value of patch
+// prefixed by prefix; Delete operations are copied unchanged. It
+// panics if the patch cannot be replayed.
 func PrefixPatchValues(patch Patch, prefix []byte) Patch {
 	pa := &patchValuePrefixer{
 		prefix: prefix,
@@ -232,6 +255,8 @@ func PrefixPatchValues(patch Patch, prefix []byte) Patch {
 	return pa.Patch
 }
 
+// ApplyPatch replays patch onto db in insertion order, stopping at
+// the first failed operation and returning its error.
 func ApplyPatch(db DB, patch Patch) error {
 	pa := &patchApplier{
 		db: db,
@@ -254,6 +279,13 @@ func AppendPatchToLevelDBBatch(batch *leveldb.Batch, prefix []byte, patch Patch,
 	})
 }
 
+// ApplyWithoutOverride replays patch onto a raw backend with
+// first-write-wins semantics: keys that already exist in db are left
+// untouched, new values are stored in the enableDelete encoding and
+// deletions become explicit tombstones. The LevelDB-backed Manager
+// relies on this to fold rollback patches in ascending height order —
+// the first (oldest) write wins, which is equivalent to applying them
+// newest-first with overwrites.
 func ApplyWithoutOverride(db db, patch Patch) error {
 	pa := &patchApplierWO{
 		db: db,
@@ -264,6 +296,14 @@ func ApplyWithoutOverride(db db, patch Patch) error {
 	}
 	return pa.err
 }
+
+// RollbackPatch computes the inverse of patch relative to the current
+// state of db: for every key the patch touches, the result restores
+// the value the key has now (or deletes it if absent). Applying the
+// returned patch after patch itself leaves db unchanged; the
+// LevelDB-backed Manager persists these inverses to undo and to
+// reconstruct historical versions. The patch must not have been
+// applied to db yet. It panics if patch cannot be replayed.
 func RollbackPatch(db DB, patch Patch) Patch {
 	pr := &patchRollback{
 		db: db,

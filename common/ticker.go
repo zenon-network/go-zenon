@@ -56,6 +56,9 @@ func (t ticker) TickMultiplier(bigger Ticker) (uint64, error) {
 	return uint64(bDuration / cDuration), nil
 }
 
+// NewTicker returns a Ticker whose tick 0 starts at startTime and whose
+// ticks are interval long. The interval must be a whole number of
+// seconds, at least one, for ToTick to divide correctly.
 func NewTicker(startTime time.Time, interval time.Duration) Ticker {
 	// ToTick works in whole seconds, so any interval that is not a whole
 	// number of seconds misbuckets ticks (and a sub-second one divides by

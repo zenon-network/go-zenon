@@ -57,18 +57,29 @@ type Cap struct {
 	Version uint
 }
 
+// RlpData returns the capability in the shape it is RLP-encoded in
+// the devp2p handshake: a two-element list of name and version.
 func (cap Cap) RlpData() interface{} {
 	return []interface{}{cap.Name, cap.Version}
 }
 
+// String renders the capability as "name/version".
 func (cap Cap) String() string {
 	return fmt.Sprintf("%s/%d", cap.Name, cap.Version)
 }
 
+// CapsByNameAndVersion sorts capabilities by name, then version; the
+// handshake sorts the capabilities received from a peer this way before
+// matching them against the local protocols.
 type CapsByNameAndVersion []Cap
 
-func (cs CapsByNameAndVersion) Len() int      { return len(cs) }
+// Len implements sort.Interface.
+func (cs CapsByNameAndVersion) Len() int { return len(cs) }
+
+// Swap implements sort.Interface.
 func (cs CapsByNameAndVersion) Swap(i, j int) { cs[i], cs[j] = cs[j], cs[i] }
+
+// Less orders by name, then by version.
 func (cs CapsByNameAndVersion) Less(i, j int) bool {
 	return cs[i].Name < cs[j].Name || (cs[i].Name == cs[j].Name && cs[i].Version < cs[j].Version)
 }

@@ -1,3 +1,25 @@
+// Package chain orchestrates the node's dual ledger. The momentum
+// pool owns the persistent momentum chain — a db.Manager whose
+// versions are momentums and whose state embeds the
+// momentum-confirmed ("stable") state of every account chain — while
+// the account pool layers unconfirmed account blocks on top, in one
+// in-memory db.Manager per address. The store interfaces both pools
+// expose are defined in chain/store.
+//
+// All ledger writes are serialized through a single chain-wide mutex:
+// writers (the pillar's momentum and contract-receive generators, the
+// protocol broadcaster and chain bridge) hold the locker returned by
+// AcquireInsert across an insertion. Account blocks first enter the
+// account pool; when a pillar produces a momentum confirming them,
+// the momentum VM copies their patches into the momentum store and
+// AddMomentumTransaction commits the result, broadcasting an
+// InsertMomentum event to the registered MomentumEventListeners — the
+// account pool itself (which rebuilds its managers over the new
+// stable state), the consensus points and election caches, the event
+// printer and the RPC subscription server. RollbackTo pops momentums
+// one by one, emitting a DeleteMomentum event per momentum, upon
+// which the account pool drops the pending blocks the rollback
+// invalidated and keeps the rest.
 package chain
 
 import (
@@ -33,6 +55,11 @@ type chain struct {
 	insert       sync.Mutex
 }
 
+// NewChain assembles the chain module on top of chainManager — the
+// momentum-chain db.Manager, persistent in production — and
+// cacheManager, which backs the chain cache, wiring the account pool
+// to draw its stable account state from the momentum pool's frontier.
+// Call Init then Start before use.
 func NewChain(chainManager db.Manager, cacheManager storage.CacheManager, genesis store.Genesis) *chain {
 	momentumPool := NewMomentumPool(chainManager, genesis)
 	cache := NewChainCache(cacheManager)

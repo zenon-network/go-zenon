@@ -19,10 +19,24 @@ import (
 )
 
 var (
+	// ErrFailedToAddAccountBlockTransaction wraps every structural
+	// insertion failure of the account pool (older than the stable
+	// state, missing or mismatched previous block, rollback failure);
+	// the wrapped message carries the specific reason.
 	ErrFailedToAddAccountBlockTransaction = errors.Errorf("failed to insert account-block-transaction")
-	ErrPlasmaRatioIsWorse                 = errors.Errorf("plasma ratio is smaller for current block")
-	ErrHashTieBreak                       = errors.Errorf("hash tie-break is worse for current block")
-	ErrBlockHeightNotFound                = errors.Errorf("block height does not exist in account manager")
+	// ErrPlasmaRatioIsWorse rejects a forking account block whose
+	// TotalPlasma/BasePlasma ratio is lower than the unconfirmed
+	// block it would replace.
+	ErrPlasmaRatioIsWorse = errors.Errorf("plasma ratio is smaller for current block")
+	// ErrHashTieBreak rejects a forking account block that ties on
+	// price — equal TotalPlasma/BasePlasma ratio before Dynamic Plasma,
+	// equal priced value under it — but does not have the strictly
+	// smaller hash.
+	ErrHashTieBreak = errors.Errorf("hash tie-break is worse for current block")
+	// ErrBlockHeightNotFound reports a request for a height that has
+	// no unconfirmed block cached in an account manager — at or below
+	// the stable height, or above the pool frontier.
+	ErrBlockHeightNotFound = errors.Errorf("block height does not exist in account manager")
 
 	// MaxAccountBlocksInMomentum takes into account batched account-blocks
 	// Not used after Dynamic Plasma spork
@@ -38,6 +52,11 @@ var (
 // but is defined locally because chain cannot import protocol (import cycle).
 const maxDetailedMomentumWireSize = 10*1024*1024 - 2*1024*1024 - 4096 // 8,386,048
 
+// Stable supplies the momentum-confirmed database of an account
+// chain — the base under the account pool's in-memory managers. The
+// momentum pool implements it with the frontier momentum store's
+// per-address subset; chain/genesis uses an empty mock while
+// generating the genesis state.
 type Stable interface {
 	GetStableAccountDB(address types.Address) db.DB
 	GetFrontierMomentumStore() store.Momentum
@@ -924,6 +943,11 @@ func newAccountPool(stable Stable) *accountPool {
 		managers: make(map[types.Address]*accountManager),
 	}
 }
+
+// NewAccountPool returns a standalone AccountPool over the given
+// stable state. The chain builds its own pool internally; this
+// constructor exists for chain/genesis, which uses a pool with an
+// empty stable base to assemble the genesis account blocks.
 func NewAccountPool(stable Stable) AccountPool {
 	return newAccountPool(stable)
 }

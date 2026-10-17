@@ -9,14 +9,29 @@ import (
 )
 
 const (
+	// DefaultMaxIndex fills Config.MaxSearchIndex when it is unset; the
+	// field is not consulted by the address search (see Config).
 	DefaultMaxIndex = 128
 )
 
+// Config configures a wallet Manager: WalletDir is the directory key
+// files live in. MaxSearchIndex is retained for configuration
+// compatibility but is not consulted; address searches use a fixed
+// internal bound.
 type Config struct {
 	WalletDir      string
 	MaxSearchIndex uint32
 }
 
+// Manager owns the wallet directory and the set of key stores known to
+// the node. It tracks every key file found on disk (encrypted) and the
+// subset currently unlocked in memory (decrypted). The maps are keyed
+// by each KeyFile's Path: for files found by Start that is the scanned
+// path (absolute when WalletDir is) unless the file's own "Path" value
+// overrides it, while lookups resolve their argument with
+// MakePathAbsolut. With an absolute WalletDir, a file whose stored Path
+// is relative is therefore indexed under a key lookups do not produce.
+// Manager is not safe for concurrent use.
 type Manager struct {
 	config *Config
 	log    common.Logger
@@ -25,6 +40,9 @@ type Manager struct {
 	decrypted map[string]*KeyStore // map from path to
 }
 
+// New returns a Manager for the given configuration, defaulting
+// MaxSearchIndex to DefaultMaxIndex when unset. It returns nil if config
+// is nil. Start must be called before the manager is used.
 func New(config *Config) *Manager {
 	if config == nil {
 		return nil
@@ -42,6 +60,9 @@ func New(config *Config) *Manager {
 	}
 }
 
+// Start ensures the wallet directory exists and loads every key file in
+// it into the encrypted set. It does not decrypt any store. It returns
+// an error if the directory cannot be created or listed.
 func (m *Manager) Start() error {
 	// ensure WalletDir exists
 	if err := os.MkdirAll(m.config.WalletDir, 0700); err != nil {
@@ -60,6 +81,11 @@ func (m *Manager) Start() error {
 	}
 	return nil
 }
+
+// Stop zeroes every unlocked key store (see KeyStore.Zero) and drops
+// the manager's references to all known key files. Nil entries are
+// skipped, so it is safe whatever sequence of Unlock and Lock calls
+// preceded it.
 func (m *Manager) Stop() {
 	for _, ks := range m.decrypted {
 		if ks != nil {
@@ -70,6 +96,9 @@ func (m *Manager) Stop() {
 	m.encrypted = nil
 }
 
+// MakePathAbsolut resolves path against the wallet directory: it
+// returns path unchanged if already absolute, otherwise joins it under
+// WalletDir. Lookups use the result as the map key (see Manager).
 func (m *Manager) MakePathAbsolut(path string) string {
 	if filepath.IsAbs(path) {
 		return path
@@ -78,6 +107,9 @@ func (m *Manager) MakePathAbsolut(path string) string {
 	}
 }
 
+// GetKeyFile returns the known key file at path, resolving path against
+// the wallet directory first. It returns ErrKeyStoreNotFound when no
+// such file is known to the manager.
 func (m *Manager) GetKeyFile(path string) (*KeyFile, error) {
 	path = m.MakePathAbsolut(path)
 	if kf, ok := m.encrypted[path]; !ok {
@@ -86,6 +118,10 @@ func (m *Manager) GetKeyFile(path string) (*KeyFile, error) {
 		return kf, nil
 	}
 }
+
+// GetKeyStore returns the unlocked key store at path. It returns
+// ErrKeyStoreNotFound when no key file is known for the path and
+// ErrKeyStoreLocked when the file exists but has not been unlocked.
 func (m *Manager) GetKeyStore(path string) (*KeyStore, error) {
 	path = m.MakePathAbsolut(path)
 	if _, ok := m.encrypted[path]; !ok {
@@ -97,6 +133,11 @@ func (m *Manager) GetKeyStore(path string) (*KeyStore, error) {
 	}
 }
 
+// GetKeyFileAndDecrypt looks up the key file at path and decrypts it
+// with password, returning the resulting key store. Unlike Unlock it
+// does not retain the decrypted store in the manager. It returns
+// ErrKeyStoreNotFound for an unknown path or ErrWrongPassword for a bad
+// password.
 func (m *Manager) GetKeyFileAndDecrypt(path, password string) (*KeyStore, error) {
 	if kf, err := m.GetKeyFile(path); err != nil {
 		return nil, err
@@ -147,6 +188,11 @@ func (m *Manager) Unlock(path, password string) error {
 	m.decrypted[path] = ks
 	return nil
 }
+
+// Lock locks the key store at path: it zeroes the decrypted secrets and
+// removes the store from the manager's unlocked set, so IsUnlocked
+// reports false afterwards. It is a no-op when the store is not
+// currently unlocked.
 func (m *Manager) Lock(path string) {
 	path = m.MakePathAbsolut(path)
 	if ks, ok := m.decrypted[path]; ok {
@@ -154,6 +200,10 @@ func (m *Manager) Lock(path string) {
 		delete(m.decrypted, path)
 	}
 }
+
+// IsUnlocked reports whether the key store at path has an entry in the
+// decrypted map, i.e. it has been unlocked and not locked since. It
+// returns ErrKeyStoreNotFound when no key file is known for the path.
 func (m *Manager) IsUnlocked(path string) (bool, error) {
 	path = m.MakePathAbsolut(path)
 	if _, ok := m.encrypted[path]; !ok {

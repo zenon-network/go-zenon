@@ -85,6 +85,10 @@ func (s Secret) MarshalJSON() ([]byte, error) {
 	return json.Marshal(s.String())
 }
 
+// ProducerConfig identifies the pillar coinbase a producing node
+// signs momentums with: the expected address, the key file and
+// password used to unlock it, and the derivation index of the key
+// pair within that key file.
 type ProducerConfig struct {
 	Address     string
 	Index       uint32
@@ -109,6 +113,11 @@ func (c ProducerConfig) Format(f fmt.State, verb rune) {
 	}
 }
 
+// RPCConfig configures the node's public RPC: whether the HTTP and
+// WebSocket servers are enabled, the host and port each listens on,
+// the set of API endpoints to expose, the allowed virtual hosts, CORS
+// domains and WebSocket origins, and the subscription and per-IP
+// WebSocket connection limits.
 type RPCConfig struct {
 	EnableHTTP bool
 	EnableWS   bool
@@ -141,6 +150,13 @@ type RPCConfig struct {
 	// at most their product in subscriptions.
 	MaxWSConnectionsPerIP int
 }
+
+// NetConfig configures the node's p2p networking: the listen host and
+// port, the transport backend override, the peer-count thresholds
+// (minimum, minimum connected, maximum and maximum pending), the
+// legacy seeder enodes and libp2p bootstrap multiaddrs used to
+// bootstrap discovery, NAT port mapping and the libp2p peerstore
+// location. The field comments below carry the details.
 type NetConfig struct {
 	ListenHost string
 	ListenPort int
@@ -185,6 +201,11 @@ type NetConfig struct {
 	PeerstoreDir *string
 }
 
+// Config is the node's full configuration: the data, wallet and
+// genesis file paths, the instance name and log level, the optional
+// pillar producer, and the nested RPC and networking configs. It is
+// the input to NewNode, and its make* helpers derive the per-subsystem
+// configs (zenon, wallet and p2p) from it.
 type Config struct {
 	DataPath    string // default ~/.zenon
 	WalletPath  string // default DataPath/wallet
@@ -199,6 +220,12 @@ type Config struct {
 	Net      NetConfig
 }
 
+// MakePathsAbsolute resolves the data, wallet and genesis paths to
+// absolute form in place, defaulting the data path to DefaultDataDir
+// and the wallet path to the wallet subdirectory of the data path
+// when unset. A leading "~" is expanded to the home directory for the
+// wallet and genesis paths only; the data path is resolved with
+// filepath.Abs without tilde expansion.
 func (c *Config) MakePathsAbsolute() error {
 	if c.DataPath == "" {
 		c.DataPath = DefaultDataDir()
@@ -396,6 +423,8 @@ func normalizeListenHost(host string) (string, bool) {
 	return host, true
 }
 
+// HTTPEndpoint returns the "host:port" the HTTP RPC server listens on,
+// or the empty string when no HTTP host is configured.
 func (c *Config) HTTPEndpoint() string {
 	if c.RPC.HTTPHost == "" {
 		return ""
@@ -409,6 +438,9 @@ func (c *Config) HTTPEndpoint() string {
 	}
 	return endpoint
 }
+
+// WSEndpoint returns the "host:port" the WebSocket RPC server listens
+// on, or the empty string when no WebSocket host is configured.
 func (c *Config) WSEndpoint() string {
 	if c.RPC.WSHost == "" {
 		return ""
