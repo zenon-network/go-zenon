@@ -1,3 +1,10 @@
+// Command devnet-keygen generates the key material and configuration
+// of the docker devnet: it derives the dev accounts from a fixed
+// mnemonic, writes each pillar's producer key file and every role's
+// config.json under docker/devnet, reads genesis.json to cross-check
+// the addresses, and prints the address table. Configs are always
+// rewritten; existing key files are kept unless --force is given. Run
+// it through `make devnet-keys`.
 package main
 
 import (
