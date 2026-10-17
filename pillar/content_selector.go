@@ -200,7 +200,12 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 	// always conservative.
 	sizeEstimate := worstCaseMomentumHeaderSize() + listPrefixAllowance
 	toCommit := make([]*nom.AccountBlock, 0, len(blocks))
-	contractBatch := make([]*nom.AccountBlock, 0, int(cs.plasma.MaxContractBlocksInMomentum()))
+	// A batch can never hold more blocks than were offered, so size it by
+	// the input. The configured contract-block cap is only a limit on what
+	// is committed and can be orders of magnitude larger than the pending
+	// set; preallocating by it would request that much memory on every
+	// producer at every momentum regardless of how many blocks are pending.
+	contractBatch := make([]*nom.AccountBlock, 0, min(len(blocks), int(cs.plasma.MaxContractBlocksInMomentum())))
 	skippedAddresses := make(map[types.Address]bool)
 	for _, block := range blocks {
 		if types.IsEmbeddedAddress(block.Address) {
