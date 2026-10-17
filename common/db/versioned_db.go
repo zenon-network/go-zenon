@@ -20,6 +20,10 @@ const (
 	maximumCacheHeightDifference = 360
 )
 
+// Top-level key-space prefixes inside the Manager's LevelDB: the
+// current (frontier) state lives under frontierByte, while patchByte
+// and rollbackByte hold, per height, the serialized patch that
+// produced that version and its precomputed inverse.
 var (
 	frontierByte = []byte{85}
 	patchByte    = []byte{102}
@@ -44,6 +48,26 @@ func getOpenFilesCacheCapacity() int {
 	}
 }
 
+// Manager is the versioned database underneath each ledger (the
+// momentum chain and every account chain). Every version is
+// identified by the hash-height of the Commit that produced it.
+//
+// Frontier returns a snapshot of the latest version and Get one of an
+// arbitrary committed version (nil if the identifier is unknown);
+// both are copy-on-write, so writing to them never affects the
+// manager. GetPatch returns the state patch that was applied at the
+// given identifier's height (nil if none; the LevelDB manager looks the
+// patch up by height alone and does not check the hash). Add appends a Transaction on top
+// of the current frontier and Pop rolls the frontier back one
+// version. Rebase moves the manager onto a new stable base, replaying
+// every pending version on top of it, and fails without mutation if
+// the base does not fit (see its own comment). Stop releases the
+// backing store and Location names it.
+//
+// Individual methods are internally synchronized, but Add, Pop and
+// Rebase perform unlocked read-then-write sequences, so writers must
+// be externally serialized — in practice the chain's insert lock is
+// the single writer.
 type Manager interface {
 	Frontier() DB
 	Get(types.HashHeight) DB
@@ -88,6 +112,11 @@ type memdbManager struct {
 	stopped bool
 }
 
+// NewMemDBManager returns an in-memory Manager rooted at the current
+// frontier of rawDB; that version becomes the stable base that cannot
+// be popped. Writes are layered over rawDB in memory and are never
+// persisted. The account pool uses one per account chain to track
+// blocks that are not yet confirmed by a momentum.
 func NewMemDBManager(rawDB DB) Manager {
 	frontierIdentifier := GetFrontierIdentifier(rawDB)
 	return &memdbManager{
@@ -471,6 +500,10 @@ type ldbManager struct {
 	stopped  bool
 }
 
+// NewLevelDBManager opens (or creates) the versioned database in dir
+// and returns the persistent Manager backed by it. It panics if the
+// database cannot be opened. This is the production manager for both
+// the momentum ledger and the stable account ledgers.
 func NewLevelDBManager(dir string) Manager {
 	opts := &opt.Options{OpenFilesCacheCapacity: getOpenFilesCacheCapacity()}
 	ldb, err := leveldb.OpenFile(dir, opts)
