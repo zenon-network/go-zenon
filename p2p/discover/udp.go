@@ -161,7 +161,10 @@ type udp struct {
 	gotreply   chan reply
 
 	closing chan struct{}
-	nat     nat.Interface
+	// natWG counts the NAT port-mapping worker, which close waits for so
+	// that its deferred unmapping has completed when close returns.
+	natWG sync.WaitGroup
+	nat   nat.Interface
 
 	wg sync.WaitGroup
 
@@ -231,10 +234,14 @@ func newUDP(priv *ecdsa.PrivateKey, c conn, natm nat.Interface, nodeDBPath strin
 	realaddr := c.LocalAddr().(*net.UDPAddr)
 	if natm != nil {
 		if !realaddr.IP.IsLoopback() {
-			udp.wg.Add(1)
+			// The worker gets the port by value: realaddr is reassigned below
+			// once the external IP is known, and the worker must not read a
+			// variable this goroutine is still writing.
+			port := realaddr.Port
+			udp.natWG.Add(1)
 			go func() {
-				nat.Map(natm, udp.closing, "udp", realaddr.Port, realaddr.Port, "ethereum discovery")
-				udp.wg.Done()
+				nat.Map(natm, udp.closing, "udp", port, port, "ethereum discovery")
+				udp.natWG.Done()
 			}()
 		}
 		// TODO: react to external IP changes over time.
@@ -258,13 +265,19 @@ func newUDP(priv *ecdsa.PrivateKey, c conn, natm nat.Interface, nodeDBPath strin
 	return udp.Table, udp
 }
 
+// close stops the transport. It waits for the NAT port-mapping worker, when
+// there is one, so that its deferred unmapping has completed when close
+// returns; otherwise a caller that closes this table and opens a new one on
+// the same port (the legacy server retrying after a failed start) can have
+// the new mapping removed by the old worker. The packet loop and the read
+// loop are signalled but not waited for, as before.
 func (t *udp) close() {
 	close(t.closing)
 	err := t.conn.Close()
 	if err != nil {
 		panic(err)
 	}
-	// TODO: wait for the loops to end.
+	t.natWG.Wait()
 }
 
 // ping sends a ping message to the given node and waits for a reply.

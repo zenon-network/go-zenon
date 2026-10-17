@@ -324,6 +324,25 @@ func (srv *Server) Start() (err error) {
 	}
 	srv.running.Store(true)
 	common.P2PLogger.Info(fmt.Sprintf("Starting Server"))
+	// Start opens the discovery socket before it binds the TCP listener. If a
+	// later step fails, release what was opened and clear the running marker,
+	// so the failure leaves nothing behind and the caller can Start again
+	// once the cause is gone. Stop cannot be used for this: it holds the same
+	// lock and treats a server that is not running as nothing to do.
+	defer func() {
+		if err == nil {
+			return
+		}
+		if srv.ntab != nil {
+			srv.ntab.Close()
+			srv.ntab = nil
+		}
+		if srv.listener != nil {
+			srv.listener.Close()
+			srv.listener = nil
+		}
+		srv.running.Store(false)
+	}()
 
 	// static fields
 	if srv.PrivateKey == nil {

@@ -122,12 +122,22 @@ type backend interface {
 //   - "auto" (default): If the oracle reports the libp2p spork as
 //     already active, libp2p is started directly. Otherwise the legacy
 //     backend is started and the activation watcher polls for the spork.
-func (srv *Server) Start() error {
+func (srv *Server) Start() (err error) {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 	if srv.stopCh != nil {
 		return errors.New("switcher: server already started")
 	}
+	// A backend that fails to start leaves the switcher unstarted: the
+	// started marker is cleared so the caller can retry Start once the cause
+	// (a port in use, usually) is gone, without an intervening Stop. The
+	// activation watcher is only launched after a successful start, so there
+	// is nothing else to unwind here.
+	defer func() {
+		if err != nil {
+			srv.stopCh = nil
+		}
+	}()
 
 	// Both backends treat this as a hard capacity bound and the libp2p
 	// backend's every capacity check is len(peerMap) >= MaxPeers, so a
@@ -292,6 +302,9 @@ func (srv *Server) startLegacyLocked() error {
 		}
 	}
 	if err := srv.legacy.Start(); err != nil {
+		// Release whatever the backend opened before it failed; Stop on a
+		// backend that did not finish starting is a no-op at worst.
+		srv.legacy.Stop()
 		srv.legacy = nil
 		return fmt.Errorf("switcher: start legacy backend: %w", err)
 	}
@@ -311,6 +324,7 @@ func (srv *Server) startLibp2pLocked() error {
 		srv.libp2p = srv.buildLibp2p()
 	}
 	if err := srv.libp2p.Start(); err != nil {
+		srv.libp2p.Stop()
 		srv.libp2p = nil
 		return fmt.Errorf("switcher: start libp2p backend: %w", err)
 	}
