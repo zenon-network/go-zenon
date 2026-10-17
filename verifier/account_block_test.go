@@ -23,7 +23,7 @@ func (s *stubSporkMomentumStore) IsSporkActive(spork *types.ImplementedSpork) (b
 }
 
 // A user receive block with non-empty Data must be rejected once the Dynamic
-// Plasma spork is enforced.
+// Plasma spork is enforced at the block's acknowledged momentum.
 func TestAccountBlockVerifier_ReceiveData_DynamicPlasmaEnforced_RejectsData(t *testing.T) {
 	address := types.ParseAddressPanic("z1qph8dkja68pg3g6j4spwk9re0kjdkul0amwqnt")
 
@@ -39,7 +39,7 @@ func TestAccountBlockVerifier_ReceiveData_DynamicPlasmaEnforced_RejectsData(t *t
 	abv := &accountBlockVerifier{
 		block:         block,
 		accountStore:  nil,
-		momentumStore: nil,
+		momentumStore: &stubSporkMomentumStore{dynamicPlasmaActive: true},
 		frontierStore: &stubSporkMomentumStore{dynamicPlasmaActive: true},
 	}
 
@@ -66,7 +66,7 @@ func TestAccountBlockVerifier_ReceiveData_DynamicPlasmaNotEnforced_AllowsData(t 
 	abv := &accountBlockVerifier{
 		block:         block,
 		accountStore:  nil,
-		momentumStore: nil,
+		momentumStore: &stubSporkMomentumStore{dynamicPlasmaActive: false},
 		frontierStore: &stubSporkMomentumStore{dynamicPlasmaActive: false},
 	}
 
@@ -92,7 +92,7 @@ func TestAccountBlockVerifier_ReceiveData_EmptyData_AllwaysAllowed(t *testing.T)
 	abv := &accountBlockVerifier{
 		block:         block,
 		accountStore:  nil,
-		momentumStore: nil,
+		momentumStore: &stubSporkMomentumStore{dynamicPlasmaActive: true},
 		frontierStore: &stubSporkMomentumStore{dynamicPlasmaActive: true},
 	}
 	if err := abv.receiveData(); err != nil {
@@ -100,6 +100,7 @@ func TestAccountBlockVerifier_ReceiveData_EmptyData_AllwaysAllowed(t *testing.T)
 	}
 
 	// Without spork
+	abv.momentumStore = &stubSporkMomentumStore{dynamicPlasmaActive: false}
 	abv.frontierStore = &stubSporkMomentumStore{dynamicPlasmaActive: false}
 	if err := abv.receiveData(); err != nil {
 		t.Fatalf("expected nil error for empty data without spork, got %v", err)
@@ -121,7 +122,7 @@ func TestAccountBlockVerifier_ReceiveData_EmbeddedAddress_SkipsCheck(t *testing.
 	abv := &accountBlockVerifier{
 		block:         block,
 		accountStore:  nil,
-		momentumStore: nil,
+		momentumStore: &stubSporkMomentumStore{dynamicPlasmaActive: true},
 		frontierStore: &stubSporkMomentumStore{dynamicPlasmaActive: true},
 	}
 
@@ -145,11 +146,40 @@ func TestAccountBlockVerifier_ReceiveData_SendBlock_SkipsCheck(t *testing.T) {
 	abv := &accountBlockVerifier{
 		block:         block,
 		accountStore:  nil,
-		momentumStore: nil,
+		momentumStore: &stubSporkMomentumStore{dynamicPlasmaActive: true},
 		frontierStore: &stubSporkMomentumStore{dynamicPlasmaActive: true},
 	}
 
 	if err := abv.receiveData(); err != nil {
 		t.Fatalf("expected nil error for send block, got %v", err)
+	}
+}
+
+// When momentumStore is nil (user blocks), receiveData falls back to
+// chain.GetMomentumStore(block.MomentumAcknowledged). With a nil chain the
+// check must not panic; it should return ErrABMAMissing.
+func TestAccountBlockVerifier_ReceiveData_NilChain_ReturnsMAMissing(t *testing.T) {
+	address := types.ParseAddressPanic("z1qph8dkja68pg3g6j4spwk9re0kjdkul0amwqnt")
+
+	block := &nom.AccountBlock{
+		Version:       1,
+		BlockType:     nom.BlockTypeUserReceive,
+		Address:       address,
+		Height:        2,
+		Data:          []byte("data"),
+		FromBlockHash: types.NewHash([]byte("send")),
+	}
+
+	abv := &accountBlockVerifier{
+		block:         block,
+		accountStore:  nil,
+		momentumStore: nil, // simulates user block
+		frontierStore: &stubSporkMomentumStore{dynamicPlasmaActive: true},
+		chain:         nil, // no chain available
+	}
+
+	err := abv.receiveData()
+	if err != ErrABMAMissing {
+		t.Fatalf("expected ErrABMAMissing with nil chain, got %v", err)
 	}
 }

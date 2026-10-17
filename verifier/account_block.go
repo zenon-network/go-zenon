@@ -108,6 +108,7 @@ func (av *accountVerifier) AccountBlock(block *nom.AccountBlock) error {
 		accountStore:  accountStore,
 		momentumStore: momentumStore,
 		frontierStore: av.chain.GetFrontierMomentumStore(),
+		chain:         av.chain,
 	}).all()
 }
 func (av *accountVerifier) AccountBlockTransaction(transaction *nom.AccountBlockTransaction) error {
@@ -144,6 +145,7 @@ type accountBlockVerifier struct {
 	accountStore  store.Account
 	momentumStore store.Momentum
 	frontierStore store.Momentum
+	chain         chain.Chain
 }
 
 func (abv *accountBlockVerifier) all() error {
@@ -418,9 +420,9 @@ func (abv *accountBlockVerifier) sequencer() error {
 }
 
 // receiveData rejects user receive blocks that carry non-empty Data once the
-// Dynamic Plasma spork is enforced. Before the spork, receive blocks always
-// get flat plasma regardless of Data size, which lets anyone commit large
-// data at minimum cost.
+// Dynamic Plasma spork is enforced at the block's acknowledged momentum height.
+// Before the spork, receive blocks always get flat plasma regardless of Data
+// size, which lets anyone commit large data at minimum cost.
 func (abv *accountBlockVerifier) receiveData() error {
 	if !abv.block.IsReceiveBlock() {
 		return nil
@@ -431,7 +433,20 @@ func (abv *accountBlockVerifier) receiveData() error {
 	if len(abv.block.Data) == 0 {
 		return nil
 	}
-	isDynamicPlasmaActive, err := abv.frontierStore.IsSporkActive(types.DynamicPlasmaSpork)
+	// Use the momentum store at the block's acknowledged height, not the
+	// frontier, so that pre-enforcement blocks replayed after the spork are
+	// validated with the rules that were active at their MA.
+	maStore := abv.momentumStore
+	if maStore == nil {
+		if abv.chain == nil {
+			return ErrABMAMissing
+		}
+		maStore = abv.chain.GetMomentumStore(abv.block.MomentumAcknowledged)
+		if maStore == nil {
+			return ErrABMAMissing
+		}
+	}
+	isDynamicPlasmaActive, err := maStore.IsSporkActive(types.DynamicPlasmaSpork)
 	if err != nil {
 		return InternalError(err)
 	}
