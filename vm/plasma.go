@@ -16,7 +16,12 @@ import (
 	"github.com/zenon-network/go-zenon/vm/vm_context"
 )
 
-// Legacy function from before the Dynamic Plasma spork
+// GetDifficultyForPlasma is the pre-Dynamic-Plasma conversion, still
+// used below the spork (package dp prices work once it is enforced).
+// It returns the proof-of-work difficulty that yields requiredPlasma
+// (constants.PoWDifficultyPerPlasma — 1500 — per unit). Plasma beyond what PoW may cover for one block
+// (constants.MaxPoWPlasmaForAccountBlock) is rejected with
+// constants.ErrForbiddenParam.
 func GetDifficultyForPlasma(requiredPlasma uint64) (uint64, error) {
 	if requiredPlasma > constants.MaxPoWPlasmaForAccountBlock {
 		return 0, constants.ErrForbiddenParam
@@ -26,7 +31,11 @@ func GetDifficultyForPlasma(requiredPlasma uint64) (uint64, error) {
 	return requiredPlasma * constants.PoWDifficultyPerPlasma, nil
 }
 
-// Legacy function from before the Dynamic Plasma spork
+// DifficultyToPlasma is the pre-Dynamic-Plasma inverse of
+// GetDifficultyForPlasma: the plasma granted by a proof-of-work of
+// the given difficulty
+// (difficulty / 1500), capped at
+// constants.MaxPoWPlasmaForAccountBlock.
 func DifficultyToPlasma(difficulty uint64) uint64 {
 	// Check for 0
 	if difficulty == 0 {
@@ -41,7 +50,11 @@ func DifficultyToPlasma(difficulty uint64) uint64 {
 	return difficulty / constants.PoWDifficultyPerPlasma
 }
 
-// Legacy function from before the Dynamic Plasma spork
+// FussedAmountToPlasma is the pre-Dynamic-Plasma conversion of an
+// amount of QSR fused to a beneficiary into its plasma capacity: every whole fusion unit
+// (constants.CostPerFusionUnit, 1 QSR) grants
+// constants.PlasmaPerFusionUnit, capped at
+// constants.MaxFusionPlasmaForAccount (5000 units' worth).
 func FussedAmountToPlasma(amount *big.Int) uint64 {
 	// Check for 0
 	if amount == nil || amount.Sign() <= 0 {
