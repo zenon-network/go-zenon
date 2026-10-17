@@ -60,14 +60,6 @@ func saveBridgeConstants(t *testing.T) {
 	})
 }
 
-// saveGovernanceAddress saves and restores types.GovernanceAddress.
-func saveGovernanceAddress(t *testing.T) {
-	saved := types.GovernanceAddress
-	t.Cleanup(func() {
-		types.GovernanceAddress = saved
-	})
-}
-
 // saveChainGlobals saves and restores mutable chain globals.
 func saveChainGlobals(t *testing.T) {
 	savedMaxUncommitted := chain.MaxUncommittedBlocksPerAccount

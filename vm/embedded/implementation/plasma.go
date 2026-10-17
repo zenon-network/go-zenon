@@ -151,7 +151,11 @@ func (p *SetVariablesMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint
 	return plasmaTable.EmbeddedSimple, nil
 }
 func (p *SetVariablesMethod) ValidateSendBlock(block *nom.AccountBlock) error {
-	if block.Address != types.GovernanceAddress {
+	// The plasma variables are governed by whoever governs sporks: the
+	// spork address named in genesis, or the community spork address
+	// inside its authorization windows, which ReceiveBlock checks because
+	// it needs the momentum height.
+	if block.Address != *types.SporkAddress && block.Address != types.CommunitySporkAddress {
 		return constants.ErrPermissionDenied
 	}
 
@@ -210,6 +214,11 @@ func (p *SetVariablesMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 func (p *SetVariablesMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
+	}
+	if sendBlock.Address == types.CommunitySporkAddress {
+		if err := checkCommunitySporkAddressValidity(context); err != nil {
+			return nil, err
+		}
 	}
 
 	param := new(definition.PlasmaVariables)
