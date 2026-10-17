@@ -26,6 +26,8 @@ type HTTPError struct {
 	Body       []byte
 }
 
+// Error returns the HTTP status, followed by the response body when
+// there is one.
 func (err HTTPError) Error() string {
 	if len(err.Body) == 0 {
 		return err.Status
