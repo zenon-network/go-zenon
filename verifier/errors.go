@@ -6,14 +6,24 @@ import (
 	"github.com/pkg/errors"
 )
 
+// InternalError wraps err as an unexpected verifier failure. It signals a
+// store or invariant problem rather than an invalid block, and unwraps to
+// ErrVerifierInternal.
 func InternalError(err error) error {
 	return fmt.Errorf("%w - %v", ErrVerifierInternal, err)
 }
 
+// DescendantVerifyError wraps err raised while verifying a descendant block
+// of a contract-receive. It unwraps to ErrABDescendantVerify.
 func DescendantVerifyError(err error) error {
 	return fmt.Errorf("%w - %v", ErrABDescendantVerify, err)
 }
 
+// Verifier errors. ErrVerifierInternal marks an unexpected failure while
+// verifying (see InternalError) rather than a merely invalid block. The
+// remaining values are validation errors: those prefixed ErrAB reject an
+// invalid account-block and those prefixed ErrM reject an invalid momentum,
+// each naming the specific rule that failed.
 var (
 	ErrVerifierInternal = errors.New("internal error while verifying")
 

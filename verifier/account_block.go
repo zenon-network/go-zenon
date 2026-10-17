@@ -15,6 +15,11 @@ import (
 )
 
 var (
+	// ReceiverMismatchEnforcementHeight is the momentum height from which a
+	// receive-block whose address differs from the send-block's ToAddress is
+	// rejected with ErrABFromBlockReceiverMismatch. Below this height the
+	// mismatch is tolerated for backwards compatibility. The frontier
+	// momentum's true height is used for the comparison.
 	ReceiverMismatchEnforcementHeight uint64 = 10109240 // Targeting 2025-04-16 12:00:00 UTC
 )
 
@@ -25,6 +30,10 @@ func isContractReceive(block *nom.AccountBlock) bool {
 	return block.IsReceiveBlock() && types.IsEmbeddedAddress(block.Address)
 }
 
+// AccountBlockVerifier validates account-blocks. AccountBlock checks a
+// block's intrinsic fields and its position in the ledger; the heavier
+// AccountBlockTransaction additionally validates the hash, signature and
+// producer once the block has been embedded in a transaction.
 type AccountBlockVerifier interface {
 	AccountBlock(block *nom.AccountBlock) error
 	AccountBlockTransaction(transaction *nom.AccountBlockTransaction) error
@@ -119,6 +128,10 @@ func (av *accountVerifier) AccountBlockTransaction(transaction *nom.AccountBlock
 	}).all()
 }
 
+// NewAccountBlockVerifier returns an AccountBlockVerifier that
+// resolves the account and momentum stores it needs from chain. The
+// consensus argument is retained for symmetry with the momentum
+// verifier and to support future account-level consensus checks.
 func NewAccountBlockVerifier(chain chain.Chain, consensus consensus.Consensus) AccountBlockVerifier {
 	return &accountVerifier{
 		chain:     chain,
