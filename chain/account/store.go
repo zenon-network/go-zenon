@@ -1,3 +1,11 @@
+// Package account implements store.Account: the state of a single
+// account chain backed by one db.DB version. The blocks themselves
+// are stored through the common/db version helpers, while balances,
+// embedded-contract storage, the chain-plasma counter, received-send
+// markers and the embedded sequencer cursor live under dedicated key
+// prefixes of the same database. Depending on which database it
+// wraps, the same store serves the momentum-confirmed ("stable")
+// state or the account pool's unconfirmed frontier.
 package account
 
 import (
@@ -34,6 +42,11 @@ func (as *accountStore) Identifier() types.HashHeight {
 	return frontier.Identifier()
 }
 
+// NewAccountStore returns a store.Account for address that reads and
+// writes through db, which must be one version of that account's
+// chain database — either the momentum store's per-address subset or
+// a version of the account pool's in-memory manager. It panics if db
+// is nil.
 func NewAccountStore(address types.Address, db db.DB) store.Account {
 	if db == nil {
 		panic("account store can't operate with nil db")
