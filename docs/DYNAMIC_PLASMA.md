@@ -367,5 +367,5 @@ After activation, new momentums will have `version: 2` with `nextFusionPrice` an
 | `ledger.getFrontierMomentum` | Momentum with `nextFusionPrice`, `nextWorkPrice`, `version` |
 | `plasma.getVariables` | `maxBasePlasmaInMomentum`, `fusedPlasmaTarget`, `powPlasmaTarget`, `maxPriceChangePercent`, `priceChangeDenominator` |
 | `plasma.get` | `currentPlasma`, `maxPlasma`, `qsrAmount` for an address |
-| `plasma.getRequiredPoWForAccountBlock` | `availablePlasma`, `basePlasma`, `requiredDifficulty` for a hypothetical transaction |
+| `plasma.getRequiredPoWForAccountBlock` | `availablePlasma`, `basePlasma`, `requiredFusedPlasma` (basePlasma scaled by the current fusion price, the amount to fuse-pay when no PoW is needed), `requiredDifficulty` for a hypothetical transaction |
 | `plasma.getEntriesByAddress` | Fusion entries for an address |

@@ -198,6 +198,7 @@ func TestPlasma_rpc(t *testing.T) {
 {
 	"availablePlasma": 10500000,
 	"basePlasma": 52500,
+	"requiredFusedPlasma": 52500,
 	"requiredDifficulty": 0
 }`)
 	common.Json(plasmaApi.GetRequiredPoWForAccountBlock(embedded.GetRequiredParam{
@@ -209,6 +210,7 @@ func TestPlasma_rpc(t *testing.T) {
 {
 	"availablePlasma": 0,
 	"basePlasma": 52500,
+	"requiredFusedPlasma": 52500,
 	"requiredDifficulty": 78750000
 }`)
 
@@ -231,6 +233,7 @@ func TestPlasma_rpc(t *testing.T) {
 {
 	"availablePlasma": 21000,
 	"basePlasma": 52500,
+	"requiredFusedPlasma": 52500,
 	"requiredDifficulty": 47250000
 }`)
 	common.Json(plasmaApi.GetEntriesByAddress(g.User1.Address, 0, 10)).HideHashes().Equals(t, `

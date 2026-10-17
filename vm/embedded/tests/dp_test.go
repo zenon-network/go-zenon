@@ -9,6 +9,7 @@ import (
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/rpc/api/embedded"
 	"github.com/zenon-network/go-zenon/vm/constants"
@@ -145,6 +146,7 @@ func TestDynamicPlasma_rpc(t *testing.T) {
 {
 	"availablePlasma": 0,
 	"basePlasma": 21000,
+	"requiredFusedPlasma": 21000,
 	"requiredDifficulty": 33075000
 }`)
 }
@@ -179,6 +181,7 @@ func TestDynamicPlasma_rpc_FusionCoversRequiredPlasma(t *testing.T) {
 {
 	"availablePlasma": 21000,
 	"basePlasma": 21000,
+	"requiredFusedPlasma": 21000,
 	"requiredDifficulty": 0
 }`)
 }
@@ -242,4 +245,88 @@ func TestDynamicPlasma_SetPlasmaVariables_TargetSumBounds(t *testing.T) {
 
 	// fusedTarget + powTarget must be checked without a uint64 sum that wraps around
 	z.InsertSendBlock(setVariables(210000, math.MaxUint64, 1), constants.ErrForbiddenParam, mock.SkipVmChanges)
+}
+
+// TestDynamicPlasma_rpc_RequiredFusedPlasmaAboveFloor pins the field #147
+// asked for: once the fusion price has moved above the floor, a fused-only
+// client that pays basePlasma underpays, and the required-PoW result must
+// say how much fused plasma the block needs at the current price. One fused
+// send against a lowered fused target moves the price from 1000 to 1050, so
+// a 21,000 base block needs 22,050 fused plasma.
+func TestDynamicPlasma_rpc_RequiredFusedPlasmaAboveFloor(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	plasmaApi := embedded.NewPlasmaApi(z)
+	defer z.StopPanic()
+	savePlasmaDefaults(t)
+
+	definition.DefaultMaxBasePlasmaInMomentum = 42000
+	definition.DefaultFusedPlasmaTarget = 10500
+
+	activateDynamicPlasma(t, z)
+
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        common.Big1,
+	}, nil, mock.SkipVmChanges)
+	// The momentum that carries the send sets the next fusion price from its
+	// own usage; an empty momentum after it would bring the price back down.
+	z.InsertNewMomentum()
+
+	frontier, err := z.Chain().GetFrontierMomentumStore().GetFrontierMomentum()
+	common.FailIfErr(t, err)
+	common.ExpectUint64(t, frontier.NextFusionPrice, 1050)
+
+	// An account with plenty of fused plasma: no PoW needed, but the fused
+	// requirement is price-scaled above basePlasma.
+	common.Json(plasmaApi.GetRequiredPoWForAccountBlock(embedded.GetRequiredParam{
+		BlockType: nom.BlockTypeUserSend,
+		SelfAddr:  g.User1.Address,
+		ToAddr:    &g.User2.Address,
+	})).Equals(t, `
+{
+	"availablePlasma": 21000000,
+	"basePlasma": 21000,
+	"requiredFusedPlasma": 22050,
+	"requiredDifficulty": 0
+}`)
+
+	// An account with no fused plasma: the same requirement, and PoW for all
+	// of it at the work price.
+	common.Json(plasmaApi.GetRequiredPoWForAccountBlock(embedded.GetRequiredParam{
+		BlockType: nom.BlockTypeUserSend,
+		SelfAddr:  g.User6.Address,
+		ToAddr:    &g.User1.Address,
+	})).Equals(t, `
+{
+	"availablePlasma": 0,
+	"basePlasma": 21000,
+	"requiredFusedPlasma": 22050,
+	"requiredDifficulty": 31500000
+}`)
+
+	// Fractional rounding: one data byte makes the base 21,068, and
+	// 21,068 x 1050 / 1000 = 22,121.4 rounds up to 22,122. That is exactly
+	// the floor the consensus rule enforces: 22,122 passes ValidPrice and
+	// 22,121 does not.
+	common.Json(plasmaApi.GetRequiredPoWForAccountBlock(embedded.GetRequiredParam{
+		BlockType: nom.BlockTypeUserSend,
+		SelfAddr:  g.User6.Address,
+		ToAddr:    &g.User1.Address,
+		Data:      []byte{1},
+	})).Equals(t, `
+{
+	"availablePlasma": 0,
+	"basePlasma": 21068,
+	"requiredFusedPlasma": 22122,
+	"requiredDifficulty": 31602000
+}`)
+	variables, err := plasmaApi.GetVariables()
+	common.FailIfErr(t, err)
+	pricing := dp.NewDynamicPlasma(frontier, variables)
+	atRequirement := &nom.AccountBlock{Address: g.User6.Address, BasePlasma: 21068, FusedPlasma: 22122}
+	oneBelow := &nom.AccountBlock{Address: g.User6.Address, BasePlasma: 21068, FusedPlasma: 22121}
+	common.Expect(t, pricing.ValidPrice(atRequirement), true)
+	common.Expect(t, pricing.ValidPrice(oneBelow), false)
 }

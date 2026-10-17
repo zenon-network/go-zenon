@@ -235,9 +235,16 @@ type GetRequiredParam struct {
 	Data      []byte         `json:"data"`
 }
 type GetRequiredResult struct {
-	AvailablePlasma    uint64 `json:"availablePlasma"`
-	BasePlasma         uint64 `json:"basePlasma"`
-	RequiredDifficulty uint64 `json:"requiredDifficulty"`
+	AvailablePlasma uint64 `json:"availablePlasma"`
+	BasePlasma      uint64 `json:"basePlasma"`
+	// RequiredFusedPlasma is the fused plasma the block needs at the current
+	// fusion price: basePlasma scaled by NextFusionPrice and rounded up, or
+	// basePlasma itself while dynamic plasma is not active. A client that
+	// pays only basePlasma underpays whenever the price is above the floor
+	// and its block waits in the pool until the price falls, so this is the
+	// amount to put in FusedPlasma when RequiredDifficulty is zero.
+	RequiredFusedPlasma uint64 `json:"requiredFusedPlasma"`
+	RequiredDifficulty  uint64 `json:"requiredDifficulty"`
 }
 
 func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetRequiredResult, error) {
@@ -301,9 +308,10 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 
 	if availablePlasma >= requiredFusedPlasma {
 		return &GetRequiredResult{
-			AvailablePlasma:    availablePlasma,
-			BasePlasma:         basePlasma,
-			RequiredDifficulty: 0,
+			AvailablePlasma:     availablePlasma,
+			BasePlasma:          basePlasma,
+			RequiredFusedPlasma: requiredFusedPlasma,
+			RequiredDifficulty:  0,
 		}, nil
 	} else {
 		var requiredDifficulty uint64
@@ -333,9 +341,10 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 			}
 		}
 		return &GetRequiredResult{
-			AvailablePlasma:    availablePlasma,
-			BasePlasma:         basePlasma,
-			RequiredDifficulty: requiredDifficulty,
+			AvailablePlasma:     availablePlasma,
+			BasePlasma:          basePlasma,
+			RequiredFusedPlasma: requiredFusedPlasma,
+			RequiredDifficulty:  requiredDifficulty,
 		}, nil
 	}
 }
