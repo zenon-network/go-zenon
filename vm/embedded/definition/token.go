@@ -33,9 +33,20 @@ const (
 			{"name":"isUtility","type":"bool"}]}
 	]`
 
-	IssueMethodName       = "IssueToken"
-	MintMethodName        = "Mint"
-	BurnMethodName        = "Burn"
+	// IssueMethodName names the method that issues a new ZTS token
+	// against the non-refundable constants.TokenIssueAmount ZNN fee;
+	// the new token's ZTS identifier is derived from the hash of the
+	// issuing send block.
+	IssueMethodName = "IssueToken"
+	// MintMethodName names the method by which a token's owner mints
+	// new supply to a receive address, within MaxSupply.
+	MintMethodName = "Mint"
+	// BurnMethodName names the method that burns the tokens sent with
+	// the call, reducing the total supply.
+	BurnMethodName = "Burn"
+	// UpdateTokenMethodName names the method by which a token's owner
+	// transfers ownership, turns off mintability (one-way) or toggles
+	// burnability.
 	UpdateTokenMethodName = "UpdateToken"
 
 	tokenInfoVariableName = "tokenInfo"
@@ -48,6 +59,10 @@ var (
 	tokenInfoKeyPrefix = []byte{1}
 )
 
+// IssueParam carries the arguments of IssueToken: the token's name,
+// symbol and domain, its initial total supply and maximum supply
+// (smallest units, interpreted against Decimals) and the mintable,
+// burnable and utility flags.
 type IssueParam struct {
 	TokenName   string
 	TokenSymbol string
@@ -59,11 +74,19 @@ type IssueParam struct {
 	IsBurnable  bool
 	IsUtility   bool
 }
+
+// MintParam carries the arguments of Mint: the token to mint, the
+// amount in its smallest units and the address that receives it.
 type MintParam struct {
 	TokenStandard  types.ZenonTokenStandard
 	Amount         *big.Int
 	ReceiveAddress types.Address
 }
+
+// UpdateTokenParam carries the arguments of UpdateToken: the token to
+// update, its (possibly new) owner and the new mintable and burnable
+// flags. The implementation only allows IsMintable to change from
+// true to false, fixing MaxSupply at the current total supply.
 type UpdateTokenParam struct {
 	TokenStandard types.ZenonTokenStandard
 	Owner         types.Address
@@ -71,6 +94,12 @@ type UpdateTokenParam struct {
 	IsBurnable    bool
 }
 
+// TokenInfo is the stored state of a ZTS token. Owner may mint (while
+// IsMintable) and update the token; TotalSupply and MaxSupply are in
+// the token's smallest units, with Decimals giving the display
+// scaling. Entries are stored under tokenInfoKeyPrefix (1) followed
+// by the 10 ZTS bytes; TokenStandard is recovered from the key, not
+// packed.
 type TokenInfo struct {
 	Owner       types.Address `json:"owner"`
 	TokenName   string        `json:"tokenName"`
@@ -88,6 +117,9 @@ type TokenInfo struct {
 	TokenStandard types.ZenonTokenStandard `json:"tokenStandard"`
 }
 
+// Save stores the full token state under its ZTS key, returning any
+// pack or put error; the token standard is recovered from the key
+// when parsing.
 func (token *TokenInfo) Save(context db.DB) error {
 	data, err := ABIToken.PackVariable(
 		tokenInfoVariableName,
@@ -143,6 +175,9 @@ func parseTokenInfo(key, data []byte) (*TokenInfo, error) {
 		return nil, constants.ErrDataNonExistent
 	}
 }
+
+// GetTokenInfo returns the token issued under ts, or
+// constants.ErrDataNonExistent if no such token exists.
 func GetTokenInfo(context db.DB, ts types.ZenonTokenStandard) (*TokenInfo, error) {
 	key := getTokenInfoKey(ts)
 	if data, err := context.Get(key); err != nil {
@@ -151,6 +186,9 @@ func GetTokenInfo(context db.DB, ts types.ZenonTokenStandard) (*TokenInfo, error
 		return parseTokenInfo(key, data)
 	}
 }
+
+// GetTokenInfoList returns every issued token, in storage-key (ZTS
+// byte) order.
 func GetTokenInfoList(context db.DB) ([]*TokenInfo, error) {
 	iterator := context.NewIterator(tokenInfoKeyPrefix)
 	defer iterator.Release()
