@@ -138,13 +138,16 @@ func (addr *Address) Proto() *AddressProto {
 		Address: addr[:],
 	}
 }
-func DeProtoAddress(pb *AddressProto) *Address {
+func DeProtoAddress(pb *AddressProto) (*Address, error) {
+	if pb == nil {
+		return nil, fmt.Errorf("invalid DeProto - nil address proto")
+	}
 	if len(pb.Address) != AddressSize {
-		panic(fmt.Sprintf("invalid DeProto - wanted address size %v but got %v", AddressSize, len(pb.Address)))
+		return nil, fmt.Errorf("invalid DeProto - wanted address size %v but got %v", AddressSize, len(pb.Address))
 	}
 	addr := new(Address)
 	copy(addr[:], pb.Address)
-	return addr
+	return addr, nil
 }
 
 // parseBech32 takes a bech32 address as input and returns the HRP and data

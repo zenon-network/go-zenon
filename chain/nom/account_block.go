@@ -72,13 +72,13 @@ func (n *Nonce) UnmarshalText(input []byte) error {
 func (n *Nonce) Serialize() []byte {
 	return n.Data[:]
 }
-func DeSerializeNonce(bytes []byte) Nonce {
+func DeSerializeNonce(bytes []byte) (Nonce, error) {
 	if len(bytes) != 8 {
-		panic("invalid nonce length")
+		return Nonce{}, fmt.Errorf("invalid nonce length %d (expect 8)", len(bytes))
 	}
 	var n Nonce
 	copy(n.Data[:], bytes)
-	return n
+	return n, nil
 }
 
 type AccountBlock struct {
@@ -285,6 +285,22 @@ func DeProtoAccountBlock(pb *AccountBlockProto) (*AccountBlock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid changes hash: %w", err)
 	}
+	address, err := types.DeProtoAddress(pb.Address)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address: %w", err)
+	}
+	toAddress, err := types.DeProtoAddress(pb.ToAddress)
+	if err != nil {
+		return nil, fmt.Errorf("invalid to address: %w", err)
+	}
+	tokenStandard, err := types.BytesToZTS(pb.TokenStandard)
+	if err != nil {
+		return nil, fmt.Errorf("invalid token standard: %w", err)
+	}
+	nonce, err := DeSerializeNonce(pb.Nonce)
+	if err != nil {
+		return nil, fmt.Errorf("invalid nonce: %w", err)
+	}
 	ab := &AccountBlock{
 		Version:              pb.Version,
 		ChainIdentifier:      pb.ChainIdentifier,
@@ -293,16 +309,16 @@ func DeProtoAccountBlock(pb *AccountBlockProto) (*AccountBlock, error) {
 		PreviousHash:         *prevHash,
 		Height:               pb.Height,
 		MomentumAcknowledged: *momentumAck,
-		Address:              *types.DeProtoAddress(pb.Address),
-		ToAddress:            *types.DeProtoAddress(pb.ToAddress),
+		Address:              *address,
+		ToAddress:            *toAddress,
 		Amount:               common.BytesToBigInt(pb.Amount),
-		TokenStandard:        types.BytesToZTSPanic(pb.TokenStandard),
+		TokenStandard:        tokenStandard,
 		FromBlockHash:        *fromBlockHash,
 		DescendantBlocks:     make([]*AccountBlock, len(pb.DescendantBlocks)),
 		Data:                 pb.Data,
 		FusedPlasma:          pb.FusedPlasma,
 		Difficulty:           pb.Difficulty,
-		Nonce:                DeSerializeNonce(pb.Nonce),
+		Nonce:                nonce,
 		BasePlasma:           pb.BasePlasma,
 		TotalPlasma:          pb.TotalPlasma,
 
