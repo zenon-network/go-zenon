@@ -184,6 +184,13 @@ func (vm *VM) applySend(block *nom.AccountBlock) error {
 			return err
 		}
 
+		// reject trailing bytes past the ABI-encoded arguments
+		if vm.context.IsDynamicPlasmaSporkEnforced() {
+			if err := embedded.CheckNoTrailingBytes(vm.context, block.ToAddress, block.Data); err != nil {
+				return err
+			}
+		}
+
 		// validate block
 		err = method.ValidateSendBlock(block)
 		if err != nil {

@@ -174,6 +174,9 @@ func (abv *accountBlockVerifier) all() error {
 	if err := abv.sequencer(); err != nil {
 		return err
 	}
+	if err := abv.receiveData(); err != nil {
+		return err
+	}
 	return nil
 }
 func (abv *accountBlockVerifier) version() error {
@@ -411,6 +414,30 @@ func (abv *accountBlockVerifier) sequencer() error {
 		return ErrABSequencerNotNext
 	}
 
+	return nil
+}
+
+// receiveData rejects user receive blocks that carry non-empty Data once the
+// Dynamic Plasma spork is enforced. Before the spork, receive blocks always
+// get flat plasma regardless of Data size, which lets anyone commit large
+// data at minimum cost.
+func (abv *accountBlockVerifier) receiveData() error {
+	if !abv.block.IsReceiveBlock() {
+		return nil
+	}
+	if types.IsEmbeddedAddress(abv.block.Address) {
+		return nil
+	}
+	if len(abv.block.Data) == 0 {
+		return nil
+	}
+	isDynamicPlasmaActive, err := abv.frontierStore.IsSporkActive(types.DynamicPlasmaSpork)
+	if err != nil {
+		return InternalError(err)
+	}
+	if isDynamicPlasmaActive {
+		return ErrABDataMustBeEmpty
+	}
 	return nil
 }
 

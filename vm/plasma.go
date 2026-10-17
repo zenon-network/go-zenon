@@ -148,6 +148,9 @@ func GetBasePlasmaForAccountBlock(context vm_context.AccountVmContext, block *no
 		return 0, nil
 	}
 	if block.IsReceiveBlock() {
+		if context.IsDynamicPlasmaSporkEnforced() && len(block.Data) > 0 {
+			return 0, verifier.ErrABDataMustBeEmpty
+		}
 		return constants.AccountBlockBasePlasma, nil
 	} else {
 		if method, err := embedded.GetEmbeddedMethod(context, block.ToAddress, block.Data); err == constants.ErrNotContractAddress {

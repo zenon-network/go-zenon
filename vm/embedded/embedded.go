@@ -326,3 +326,68 @@ func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Addres
 		return nil, constants.ErrContractDoesntExist
 	}
 }
+
+// CheckNoTrailingBytes verifies that data contains exactly the ABI-encoded
+// arguments for the embedded method it selects, with no trailing bytes past
+// the canonical encoding. It resolves the abi.Method from the same spork-aware
+// contract map GetEmbeddedMethod uses, decodes the arguments, re-packs them
+// canonically, and compares the re-packed length (plus the 4-byte selector)
+// with len(data).
+//
+// A nil error means either the data is clean or the lookup failed in a way
+// that ValidateSendBlock will catch and report; this function only adds the
+// trailing-bytes rejection on top of the normal validation path.
+func CheckNoTrailingBytes(context vm_context.AccountVmContext, address types.Address, data []byte) error {
+	if !types.IsEmbeddedAddress(address) {
+		return nil
+	}
+	if len(data) <= 4 {
+		return nil
+	}
+
+	embeddedVariantsOnce.Do(buildEmbeddedVariants)
+
+	key := 0
+	if context.IsAcceleratorSporkEnforced() {
+		key |= acceleratorSporkBit
+	}
+	if context.IsBridgeAndLiquiditySporkEnforced() {
+		key |= bridgeAndLiquiditySporkBit
+	}
+	if context.IsHtlcSporkEnforced() {
+		key |= htlcSporkBit
+	}
+	if context.IsDynamicPlasmaSporkEnforced() {
+		key |= dynamicPlasmaSporkBit
+	}
+	if context.IsPtlcSporkEnforced() {
+		key |= ptlcSporkBit
+	}
+	contractsMap := embeddedVariants[key]
+
+	p, found := contractsMap[address]
+	if !found {
+		return nil
+	}
+
+	method, err := p.abi.MethodById(data)
+	if err != nil {
+		return nil
+	}
+
+	values, err := method.Inputs.UnpackValues(data[4:])
+	if err != nil {
+		return nil
+	}
+
+	packed, err := method.Inputs.Pack(values...)
+	if err != nil {
+		return nil
+	}
+
+	if len(packed)+4 != len(data) {
+		return constants.ErrABDataTrailingBytes
+	}
+
+	return nil
+}

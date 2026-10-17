@@ -84,6 +84,12 @@ func NewMomentumVerifier(chain chain.Chain, consensus consensus.Consensus, canon
 	}
 }
 
+// MaxMomentumContentBytes is the cumulative protobuf-serialized size limit
+// for all account blocks listed in a momentum's content. It is well under
+// ProtocolMaxMsgSize (10 MiB) so that a DetailedMomentum carrying these
+// blocks always fits in a single protocol message.
+const MaxMomentumContentBytes = 8 * 1024 * 1024 // 8 MiB
+
 type rawMomentumVerifier struct {
 	momentum            *nom.Momentum
 	accountBlocks       []*nom.AccountBlock
@@ -232,6 +238,28 @@ func maxContentUnderPlasma(config *definition.PlasmaVariables) uint64 {
 	return config.MaxBasePlasmaInMomentum/constants.AccountBlockBasePlasma + dp.MaxContractBlocks(config)
 }
 
+// contentByteBound rejects a momentum whose prefetched account blocks
+// exceed MaxMomentumContentBytes in cumulative protobuf-serialized size.
+// It runs before any per-block matching or price work so an oversized
+// momentum is caught early, before any allocation sized from its content.
+func (rmv *rawMomentumVerifier) contentByteBound() error {
+	var total int
+	for _, block := range rmv.accountBlocks {
+		if block == nil {
+			continue
+		}
+		size, err := block.Serialize()
+		if err != nil {
+			return InternalError(err)
+		}
+		total += len(size)
+		if total > MaxMomentumContentBytes {
+			return ErrMContentTooBig
+		}
+	}
+	return nil
+}
+
 func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 	// Cheap upper bound on content size before any allocation sized from
 	// attacker-supplied content. On the legacy path this is a fixed
@@ -251,6 +279,12 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 	}
 	if uint64(len(rmv.momentum.Content)) > maxContent {
 		return ErrMContentTooBig
+	}
+
+	if isDynamicPlasmaActive {
+		if err := rmv.contentByteBound(); err != nil {
+			return err
+		}
 	}
 
 	blocksLookup := make(map[types.HashHeight]*nom.AccountBlock, len(rmv.accountBlocks))
