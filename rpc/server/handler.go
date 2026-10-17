@@ -373,6 +373,8 @@ func (h *handler) handleResponse(msg *jsonrpcMessage) {
 		return
 	}
 	delete(h.respWait, string(msg.ID))
+	// Delivered, so a later write completion must not fail the operation.
+	op.answered++
 	// For normal responses, just forward the reply to Call/BatchCall.
 	if op.sub == nil {
 		op.resp <- msg

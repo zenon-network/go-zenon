@@ -146,6 +146,15 @@ type requestOp struct {
 	err  error
 	resp chan *jsonrpcMessage // receives up to len(ids) responses
 	sub  *ClientSubscription  // only set for EthSubscribe requests
+	// answered counts the responses delivered on resp. It is read and
+	// written on the dispatch goroutine only.
+	answered int
+}
+
+// outstanding reports whether a response is still owed to the operation.
+// Called on the dispatch goroutine.
+func (op *requestOp) outstanding() bool {
+	return op.answered < len(op.ids)
 }
 
 func (op *requestOp) wait(ctx context.Context, c *Client) (*jsonrpcMessage, error) {
@@ -159,8 +168,16 @@ func (op *requestOp) wait(ctx context.Context, c *Client) (*jsonrpcMessage, erro
 			}
 		}
 		return nil, ctx.Err()
-	case resp := <-op.resp:
-		return resp, op.err
+	case resp, ok := <-op.resp:
+		if !ok {
+			// Closed by dispatch, which sets op.err before closing; the
+			// close is what makes that write visible here. A delivered
+			// reply never carries an error, so op.err is not read for one:
+			// a batch may still be outstanding, and dispatch may still
+			// write op.err for it.
+			return nil, op.err
+		}
+		return resp, nil
 	}
 }
 
@@ -630,6 +647,14 @@ func (c *Client) dispatch(codec ServerCodec) {
 				// Remove response handlers for the last send. When the read loop
 				// goes down, it will signal all other current operations.
 				conn.handler.removeRequestOp(lastOp)
+			} else if !reading && lastOp.outstanding() {
+				// The read loop exited while this request was being written.
+				// The connection close skipped it as in flight, and with the
+				// write now complete no reply can arrive for it: fail it here,
+				// or its caller waits forever. A request whose replies had
+				// all arrived before the read loop exited is left alone.
+				lastOp.err = errDead
+				close(lastOp.resp)
 			}
 			// Let the next request in.
 			reqInitLock = c.reqInit
