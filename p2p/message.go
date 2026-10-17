@@ -55,6 +55,7 @@ func (msg Msg) Decode(val interface{}) error {
 	return nil
 }
 
+// String renders the message code and payload size, for logs.
 func (msg Msg) String() string {
 	return fmt.Sprintf("msg #%v (%v bytes)", msg.Code, msg.Size)
 }
@@ -65,10 +66,13 @@ func (msg Msg) Discard() error {
 	return err
 }
 
+// MsgReader is the read half of a message transport: ReadMsg returns
+// the next message, blocking until one arrives.
 type MsgReader interface {
 	ReadMsg() (Msg, error)
 }
 
+// MsgWriter is the write half of a message transport.
 type MsgWriter interface {
 	// WriteMsg sends a message. It will block until the message's
 	// Payload has been consumed by the other end.

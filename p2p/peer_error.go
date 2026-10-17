@@ -21,7 +21,11 @@ import (
 )
 
 const (
+	// ErrInvalidMsgCode is the PeerError code for a message code outside
+	// the protocol's range.
 	ErrInvalidMsgCode = iota
+	// ErrInvalidMsg is the PeerError code for a payload that does not
+	// decode.
 	ErrInvalidMsg
 )
 
@@ -30,11 +34,17 @@ var errorToString = map[int]string{
 	ErrInvalidMsg:     "invalid message",
 }
 
+// PeerError is a protocol violation by a remote peer, carrying one of
+// the codes above and a message. DiscReasonForError maps it to the
+// DiscProtocolError disconnect reason.
 type PeerError struct {
 	code    int
 	message string
 }
 
+// NewPeerError builds a PeerError for code, appending the formatted
+// detail to the code's description when format is non-empty. It panics
+// on an unknown code.
 func NewPeerError(code int, format string, v ...interface{}) *PeerError {
 	desc, ok := errorToString[code]
 	if !ok {
@@ -47,12 +57,19 @@ func NewPeerError(code int, format string, v ...interface{}) *PeerError {
 	return err
 }
 
+// Error returns the description and detail.
 func (self *PeerError) Error() string {
 	return self.message
 }
 
+// DiscReason explains why a peer is being disconnected. The reason is
+// sent to the remote side in the disconnect message, so both ends
+// must agree on the numeric values. They match the devp2p wire
+// protocol for 0x00-0x0b, but DiscSubprotocolError is 0x0c here
+// rather than devp2p's 0x10.
 type DiscReason uint
 
+// The devp2p disconnect reasons.
 const (
 	DiscRequested DiscReason = iota
 	DiscNetworkError
@@ -85,6 +102,8 @@ var discReasonToString = [...]string{
 	DiscSubprotocolError:    "Subprotocol error",
 }
 
+// String returns the human-readable reason, or "Unknown Reason(n)" for a
+// value outside the declared set, which can arrive from the wire.
 func (d DiscReason) String() string {
 	// d indexes discReasonToString, so the bound is >= len, not > len. d is also
 	// decoded from the wire and is not constrained to the declared reasons.
@@ -94,10 +113,15 @@ func (d DiscReason) String() string {
 	return discReasonToString[d]
 }
 
+// Error lets a DiscReason be returned and matched as an error.
 func (d DiscReason) Error() string {
 	return d.String()
 }
 
+// DiscReasonForError maps an error raised while handling a peer to the
+// reason sent in the disconnect message: a DiscReason passes through, a
+// PeerError becomes DiscProtocolError, anything else
+// DiscSubprotocolError.
 func DiscReasonForError(err error) DiscReason {
 	if reason, ok := err.(DiscReason); ok {
 		return reason

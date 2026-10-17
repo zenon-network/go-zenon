@@ -9,6 +9,11 @@ import (
 	"github.com/zenon-network/go-zenon/p2p/discover"
 )
 
+// Defaults applied to the network section of the node configuration:
+// the advertised node name, the listening interface and ports (35995
+// for devp2p, 35997 and 35998 for the HTTP and WebSocket RPC
+// endpoints), the peer-count limits and the location of the node
+// database and network private key inside the data directory.
 const (
 	DefaultNodeName = "znn-node"
 
@@ -189,6 +194,12 @@ const (
 	P2PBackendLegacy P2PBackend = "legacy"
 )
 
+// Net carries the network settings from the node configuration in the
+// shape the p2p layer expects. The node layer builds one with
+// data-directory-relative paths filled in, then hands its fields to
+// the transport switcher and its two backends, resolving the private
+// key with PrivateKey, the legacy seeders with Nodes and the libp2p
+// bootstrap peers with libp2p.ParseBootstrapPeers.
 type Net struct {
 	// This field must be set to a valid secp256k1 private key.
 	privateKey *ecdsa.PrivateKey
@@ -306,6 +317,10 @@ func (c *Net) PrivateKey() *ecdsa.PrivateKey {
 	}
 	return key
 }
+
+// Nodes parses the configured seeders into discovery nodes, suitable
+// for the server's bootstrap node list. It fails on the first seeder
+// that is not a valid enode URL.
 func (c *Net) Nodes() ([]*discover.Node, error) {
 	var err error
 	nodes := make([]*discover.Node, len(c.Seeders))
