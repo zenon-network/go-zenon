@@ -5,22 +5,29 @@ import (
 	"math/big"
 )
 
+// PillarDelegation is a pillar's delegated weight as seen by the
+// consensus election: the pillar name, the address its momentums are
+// produced from, and the total delegated weight backing it.
 type PillarDelegation struct {
 	Name      string
 	Producing Address
 	Weight    *big.Int
 }
+
+// PillarDelegationDetail extends PillarDelegation with the per-address
+// breakdown of the delegations that make up the weight.
 type PillarDelegationDetail struct {
 	PillarDelegation
 	Backers map[Address]*big.Int
 }
 
-// Used for logging purposes
+// String renders the delegation as "name@weight" for logging.
 func (v *PillarDelegation) String() string {
 	return fmt.Sprintf("%v@%v", v.Name, v.Weight)
 }
 
-// Add all values together into this object
+// Merge adds oth's weight and per-backer amounts into the receiver,
+// modifying it in place; oth is left unchanged.
 func (pdd *PillarDelegationDetail) Merge(oth *PillarDelegationDetail) {
 	pdd.Weight.Add(pdd.Weight, oth.Weight)
 	for addr, amount := range oth.Backers {
@@ -42,10 +49,18 @@ func (pdd *PillarDelegationDetail) Reduce(count int64) {
 	}
 }
 
+// SortPDDByWeight implements sort.Interface over
+// PillarDelegationDetail slices: descending by weight, with ties
+// broken by ascending name, so the order is deterministic.
 type SortPDDByWeight []*PillarDelegationDetail
 
-func (a SortPDDByWeight) Len() int      { return len(a) }
+// Len implements sort.Interface.
+func (a SortPDDByWeight) Len() int { return len(a) }
+
+// Swap implements sort.Interface.
 func (a SortPDDByWeight) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+
+// Less orders by descending weight, then ascending name.
 func (a SortPDDByWeight) Less(i, j int) bool {
 	r := a[j].Weight.Cmp(a[i].Weight)
 	if r == 0 {
@@ -55,10 +70,18 @@ func (a SortPDDByWeight) Less(i, j int) bool {
 	}
 }
 
+// SortPDByWeight implements sort.Interface over PillarDelegation
+// slices: descending by weight, with ties broken by ascending name,
+// so the order is deterministic.
 type SortPDByWeight []*PillarDelegation
 
-func (a SortPDByWeight) Len() int      { return len(a) }
+// Len implements sort.Interface.
+func (a SortPDByWeight) Len() int { return len(a) }
+
+// Swap implements sort.Interface.
 func (a SortPDByWeight) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+
+// Less orders by descending weight, then ascending name.
 func (a SortPDByWeight) Less(i, j int) bool {
 	r := a[j].Weight.Cmp(a[i].Weight)
 	if r == 0 {
