@@ -442,6 +442,20 @@ func (ap *accountPool) getFrontierAccountStore(address types.Address) store.Acco
 // refreshDynamicPlasma recomputes the pricing context from the committed
 // frontier momentum. Called on every momentum insert and rollback, and
 // once at chain start-up.
+//
+// Staleness bound: the momentum pool moves its frontier and then notifies
+// listeners with its lock released, and this listener reads the frontier
+// at that moment, so when the store answers the cache is exact at every
+// event boundary, including each pop of a multi-momentum rollback. It can
+// lag the frontier only between a frontier change and the listener call
+// that follows it. No production reader observes that window because
+// higherPriority runs under the chain insert lock, and so does every
+// momentum insert and rollback; that lock is a caller contract (see
+// chain.AcquireInsert), not something this code can check. A failed
+// momentum insert that is compensated by popping the momentum again emits
+// no event and leaves the frontier where it was, so the unchanged cache is
+// still exact. The bound is accepted rather than closed with a per-read
+// store lookup, which is what this cache replaced.
 func (ap *accountPool) refreshDynamicPlasma() {
 	plasma := ap.computeDynamicPlasma()
 	ap.plasmaMu.Lock()
