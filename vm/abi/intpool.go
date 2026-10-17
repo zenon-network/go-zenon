@@ -7,8 +7,9 @@ import (
 
 const poolLimit = 256
 
-// intPool is a pool of big integers that
-// can be reused for all big.Int operations.
+// IntPool is a pool of big integers that can be reused for all
+// big.Int operations, avoiding allocations in decoding hot paths.
+// Obtain one from PoolOfIntPools.
 type IntPool struct {
 	pool *stack
 }
@@ -17,8 +18,9 @@ func newIntPool() *IntPool {
 	return &IntPool{pool: newStack()}
 }
 
-// get retrieves a big int from the pool, allocating one if the pool is empty.
-// Note, the returned int's amount is arbitrary and will not be zeroed!
+// Get retrieves a big int from the pool, allocating one if the pool
+// is empty. Note, the returned int's value is arbitrary and will not
+// be zeroed!
 func (p *IntPool) Get() *big.Int {
 	if p.pool.len() > 0 {
 		return p.pool.pop()
@@ -26,8 +28,8 @@ func (p *IntPool) Get() *big.Int {
 	return new(big.Int)
 }
 
-// getZero retrieves a big int from the pool, setting it to zero or allocating
-// a new one if the pool is empty.
+// GetZero retrieves a big int from the pool, setting it to zero or
+// allocating a new one if the pool is empty.
 func (p *IntPool) GetZero() *big.Int {
 	if p.pool.len() > 0 {
 		return p.pool.pop().SetUint64(0)
@@ -35,8 +37,10 @@ func (p *IntPool) GetZero() *big.Int {
 	return new(big.Int)
 }
 
-// put returns an allocated big int to the pool to be later reused by get calls.
-// Note, the values as saved as is; neither put nor get zeroes the ints out!
+// Put returns allocated big ints to the pool to be later reused by
+// Get calls. Note, the values are saved as is; neither Put nor Get
+// zeroes the ints out! Once the pool holds more than 256 integers
+// further values are dropped.
 func (p *IntPool) Put(is ...*big.Int) {
 	if len(p.pool.data) > poolLimit {
 		return
@@ -54,6 +58,9 @@ type intPoolPool struct {
 
 const poolDefaultCap = 25
 
+// PoolOfIntPools is the process-wide reservoir of IntPools: Get
+// borrows a pool (allocating one when none is free) and Put returns
+// it for reuse by other decoders.
 var PoolOfIntPools = &intPoolPool{
 	pools: make([]*IntPool, 0, poolDefaultCap),
 }
