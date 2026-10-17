@@ -1,3 +1,24 @@
+// Package consensus elects which pillar produces each momentum and
+// tracks how well pillars keep their production schedule.
+//
+// Time is divided into fixed ticks anchored at the genesis timestamp
+// (common.Ticker): an election tick lasts BlockTime * NodeCount
+// seconds (300 on Alphanet) and is split into NodeCount slots of
+// BlockTime seconds, one momentum each; an epoch lasts EpochDuration
+// (24 hours). For every tick the election manager (election.go) seeds
+// a deterministic algorithm (election_algorithm.go) with a proof
+// momentum taken two ticks back and assigns each slot to a pillar —
+// part by delegated weight, part at random. The points system
+// (points.go) records, per pillar and per tick or epoch, how many
+// momentums were expected versus actually produced, along with the
+// delegated weight backing the pillar.
+//
+// The Consensus object wires these together: it registers the
+// election and points caches as chain listeners so they stay warm as
+// momentums are committed, runs a goroutine that broadcasts a
+// ProducerEvent at the start of every slot so the local pillar can
+// produce, and verifies the producer of incoming momentums for the
+// momentum verifier.
 package consensus
 
 import (
@@ -17,6 +38,10 @@ import (
 )
 
 var (
+	// EpochDuration is the length of one consensus epoch. Epochs are
+	// counted from the genesis timestamp by the epoch ticker; pillar
+	// production statistics (EpochStats) and the embedded contracts'
+	// reward computations are aggregated per epoch.
 	EpochDuration = time.Hour * 24
 )
 
