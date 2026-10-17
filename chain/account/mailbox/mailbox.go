@@ -1,3 +1,10 @@
+// Package mailbox implements store.AccountMailbox: the per-address
+// record of incoming send blocks, stored under the momentum ledger
+// (not the account chain) and updated only when a momentum confirms
+// blocks. It tracks which send blocks are still unreceived, which
+// receive block consumed each send, and — for embedded contracts —
+// the FIFO queue of send-block headers that must be received in
+// order.
 package mailbox
 
 import (
@@ -30,6 +37,9 @@ type mailbox struct {
 	db.DB
 }
 
+// NewAccountMailbox returns a store.AccountMailbox for address that
+// reads and writes through db, the address's mailbox subset of a
+// momentum-chain database version (see chain/momentum).
 func NewAccountMailbox(address types.Address, db db.DB) store.AccountMailbox {
 	return &mailbox{
 		address: address,
