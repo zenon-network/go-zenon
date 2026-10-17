@@ -238,6 +238,9 @@ type GetRequiredResult struct {
 	AvailablePlasma    uint64 `json:"availablePlasma"`
 	BasePlasma         uint64 `json:"basePlasma"`
 	RequiredDifficulty uint64 `json:"requiredDifficulty"`
+	// RequiredFusedPlasma is the total fused-only payment target, not an
+	// additional fused amount to attach alongside the PoW recommendation.
+	RequiredFusedPlasma uint64 `json:"requiredFusedPlasma"`
 }
 
 func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetRequiredResult, error) {
@@ -301,9 +304,10 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 
 	if availablePlasma >= requiredFusedPlasma {
 		return &GetRequiredResult{
-			AvailablePlasma:    availablePlasma,
-			BasePlasma:         basePlasma,
-			RequiredDifficulty: 0,
+			AvailablePlasma:     availablePlasma,
+			BasePlasma:          basePlasma,
+			RequiredDifficulty:  0,
+			RequiredFusedPlasma: requiredFusedPlasma,
 		}, nil
 	} else {
 		var requiredDifficulty uint64
@@ -333,9 +337,10 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 			}
 		}
 		return &GetRequiredResult{
-			AvailablePlasma:    availablePlasma,
-			BasePlasma:         basePlasma,
-			RequiredDifficulty: requiredDifficulty,
+			AvailablePlasma:     availablePlasma,
+			BasePlasma:          basePlasma,
+			RequiredDifficulty:  requiredDifficulty,
+			RequiredFusedPlasma: requiredFusedPlasma,
 		}, nil
 	}
 }
