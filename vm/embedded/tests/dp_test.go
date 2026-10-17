@@ -145,7 +145,8 @@ func TestDynamicPlasma_rpc(t *testing.T) {
 {
 	"availablePlasma": 0,
 	"basePlasma": 21000,
-	"requiredDifficulty": 33075000
+	"requiredDifficulty": 33075000,
+	"requiredFusedPlasma": 21000
 }`)
 }
 
@@ -179,7 +180,8 @@ func TestDynamicPlasma_rpc_FusionCoversRequiredPlasma(t *testing.T) {
 {
 	"availablePlasma": 21000,
 	"basePlasma": 21000,
-	"requiredDifficulty": 0
+	"requiredDifficulty": 0,
+	"requiredFusedPlasma": 21000
 }`)
 }
 
