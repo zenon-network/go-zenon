@@ -105,16 +105,13 @@ func enforcementHeight(t *testing.T, z mock.MockZenon) uint64 {
 	return 0
 }
 
-// setPlasmaBudget lets the governance address lower the per-momentum plasma
-// budget to its minimum and returns the variables in force afterwards.
+// setPlasmaBudget lets the genesis spork address lower the per-momentum
+// plasma budget to its minimum and returns the variables in force afterwards.
 func setPlasmaBudget(t *testing.T, z mock.MockZenon) *definition.PlasmaVariables {
 	t.Helper()
-	savedGovernance := types.GovernanceAddress
-	types.GovernanceAddress = g.User1.Address
-	t.Cleanup(func() { types.GovernanceAddress = savedGovernance })
 
 	call := z.CallContract(&nom.AccountBlock{
-		Address:       g.User1.Address,
+		Address:       g.Spork.Address,
 		ToAddress:     types.PlasmaContract,
 		TokenStandard: types.ZeroTokenStandard,
 		Amount:        common.Big0,
