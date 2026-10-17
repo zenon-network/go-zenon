@@ -1,3 +1,29 @@
+// Package vm executes account blocks and momentums against the
+// ledger state. The Supervisor is the entry point: it builds a
+// vm_context for the block or momentum being processed, runs the
+// verifier, lets the VM (account blocks) or MomentumVM (momentums)
+// apply the state changes, and packs the result into a
+// nom.AccountBlockTransaction or nom.MomentumTransaction carrying the
+// Changes patch. For momentums and for blocks the node generates
+// itself the ChangesHash field is set from that patch; a user block
+// received from outside keeps whatever ChangesHash it was supplied
+// with — the field is outside the block hash and therefore outside the
+// signature (see Supervisor.ApplyBlock).
+//
+// For account blocks the VM checks plasma (see
+// GetBasePlasmaForAccountBlock and AvailablePlasma; once Dynamic
+// Plasma is enforced the price rules in package dp apply on top),
+// adjusts balances, and — for sends addressed to an embedded contract —
+// dispatches to the contract method selected by the block's Data via
+// embedded.GetEmbeddedMethod. Receives addressed to embedded
+// contracts are not signed by users: the VM auto-generates the
+// ContractReceive block, executing the method inside a
+// snapshot/rollback window so a failing method refunds the sent
+// tokens instead of mutating contract state.
+//
+// For momentums the MomentumVM folds the patch of every confirmed
+// account block into the momentum store, producing the momentum-level
+// patch committed by the chain.
 package vm
 
 import (
@@ -21,6 +47,10 @@ var (
 	log = common.VmLogger
 )
 
+// Execution status codes stored (big-endian, 8 bytes) in the Data
+// field of a generated ContractReceive block: resultSuccess when the
+// embedded method executed, resultFail when it returned an error and
+// was rolled back. resultInvalid (0) is never produced by errToStatus.
 const (
 	resultInvalid uint64 = iota
 	resultSuccess
@@ -36,11 +66,16 @@ func errToStatus(err error) uint64 {
 	}
 }
 
+// VM applies a single account block on top of an account VM context.
+// It is single-use: the supervisor creates one per block and reads
+// the accumulated state changes from the context afterwards.
 type VM struct {
 	context       vm_context.AccountVmContext
 	frontierStore store.Momentum
 }
 
+// NewVM returns a VM that applies one account block on top of
+// context.
 func NewVM(context vm_context.AccountVmContext, frontierStore store.Momentum) *VM {
 	return &VM{
 		context:       context,
@@ -299,10 +334,15 @@ func (vm *VM) finalizeEmbedded(fromBlockHash types.Hash, descendantBlocks []*nom
 	return block, executionError, nil
 }
 
+// MomentumVM applies a single momentum on top of a momentum VM
+// context. Like VM it is single-use; the supervisor reads the
+// momentum-level patch from the context afterwards.
 type MomentumVM struct {
 	context vm_context.MomentumVMContext
 }
 
+// NewMomentumVM returns a MomentumVM that applies one momentum on top
+// of context.
 func NewMomentumVM(context vm_context.MomentumVMContext) *MomentumVM {
 	return &MomentumVM{
 		context: context,
