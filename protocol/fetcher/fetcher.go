@@ -37,8 +37,10 @@ const (
 	fetchTimeout  = 5 * time.Second        // Maximum alloted time to return an explicitly requested block
 	maxUncleDist  = 7                      // Maximum allowed backward distance from the chain head
 	maxQueueDist  = 32                     // Maximum allowed distance from the chain head to queue
-	HashLimit     = 256                    // Maximum number of unique blocks a peer may have announced; also the largest batch one fetch request names
-	blockLimit    = 64                     // Maximum number of unique blocks a per may have delivered
+	// HashLimit caps the announcements the fetcher tracks per peer and the
+	// number of hashes one fetch request may name.
+	HashLimit  = 256 // Maximum number of unique blocks a peer may have announced; also the largest batch one fetch request names
+	blockLimit = 64  // Maximum number of unique blocks a per may have delivered
 )
 
 var (
