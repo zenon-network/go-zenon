@@ -12,9 +12,17 @@ import (
 )
 
 const (
+	// DefaultWalletDir is the wallet subdirectory of the data path used
+	// when no wallet path is configured.
 	DefaultWalletDir = "wallet"
 )
 
+// DefaultNodeConfig is the baseline node configuration: the default
+// data path, node name and log level, with HTTP and WebSocket RPC
+// enabled on their default ports and no CORS allowlist (requests are
+// answered, but without the Access-Control-Allow-Origin header a
+// browser needs to read a cross-origin response), and the default p2p
+// listen address, peer limits and seeders.
 var DefaultNodeConfig = Config{
 	DataPath: DefaultDataDir(),
 
@@ -113,6 +121,9 @@ func homeDir() string {
 	return ""
 }
 
+// ReplaceHomeVariable expands a leading "~" in path to the user's home
+// directory, returning the path unchanged otherwise and the empty
+// string for an empty path.
 func ReplaceHomeVariable(path string) string {
 	if len(path) == 0 {
 		return ""
