@@ -777,65 +777,138 @@ func TestInsertChain_ListenersSeeDeleteThenInsertOnRestore(t *testing.T) {
 	}
 }
 
-// TestInsertChain_PendingPoolAfterRestore pins what a restore does to the
-// account pool, which it deliberately does not restore. Blocks that were
-// pending before the side chain arrived are dropped by the rollback, exactly
-// as any rollback drops them. A valid block carried by the failing candidate
-// was force-inserted before the candidate failed and stays pending, as if a
-// peer had relayed it on its own.
+// TestInsertChain_PendingPoolAfterRestore preserves pending bytes, patches and
+// account state after a rejected replacement. Both a recent acknowledgement
+// outside the fork's accounts and an account touched by the removed branch
+// exercise state that rollback would otherwise discard.
 func TestInsertChain_PendingPoolAfterRestore(t *testing.T) {
-	f := newForkFixture(t, 6, 7)
+	for _, accountKind := range []string{"recent-acknowledgement", "touched-account"} {
+		for _, stage := range []string{"head", "later"} {
+			t.Run(accountKind+"/"+stage, func(t *testing.T) {
+				var f *forkFixture
+				address, recipient := g.User2.Address, g.User1.Address
+				if accountKind == "touched-account" {
+					z := mock.NewMockZenon(t)
+					z.InsertMomentumsTo(5)
+					z.InsertSendBlock(&nom.AccountBlock{
+						Address: g.User1.Address, ToAddress: g.User2.Address,
+						TokenStandard: types.ZnnTokenStandard, Amount: big.NewInt(2),
+					}, nil, mock.SkipVmChanges)
+					z.InsertMomentumsTo(6)
+					f = &forkFixture{z: z, original: snapshotChain(t, z.Chain()), removed: 1, fork: buildFork(t, z, 5, 7, 1)}
+					address, recipient = g.User1.Address, g.User2.Address
+				} else {
+					f = newForkFixture(t, 6, 7)
+				}
+				defer f.z.StopPanic()
+				ma := f.z.Chain().GetFrontierMomentumStore().Identifier()
+				if accountKind == "touched-account" {
+					// An old MA isolates touched-account eviction from MA pruning.
+					ma = momentumAt(t, f.z.Chain(), 5).Identifier()
+				}
+				pending := make(map[types.Hash]*nom.AccountBlock)
+				patches := make(map[types.Hash]string)
+				for _, amount := range []int64{3, 4} {
+					block := f.z.InsertSendBlock(&nom.AccountBlock{
+						Address: address, ToAddress: recipient, MomentumAcknowledged: ma,
+						TokenStandard: types.ZnnTokenStandard, Amount: big.NewInt(amount),
+					}, nil, mock.SkipVmChanges)
+					common.Expect(t, block.MomentumAcknowledged, ma)
+					pending[block.Hash] = block.Copy()
+					patch := f.z.Chain().GetPatch(block.Address, block.Identifier())
+					if patch == nil {
+						t.Fatal("pending block has no patch")
+					}
+					patches[block.Hash] = string(patch.Dump())
+				}
+				common.Expect(t, len(f.z.Chain().GetAllUncommittedAccountBlocks()), len(pending))
+				poolFrontier := f.z.Chain().GetFrontierAccountStore(address).Identifier()
+				balance, err := f.z.Chain().GetFrontierAccountStore(address).GetBalance(types.ZnnTokenStandard)
+				common.FailIfErr(t, err)
+				balanceBefore := balance.String()
+				counting, bridge := newSideChainBridge(f.z)
+				carried := f.fork[0].AccountBlocks
+				if len(carried) == 0 {
+					t.Fatal("fork head carries no account block")
+				}
+				var candidates []*nom.DetailedMomentum
+				wantFailed := 0
+				if stage == "head" {
+					head := unsignedMomentum(momentumAt(t, f.z.Chain(), 5), 6)
+					head.Content = f.fork[0].Momentum.Content
+					head = signedBy(head, electedKey(t, f.z, *head.Timestamp))
+					candidates = []*nom.DetailedMomentum{{Momentum: head, AccountBlocks: carried}, detailedOf(attackerMomentum(head, 7))[0]}
+				} else {
+					bad := producerMomentum(t, f.z, f.fork[0].Momentum, 7)
+					candidates = []*nom.DetailedMomentum{f.fork[0], detailedOf(bad)[0]}
+					wantFailed = 1
+				}
+				for attempt := 0; attempt < 2; attempt++ {
+					failed, err := bridge.InsertChain(candidates)
+					if err == nil {
+						t.Fatal("expected the side chain to be rejected")
+					}
+					common.Expect(t, failed, wantFailed)
+					common.Expect(t, counting.rollbacks, 2*(attempt+1))
+					expectChainEquals(t, f.z.Chain(), f.original)
+					pool := f.z.Chain().GetAllUncommittedAccountBlocks()
+					if len(pool) != len(pending) {
+						t.Fatalf("pending pool count = %d, want %d", len(pool), len(pending))
+					}
+					for _, block := range pool {
+						before := pending[block.Hash]
+						if before == nil || !block.EqualBytes(before) {
+							t.Fatalf("pending block was lost, added or changed: %v", block.Header())
+						}
+						patch := f.z.Chain().GetPatch(block.Address, block.Identifier())
+						if patch == nil || string(patch.Dump()) != patches[block.Hash] {
+							t.Fatalf("pending patch changed: %v", block.Header())
+						}
+						for _, rejected := range carried {
+							if block.Hash == rejected.Hash {
+								t.Fatal("block from rejected replacement stayed pending")
+							}
+						}
+					}
+					common.Expect(t, f.z.Chain().GetFrontierAccountStore(address).Identifier(), poolFrontier)
+					balance, err := f.z.Chain().GetFrontierAccountStore(address).GetBalance(types.ZnnTokenStandard)
+					common.FailIfErr(t, err)
+					common.Expect(t, balance.String(), balanceBefore)
+				}
+			})
+		}
+	}
+}
+
+// A retained longer prefix has a different frontier: restoring the old pool
+// there would resurrect blocks acknowledging a no-longer-canonical momentum.
+func TestInsertChain_KeptPrefixDoesNotResurrectPending(t *testing.T) {
+	f := newForkFixture(t, 6, 8)
 	defer f.z.StopPanic()
-	_, bridge := newSideChainBridge(f.z)
-
+	ma := f.z.Chain().GetFrontierMomentumStore().Identifier()
 	pending := f.z.InsertSendBlock(&nom.AccountBlock{
-		Address:       g.User2.Address,
-		ToAddress:     g.User1.Address,
-		TokenStandard: types.ZnnTokenStandard,
-		Amount:        big.NewInt(1),
-	}, nil, mock.SkipVmChanges)
-	common.Expect(t, len(f.z.Chain().GetAllUncommittedAccountBlocks()), 1)
-
-	// A candidate carrying the fork's genuine account block, signed by the
-	// elected producer but advertising a changes-hash the node can't
-	// reproduce: the block applies, the momentum fails.
-	target := momentumAt(t, f.z.Chain(), 5)
-	head := unsignedMomentum(target, 6)
-	head.Content = f.fork[0].Momentum.Content
-	head = signedBy(head, electedKey(t, f.z, *head.Timestamp))
-	carried := f.fork[0].AccountBlocks
-	if len(carried) == 0 {
-		t.Fatal("fork head carries no account block")
-	}
-	candidates := []*nom.DetailedMomentum{
-		{Momentum: head, AccountBlocks: carried},
-		detailedOf(attackerMomentum(head, 7))[0],
-	}
-
-	_, err := bridge.InsertChain(candidates)
+		Address: g.User2.Address, ToAddress: g.User1.Address, MomentumAcknowledged: ma,
+		TokenStandard: types.ZnnTokenStandard, Amount: big.NewInt(1),
+	}, nil, mock.SkipVmChanges).Copy()
+	common.Expect(t, pending.MomentumAcknowledged, ma)
+	counting, bridge := newSideChainBridge(f.z)
+	candidates := []*nom.DetailedMomentum{f.fork[0], f.fork[1], detailedOf(attackerMomentum(f.fork[1].Momentum, 8))[0]}
+	failed, err := bridge.InsertChain(candidates)
 	if err == nil {
 		t.Fatal("expected the side chain to be rejected")
 	}
-	expectChainEquals(t, f.z.Chain(), f.original)
-
-	// The pool is left as the rollback and the failed insert left it. The
-	// block pending before the side chain arrived is dropped by the
-	// rollback (tracked in #104). The block carried by the failing
-	// candidate was force-inserted before the momentum failed and is put
-	// back with the per-momentum pool snapshot, so it does not stay pending
-	// either: a rejected candidate leaves nothing of itself in the pool.
-	uncommitted := f.z.Chain().GetAllUncommittedAccountBlocks()
-	for _, block := range uncommitted {
+	common.Expect(t, failed, 2)
+	common.Expect(t, counting.rollbacks, 1)
+	expectFrontierAt(t, f.z.Chain(), f.fork[1].Momentum)
+	acknowledged := momentumAt(t, f.z.Chain(), pending.MomentumAcknowledged.Height)
+	if acknowledged.Hash == pending.MomentumAcknowledged.Hash {
+		t.Fatal("old acknowledgement did not become noncanonical")
+	}
+	for _, block := range f.z.Chain().GetAllUncommittedAccountBlocks() {
 		if block.Hash == pending.Hash {
-			t.Fatal("block pending before the side chain survived the rollback")
-		}
-		for _, carriedBlock := range carried {
-			if block.Hash == carriedBlock.Hash {
-				t.Fatal("block carried by the rejected candidate stayed pending")
-			}
+			t.Fatal("invalid old pending block resurrected on retained prefix")
 		}
 	}
-	common.Expect(t, len(uncommitted), 0)
 }
 
 // TestInsertChain_SecondForkAtSameForkPointReplacesFirst replaces the
