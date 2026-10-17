@@ -50,8 +50,13 @@ const (
 	FuseMethodName       = "Fuse"
 	CancelFuseMethodName = "CancelFuse"
 
-	MaxBasePlasmaInMomentumUpperLimit = uint64(210000000000000) // 10,000,000,000 * constants.AccountBlockBasePlasma
-	MaxBasePlasmaInMomentumLowerLimit = uint64(210000)          // 10 * constants.AccountBlockBasePlasma
+	// MaxBasePlasmaInMomentumUpperLimit is 100,000 base blocks. A momentum is
+	// capped at the protocol message size, which carries a few tens of
+	// thousands of blocks at most, so a larger ceiling could never be used
+	// and would only make the bounds derived from it (the contract block
+	// cap, the verifier's content-count check) meaningless.
+	MaxBasePlasmaInMomentumUpperLimit = uint64(2100000000) // 100,000 * constants.AccountBlockBasePlasma
+	MaxBasePlasmaInMomentumLowerLimit = uint64(210000)     // 10 * constants.AccountBlockBasePlasma
 	FusedPlasmaTargetLowerLimit       = uint64(1)
 	PowPlasmaTargetLowerLimit         = uint64(1)
 	MaxPriceChangePercentUpperLimit   = uint8(100)
