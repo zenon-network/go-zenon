@@ -23,8 +23,9 @@ import (
 // network, around definition.CommunitySporkAddressRenewalStartHeight:
 //
 //   - pool admission refuses a tampered contract receive whatever the rule
-//     height, so an upgraded node never holds one, and a momentum insertion
-//     that finds the pool clean validates the block itself;
+//     height, so one cannot reach an upgraded node's pool through
+//     publication or gossip, and a momentum insertion that finds the pool
+//     clean validates the block itself under the rules for its height;
 //   - a momentum carrying a tampered receive, built the way a producer without
 //     the rules would build it, is accepted when its height is below the rule
 //     height (what every node did before the rules) and rejected at the rule

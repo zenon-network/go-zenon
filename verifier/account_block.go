@@ -395,12 +395,14 @@ type accountBlockTransactionVerifier struct {
 	momentumStore store.Momentum
 	// contractReceiveRules says whether the contract-receive rules apply
 	// to this verification. They always apply when a block is admitted to
-	// the pool or generated locally, which is not a consensus decision and
-	// keeps an upgraded node from ever holding or producing a block that
-	// fails them. When a block is verified as part of a momentum being
+	// the pool through publication or gossip, or generated locally: that
+	// is not a consensus decision, and it keeps a block that fails them out
+	// of the uncommitted state an upgraded node could later reuse or
+	// produce from. When a block is verified as part of a momentum being
 	// inserted they apply from the community spork renewal height, so that
 	// every node judges a momentum the same way; the caller decides from
-	// the momentum's height.
+	// the momentum's height. A momentum below that height is committed as
+	// every node committed it before the rules existed, blocks included.
 	contractReceiveRules bool
 }
 
