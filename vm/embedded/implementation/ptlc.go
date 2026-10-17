@@ -212,13 +212,22 @@ func verifyPtlcSignature(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, 
 	return verifyPtlcWitness(ptlcInfo, chainIdentifier, id, destination, signature)
 }
 
+// CreatePtlcMethod implements Create: it locks the tokens sent with the
+// call behind a point until an expiration time, recording the entry
+// under the send block's hash.
 type CreatePtlcMethod struct {
 	MethodName string
 }
 
+// GetPlasma prices the call as a simple embedded call.
 func (p *CreatePtlcMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock checks the point lock is a valid point of its type,
+// the destination is payable when given and present for secp256k1
+// points, and a positive amount is attached; it then repacks the data
+// in canonical form.
 func (p *CreatePtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -245,6 +254,9 @@ func (p *CreatePtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	)
 	return err
 }
+
+// ReceiveBlock re-validates the send, requires the expiration time to be
+// in the future of the confirming momentum, and stores the entry.
 func (p *CreatePtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		ptlcLog.Debug("invalid create - syntactic validation failed", "address", sendBlock.Address, "reason", err)
@@ -279,13 +291,19 @@ func (p *CreatePtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 	return nil, nil
 }
 
+// ReclaimPtlcMethod implements Reclaim: the creator takes the locked
+// tokens back once the entry has expired.
 type ReclaimPtlcMethod struct {
 	MethodName string
 }
 
+// GetPlasma prices the call as an embedded withdrawal.
 func (p *ReclaimPtlcMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
+
+// ValidateSendBlock checks the data is an entry id and no tokens are
+// attached.
 func (p *ReclaimPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(types.Hash)
@@ -301,6 +319,10 @@ func (p *ReclaimPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIPtlc.PackMethod(p.MethodName, param)
 	return err
 }
+
+// ReceiveBlock requires the caller to be the entry's creator and the
+// confirming momentum to be at or past the expiration time, then
+// deletes the entry and sends the tokens back to the creator.
 func (p *ReclaimPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		ptlcLog.Debug("invalid reclaim - syntactic validation failed", "address", sendBlock.Address, "reason", err)
@@ -402,13 +424,21 @@ func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock
 	}, nil
 }
 
+// UnlockPtlcMethod implements Unlock: the caller claims the locked
+// tokens by presenting a witness for the entry's point — a signature
+// over the unlock message bound to its own address, or the scalar for a
+// secp256k1 point.
 type UnlockPtlcMethod struct {
 	MethodName string
 }
 
+// GetPlasma prices the call as an embedded withdrawal.
 func (p *UnlockPtlcMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
+
+// ValidateSendBlock checks the data unpacks, no tokens are attached and
+// the witness has a valid size.
 func (p *UnlockPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.UnlockPtlcParam)
@@ -428,6 +458,10 @@ func (p *UnlockPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIPtlc.PackMethod(p.MethodName, param.Id, param.Signature)
 	return err
 }
+
+// ReceiveBlock pays the entry to the caller if the entry has not
+// expired, the caller matches a fixed destination when the entry has
+// one, and the witness verifies for the entry's point type.
 func (p *UnlockPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		ptlcLog.Debug("invalid unlock - syntactic validation failed", "address", sendBlock.Address, "reason", err)
@@ -442,13 +476,23 @@ func (p *UnlockPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 
 }
 
+// ProxyUnlockPtlcMethod implements ProxyUnlock: anyone may claim the
+// locked tokens for a named destination by presenting a witness for
+// the entry's point (a signature over the unlock message bound to that
+// destination, or the scalar for a secp256k1 point, whose entry must
+// then name that destination), so the holder of the secret need not
+// pay plasma themselves.
 type ProxyUnlockPtlcMethod struct {
 	MethodName string
 }
 
+// GetPlasma prices the call as an embedded withdrawal.
 func (p *ProxyUnlockPtlcMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
+
+// ValidateSendBlock checks the data unpacks, no tokens are attached,
+// the destination is payable and the witness has a valid size.
 func (p *ProxyUnlockPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.ProxyUnlockPtlcParam)
@@ -472,6 +516,9 @@ func (p *ProxyUnlockPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error
 	block.Data, err = definition.ABIPtlc.PackMethod(p.MethodName, param.Id, param.Destination, param.Signature)
 	return err
 }
+
+// ReceiveBlock pays the entry to the given destination under the same
+// rules as Unlock, with the witness verified against that destination.
 func (p *ProxyUnlockPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		ptlcLog.Debug("invalid unlock - syntactic validation failed", "address", sendBlock.Address, "reason", err)

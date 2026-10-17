@@ -15,13 +15,25 @@ var (
 	plasmaLog = common.EmbeddedLogger.New("contract", "plasma")
 )
 
+// FuseMethod (Fuse) locks the sent QSR to generate plasma for a
+// beneficiary address; the QSR stays locked until the entry is
+// cancelled via CancelFuse. The plasma granted per account block is
+// proportional to the total amount fused for the beneficiary — see
+// vm/constants/plasma.go for the fusion-unit arithmetic.
 type FuseMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *FuseMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed beneficiary address carried by
+// a send of QSR of at least constants.FuseMinAmount and a whole
+// multiple of constants.CostPerFusionUnit; anything else fails with
+// constants.ErrInvalidTokenOrAmount.
 func (p *FuseMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(types.Address)
@@ -44,6 +56,12 @@ func (p *FuseMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIPlasma.PackMethod(p.MethodName, param)
 	return err
 }
+
+// ReceiveBlock saves a FusionInfo owned by the sender — its id is
+// the send block's hash, its expiration the frontier height plus
+// constants.FuseExpiration — and adds the amount to the
+// beneficiary's running FusedAmount. It cannot fail past validation
+// and emits no descendant blocks.
 func (p *FuseMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -74,13 +92,21 @@ func (p *FuseMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock
 	return nil, nil
 }
 
+// CancelFuseMethod (CancelFuse) dissolves one of the sender's fusion
+// entries and refunds its QSR, once the entry has aged past its
+// expiration height.
 type CancelFuseMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedWWithdraw tier, covering the one
+// refund block the cancellation sends back.
 func (p *CancelFuseMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
+
+// ValidateSendBlock accepts a packed fusion id — the hash of the
+// original Fuse send block — carried by a send with no tokens.
 func (p *CancelFuseMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(types.Hash)
@@ -96,6 +122,14 @@ func (p *CancelFuseMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIPlasma.PackMethod(p.MethodName, param)
 	return err
 }
+
+// ReceiveBlock cancels the fusion entry stored under the sender and
+// id — only the owner can find it, anyone else gets
+// constants.ErrDataNonExistent — once it has expired; an entry whose
+// expiration height is still above the frontier fails with
+// constants.RevokeNotDue. The amount is subtracted from the
+// beneficiary's FusedAmount (deleted at zero), the entry is deleted
+// and one descendant send refunds the QSR to the sender.
 func (p *CancelFuseMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -143,13 +177,22 @@ func (p *CancelFuseMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 	}, nil
 }
 
+// SetVariablesMethod implements SetVariables: it replaces the on-chain
+// PlasmaVariables that drive Dynamic Plasma. Only the governing address
+// may call it; the new values must satisfy the limits in
+// vm/embedded/definition and the send must carry no tokens.
 type SetVariablesMethod struct {
 	MethodName string
 }
 
+// GetPlasma prices the call as a simple embedded call.
 func (p *SetVariablesMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock checks the caller is authorized, the data unpacks
+// as PlasmaVariables, no tokens are attached, and every field is within
+// its limits with the two targets fitting under the ceiling.
 func (p *SetVariablesMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	if block.Address != types.GovernanceAddress {
 		return constants.ErrPermissionDenied
@@ -207,6 +250,9 @@ func (p *SetVariablesMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 		param.FusedPlasmaTarget, param.PowPlasmaTarget, param.MaxPriceChangePercent, param.PriceChangeDenominator)
 	return err
 }
+
+// ReceiveBlock re-validates the send and stores the new variables; they
+// apply to the pricing of the momentums that follow.
 func (p *SetVariablesMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
