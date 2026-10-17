@@ -196,8 +196,8 @@ type jsonCodec struct {
 	encMu      sync.Mutex                // guards the encoder
 	encode     func(v interface{}) error // encoder to allow multiple transports
 	conn       deadlineCloser
-	connMu     sync.Mutex                // guards connClosed
-	connClosed bool                      // true after conn.Close has been called
+	connMu     sync.Mutex // guards connClosed
+	connClosed bool       // true after conn.Close has been called
 }
 
 // NewFuncCodec creates a codec which uses the given functions to read and write. If conn
