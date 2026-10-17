@@ -108,6 +108,27 @@ func TestPtlc_ED25519SmallOrderLockRejected(t *testing.T) {
 	}
 }
 
+// TestPtlc_ED25519UndecodableLockRejected covers the SetBytes error path in
+// checkED25519PointLock. The small-order tests above all pass SetBytes and are
+// caught by the cofactor check; this test exercises the deserialization failure
+// itself. Without the error check, the nil point would flow into MultByCofactor
+// and panic.
+func TestPtlc_ED25519UndecodableLockRejected(t *testing.T) {
+	// 0x02 followed by 31 more 0x02 bytes: a y-coordinate that does not
+	// correspond to any point on the Edwards25519 curve.
+	undecodable := append([]byte{0x02}, bytes.Repeat([]byte{0x02}, 31)...)
+	if err := checkPointLock(definition.PointTypeED25519, undecodable); err != constants.ErrInvalidPointLock {
+		t.Errorf("undecodable ED25519 lock: got %v, want %v", err, constants.ErrInvalidPointLock)
+	}
+	err := checkStoredPtlcInfo(&definition.PtlcInfo{
+		Amount: big.NewInt(1), ExpirationTime: 1000000000,
+		PointType: definition.PointTypeED25519, PointLock: undecodable,
+	})
+	if err != constants.ErrInvalidPointLock {
+		t.Errorf("undecodable ED25519 lock, as stored state: got %v, want %v", err, constants.ErrInvalidPointLock)
+	}
+}
+
 func TestPtlc_ED25519IdentityLockNeedsNoSecret(t *testing.T) {
 	identity := mustDecodeHex(t, ed25519SmallOrderLocks["identity"])
 	forged := append(append([]byte{}, identity...), make([]byte, 32)...)

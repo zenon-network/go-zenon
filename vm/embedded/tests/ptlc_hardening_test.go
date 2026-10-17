@@ -42,6 +42,10 @@ func TestPtlc_sendBlockRefusals(t *testing.T) {
 		z.InsertSendBlock(create(g.User2.Public, destination), constants.ErrInvalidDestination, mock.NoVmChanges)
 	}
 	z.InsertSendBlock(create(identityKey, types.ZeroAddress), constants.ErrInvalidPointLock, mock.NoVmChanges)
+	// A 32-byte value that does not decode as an Edwards25519 point exercises
+	// the SetBytes error path (distinct from the small-order cofactor check).
+	undecodableLock := append([]byte{0x02}, bytes.Repeat([]byte{0x02}, 31)...)
+	z.InsertSendBlock(create(undecodableLock, types.ZeroAddress), constants.ErrInvalidPointLock, mock.NoVmChanges)
 
 	ptlcId := z.InsertSendBlock(create(g.User2.Public, types.ZeroAddress), nil, mock.SkipVmChanges).Hash
 	z.InsertNewMomentum()
