@@ -27,13 +27,25 @@ func GetSentinelRevokeStatus(registrationTime int64, m *nom.Momentum) (bool, int
 	}
 }
 
+// RegisterSentinelMethod (Register) creates a sentinel owned
+// by the sender. The send must carry exactly
+// constants.SentinelZnnRegisterAmount ZNN and the sender must have
+// deposited constants.SentinelQsrDepositAmount QSR via DepositQsr
+// beforehand; both amounts stay locked in the sentinel until
+// revocation.
 type RegisterSentinelMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (method *RegisterSentinelMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts an argument-less call that must carry
+// exactly constants.SentinelZnnRegisterAmount ZNN; anything else
+// fails with constants.ErrInvalidTokenOrAmount.
 func (method *RegisterSentinelMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -48,6 +60,14 @@ func (method *RegisterSentinelMethod) ValidateSendBlock(block *nom.AccountBlock)
 	block.Data, err = definition.ABISentinel.PackMethod(method.MethodName)
 	return err
 }
+
+// ReceiveBlock registers the sentinel: any existing entry for the
+// sender — active or revoked, since revoked entries persist — fails
+// with constants.ErrAlreadyRegistered, so an address can register at
+// most once; a deposit below constants.SentinelQsrDepositAmount
+// fails with constants.ErrNotEnoughDepositedQsr. The QSR is consumed
+// and the SentinelInfo saved with the frontier timestamp as its
+// registration time.
 func (method *RegisterSentinelMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := method.ValidateSendBlock(sendBlock); err != nil {
 		sentinelLog.Debug("invalid register - syntactic validation failed", "address", sendBlock.Address, "reason", err)
@@ -82,13 +102,23 @@ func (method *RegisterSentinelMethod) ReceiveBlock(context vm_context.AccountVmC
 	return nil, nil
 }
 
+// RevokeSentinelMethod (Revoke) closes the sender's sentinel
+// and returns its locked ZNN and QSR. Revocation is only possible
+// inside the periodic revoke window — see GetSentinelRevokeStatus —
+// and is permanent: the revoked entry persists and blocks the owner
+// from registering again.
 type RevokeSentinelMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedWDoubleWithdraw tier, covering the
+// two refund blocks (ZNN and QSR) the revocation sends back.
 func (method *RevokeSentinelMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWDoubleWithdraw, nil
 }
+
+// ValidateSendBlock accepts an argument-less call carrying no
+// tokens.
 func (method *RevokeSentinelMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -103,6 +133,13 @@ func (method *RevokeSentinelMethod) ValidateSendBlock(block *nom.AccountBlock) e
 	block.Data, err = definition.ABISentinel.PackMethod(method.MethodName)
 	return err
 }
+
+// ReceiveBlock revokes the sender's sentinel: it must exist
+// (constants.ErrDataNonExistent), not be revoked already
+// (constants.ErrAlreadyRevoked) and sit inside its revoke window
+// (constants.RevokeNotDue). The revoke timestamp is stamped, both
+// stored amounts zeroed and two descendant sends refund the locked
+// ZNN and QSR to the owner.
 func (method *RevokeSentinelMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := method.ValidateSendBlock(sendBlock); err != nil {
 		sentinelLog.Debug("invalid revoke - syntactic validation failed", "address", sendBlock.Address, "reason", err)
@@ -150,13 +187,21 @@ func (method *RevokeSentinelMethod) ReceiveBlock(context vm_context.AccountVmCon
 	}, nil
 }
 
+// UpdateEmbeddedSentinelMethod (Update) advances the sentinel
+// contract's reward bookkeeping. Anyone may call it; it is throttled
+// to one run every constants.UpdateMinNumMomentums momentums.
 type UpdateEmbeddedSentinelMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (method *UpdateEmbeddedSentinelMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts an argument-less call carrying no
+// tokens.
 func (method *UpdateEmbeddedSentinelMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -171,6 +216,11 @@ func (method *UpdateEmbeddedSentinelMethod) ValidateSendBlock(block *nom.Account
 	block.Data, err = definition.ABISentinel.PackMethod(method.MethodName)
 	return err
 }
+
+// ReceiveBlock runs the update throttle (constants.ErrUpdateTooRecent
+// when called again too soon) and then credits the sentinel rewards
+// of every epoch that has become due (updateSentinelRewards),
+// collectable via CollectReward.
 func (method *UpdateEmbeddedSentinelMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := method.ValidateSendBlock(sendBlock); err != nil {
 		sentinelLog.Debug("invalid update - syntactic validation failed", "address", sendBlock.Address, "reason", err)

@@ -137,14 +137,27 @@ func PillarGetRevokeStatus(old *definition.PillarInfo, m *nom.Momentum) (bool, i
 	}
 }
 
+// RegisterMethod (Register) creates a normal-type pillar. The send
+// must carry exactly constants.PillarStakeAmount ZNN, locked until
+// revocation, and the sender must have deposited the current QSR
+// cost (GetQsrCostForNextPillar) via DepositQsr beforehand; the
+// consumed QSR is burned.
 type RegisterMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes twice the EmbeddedSimple tier, covering the burn
+// transaction the registration sends to the token contract.
 func (p *RegisterMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	// include burn transaction
 	return 2 * plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed definition.RegisterParam with a
+// valid pillar name and give-percentages of at most 100, carried by
+// a send of exactly constants.PillarStakeAmount ZNN. The QSR cost is
+// taken from the contract-side deposit and cannot be checked
+// statically.
 func (p *RegisterMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.RegisterParam)
@@ -168,6 +181,13 @@ func (p *RegisterMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIPillars.PackMethod(p.MethodName, param.Name, param.ProducerAddress, param.RewardAddress, param.GiveBlockRewardPercentage, param.GiveDelegateRewardPercentage)
 	return err
 }
+
+// ReceiveBlock registers the pillar with the sender as stake
+// address: the name and producing address must be available
+// (constants.ErrNotUnique) and the sender's QSR deposit must cover
+// the current cost (constants.ErrNotEnoughDepositedQsr). It returns
+// one descendant send burning the consumed QSR at the token
+// contract.
 func (p *RegisterMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -199,14 +219,28 @@ func (p *RegisterMethod) ReceiveBlock(context vm_context.AccountVmContext, sendB
 	}, nil
 }
 
+// LegacyRegisterMethod (RegisterLegacy) creates a pillar against a
+// legacy (swap-era) pillar slot. On top of the Register requirements
+// the caller proves ownership of the legacy secp256k1 public key
+// with a signature binding it to the sender's address; in exchange
+// the QSR cost is the flat constants.PillarQsrStakeBaseAmount
+// instead of the growing normal-type cost.
 type LegacyRegisterMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes twice the EmbeddedSimple tier, covering the burn
+// transaction the registration sends to the token contract.
 func (p *LegacyRegisterMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	// include burn transaction
 	return 2 * plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed definition.LegacyRegisterParam
+// — the Register parameters plus a base64 public key and signature —
+// carried by a send of exactly constants.PillarStakeAmount ZNN. The
+// signature must recover to the public key over the legacy-pillar
+// swap message for the sender's address (see CheckSwapSignature).
 func (p *LegacyRegisterMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.LegacyRegisterParam)
@@ -234,6 +268,13 @@ func (p *LegacyRegisterMethod) ValidateSendBlock(block *nom.AccountBlock) error 
 	block.Data, err = definition.ABIPillars.PackMethod(p.MethodName, param.Name, param.ProducerAddress, param.RewardAddress, param.GiveBlockRewardPercentage, param.GiveDelegateRewardPercentage, param.PublicKey, param.Signature)
 	return err
 }
+
+// ReceiveBlock consumes one slot of the LegacyPillarEntry stored
+// under the public key's key-id hash — a missing entry fails with
+// constants.ErrNotEnoughSlots; the count is decremented and the
+// entry deleted at zero — then registers the pillar with
+// definition.LegacyPillarType, consumes the flat base QSR deposit
+// and returns one descendant send burning it at the token contract.
 func (p *LegacyRegisterMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -284,13 +325,22 @@ func (p *LegacyRegisterMethod) ReceiveBlock(context vm_context.AccountVmContext,
 	}, nil
 }
 
+// RevokeMethod (Revoke) closes a pillar and returns its locked ZNN.
+// Revocation is only possible inside the periodic revoke window —
+// see PillarGetRevokeStatus — and is permanent: the name stays
+// registered and can never be reused.
 type RevokeMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedWWithdraw tier, covering the one
+// refund block the revocation sends back.
 func (p *RevokeMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
+
+// ValidateSendBlock accepts a valid pillar name carried by a send
+// with no tokens.
 func (p *RevokeMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(string)
@@ -309,6 +359,14 @@ func (p *RevokeMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIPillars.PackMethod(p.MethodName, param)
 	return err
 }
+
+// ReceiveBlock revokes the named pillar: it must exist
+// (constants.ErrDataNonExistent), still be active
+// (constants.ErrNotActive), be owned by the sender — the stake
+// address — (constants.ErrPermissionDenied) and sit inside its
+// revoke window (constants.RevokeNotDue). The revoke time is
+// stamped, the stored amount zeroed and one descendant send refunds
+// constants.PillarStakeAmount ZNN to the stake address.
 func (p *RevokeMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -566,13 +624,22 @@ func updatePillarRewards(context vm_context.AccountVmContext) error {
 	}
 }
 
+// UpdatePillarMethod (UpdatePillar) lets a pillar's stake address
+// change its producing address, reward-withdraw address and
+// give-percentages; the name and the locked deposit cannot change.
 type UpdatePillarMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *UpdatePillarMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a packed definition.RegisterParam with a
+// valid pillar name and give-percentages of at most 100, carried by
+// a send with no tokens.
 func (p *UpdatePillarMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.RegisterParam)
@@ -594,6 +661,14 @@ func (p *UpdatePillarMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIPillars.PackMethod(p.MethodName, param.Name, param.ProducerAddress, param.RewardAddress, param.GiveBlockRewardPercentage, param.GiveDelegateRewardPercentage)
 	return err
 }
+
+// ReceiveBlock applies the changed fields to the named pillar, which
+// must exist (constants.ErrDataNonExistent), belong to the sender
+// (constants.ErrPermissionDenied) and be active
+// (constants.ErrNotActive). A new producing address must pass the
+// same reuse rule as at registration
+// (checkAvailableProducingAddress) and is bound to the pillar on top
+// of its earlier bindings.
 func (p *UpdatePillarMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -651,13 +726,22 @@ func (p *UpdatePillarMethod) ReceiveBlock(context vm_context.AccountVmContext, s
 	return nil, nil
 }
 
+// DelegateMethod (Delegate) points the sender's delegation at the
+// named pillar. The delegated weight is the sender's ZNN balance,
+// tracked by the consensus layer; a new delegation replaces any
+// earlier one.
 type DelegateMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *DelegateMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts a valid pillar name carried by a send
+// with no tokens.
 func (p *DelegateMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(string)
@@ -676,6 +760,10 @@ func (p *DelegateMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIPillars.PackMethod(p.MethodName, param)
 	return err
 }
+
+// ReceiveBlock saves the sender's DelegationInfo for the named
+// pillar, which must exist (constants.ErrDataNonExistent) and be
+// active (constants.ErrNotActive).
 func (p *DelegateMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -708,13 +796,19 @@ func (p *DelegateMethod) ReceiveBlock(context vm_context.AccountVmContext, sendB
 	return nil, nil
 }
 
+// UndelegateMethod (Undelegate) removes the sender's delegation.
 type UndelegateMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *UndelegateMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts an argument-less call carrying no
+// tokens.
 func (p *UndelegateMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -729,6 +823,9 @@ func (p *UndelegateMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	block.Data, err = definition.ABIPillars.PackMethod(p.MethodName)
 	return err
 }
+
+// ReceiveBlock deletes the sender's DelegationInfo, failing with
+// constants.ErrDataNonExistent when no delegation exists.
 func (p *UndelegateMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -747,13 +844,21 @@ func (p *UndelegateMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 	return nil, nil
 }
 
+// UpdateEmbeddedPillarMethod (Update) advances the pillar contract's
+// reward bookkeeping. Anyone may call it; it is throttled to one run
+// every constants.UpdateMinNumMomentums momentums.
 type UpdateEmbeddedPillarMethod struct {
 	MethodName string
 }
 
+// GetPlasma quotes the EmbeddedSimple tier; the call sends no
+// response block.
 func (p *UpdateEmbeddedPillarMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
+
+// ValidateSendBlock accepts an argument-less call carrying no
+// tokens.
 func (p *UpdateEmbeddedPillarMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -768,6 +873,11 @@ func (p *UpdateEmbeddedPillarMethod) ValidateSendBlock(block *nom.AccountBlock) 
 	block.Data, err = definition.ABIPillars.PackMethod(p.MethodName)
 	return err
 }
+
+// ReceiveBlock runs the update throttle (constants.ErrUpdateTooRecent
+// when called again too soon) and then distributes the pillar
+// rewards of every epoch that has become due (updatePillarRewards),
+// crediting RewardDeposit entries collectable via CollectReward.
 func (p *UpdateEmbeddedPillarMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
