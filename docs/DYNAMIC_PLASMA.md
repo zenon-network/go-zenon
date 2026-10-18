@@ -131,7 +131,7 @@ The verifier (`verifier/momentum.go:198-231`) enforces these by iterating blocks
 
 ## Configuration
 
-Parameters are stored on-chain in the Plasma contract and adjustable via `SetVariables`. The method enforces `block.Address == types.GovernanceAddress` (see `vm/embedded/implementation/plasma.go:154`). Note that `GovernanceAddress` is currently a hardcoded address in `common/types/address.go:46` with a `// TODO: Update governance address to governance contract` marker — it is **not** the same as `SporkAddress`.
+Parameters are stored on-chain in the Plasma contract and adjustable via `SetVariables`. The method is authorized the same way the Spork contract is: the send must come from the `SporkAddress` named in genesis, or from the community spork address while one of its authorization windows is open (see `SetVariablesMethod` in `vm/embedded/implementation/plasma.go`). There is no separate governance key; whoever can create and activate sporks on a network can set its plasma variables. The window is judged at the height of the momentum the receive acknowledges, which is the momentum that confirmed the send, as for sporks: a send confirmed at the last height inside a window is accepted even though its receive lands in the next momentum. A genesis `SporkAddress` equal to the community spork address is window-limited like it. A private devnet that already enforces the spork and changed its variables from the former compiled key cannot replay that history under this rule unless its genesis `SporkAddress` is that key, as the docker devnet's is; such a devnet needs a reset.
 
 | Parameter | Default | Bounds | Description |
 |-----------|---------|--------|-------------|
@@ -141,7 +141,7 @@ Parameters are stored on-chain in the Plasma contract and adjustable via `SetVar
 | `maxPriceChangePercent` | 10 | 1 – 100 | Max price change per adjustment |
 | `priceChangeDenominator` | 20 | 1 – 100 | Denominator for price change calculation |
 
-Bounds are enforced in `SetVariablesMethod.ValidateSendBlock` (`vm/embedded/implementation/plasma.go:169-204`).
+Bounds are enforced in `SetVariablesMethod.ValidateSendBlock` (`vm/embedded/implementation/plasma.go:173-208`).
 
 Defaults are defined in `vm/embedded/definition/plasma.go`. Values take effect after `SetVariables` is called on-chain; if never called, defaults apply.
 
@@ -249,10 +249,10 @@ Prices will have moved away from the baseline (1000) if the load pushed fused or
 
 ### Updating Plasma Configuration
 
-The on-chain plasma parameters can be updated at runtime via `SetVariables` on the Plasma contract. This requires the governance address mnemonic. The loadtest repo includes a helper script:
+The on-chain plasma parameters can be updated at runtime via `SetVariables` on the Plasma contract. This requires the mnemonic of the network's spork address (on the docker devnet, pillar 1's producer key, which is also its genesis `SporkAddress`). The loadtest repo includes a helper script:
 
 ```sh
-MNEMONIC="your governance mnemonic words here" \
+MNEMONIC="your spork address mnemonic words here" \
 MAX_BASE_PLASMA=8400000 \
 FUSED_TARGET=2100000 \
 POW_TARGET=2100000 \
@@ -337,7 +337,7 @@ After activation, new momentums will have `version: 2` with `nextFusionPrice` an
 | `DefaultPriceChangeDenominator` = 20 vs documented = 10 | **Mismatch** | The doc in the old version said 10, but `plasma.go` defaults to 20. Confirm the intended value. |
 | Price convergence behaviour | **Untested at scale** | No integration tests verify prices converge correctly under realistic load patterns. Recommend testnet soak testing. |
 | Max fusion units change (5000 -> 100,000,000) | **Breaking change** | Pre-DP, accounts were limited to 5000 fusion units. Post-DP, the limit is effectively removed. This is intentional but changes the economics significantly. |
-| `SetVariables` governance | **GovernanceAddress only** | The `SetVariables` method permission-checks `block.Address == types.GovernanceAddress`. `GovernanceAddress` is a hardcoded placeholder with a TODO to migrate to a governance contract. Ensure this key is properly secured (and the TODO resolved) before mainnet. |
+| `SetVariables` governance | **Spork address from genesis, or the community spork address inside its windows** | Same rule as the Spork contract. No separate governance key: each network's genesis names its own principal, and the community spork address is bounded by the same heights as for sporks. |
 | 100-block limit removed by DP | **Open question** | The pre-DP hard cap of 100 blocks/momentum is replaced by plasma-based limits (~200 user + 80 contract at defaults). The new limit can be raised further via `SetVariables`. Needs testnet soak testing to determine safe throughput ceiling. |
 
 ---

@@ -157,9 +157,6 @@ func TestDynamicPlasma_rpc_FusionCoversRequiredPlasma(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	plasmaApi := embedded.NewPlasmaApi(z)
 	defer z.StopPanic()
-	saveGovernanceAddress(t)
-
-	types.GovernanceAddress = g.User1.Address
 
 	activateDynamicPlasma(t, z)
 
@@ -189,14 +186,11 @@ func TestDynamicPlasma_SetPlasmaVariables(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	plasmaApi := embedded.NewPlasmaApi(z)
 	defer z.StopPanic()
-	saveGovernanceAddress(t)
-
-	types.GovernanceAddress = g.User1.Address
 
 	activateDynamicPlasma(t, z)
 
 	ab := &nom.AccountBlock{
-		Address:       g.User1.Address,
+		Address:       g.Spork.Address,
 		ToAddress:     types.PlasmaContract,
 		TokenStandard: types.ZeroTokenStandard,
 		Amount:        common.Big0,
@@ -219,15 +213,12 @@ func TestDynamicPlasma_SetPlasmaVariables(t *testing.T) {
 func TestDynamicPlasma_SetPlasmaVariables_TargetSumBounds(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
-	saveGovernanceAddress(t)
-
-	types.GovernanceAddress = g.User1.Address
 
 	activateDynamicPlasma(t, z)
 
 	setVariables := func(maxBasePlasma, fusedTarget, powTarget uint64) *nom.AccountBlock {
 		return &nom.AccountBlock{
-			Address:       g.User1.Address,
+			Address:       g.Spork.Address,
 			ToAddress:     types.PlasmaContract,
 			TokenStandard: types.ZeroTokenStandard,
 			Amount:        common.Big0,
