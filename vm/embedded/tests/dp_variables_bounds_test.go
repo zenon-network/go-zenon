@@ -22,15 +22,11 @@ import (
 func TestDynamicPlasma_SetPlasmaVariables_CeilingUpperBound(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
-	saveGovernanceAddress(t)
-
-	types.GovernanceAddress = g.User1.Address
-
 	activateDynamicPlasma(t, z)
 
 	setCeiling := func(maxBasePlasma uint64) *nom.AccountBlock {
 		return &nom.AccountBlock{
-			Address:       g.User1.Address,
+			Address:       g.Spork.Address,
 			ToAddress:     types.PlasmaContract,
 			TokenStandard: types.ZeroTokenStandard,
 			Amount:        common.Big0,
