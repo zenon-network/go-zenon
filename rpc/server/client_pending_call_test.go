@@ -366,6 +366,11 @@ func TestNotifyDuringReadLoopExitDoesNotPanic(t *testing.T) {
 	if err := awaitCall(t, done, "notification during the read loop exit"); err != nil {
 		t.Fatalf("Notify returned %v", err)
 	}
+	// Notify returns once its write is enqueued on reqSent; dispatch may
+	// not have handled it yet, and cleanup could take the close first. Wait
+	// for dispatch to process it, so the test has reached the point where
+	// a response channel the notification does not have would be closed.
+	awaitReqSentProcessed(t, client, codec)
 }
 
 // A batch whose write completed normally and then had one of two replies
