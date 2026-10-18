@@ -19,6 +19,7 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -243,10 +244,24 @@ type websocketCodec struct {
 	pingReset chan struct{}
 }
 
+// websocketEncoder returns an encoder that serializes the whole message
+// first and then sends it as one text frame, so a payload that cannot be
+// encoded is reported as encodingError and never opens a frame on the
+// connection, unlike conn.WriteJSON, which encodes into an open frame.
+func websocketEncoder(conn *websocket.Conn) func(v interface{}) error {
+	return func(v interface{}) error {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return encodingError{err}
+		}
+		return conn.WriteMessage(websocket.TextMessage, b)
+	}
+}
+
 func newWebsocketCodec(conn *websocket.Conn) ServerCodec {
 	conn.SetReadLimit(wsMessageSizeLimit)
 	wc := &websocketCodec{
-		jsonCodec: NewFuncCodec(conn, conn.WriteJSON, conn.ReadJSON).(*jsonCodec),
+		jsonCodec: NewFuncCodec(conn, websocketEncoder(conn), conn.ReadJSON).(*jsonCodec),
 		conn:      conn,
 		pingReset: make(chan struct{}, 1),
 	}

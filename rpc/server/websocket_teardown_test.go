@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,45 @@ func awaitCodec(t *testing.T, codecs <-chan *websocketCodec) *websocketCodec {
 	case <-time.After(teardownTestTimeout):
 		t.Fatal("server never created a codec for the connection")
 		return nil
+	}
+}
+
+// The same plain encoding error over WebSocket: the codec stays open, no
+// frame is sent for the failed message, and the next message reaches the
+// peer. Fails if the WebSocket encoder serializes into an open frame and
+// its error is then read as a transport failure.
+func TestWebsocketPlainEncodingErrorDoesNotTearDownConnection(t *testing.T) {
+	srv := NewServer()
+	defer srv.Stop()
+	url, codecs := wsServer(t, srv)
+	client := dialRaw(t, url)
+	codec := awaitCodec(t, codecs)
+
+	err := codec.writeJSON(context.Background(), map[string]interface{}{"n": json.Number("not-a-number")})
+	if err == nil {
+		t.Fatal("encoding an invalid json.Number succeeded")
+	}
+	if isTerminalWriteError(err) {
+		t.Fatalf("encoding error %v was classified as a terminal write error", err)
+	}
+	select {
+	case <-codec.closed():
+		t.Fatal("codec was closed by an encoding error")
+	default:
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- codec.writeJSON(context.Background(), &jsonrpcMessage{Version: vsn, Method: "ok"}) }()
+	client.SetReadDeadline(time.Now().Add(teardownTestTimeout))
+	var msg jsonrpcMessage
+	if err := client.ReadJSON(&msg); err != nil {
+		t.Fatalf("reading the message after the encoding error: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if msg.Method != "ok" {
+		t.Fatalf("got method %q, want ok", msg.Method)
 	}
 }
 

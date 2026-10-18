@@ -226,10 +226,32 @@ func NewFuncCodec(conn deadlineCloser, encode, decode func(v interface{}) error)
 // NewCodec creates a codec on the given connection. If conn implements ConnRemoteAddr, log
 // messages will use it to include the remote address of the connection.
 func NewCodec(conn Conn) ServerCodec {
-	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)
 	dec.UseNumber()
-	return NewFuncCodec(conn, enc.Encode, dec.Decode)
+	return NewFuncCodec(conn, streamEncoder(conn), dec.Decode)
+}
+
+// encodingError marks an error raised while serializing a message, before
+// any byte reached the transport. The codec's own encoders return it so
+// that writeJSON can tell a bad payload from a dead connection without
+// guessing from the error's type.
+type encodingError struct{ err error }
+
+func (e encodingError) Error() string { return e.err.Error() }
+func (e encodingError) Unwrap() error { return e.err }
+
+// streamEncoder returns an encoder that serializes the whole message first
+// and only then writes it, newline-terminated as json.Encoder does, so an
+// error from the two steps is told apart at the boundary between them.
+func streamEncoder(w io.Writer) func(v interface{}) error {
+	return func(v interface{}) error {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return encodingError{err}
+		}
+		_, err = w.Write(append(b, '\n'))
+		return err
+	}
 }
 
 func (c *jsonCodec) remoteAddr() string {
@@ -293,13 +315,20 @@ func (c *jsonCodec) write(ctx context.Context, v interface{}) error {
 
 // isTerminalWriteError reports whether a write error came from the
 // transport. An error encoding the payload happens before any byte is
-// written and leaves the connection usable.
+// written and leaves the connection usable. The codec's own encoders mark
+// such errors as encodingError; for an encoder supplied through
+// NewFuncCodec that serializes straight onto its transport, the named
+// encoding/json error types are recognised as well.
 func isTerminalWriteError(err error) bool {
 	var (
+		encoding    encodingError
 		marshaler   *json.MarshalerError
 		unsupported *json.UnsupportedTypeError
 		value       *json.UnsupportedValueError
 	)
+	if errors.As(err, &encoding) {
+		return false
+	}
 	return !errors.As(err, &marshaler) && !errors.As(err, &unsupported) && !errors.As(err, &value)
 }
 

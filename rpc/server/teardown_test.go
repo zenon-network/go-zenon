@@ -176,6 +176,48 @@ func TestMarshalErrorDoesNotTearDownCodec(t *testing.T) {
 	}
 }
 
+// encoding/json reports some payload errors as plain errors rather than
+// one of its named types: an invalid json.Number literal is one. Such an
+// error also happens before any byte reaches the transport, so it must not
+// be read as a terminal write failure. Fails if the codec decides from a
+// list of error types instead of from where the error arose.
+func TestPlainEncodingErrorDoesNotTearDownCodec(t *testing.T) {
+	conn, client := newScriptedConn(t)
+	codec := NewCodec(conn).(*jsonCodec)
+
+	err := codec.writeJSON(context.Background(), map[string]interface{}{"n": json.Number("not-a-number")})
+	if err == nil {
+		t.Fatal("encoding an invalid json.Number succeeded")
+	}
+	if isTerminalWriteError(err) {
+		t.Fatalf("encoding error %v was classified as a terminal write error", err)
+	}
+	select {
+	case <-codec.closed():
+		t.Fatal("codec was closed by an encoding error")
+	default:
+	}
+	if conn.closeCount() != 0 {
+		t.Fatal("connection was closed by an encoding error")
+	}
+	if conn.writeCount() != 0 {
+		t.Fatal("an encoding error still reached the transport")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- codec.writeJSON(context.Background(), &jsonrpcMessage{Version: vsn, Method: "ok"}) }()
+	var msg jsonrpcMessage
+	if err := json.NewDecoder(client).Decode(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if msg.Method != "ok" {
+		t.Fatalf("got method %q, want ok", msg.Method)
+	}
+}
+
 // stopOnCloseConn is a scriptedConn whose Close calls Server.Stop, the way an
 // embedding application's connection type might (issue #116). Stop then
 // closes every registered codec, including the one whose abort is running.
