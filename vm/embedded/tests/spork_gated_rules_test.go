@@ -14,6 +14,11 @@ import (
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
+// newTestVerifier returns an AccountBlockVerifier backed by the mock chain.
+func newTestVerifier(z mock.MockZenon) verifier.AccountBlockVerifier {
+	return verifier.NewAccountBlockVerifier(z.Chain(), z.Consensus())
+}
+
 // Test 1: A user receive block with non-empty Data is rejected once the
 // Dynamic Plasma spork is active.
 func TestSporkGated_ReceiveBlockDataRejectedAfterSpork(t *testing.T) {
@@ -108,8 +113,100 @@ func TestSporkGated_PreEnforcementBlockReplayedAfterSpork(t *testing.T) {
 	defer z.StopPanic()
 	saveSporkState(t)
 
-	// Send and receive BEFORE activating the spork — the receive has Data
-	// but is accepted because DP is not yet enforced.
+	// Send from User1 to User3 BEFORE activating the spork.
+	sendBlock := z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User3.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(10 * g.Zexp),
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+
+	// Capture the pre-spork momentum identifier for later use as MA.
+	frontierStore := z.Chain().GetFrontierMomentumStore()
+	preSporkMomentum, err := frontierStore.GetFrontierMomentum()
+	common.FailIfErr(t, err)
+
+	// Activate the spork
+	activateDynamicPlasma(t, z)
+
+	// Construct a receive block for User3 with the PRE-SPORK MA and non-empty
+	// Data. The verifier must accept it because receiveData() looks up the
+	// spork state at the block's MA, which predates enforcement.
+	user3Store := z.Chain().GetFrontierAccountStore(g.User3.Address)
+	user3Frontier, err := user3Store.Frontier()
+	common.FailIfErr(t, err)
+
+	receiveBlock := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      z.Chain().ChainIdentifier(),
+		BlockType:            nom.BlockTypeUserReceive,
+		Address:              g.User3.Address,
+		ToAddress:            types.ZeroAddress,
+		Amount:               big.NewInt(0),
+		TokenStandard:        types.ZeroTokenStandard,
+		Height:               user3Frontier.Height + 1,
+		PreviousHash:         user3Frontier.Hash,
+		MomentumAcknowledged: preSporkMomentum.Identifier(),
+		FromBlockHash:        sendBlock.Hash,
+		Data:                 []byte("pre-spork data"),
+	}
+	receiveBlock.Hash = receiveBlock.ComputeHash()
+	signature, _, publicKey, err := g.User3.Signer(receiveBlock.Hash.Bytes())
+	common.FailIfErr(t, err)
+	receiveBlock.Signature = signature
+	receiveBlock.PublicKey = publicKey
+
+	v := newTestVerifier(z)
+	if err := v.AccountBlock(receiveBlock); err != nil {
+		t.Fatalf("pre-spork MA receive with Data rejected after spork: %v", err)
+	}
+}
+
+// Test 6: A pre-spork embedded send (created before the spork) is
+// auto-received by the contract during momentum production that happens after
+// enforcement begins. The contract auto-receive must succeed because
+// receiveData() skips embedded addresses.
+func TestSporkGated_PreSporkEmbeddedSendReceivedAfterSpork(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	saveSporkState(t)
+
+	// Create a Plasma.Fuse embedded send BEFORE the spork.
+	fuseData := definition.ABIPlasma.PackMethodPanic(definition.FuseMethodName, g.User1.Address)
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.PlasmaContract,
+		Data:          fuseData,
+		TokenStandard: types.QsrTokenStandard,
+		Amount:        big.NewInt(10 * g.Zexp),
+	}, nil, mock.SkipVmChanges)
+
+	// Activate the spork — the momentums created during activation pick up the
+	// pending fuse send and the Plasma contract auto-receives it. The
+	// auto-receive is a ContractReceive (embedded address), so receiveData()
+	// skips it and the fusion is processed normally.
+	activateDynamicPlasma(t, z)
+
+	// Verify the Plasma contract processed the fuse: its account chain grew.
+	plasmaStore := z.Chain().GetFrontierAccountStore(types.PlasmaContract)
+	plasmaFrontier, err := plasmaStore.Frontier()
+	common.FailIfErr(t, err)
+	common.Expect(t, true, plasmaFrontier.Height >= 1)
+}
+
+// Test 7: A pre-signed external block with non-empty Data on a receive is
+// rejected by the verifier when the spork is active. The block is constructed
+// and signed independently (not via GenerateFromTemplate), then passed through
+// verifier.AccountBlock() — the admission path for external blocks.
+func TestSporkGated_ExternalSignedReceiveWithDataRejectedAfterSpork(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	saveSporkState(t)
+
+	activateDynamicPlasma(t, z)
+
+	// Insert a send so there is something to receive
 	sendBlock := z.InsertSendBlock(&nom.AccountBlock{
 		Address:       g.User1.Address,
 		ToAddress:     g.User2.Address,
@@ -118,26 +215,98 @@ func TestSporkGated_PreEnforcementBlockReplayedAfterSpork(t *testing.T) {
 	}, nil, mock.SkipVmChanges)
 	z.InsertNewMomentum()
 
-	receiveBlock := z.InsertReceiveBlock(sendBlock.Header(), &nom.AccountBlock{
-		Data: []byte("pre-spork data"),
-	}, nil, mock.SkipVmChanges)
-	z.InsertNewMomentum()
+	// Construct the receive block manually (simulating an external sender),
+	// set all required fields, sign it, then submit through the verifier.
+	frontierMomentum := z.Chain().GetFrontierMomentumStore()
+	fm, err := frontierMomentum.GetFrontierMomentum()
+	common.FailIfErr(t, err)
 
-	// Activate the spork
+	user2Store := z.Chain().GetFrontierAccountStore(g.User2.Address)
+	user2Frontier, err := user2Store.Frontier()
+	common.FailIfErr(t, err)
+
+	receiveBlock := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      z.Chain().ChainIdentifier(),
+		BlockType:            nom.BlockTypeUserReceive,
+		Address:              g.User2.Address,
+		ToAddress:            types.ZeroAddress,
+		Amount:               big.NewInt(0),
+		TokenStandard:        types.ZeroTokenStandard,
+		Height:               user2Frontier.Height + 1,
+		PreviousHash:         user2Frontier.Hash,
+		MomentumAcknowledged: fm.Identifier(),
+		FromBlockHash:        sendBlock.Hash,
+		Data:                 []byte("external data"),
+	}
+	receiveBlock.Hash = receiveBlock.ComputeHash()
+	signature, _, publicKey, err := g.User2.Signer(receiveBlock.Hash.Bytes())
+	common.FailIfErr(t, err)
+	receiveBlock.Signature = signature
+	receiveBlock.PublicKey = publicKey
+
+	// The verifier must reject this block
+	v := newTestVerifier(z)
+	err = v.AccountBlock(receiveBlock)
+	common.ExpectError(t, err, verifier.ErrABDataMustBeEmpty)
+
+	// Pool/chain state must be unchanged: User2's frontier is still the same
+	unchangedFrontier, err := z.Chain().GetFrontierAccountStore(g.User2.Address).Frontier()
+	common.FailIfErr(t, err)
+	common.Expect(t, user2Frontier.Identifier(), unchangedFrontier.Identifier())
+}
+
+// Test 8: A pre-signed external block with empty Data on a receive is
+// accepted by the verifier when the spork is active. The block is constructed
+// and signed independently, then passed through verifier.AccountBlock().
+func TestSporkGated_ExternalSignedReceiveEmptyDataAcceptedAfterSpork(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	saveSporkState(t)
+
 	activateDynamicPlasma(t, z)
 
-	// The pre-spork receive block should still verify cleanly because its
-	// MomentumAcknowledged predates the spork enforcement height.
-	// We test this by sending a new block from User2 (whose frontier is the
-	// pre-spork receive) — if the chain state is consistent, this succeeds.
-	z.InsertSendBlock(&nom.AccountBlock{
-		Address:       g.User2.Address,
-		ToAddress:     g.User1.Address,
+	// Insert a send so there is something to receive
+	sendBlock := z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
 		TokenStandard: types.ZnnTokenStandard,
-		Amount:        big.NewInt(5 * g.Zexp),
+		Amount:        big.NewInt(10 * g.Zexp),
 	}, nil, mock.SkipVmChanges)
 	z.InsertNewMomentum()
 
-	// Verify the pre-spork receive block's header is still retrievable
-	common.Expect(t, true, receiveBlock != nil)
+	// Construct the receive block manually
+	frontierMomentum := z.Chain().GetFrontierMomentumStore()
+	fm, err := frontierMomentum.GetFrontierMomentum()
+	common.FailIfErr(t, err)
+
+	user2Store := z.Chain().GetFrontierAccountStore(g.User2.Address)
+	user2Frontier, err := user2Store.Frontier()
+	common.FailIfErr(t, err)
+
+	receiveBlock := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      z.Chain().ChainIdentifier(),
+		BlockType:            nom.BlockTypeUserReceive,
+		Address:              g.User2.Address,
+		ToAddress:            types.ZeroAddress,
+		Amount:               big.NewInt(0),
+		TokenStandard:        types.ZeroTokenStandard,
+		Height:               user2Frontier.Height + 1,
+		PreviousHash:         user2Frontier.Hash,
+		MomentumAcknowledged: fm.Identifier(),
+		FromBlockHash:        sendBlock.Hash,
+		Data:                 nil,
+	}
+	receiveBlock.Hash = receiveBlock.ComputeHash()
+	signature, _, publicKey, err := g.User2.Signer(receiveBlock.Hash.Bytes())
+	common.FailIfErr(t, err)
+	receiveBlock.Signature = signature
+	receiveBlock.PublicKey = publicKey
+
+	// The verifier must accept this block
+	v := newTestVerifier(z)
+	if err := v.AccountBlock(receiveBlock); err != nil {
+		t.Fatalf("external signed receive with empty Data rejected: %v", err)
+	}
 }

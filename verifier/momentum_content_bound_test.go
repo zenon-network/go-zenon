@@ -1,8 +1,10 @@
 package verifier
 
 import (
+	"math/big"
 	"testing"
 
+	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common/types"
 )
@@ -94,5 +96,111 @@ func TestRawMomentumVerifier_Content_DPActive_ByteBound(t *testing.T) {
 	err = rmv.content(false)
 	if err == ErrMContentTooBig {
 		t.Errorf("DP inactive: contentByteBound should not fire")
+	}
+}
+
+// makeExactSizeBlock returns an AccountBlock whose protobuf-serialized size is
+// exactly targetSize bytes. It binary-searches the Data length because the
+// protobuf varint encoding of the Data length prefix changes size at 128-byte
+// boundaries, making the overhead non-linear. The block carries enough
+// FusedPlasma to pass the dynamic-plasma price check in content().
+func makeExactSizeBlock(address types.Address, targetSize int) *nom.AccountBlock {
+	block := &nom.AccountBlock{
+		Address:       address,
+		Hash:          types.NewHash([]byte("exact-size-block")),
+		Height:        1,
+		BlockType:     nom.BlockTypeUserSend,
+		FusedPlasma:   1_000_000, // well above the minimum price
+		TokenStandard: types.ZeroTokenStandard,
+		Amount:        big.NewInt(0),
+	}
+	// Binary search for the Data length that yields exactly targetSize.
+	lo, hi := 0, targetSize
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		block.Data = make([]byte, mid)
+		serialized, err := block.Serialize()
+		if err != nil {
+			panic(err)
+		}
+		if len(serialized) <= targetSize {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	block.Data = make([]byte, lo)
+	return block
+}
+
+// TestRawMomentumVerifier_Content_ExactBound_Accepted pins the enforcement
+// transition at exactly MaxMomentumContentBytes: a momentum whose blocks
+// serialize to exactly the limit must pass the content() byte bound.
+func TestRawMomentumVerifier_Content_ExactBound_Accepted(t *testing.T) {
+	addr := types.ParseAddressPanic("z1qph8dkja68pg3g6j4spwk9re0kjdkul0amwqnt")
+
+	block := makeExactSizeBlock(addr, MaxMomentumContentBytes)
+	serialized, err := block.Serialize()
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	if len(serialized) > MaxMomentumContentBytes {
+		t.Fatalf("test setup: block size %d exceeds target %d", len(serialized), MaxMomentumContentBytes)
+	}
+
+	rmv := &rawMomentumVerifier{
+		momentum: &nom.Momentum{
+			Version:         2, // dynamic-plasma momentum
+			NextFusionPrice: 1000,
+			NextWorkPrice:   1000,
+			Content: nom.MomentumContent{
+				{Address: addr, HashHeight: types.HashHeight{Hash: block.Hash, Height: 1}},
+			},
+		},
+		accountBlocks: []*nom.AccountBlock{block},
+		momentumStore: &stubMomentumStore{},
+		canonicalBasePlasma: func(chain.Chain, *nom.AccountBlock) (uint64, error) {
+			return 21000, nil // matches stubMomentumStore's FusedPlasmaTarget
+		},
+	}
+
+	// content(true) runs contentByteBound + matching + frontier checks.
+	// The byte bound must NOT fire at exactly MaxMomentumContentBytes.
+	if err := rmv.content(true); err != nil {
+		t.Errorf("exactly %d bytes: got %v, want nil", MaxMomentumContentBytes, err)
+	}
+}
+
+// TestRawMomentumVerifier_Content_OneByteOverBound_Rejected pins the
+// enforcement transition at MaxMomentumContentBytes+1: a momentum whose
+// blocks exceed the limit by a single byte must be rejected by content().
+func TestRawMomentumVerifier_Content_OneByteOverBound_Rejected(t *testing.T) {
+	addr := types.ParseAddressPanic("z1qph8dkja68pg3g6j4spwk9re0kjdkul0amwqnt")
+
+	// Build a block that serializes to exactly MaxMomentumContentBytes, then
+	// add one more byte to its Data field.
+	block := makeExactSizeBlock(addr, MaxMomentumContentBytes)
+	block.Data = append(block.Data, 0x00)
+	serialized, err := block.Serialize()
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	if len(serialized) <= MaxMomentumContentBytes {
+		t.Fatalf("test setup: block size %d should exceed %d", len(serialized), MaxMomentumContentBytes)
+	}
+
+	rmv := &rawMomentumVerifier{
+		momentum: &nom.Momentum{
+			Content: nom.MomentumContent{
+				{Address: addr, HashHeight: types.HashHeight{Hash: block.Hash, Height: 1}},
+			},
+		},
+		accountBlocks: []*nom.AccountBlock{block},
+		momentumStore: &stubMomentumStore{},
+	}
+
+	err = rmv.content(true)
+	if err != ErrMContentTooBig {
+		t.Errorf("%d bytes (1 over): got %v, want %v", len(serialized), err, ErrMContentTooBig)
 	}
 }
