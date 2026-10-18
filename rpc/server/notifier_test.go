@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -22,22 +23,21 @@ func newTestNotifier(t *testing.T, conn *scriptedConn) (*Notifier, *Subscription
 
 // readNotifications decodes n messages from the test end and returns their
 // subscription payloads, in wire order.
-func readNotifications(t *testing.T, r interface{ Read([]byte) (int, error) }, n int) []json.RawMessage {
-	t.Helper()
+func readNotifications(r interface{ Read([]byte) (int, error) }, n int) ([]json.RawMessage, error) {
 	dec := json.NewDecoder(r)
 	out := make([]json.RawMessage, 0, n)
 	for i := 0; i < n; i++ {
 		var msg jsonrpcMessage
 		if err := dec.Decode(&msg); err != nil {
-			t.Fatalf("message %d: %v", i+1, err)
+			return nil, fmt.Errorf("message %d: %w", i+1, err)
 		}
 		var res subscriptionResult
 		if err := json.Unmarshal(msg.Params, &res); err != nil {
-			t.Fatalf("message %d params: %v", i+1, err)
+			return nil, fmt.Errorf("message %d params: %w", i+1, err)
 		}
 		out = append(out, res.Result)
 	}
-	return out
+	return out, nil
 }
 
 // A flush failure during activation is terminal for the notifier: activate
@@ -134,22 +134,41 @@ func TestNotifyDoesNotBlockBehindFlush(t *testing.T) {
 	}
 
 	release()
-	got := make(chan []json.RawMessage, 1)
-	go func() { got <- readNotifications(t, client, 2) }()
+	// The reader runs off the test goroutine, so it reports through the
+	// channel and the test goroutine fails the test.
+	type read struct {
+		msgs []json.RawMessage
+		err  error
+	}
+	got := make(chan read, 1)
+	go func() {
+		msgs, err := readNotifications(client, 2)
+		got <- read{msgs, err}
+	}()
 	if err := <-activated; err != nil {
 		t.Fatal(err)
 	}
 	order := <-got
-	if string(order[0]) != `"buffered-1"` || string(order[1]) != `"buffered-2"` {
-		t.Fatalf("wire order %s, %s; want buffered-1 then buffered-2", order[0], order[1])
+	if order.err != nil {
+		t.Fatal(order.err)
+	}
+	if string(order.msgs[0]) != `"buffered-1"` || string(order.msgs[1]) != `"buffered-2"` {
+		t.Fatalf("wire order %s, %s; want buffered-1 then buffered-2", order.msgs[0], order.msgs[1])
 	}
 	// Now live: a Notify writes directly.
-	go func() { got <- readNotifications(t, client, 1) }()
+	go func() {
+		msgs, err := readNotifications(client, 1)
+		got <- read{msgs, err}
+	}()
 	if err := n.Notify(sub.ID, "live"); err != nil {
 		t.Fatal(err)
 	}
-	if live := <-got; string(live[0]) != `"live"` {
-		t.Fatalf("live message %s, want live", live[0])
+	live := <-got
+	if live.err != nil {
+		t.Fatal(live.err)
+	}
+	if string(live.msgs[0]) != `"live"` {
+		t.Fatalf("live message %s, want live", live.msgs[0])
 	}
 }
 

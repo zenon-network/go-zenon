@@ -264,7 +264,17 @@ func TestTeardownUnderConcurrentChurn(t *testing.T) {
 				} else {
 					clientEnd.Close() // normal disconnect
 				}
-				<-served
+				// A regression in terminal-write teardown leaves ServeCodec
+				// running: fail the round and release both pipe ends so the
+				// test reports it instead of hanging until the suite timeout.
+				select {
+				case <-served:
+				case <-time.After(5 * time.Second):
+					t.Errorf("connection %d round %d: ServeCodec did not return within 5s", c, r)
+					serverEnd.Close()
+					clientEnd.Close()
+					<-served
+				}
 				serverEnd.Close()
 				clientEnd.Close()
 			}
