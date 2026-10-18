@@ -358,7 +358,7 @@ After activation, new momentums will have `version: 2` with `nextFusionPrice` an
 | `AccountBlockBasePlasma` | 21000 | `vm/constants/plasma.go:28` |
 | `EmbeddedSimplePlasma` | 52500 | `vm/constants/plasma.go:31` |
 | `MaxBasePlasmaInMomentumUpperLimit` | 2,100,000,000 | `vm/embedded/definition/plasma.go` |
-| `MaxBasePlasmaInMomentumLowerLimit` | 210,000 | `vm/embedded/definition/plasma.go:54` |
+| `MaxBasePlasmaInMomentumLowerLimit` | 210,000 | `vm/embedded/definition/plasma.go` |
 
 ### RPC Methods
 
