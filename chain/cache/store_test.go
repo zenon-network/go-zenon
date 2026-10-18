@@ -19,13 +19,13 @@ type mockIterator struct {
 	err        error
 }
 
-func (m *mockIterator) Next() bool     { return false }
-func (m *mockIterator) Prev() bool     { return false }
-func (m *mockIterator) Last() bool     { return m.lastResult }
-func (m *mockIterator) Key() []byte    { return nil }
-func (m *mockIterator) Value() []byte  { return nil }
-func (m *mockIterator) Error() error   { return m.err }
-func (m *mockIterator) Release()       {}
+func (m *mockIterator) Next() bool    { return false }
+func (m *mockIterator) Prev() bool    { return false }
+func (m *mockIterator) Last() bool    { return m.lastResult }
+func (m *mockIterator) Key() []byte   { return nil }
+func (m *mockIterator) Value() []byte { return nil }
+func (m *mockIterator) Error() error  { return m.err }
+func (m *mockIterator) Release()      {}
 
 // mockDB implements db.DB, returning a mockIterator from NewIterator.
 type mockDB struct {
