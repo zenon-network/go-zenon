@@ -70,3 +70,48 @@ func TestReceive_OtherChainRejectsWrongRecipient_RegardlessOfHeight(t *testing.T
 	z.InsertNewMomentum()
 	common.Expect(t, 0, new(big.Int).Sub(znnBalanceOf(t, z, g.User3.Address), user3Before).Sign())
 }
+
+// On mainnet's chain identifier the historical relaxation still applies: a
+// receive by an account other than the recipient is accepted while the
+// frontier is below the enforcement height and rejected from that height
+// on, so a sync of mainnet's history keeps replaying the earlier blocks.
+func TestReceive_MainnetIdentifier_RelaxedOnlyBelowTheHeight(t *testing.T) {
+	savedHeight := verifier.ReceiverMismatchEnforcementHeight
+	savedChain := g.EmbeddedGenesis.ChainIdentifier
+	verifier.ReceiverMismatchEnforcementHeight = 10
+	g.EmbeddedGenesis.ChainIdentifier = 1
+	defer func() {
+		verifier.ReceiverMismatchEnforcementHeight = savedHeight
+		g.EmbeddedGenesis.ChainIdentifier = savedChain
+	}()
+
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	common.Expect(t, uint64(1), z.Chain().ChainIdentifier())
+
+	amount := big.NewInt(100 * g.Zexp)
+	send := z.InsertSendBlock(&nom.AccountBlock{
+		Address: g.User1.Address, ToAddress: g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard, Amount: amount,
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+	acknowledged := z.Chain().GetFrontierMomentumStore().Identifier()
+	common.Expect(t, true, acknowledged.Height < verifier.ReceiverMismatchEnforcementHeight)
+
+	// Below the height: the historical exception admits the wrong receiver.
+	user3Before := znnBalanceOf(t, z, g.User3.Address)
+	z.InsertReceiveBlock(send.Header(), &nom.AccountBlock{Address: g.User3.Address, MomentumAcknowledged: acknowledged}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+	common.Expect(t, 0, new(big.Int).Sub(znnBalanceOf(t, z, g.User3.Address), user3Before).Cmp(amount))
+
+	// From the height on: rejected, even with an acknowledgement from
+	// before the height.
+	z.InsertMomentumsTo(verifier.ReceiverMismatchEnforcementHeight)
+	common.Expect(t, true, z.Chain().GetFrontierMomentumStore().Identifier().Height >= verifier.ReceiverMismatchEnforcementHeight)
+	z.InsertReceiveBlock(send.Header(), &nom.AccountBlock{Address: g.User4.Address, MomentumAcknowledged: acknowledged}, verifier.ErrABFromBlockReceiverMismatch, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+	z.InsertReceiveBlock(send.Header(), &nom.AccountBlock{Address: g.User4.Address}, verifier.ErrABFromBlockReceiverMismatch, mock.SkipVmChanges)
+
+	// The rightful recipient is unaffected either way.
+	z.InsertReceiveBlock(send.Header(), nil, nil, mock.SkipVmChanges)
+}
