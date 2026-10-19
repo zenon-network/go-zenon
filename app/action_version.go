@@ -29,6 +29,6 @@ Operating System:%v
 GOPATH:%v
 GOROOT:%v
 Commit hash:%v
-`, metadata.Version, runtime.GOARCH, runtime.Version(), runtime.GOOS, os.Getenv("GOPATH"), runtime.GOROOT(), metadata.GitCommit)
+`, metadata.Version, runtime.GOARCH, runtime.Version(), runtime.GOOS, os.Getenv("GOPATH"), runtime.GOROOT(), metadata.CommitHash())
 	return nil
 }
