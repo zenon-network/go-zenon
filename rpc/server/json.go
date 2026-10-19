@@ -35,9 +35,11 @@ const (
 	subscribeMethodSuffix    = ".subscribe"
 	unsubscribeMethodSuffix  = ".unsubscribe"
 	notificationMethodSuffix = ".subscription"
-
-	defaultWriteTimeout = 10 * time.Second // used if context has no deadline
 )
+
+// defaultWriteTimeout bounds one write when the context carries no deadline.
+// It is a variable so tests can shorten it.
+var defaultWriteTimeout = 10 * time.Second
 
 // Bounds on the work one batch can hand the server.
 const (
@@ -196,8 +198,13 @@ type jsonCodec struct {
 	encMu      sync.Mutex                // guards the encoder
 	encode     func(v interface{}) error // encoder to allow multiple transports
 	conn       deadlineCloser
-	connMu     sync.Mutex                // guards connClosed
-	connClosed bool                      // true after conn.Close has been called
+	connMu     sync.Mutex // guards connClosed
+	connClosed bool       // true after conn.Close has been called
+
+	// failMu guards failErr: the first terminal transport error, recorded
+	// by abort. Once set, writeJSON refuses every write with it.
+	failMu  sync.Mutex
+	failErr error
 }
 
 // NewFuncCodec creates a codec which uses the given functions to read and write. If conn
@@ -219,10 +226,32 @@ func NewFuncCodec(conn deadlineCloser, encode, decode func(v interface{}) error)
 // NewCodec creates a codec on the given connection. If conn implements ConnRemoteAddr, log
 // messages will use it to include the remote address of the connection.
 func NewCodec(conn Conn) ServerCodec {
-	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)
 	dec.UseNumber()
-	return NewFuncCodec(conn, enc.Encode, dec.Decode)
+	return NewFuncCodec(conn, streamEncoder(conn), dec.Decode)
+}
+
+// encodingError marks an error raised while serializing a message, before
+// any byte reached the transport. The codec's own encoders return it so
+// that writeJSON can tell a bad payload from a dead connection without
+// guessing from the error's type.
+type encodingError struct{ err error }
+
+func (e encodingError) Error() string { return e.err.Error() }
+func (e encodingError) Unwrap() error { return e.err }
+
+// streamEncoder returns an encoder that serializes the whole message first
+// and only then writes it, newline-terminated as json.Encoder does, so an
+// error from the two steps is told apart at the boundary between them.
+func streamEncoder(w io.Writer) func(v interface{}) error {
+	return func(v interface{}) error {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return encodingError{err}
+		}
+		_, err = w.Write(append(b, '\n'))
+		return err
+	}
 }
 
 func (c *jsonCodec) remoteAddr() string {
@@ -255,7 +284,24 @@ func (c *jsonCodec) readBatch() (messages []*jsonrpcMessage, batch bool, err err
 	return messages, batch, nil
 }
 
+// writeJSON writes one message. After the first terminal transport failure
+// the codec is being torn down and every call returns that failure without
+// touching the connection.
 func (c *jsonCodec) writeJSON(ctx context.Context, v interface{}) error {
+	if err := c.failed(); err != nil {
+		return err
+	}
+	err := c.write(ctx, v)
+	if err != nil && isTerminalWriteError(err) {
+		// Outside the encoder lock: abort closes the connection, and an
+		// embedding's Close may re-enter Server.Stop, which closes codecs
+		// and joins goroutines that need the lock.
+		c.abort(err)
+	}
+	return err
+}
+
+func (c *jsonCodec) write(ctx context.Context, v interface{}) error {
 	c.encMu.Lock()
 	defer c.encMu.Unlock()
 
@@ -265,6 +311,49 @@ func (c *jsonCodec) writeJSON(ctx context.Context, v interface{}) error {
 	}
 	c.conn.SetWriteDeadline(deadline)
 	return c.encode(v)
+}
+
+// isTerminalWriteError reports whether a write error came from the
+// transport. An error encoding the payload happens before any byte is
+// written and leaves the connection usable. The codec's own encoders mark
+// such errors as encodingError; for an encoder supplied through
+// NewFuncCodec that serializes straight onto its transport, the named
+// encoding/json error types are recognised as well.
+func isTerminalWriteError(err error) bool {
+	var (
+		encoding    encodingError
+		marshaler   *json.MarshalerError
+		unsupported *json.UnsupportedTypeError
+		value       *json.UnsupportedValueError
+	)
+	if errors.As(err, &encoding) {
+		return false
+	}
+	return !errors.As(err, &marshaler) && !errors.As(err, &unsupported) && !errors.As(err, &value)
+}
+
+// failed returns the terminal transport error recorded by abort, if any.
+func (c *jsonCodec) failed() error {
+	c.failMu.Lock()
+	defer c.failMu.Unlock()
+	return c.failErr
+}
+
+// abort starts teardown after a terminal transport failure: it records the
+// error so later writes are refused, fires closed() so the connection's
+// lifecycle and subscription watchers see the connection go, and closes the
+// transport. It takes neither the encoder lock nor any wait: a goroutine
+// that is itself joined by close (the websocket ping loop) may call it.
+// Subsequent aborts and the lifecycle's close are no-ops on the transport.
+func (c *jsonCodec) abort(err error) {
+	c.failMu.Lock()
+	if c.failErr != nil {
+		c.failMu.Unlock()
+		return
+	}
+	c.failErr = err
+	c.failMu.Unlock()
+	c.close()
 }
 
 func (c *jsonCodec) close() {

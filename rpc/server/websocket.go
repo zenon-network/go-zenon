@@ -19,6 +19,7 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -35,9 +36,13 @@ import (
 const (
 	wsReadBuffer       = 1024
 	wsWriteBuffer      = 1024
+	wsMessageSizeLimit = 15 * 1024 * 1024
+)
+
+// Ping timings are variables so tests can shorten them.
+var (
 	wsPingInterval     = 60 * time.Second
 	wsPingWriteTimeout = 5 * time.Second
-	wsMessageSizeLimit = 15 * 1024 * 1024
 )
 
 var wsBufferPool = new(sync.Pool)
@@ -239,21 +244,45 @@ type websocketCodec struct {
 	pingReset chan struct{}
 }
 
+// websocketEncoder returns an encoder that serializes the whole message
+// first and then sends it as one text frame, so a payload that cannot be
+// encoded is reported as encodingError and never opens a frame on the
+// connection, unlike conn.WriteJSON, which encodes into an open frame.
+func websocketEncoder(conn *websocket.Conn) func(v interface{}) error {
+	return func(v interface{}) error {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return encodingError{err}
+		}
+		return conn.WriteMessage(websocket.TextMessage, b)
+	}
+}
+
 func newWebsocketCodec(conn *websocket.Conn) ServerCodec {
 	conn.SetReadLimit(wsMessageSizeLimit)
 	wc := &websocketCodec{
-		jsonCodec: NewFuncCodec(conn, conn.WriteJSON, conn.ReadJSON).(*jsonCodec),
+		jsonCodec: NewFuncCodec(conn, websocketEncoder(conn), conn.ReadJSON).(*jsonCodec),
 		conn:      conn,
 		pingReset: make(chan struct{}, 1),
 	}
 	wc.wg.Add(1)
 	go func() {
-		wc.pingLoop()
+		err := wc.pingLoop()
+		// Leave the wait group before aborting: abort closes the
+		// connection, an embedding's Close may re-enter Server.Stop, and
+		// Stop's close of this codec joins the ping goroutine. Counted as
+		// finished first, that join returns instead of waiting for the
+		// goroutine that is running it.
 		wc.wg.Done()
+		if err != nil {
+			wc.jsonCodec.abort(err)
+		}
 	}()
 	return wc
 }
 
+// close joins the ping loop; abort (a terminal write failure) never does,
+// so that the ping loop itself may abort.
 func (wc *websocketCodec) close() {
 	wc.jsonCodec.close()
 	wc.wg.Wait()
@@ -271,15 +300,18 @@ func (wc *websocketCodec) writeJSON(ctx context.Context, v interface{}) error {
 	return err
 }
 
-// pingLoop sends periodic ping frames when the connection is idle.
-func (wc *websocketCodec) pingLoop() {
+// pingLoop sends periodic ping frames when the connection is idle. It
+// returns nil when the codec closes, or the error of a ping that could not
+// be written: replies and notifications cannot be written then either, and
+// the caller aborts the codec once this goroutine has left the wait group.
+func (wc *websocketCodec) pingLoop() error {
 	var timer = time.NewTimer(wsPingInterval)
 	defer timer.Stop()
 
 	for {
 		select {
 		case <-wc.closed():
-			return
+			return nil
 		case <-wc.pingReset:
 			if !timer.Stop() {
 				<-timer.C
@@ -288,8 +320,11 @@ func (wc *websocketCodec) pingLoop() {
 		case <-timer.C:
 			wc.jsonCodec.encMu.Lock()
 			wc.conn.SetWriteDeadline(time.Now().Add(wsPingWriteTimeout))
-			wc.conn.WriteMessage(websocket.PingMessage, nil)
+			err := wc.conn.WriteMessage(websocket.PingMessage, nil)
 			wc.jsonCodec.encMu.Unlock()
+			if err != nil {
+				return err
+			}
 			timer.Reset(wsPingInterval)
 		}
 	}
