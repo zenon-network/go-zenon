@@ -22,6 +22,13 @@ import (
 // method to sign the transaction in supervisor
 type SignFunc func(data []byte) (signedData []byte, addr *types.Address, pubkey []byte, err error)
 
+// Supervisor is the entry point of the vm package: it pairs the chain
+// with a verifier and turns raw account blocks and momentums into
+// verified transactions ready for insertion. Apply* methods process
+// blocks received from outside (RPC, network sync), Generate* methods
+// build new ones locally (pillar momentum production, embedded
+// auto-receives, node-internal sends). VM panics during execution are
+// recovered and surfaced as constants.ErrVmRunPanic.
 type Supervisor struct {
 	log common.Logger
 
@@ -30,11 +37,20 @@ type Supervisor struct {
 	verifier  verifier.Verifier
 }
 
+// ContractExecution is the result of GenerateAutoReceive: the
+// ContractReceive transaction to insert plus the error the execution
+// produced — the embedded method's own error, or a validation failure
+// of one of the descendant sends it issued (non-nil when the call
+// failed and was rolled back, with a refund block if the send carried
+// tokens; the transaction is still valid and records the failure
+// status).
 type ContractExecution struct {
 	Transaction   *nom.AccountBlockTransaction
 	ReturnedError error
 }
 
+// NewSupervisor returns a Supervisor over chain, creating its own
+// verifier from chain and consensus.
 func NewSupervisor(chain chain.Chain, consensus consensus.Consensus) *Supervisor {
 	return &Supervisor{
 		log:       common.SupervisorLogger,
@@ -100,12 +116,29 @@ func (s *Supervisor) newMomentumContext(momentum *nom.Momentum) vm_context.Momen
 	)
 }
 
+// ApplyBlock verifies and executes a fully-formed account block
+// received from outside (RPC publish, chain bridge) and returns the
+// transaction pairing it with the state patch it produces. The VM
+// never signs the block and leaves the author's hashed and signature
+// fields alone, but it does populate the plasma accounting fields
+// (TotalPlasma from PoW plus fused plasma, BasePlasma from the
+// block's cost) during execution. ChangesHash is validated only for
+// ContractReceive blocks, whose regenerated counterpart must match;
+// for user blocks it is recorded as authored, not checked against
+// the produced patch. ContractSend blocks are rejected — they only
+// exist as descendants of a ContractReceive.
 func (s *Supervisor) ApplyBlock(block *nom.AccountBlock) (*nom.AccountBlockTransaction, error) {
 	if block.BlockType == nom.BlockTypeContractSend {
 		return nil, errors.Errorf("can't apply BlockTypeContractSend")
 	}
 	return s.applyBlock(block, nil)
 }
+
+// ApplyMomentum verifies and executes a momentum received from the
+// network and returns the transaction pairing it with the
+// momentum-store patch it produces. The momentum is not modified: its
+// ChangesHash was set by the producing pillar and is checked against
+// the recomputed patch by the momentum-transaction verifier.
 func (s *Supervisor) ApplyMomentum(detailed *nom.DetailedMomentum) (result *nom.MomentumTransaction, internalErr error) {
 	momentum := detailed.Momentum
 	defer func() {
@@ -133,6 +166,14 @@ func (s *Supervisor) ApplyMomentum(detailed *nom.DetailedMomentum) (result *nom.
 	return transaction, nil
 }
 
+// GenerateFromTemplate completes a partially filled account block and
+// executes it: missing fields are defaulted from the chain frontier
+// (MomentumAcknowledged, PreviousHash/Height, ChainIdentifier,
+// Version, Amount) and, when neither PoW difficulty nor FusedPlasma
+// is set, FusedPlasma is set to the block's base plasma. The block is
+// then applied, ChangesHash is filled in from the produced patch, and
+// the completed block is signed once via signFunc. The pillar's node
+// uses it for embedded-contract update calls.
 func (s *Supervisor) GenerateFromTemplate(template *nom.AccountBlock, signFunc SignFunc) (*nom.AccountBlockTransaction, error) {
 	if err := s.setAll(template); err != nil {
 		return nil, err
@@ -143,6 +184,14 @@ func (s *Supervisor) GenerateFromTemplate(template *nom.AccountBlock, signFunc S
 	}
 	return s.applyBlock(template, signFunc)
 }
+
+// GenerateAutoReceive builds the ContractReceive block for a send
+// addressed to an embedded contract: it executes the contract method
+// at the momentum that confirmed the send and returns the resulting
+// transaction together with the execution's error, from the method or
+// from one of its descendant sends (see ContractExecution). Embedded blocks are unsigned, so no SignFunc is
+// involved. The pillar's contract generator drives this for every
+// queued send.
 func (s *Supervisor) GenerateAutoReceive(sendBlock *nom.AccountBlock) (execution *ContractExecution, internalErr error) {
 	// Matches ApplyMomentum/GenerateMomentum/GenerateGenesisMomentum/applyBlock.
 	// This runs on the producer goroutine, which common.NewTask starts without a
@@ -191,6 +240,12 @@ func (s *Supervisor) GenerateAutoReceive(sendBlock *nom.AccountBlock) (execution
 		ReturnedError: methodErr,
 	}, nil
 }
+
+// GenerateMomentum executes a momentum template produced by the
+// pillar worker and finishes it: after the account-block patches are
+// folded in, ChangesHash is set to the hash of the resulting patch,
+// the momentum hash is recomputed and signed via signFunc, and the
+// complete transaction is verified and returned.
 func (s *Supervisor) GenerateMomentum(detailed *nom.DetailedMomentum, signFunc SignFunc) (result *nom.MomentumTransaction, internalErr error) {
 	template := detailed.Momentum
 	defer func() {
@@ -217,6 +272,13 @@ func (s *Supervisor) GenerateMomentum(detailed *nom.DetailedMomentum, signFunc S
 	}
 	return transaction, nil
 }
+
+// GenerateGenesisMomentum builds the height-1 momentum from the
+// genesis template: it folds the genesis account-block patches from
+// pool into an empty in-memory momentum store, sets ChangesHash and
+// the momentum hash, and skips both the momentum verifier and the
+// transaction verifier — the genesis momentum is unsigned and has no
+// predecessor to verify against.
 func (s *Supervisor) GenerateGenesisMomentum(template *nom.Momentum, pool chain.AccountPool) (result *nom.MomentumTransaction, internalErr error) {
 	defer func() {
 		if err := recover(); err != nil {

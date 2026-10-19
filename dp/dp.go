@@ -1,3 +1,18 @@
+// Package dp implements Dynamic Plasma: the per-momentum pricing of the
+// two resources an account block can pay with, fused plasma and proof
+// of work. Each momentum produced after the Dynamic Plasma spork carries
+// a fusion price and a work price (nom.Momentum.NextFusionPrice and
+// NextWorkPrice, in units of PriceScaleFactor, never below
+// MinResourcePrice). A DynamicPlasma built from that momentum prices the
+// blocks the next momentum confirms: ValidPrice checks that a block pays
+// at least the floor a minimum-priced block would, HigherPrice ranks two
+// blocks competing for the same account-chain slot, and ComputeBasePlasma
+// attributes a block's base plasma to the two resources so NextFusionPrice
+// and NextWorkPrice can move each price toward its target share of the
+// momentum (the targets and the step limits are the on-chain
+// definition.PlasmaVariables). The conversion helpers mirror the
+// pre-spork ones in package vm with the much larger per-account bounds
+// that apply once plasma is priced.
 package dp
 
 import (
@@ -11,27 +26,62 @@ import (
 )
 
 var (
+	// ErrBlockPriceWorse is returned by HigherPrice when the first block
+	// pays a lower price per unit of base plasma than the second.
 	ErrBlockPriceWorse = errors.Errorf("block price is smaller for current block")
-	ErrBlockPriceSame  = errors.Errorf("block price is the same for current block")
+	// ErrBlockPriceSame is returned by HigherPrice when both blocks pay the
+	// same price; callers break the tie by hash.
+	ErrBlockPriceSame = errors.Errorf("block price is the same for current block")
 
-	MaxFusedAmountForAccountBig  = big.NewInt(MaxFusedAmountForAccount)
+	// MaxFusedAmountForAccountBig is MaxFusedAmountForAccount as a big.Int,
+	// for balance comparisons.
+	MaxFusedAmountForAccountBig = big.NewInt(MaxFusedAmountForAccount)
+	// MaxFusionPlasmaForAccountBig is MaxFusionPlasmaForAccount as a big.Int.
 	MaxFusionPlasmaForAccountBig = big.NewInt(MaxFusionPlasmaForAccount)
 )
 
 const (
 	// The max amount of fusion and PoW plasma is unlimited in a practical sense.
 	// A theoretical maximum for plasma is used to maintain consistency.
-	MaxFusionUnitsPerAccount  = 100000000
+	// MaxFusionUnitsPerAccount bounds the fusion units a single account can
+	// hold under Dynamic Plasma. It is deliberately far above any practical
+	// amount; it exists so conversions stay bounded.
+	MaxFusionUnitsPerAccount = 100000000
+	// MaxFusionPlasmaForAccount is the plasma MaxFusionUnitsPerAccount grants.
 	MaxFusionPlasmaForAccount = MaxFusionUnitsPerAccount * constants.PlasmaPerFusionUnit
-	MaxFusedAmountForAccount  = constants.CostPerFusionUnit * MaxFusionUnitsPerAccount
+	// MaxFusedAmountForAccount is the QSR, in smallest units, that fuses
+	// MaxFusionUnitsPerAccount.
+	MaxFusedAmountForAccount = constants.CostPerFusionUnit * MaxFusionUnitsPerAccount
 
-	MaxPoWPlasmaForAccountBlock  = MaxFusionPlasmaForAccount
+	// MaxPoWPlasmaForAccountBlock bounds the proof-of-work plasma a single
+	// block may claim.
+	MaxPoWPlasmaForAccountBlock = MaxFusionPlasmaForAccount
+	// MaxDifficultyForAccountBlock is the difficulty that yields
+	// MaxPoWPlasmaForAccountBlock.
 	MaxDifficultyForAccountBlock = MaxPoWPlasmaForAccountBlock * constants.PoWDifficultyPerPlasma
 
+	// MinResourcePrice is the floor of both resource prices and the price
+	// every chain starts at; with PriceScaleFactor it represents 1.0, so a
+	// block at the floor pays exactly its base plasma.
 	MinResourcePrice uint64 = 1000
+	// PriceScaleFactor is the fixed-point scale of the resource prices: a
+	// price of PriceScaleFactor means one unit of plasma per unit of base
+	// plasma.
 	PriceScaleFactor uint64 = 1000
 )
 
+// DynamicPlasma prices account blocks against one momentum's fusion and
+// work prices and the on-chain plasma variables. NextFusionPrice and
+// NextWorkPrice return the price the next momentum should carry given
+// how much base plasma this momentum's blocks paid with each resource;
+// ComputeBasePlasma and ComputeTotalBasePlasma make that attribution;
+// ValidPrice reports whether a block pays at least the current floor;
+// HigherPrice compares two blocks' price per unit of base plasma
+// (ErrBlockPriceWorse, ErrBlockPriceSame or nil when a pays more than
+// b); Config returns the variables in force and
+// MaxContractBlocksInMomentum the contract-block cap they imply.
+// Blocks from embedded addresses are exempt: zero base plasma, always a
+// valid price.
 type DynamicPlasma interface {
 	NextFusionPrice(fusedBasePlasma uint64) uint64
 	NextWorkPrice(powBasePlasma uint64) uint64
@@ -214,6 +264,11 @@ func (dp *dynamicPlasma) MaxContractBlocksInMomentum() uint64 {
 	return MaxContractBlocks(dp.config)
 }
 
+// NewDynamicPlasma returns the pricing for the blocks confirmed after
+// context: its NextFusionPrice and NextWorkPrice when context is a
+// Dynamic Plasma momentum (Version at least
+// nom.DynamicPlasmaMomentumVersion), MinResourcePrice for both
+// otherwise, together with the plasma variables config.
 func NewDynamicPlasma(context *nom.Momentum, config *definition.PlasmaVariables) DynamicPlasma {
 	fusionPrice := MinResourcePrice
 	workPrice := MinResourcePrice
@@ -232,6 +287,9 @@ func NewDynamicPlasma(context *nom.Momentum, config *definition.PlasmaVariables)
 	}
 }
 
+// GetDifficultyForPlasma returns the proof-of-work difficulty that
+// yields requiredPlasma (constants.PoWDifficultyPerPlasma per unit), or
+// constants.ErrForbiddenParam above MaxPoWPlasmaForAccountBlock.
 func GetDifficultyForPlasma(requiredPlasma uint64) (uint64, error) {
 	if requiredPlasma > MaxPoWPlasmaForAccountBlock {
 		return 0, constants.ErrForbiddenParam
@@ -241,6 +299,8 @@ func GetDifficultyForPlasma(requiredPlasma uint64) (uint64, error) {
 	return requiredPlasma * constants.PoWDifficultyPerPlasma, nil
 }
 
+// DifficultyToPlasma returns the plasma a proof of work of the given
+// difficulty is worth, capped at MaxPoWPlasmaForAccountBlock.
 func DifficultyToPlasma(difficulty uint64) uint64 {
 	// Check for 0
 	if difficulty == 0 {
@@ -255,6 +315,10 @@ func DifficultyToPlasma(difficulty uint64) uint64 {
 	return difficulty / constants.PoWDifficultyPerPlasma
 }
 
+// FusedAmountToPlasma converts fused QSR (smallest units) into plasma:
+// constants.PlasmaPerFusionUnit per whole constants.CostPerFusionUnit,
+// capped at MaxFusionPlasmaForAccount; nil or non-positive amounts give
+// 0.
 func FusedAmountToPlasma(amount *big.Int) uint64 {
 	// Check for 0
 	if amount == nil || amount.Sign() <= 0 {

@@ -1,3 +1,22 @@
+// Package embedded routes account blocks sent to the embedded
+// contracts — the system contracts compiled into the node at the
+// fixed addresses defined in common/types — to executable Go code.
+//
+// Each contract pairs the ABI parsed in vm/embedded/definition with
+// a map from method name to the Method (from
+// vm/embedded/implementation) that executes it. The VM resolves a
+// send block through GetEmbeddedMethod: the first four bytes of the
+// block's Data select the ABI method by selector, and the method's
+// name selects the implementation.
+//
+// The available method set grows with the enforced sporks. Starting
+// from the genesis contracts (getOrigin), each spork that changes the
+// surface — accelerator, bridge and liquidity, HTLC, Dynamic Plasma,
+// PTLC — adds or replaces methods, and the registry for each
+// combination is built lazily, once, on first use. GetEmbeddedMethod
+// looks up the registry keyed by the sporks enforced at the context's
+// momentum, so the same call is resolved against whatever method set
+// is active at that height.
 package embedded
 
 import (

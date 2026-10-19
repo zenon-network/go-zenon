@@ -1,3 +1,15 @@
+// Package cache implements store.Cache: the derived account state the
+// node needs at every momentum but does not want to recompute from the
+// ledger — each beneficiary's fused QSR amount, each address's chain
+// plasma and the activation state of sporks. Values are stored under
+// keys suffixed with the momentum height they became valid at, so a
+// cache store fixed at an identifier answers reads as of that height
+// by taking the newest entry at or below it. Superseded entries of an
+// address are pruned when that address next sends a block, down to the
+// height its block acknowledges, so an address that never sends keeps
+// its history. The backing database is
+// the storage.CacheManager, which keeps the last rollback patches so the
+// cache follows momentum rollbacks.
 package cache
 
 import (

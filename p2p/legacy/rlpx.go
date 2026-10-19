@@ -85,6 +85,9 @@ const (
 	discWriteTimeout = 1 * time.Second
 )
 
+// Decrypt decrypts an ECIES ciphertext with the given secp256k1
+// private key. The RLPx encryption handshake uses it to open the
+// auth and auth-response packets.
 func Decrypt(prv *ecdsa.PrivateKey, ct []byte) ([]byte, error) {
 	key := ecies.ImportECDSA(prv)
 	return key.Decrypt(ct, nil, nil)

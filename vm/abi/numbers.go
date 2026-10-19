@@ -9,13 +9,16 @@ import (
 )
 
 const (
-	// number of bits in chain big.Word
+	// WordBits is the number of bits in a big.Word (32 or 64,
+	// depending on the host platform).
 	WordBits = 32 << (uint64(^big.Word(0)) >> 63)
 
-	// number of bytes in chain big.Word
+	// WordBytes is the number of bytes in a big.Word.
 	WordBytes = WordBits / 8
 
-	// number of bytes in chain vm word
+	// WordSize is the number of bytes in an ABI word: every elementary
+	// static value is encoded into one big-endian 32-byte slot (a static
+	// array takes one slot per element).
 	WordSize = 32
 )
 
@@ -40,6 +43,9 @@ func U256(n *big.Int) []byte {
 	return PaddedBigBytes(n.And(n, common.BigP256m1), WordSize)
 }
 
+// PaddedBigBytes encodes bigint as a big-endian byte slice
+// left-padded with zeros to n bytes. If bigint already needs n or
+// more bytes it is returned unpadded.
 func PaddedBigBytes(bigint *big.Int, n int) []byte {
 	if bigint.BitLen()/8 >= n {
 		return bigint.Bytes()

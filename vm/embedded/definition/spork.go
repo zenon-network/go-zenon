@@ -24,7 +24,13 @@ const (
 		]}
 	]`
 
-	SporkCreateMethodName   = "CreateSpork"
+	// SporkCreateMethodName names the method that registers a new
+	// spork; only types.SporkAddress and types.CommunitySporkAddress
+	// may call it.
+	SporkCreateMethodName = "CreateSpork"
+	// SporkActivateMethodName names the method that activates an
+	// existing spork by id, scheduling its enforcement; restricted to
+	// the same two addresses as CreateSpork.
 	SporkActivateMethodName = "ActivateSpork"
 
 	sporkInfoVariableName = "sporkInfo"
@@ -34,10 +40,15 @@ var (
 	// ABISpork is abi definition of token contract
 	ABISpork = abi.JSONToABIContract(strings.NewReader(jsonSpork))
 
-	// Original authorization window. Kept unchanged so historical
-	// execution results are preserved.
+	// CommunitySporkAddressStartHeight is the first momentum height at
+	// which types.CommunitySporkAddress may create and activate
+	// sporks; calls below it are rejected.
 	CommunitySporkAddressStartHeight uint64 = 10109240 // Targeting 2025-04-16 12:00:00 UTC
-	CommunitySporkAddressEndHeight   uint64 = 13243712 // Targeting 2026-04-16 12:00:00 UTC
+	// CommunitySporkAddressEndHeight is the momentum height at which
+	// the community spork address's original window closes; calls at
+	// or above it are rejected until the renewal window below opens.
+	// types.SporkAddress is bound by neither window.
+	CommunitySporkAddressEndHeight uint64 = 13243712 // Targeting 2026-04-16 12:00:00 UTC
 
 	// Renewal authorization window. The start is projected from the observed
 	// mainnet rate of ~11.46s per momentum (frontier 14310887 at
@@ -57,16 +68,24 @@ var (
 	// includes this window; every node should upgrade before
 	// CommunitySporkAddressRenewalStartHeight so that the window can be used.
 	CommunitySporkAddressRenewalStartHeight uint64 = 14567887 // Targeting 2026-11-03 12:00:00 UTC
-	CommunitySporkAddressRenewalEndHeight   uint64 = 19791986 // Targeting 2028-09-19 12:00:00 UTC
+	// CommunitySporkAddressRenewalEndHeight closes the renewal window;
+	// community spork calls confirmed at or above it are rejected.
+	CommunitySporkAddressRenewalEndHeight uint64 = 19791986 // Targeting 2028-09-19 12:00:00 UTC
 )
 
 const (
 	_ byte = iota
 	sporkInfoPrefix
 
+	// SporkInfoPrefix is the storage prefix of spork entries, exported for
+	// the chain cache, which indexes activations.
 	SporkInfoPrefix = sporkInfoPrefix
 )
 
+// Spork is one stored protocol-upgrade switch. Id is the hash of the
+// CreateSpork send block; Activated and EnforcementHeight stay false
+// and zero until ActivateSpork sets them. Entries are stored under
+// sporkInfoPrefix (1) followed by the 32-byte id.
 type Spork struct {
 	Id          types.Hash `json:"id"`
 	Name        string     `json:"name"`
@@ -77,9 +96,13 @@ type Spork struct {
 	EnforcementHeight uint64 `json:"enforcementHeight"`
 }
 
+// Save stores the spork under its id key, panicking via
+// common.DealWithErr on database errors.
 func (spork *Spork) Save(context db.DB) {
 	common.DealWithErr(context.Put(spork.Key(), spork.Data()))
 }
+
+// Data packs the full spork state; packing failures panic.
 func (spork *Spork) Data() []byte {
 	return ABISpork.PackVariablePanic(
 		sporkInfoVariableName,
@@ -89,16 +112,23 @@ func (spork *Spork) Data() []byte {
 		spork.Activated,
 		spork.EnforcementHeight)
 }
+
+// Key is sporkInfoPrefix (1) followed by the 32-byte id.
 func (spork *Spork) Key() []byte {
 	return common.JoinBytes([]byte{sporkInfoPrefix}, spork.Id.Bytes())
 }
 
+// ParseSporkInfo decodes a stored spork entry. The data is the
+// contract's own, so a malformed value panics rather than returning an
+// error.
 func ParseSporkInfo(data []byte) *Spork {
 	spork := new(Spork)
 	ABISpork.UnpackVariablePanic(spork, sporkInfoVariableName, data)
 	return spork
 }
 
+// GetSporkInfoById returns the spork registered under id, or nil if
+// none exists; database errors panic via common.DealWithErr.
 func GetSporkInfoById(context db.DB, id types.Hash) *Spork {
 	spork := new(Spork)
 	spork.Id = id
@@ -111,6 +141,9 @@ func GetSporkInfoById(context db.DB, id types.Hash) *Spork {
 		return ParseSporkInfo(data)
 	}
 }
+
+// GetAllSporks returns every registered spork, in storage-key (id
+// byte) order; database errors panic via common.DealWithErr.
 func GetAllSporks(context db.DB) []*Spork {
 	iterator := context.NewIterator([]byte{sporkInfoPrefix})
 	defer iterator.Release()

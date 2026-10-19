@@ -14,6 +14,9 @@ type Argument struct {
 	Indexed bool // indexed is only used by events
 }
 
+// Arguments is the ordered input list of a method or variable; its
+// Pack and Unpack methods implement the ABI encoding for the whole
+// tuple.
 type Arguments []Argument
 
 // UnmarshalJSON implements json.Unmarshaler interface

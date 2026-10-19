@@ -19,27 +19,48 @@ import (
 	"github.com/zenon-network/go-zenon/zenon"
 )
 
+// PlasmaApi implements the "embedded.plasma" JSON-RPC namespace, which
+// reads plasma state derived from fused QSR: per-address plasma totals,
+// the fusion entries stored in the plasma embedded contract, and the
+// proof-of-work difficulty needed when fused plasma does not cover a
+// prospective account block. Contract storage is read at the
+// account-pool frontier; prices and heights come from the frontier
+// momentum. Every exported method is served as
+// embedded.plasma.<lowerCamelMethodName>.
 type PlasmaApi struct {
 	chain chain.Chain
 }
 
+// NewPlasmaApi returns a PlasmaApi bound to the given node's chain. It
+// is called by the RPC server when the "embedded"
+// namespace is enabled; it is not itself an RPC method.
 func NewPlasmaApi(z zenon.Zenon) *PlasmaApi {
 	return &PlasmaApi{
 		chain: z.Chain(),
 	}
 }
 
+// PlasmaInfo summarizes an address's plasma as reported by Get.
+// QsrAmount is the total QSR fused with the address as beneficiary, in
+// smallest units; MaxPlasma is the plasma that fused amount converts
+// to; CurrentPlasma is the portion still available after subtracting
+// plasma held by the address's unconfirmed account blocks.
 type PlasmaInfo struct {
 	CurrentPlasma uint64   `json:"currentPlasma"`
 	MaxPlasma     uint64   `json:"maxPlasma"`
 	QsrAmount     *big.Int `json:"qsrAmount"`
 }
+
+// PlasmaInfoMarshal is the JSON wire form of PlasmaInfo, with QsrAmount
+// rendered as a base-10 string.
 type PlasmaInfoMarshal struct {
 	CurrentPlasma uint64 `json:"currentPlasma"`
 	MaxPlasma     uint64 `json:"maxPlasma"`
 	QsrAmount     string `json:"qsrAmount"`
 }
 
+// ToPlasmaInfoMarshal converts the plasma info to its JSON wire
+// representation, rendering QsrAmount as a base-10 string.
 func (r *PlasmaInfo) ToPlasmaInfoMarshal() *PlasmaInfoMarshal {
 	aux := &PlasmaInfoMarshal{
 		CurrentPlasma: r.CurrentPlasma,
@@ -50,10 +71,15 @@ func (r *PlasmaInfo) ToPlasmaInfoMarshal() *PlasmaInfoMarshal {
 	return aux
 }
 
+// MarshalJSON encodes the plasma info via its PlasmaInfoMarshal wire
+// form, so QsrAmount appears as a base-10 JSON string.
 func (r *PlasmaInfo) MarshalJSON() ([]byte, error) {
 	return json.Marshal(r.ToPlasmaInfoMarshal())
 }
 
+// UnmarshalJSON decodes the PlasmaInfoMarshal wire form produced by
+// MarshalJSON. A QSR amount string that is not a valid base-10 integer
+// decodes to 0 rather than producing an error.
 func (r *PlasmaInfo) UnmarshalJSON(data []byte) error {
 	aux := new(PlasmaInfoMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -65,6 +91,13 @@ func (r *PlasmaInfo) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// FusionEntry is one QSR fusion recorded in the plasma contract: the
+// fused QSR amount in smallest units, the beneficiary address whose
+// plasma it backs, the momentum height starting at which the owner may
+// cancel the fusion and reclaim the QSR, the entry's id, which is the
+// hash of the send block that created it, and whether the entry is
+// already revocable (the frontier momentum has reached its expiration
+// height).
 type FusionEntry struct {
 	QsrAmount        *big.Int      `json:"qsrAmount"`
 	Beneficiary      types.Address `json:"beneficiary"`
@@ -72,6 +105,9 @@ type FusionEntry struct {
 	Id               types.Hash    `json:"id"`
 	IsRevocable      bool          `json:"isRevocable"`
 }
+
+// FusionEntryMarshal is the JSON wire form of FusionEntry, with
+// QsrAmount rendered as a base-10 string.
 type FusionEntryMarshal struct {
 	QsrAmount        string        `json:"qsrAmount"`
 	Beneficiary      types.Address `json:"beneficiary"`
@@ -80,6 +116,8 @@ type FusionEntryMarshal struct {
 	IsRevocable      bool          `json:"isRevocable"`
 }
 
+// ToFusionEntryMarshal converts the entry to its JSON wire
+// representation, rendering QsrAmount as a base-10 string.
 func (r *FusionEntry) ToFusionEntryMarshal() *FusionEntryMarshal {
 	aux := &FusionEntryMarshal{
 		QsrAmount:        r.QsrAmount.String(),
@@ -92,10 +130,15 @@ func (r *FusionEntry) ToFusionEntryMarshal() *FusionEntryMarshal {
 	return aux
 }
 
+// MarshalJSON encodes the entry via its FusionEntryMarshal wire form,
+// so QsrAmount appears as a base-10 JSON string.
 func (r *FusionEntry) MarshalJSON() ([]byte, error) {
 	return json.Marshal(r.ToFusionEntryMarshal())
 }
 
+// UnmarshalJSON decodes the FusionEntryMarshal wire form produced by
+// MarshalJSON. A QSR amount string that is not a valid base-10 integer
+// decodes to 0 rather than producing an error.
 func (r *FusionEntry) UnmarshalJSON(data []byte) error {
 	aux := new(FusionEntryMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -109,17 +152,26 @@ func (r *FusionEntry) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// FusionEntryList is one page of an owner's fusion entries as returned
+// by GetEntriesByAddress. QsrAmount and Count cover all of the owner's
+// entries, not just the page: QsrAmount is the total QSR the owner has
+// fused, in smallest units, and Count is the total number of entries.
 type FusionEntryList struct {
 	QsrAmount *big.Int       `json:"qsrAmount"`
 	Count     int            `json:"count"`
 	Fusions   []*FusionEntry `json:"list"`
 }
+
+// FusionEntryListMarshal is the JSON wire form of FusionEntryList, with
+// the total QsrAmount rendered as a base-10 string.
 type FusionEntryListMarshal struct {
 	QsrAmount string         `json:"qsrAmount"`
 	Count     int            `json:"count"`
 	Fusions   []*FusionEntry `json:"list"`
 }
 
+// ToFusionEntryListMarshal converts the list to its JSON wire
+// representation, rendering the total QsrAmount as a base-10 string.
 func (r *FusionEntryList) ToFusionEntryListMarshal() *FusionEntryListMarshal {
 	aux := &FusionEntryListMarshal{
 		QsrAmount: r.QsrAmount.String(),
@@ -133,10 +185,14 @@ func (r *FusionEntryList) ToFusionEntryListMarshal() *FusionEntryListMarshal {
 	return aux
 }
 
+// MarshalJSON encodes the list via its FusionEntryListMarshal wire
+// form, so the total QsrAmount appears as a base-10 JSON string.
 func (r *FusionEntryList) MarshalJSON() ([]byte, error) {
 	return json.Marshal(r.ToFusionEntryListMarshal())
 }
 
+// UnmarshalJSON decodes the FusionEntryListMarshal wire form produced
+// by MarshalJSON, sizing the entry slice from the decoded list.
 func (r *FusionEntryList) UnmarshalJSON(data []byte) error {
 	aux := new(FusionEntryListMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -152,10 +208,19 @@ func (r *FusionEntryList) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// SortFusionEntryByHeight implements sort.Interface, ordering fusion
+// entries by ascending expiration height with ties broken by ascending
+// beneficiary address string. GetEntriesByAddress uses it before
+// paginating.
 type SortFusionEntryByHeight []*definition.FusionInfo
 
-func (a SortFusionEntryByHeight) Len() int      { return len(a) }
+// Len implements sort.Interface.
+func (a SortFusionEntryByHeight) Len() int { return len(a) }
+
+// Swap implements sort.Interface.
 func (a SortFusionEntryByHeight) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+
+// Less orders by ascending expiration height, then beneficiary.
 func (a SortFusionEntryByHeight) Less(i, j int) bool {
 	if a[i].ExpirationHeight == a[j].ExpirationHeight {
 		return a[i].Beneficiary.String() < a[j].Beneficiary.String()
@@ -163,6 +228,14 @@ func (a SortFusionEntryByHeight) Less(i, j int) bool {
 	return a[i].ExpirationHeight < a[j].ExpirationHeight
 }
 
+// Get returns the plasma of address: the total QSR fused with it as
+// beneficiary and the plasma that amount converts to, both as confirmed
+// by the frontier momentum (a fusion whose receive has executed but is
+// not yet confirmed does not count), and the plasma currently
+// available once the plasma held by the address's unconfirmed account
+// blocks is subtracted from that total.
+//
+// JSON-RPC: embedded.plasma.get
 func (a *PlasmaApi) Get(address types.Address) (*PlasmaInfo, error) {
 	_, context, err := api.GetFrontierContext(a.chain, address)
 	if err != nil {
@@ -197,6 +270,17 @@ func (a *PlasmaApi) Get(address types.Address) (*PlasmaInfo, error) {
 		QsrAmount:     amount,
 	}, nil
 }
+
+// GetEntriesByAddress returns one page of the fusion entries owned by
+// address (the address that sent the fuse transactions, not the
+// beneficiary), read from plasma contract state at the account-pool
+// frontier and sorted by ascending expiration height with ties broken
+// by beneficiary. Each entry's IsRevocable reports whether the frontier
+// momentum height has reached the entry's expiration height. QsrAmount
+// and Count in the result cover all of the owner's entries. A pageSize
+// above 1024 is rejected with api.ErrPageSizeParamTooBig.
+//
+// JSON-RPC: embedded.plasma.getEntriesByAddress
 func (a *PlasmaApi) GetEntriesByAddress(address types.Address, pageIndex, pageSize uint32) (*FusionEntryList, error) {
 	if pageSize > api.RpcMaxPageSize {
 		return nil, api.ErrPageSizeParamTooBig
@@ -228,12 +312,27 @@ func (a *PlasmaApi) GetEntriesByAddress(address types.Address, pageIndex, pageSi
 	return &FusionEntryList{amount, listLen, entryList}, nil
 }
 
+// GetRequiredParam describes the prospective account block passed to
+// GetRequiredPoWForAccountBlock: the sending address, the block type
+// (nom.BlockTypeUserSend or a receive type), the destination address
+// (required for user-send blocks) and the data payload, whose length
+// influences the plasma requirement of send blocks.
 type GetRequiredParam struct {
 	SelfAddr  types.Address  `json:"address"`
 	BlockType uint64         `json:"blockType"`
 	ToAddr    *types.Address `json:"toAddress"`
 	Data      []byte         `json:"data"`
 }
+
+// GetRequiredResult is the answer of GetRequiredPoWForAccountBlock:
+// the plasma currently available to the address from fused QSR, the
+// minimum plasma the described block requires, the proof-of-work
+// difficulty that would cover the shortfall (0 when the available
+// plasma already suffices) and the total fused plasma a fused-only
+// block must carry: the block's base plasma before Dynamic Plasma, and
+// the base plasma scaled by the frontier momentum's NextFusionPrice
+// once Dynamic Plasma is enforced and the frontier momentum is a
+// version-2 momentum.
 type GetRequiredResult struct {
 	AvailablePlasma    uint64 `json:"availablePlasma"`
 	BasePlasma         uint64 `json:"basePlasma"`
@@ -243,6 +342,24 @@ type GetRequiredResult struct {
 	RequiredFusedPlasma uint64 `json:"requiredFusedPlasma"`
 }
 
+// GetRequiredPoWForAccountBlock computes, against the frontier
+// momentum, how much proof of work the described account block would
+// need on top of the address's available fused plasma. The base plasma
+// is the block's minimum requirement (a flat base for receive blocks; a
+// base plus a per-byte data charge for sends to user addresses; the
+// called method's fixed cost for sends to embedded contracts). When
+// available plasma covers it the required difficulty is 0; otherwise
+// the difficulty is proportional to the missing plasma (1500 per unit),
+// and a shortfall beyond what proof of work may cover for one block is
+// rejected with an error. A user-send block without a destination
+// address is rejected. Once Dynamic Plasma is enforced and the
+// frontier momentum is a version-2 momentum (the first momentum after
+// enforcement still carries no prices), the fused and work requirements
+// are scaled by that momentum's NextFusionPrice and NextWorkPrice (see
+// package dp), and the result's RequiredFusedPlasma is the
+// price-scaled fused-only target.
+//
+// JSON-RPC: embedded.plasma.getRequiredPoWForAccountBlock
 func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetRequiredResult, error) {
 	_, context, err := api.GetFrontierContext(a.chain, param.SelfAddr)
 	if err != nil {
@@ -345,6 +462,12 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 	}
 }
 
+// GetVariables returns the Dynamic Plasma variables in force at the
+// account-pool frontier: the per-momentum base plasma ceiling, the fused
+// and PoW targets and the price-change limits. Before SetVariables has
+// ever been called it returns the compiled defaults.
+//
+// JSON-RPC: embedded.plasma.getVariables
 func (a *PlasmaApi) GetVariables() (*definition.PlasmaVariables, error) {
 	_, context, err := api.GetFrontierContext(a.chain, types.PlasmaContract)
 	if err != nil {

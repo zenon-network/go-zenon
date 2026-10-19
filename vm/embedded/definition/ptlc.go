@@ -49,28 +49,49 @@ const (
 		]}
 	]`
 
-	CreatePtlcMethodName      = "Create"
-	ReclaimPtlcMethodName     = "Reclaim"
-	UnlockPtlcMethodName      = "Unlock"
+	// CreatePtlcMethodName names the method that locks the sent tokens
+	// behind a point.
+	CreatePtlcMethodName = "Create"
+	// ReclaimPtlcMethodName names the method by which the creator takes the
+	// tokens back after expiry.
+	ReclaimPtlcMethodName = "Reclaim"
+	// UnlockPtlcMethodName names the method that pays the tokens to the
+	// caller against a witness for the point.
+	UnlockPtlcMethodName = "Unlock"
+	// ProxyUnlockPtlcMethodName names the method that pays the tokens to a
+	// named destination against a witness bound to that destination.
 	ProxyUnlockPtlcMethodName = "ProxyUnlock"
 
 	variableNamePtlcInfo = "ptlcInfo"
 
+	// PtlcUnlockMessageDomain is the domain-separation prefix of the
+	// message an unlock signature covers (see GetPtlcUnlockMessage).
 	PtlcUnlockMessageDomain = "zenon-ptlc-unlock:v1"
 )
 
 const (
+	// PointTypeED25519 locks to an Ed25519 public key, unlocked by an
+	// Ed25519 signature.
 	PointTypeED25519 uint8 = iota
+	// PointTypeBIP340 locks to a BIP-340 x-only public key, unlocked by a
+	// Schnorr signature.
 	PointTypeBIP340
+	// PointTypeSecp256k1Point locks to a compressed secp256k1 point, unlocked
+	// by revealing its scalar.
 	PointTypeSecp256k1Point
 )
 
+// PointTypePubKeySizes gives the byte length of a valid point lock per
+// point type.
 var PointTypePubKeySizes = map[uint8]uint8{
 	PointTypeED25519:        32,
 	PointTypeBIP340:         32,
 	PointTypeSecp256k1Point: 33,
 }
 
+// PointTypeWitnessSizes gives the byte length of a valid unlock witness
+// per point type: a 64-byte signature, or the 32-byte scalar for a
+// secp256k1 point.
 var PointTypeWitnessSizes = map[uint8]uint8{
 	PointTypeED25519:        64,
 	PointTypeBIP340:         64,
@@ -78,11 +99,16 @@ var PointTypeWitnessSizes = map[uint8]uint8{
 }
 
 var (
+	// ABIPtlc is the parsed ABI of the PTLC embedded contract.
 	ABIPtlc = abi.JSONToABIContract(strings.NewReader(jsonPtlc))
 
 	ptlcInfoKeyPrefix = []byte{1}
 )
 
+// CreatePtlcParam is the argument of Create: the unix time after which
+// the creator may reclaim, the point type and point lock, and an
+// optional fixed destination (required for secp256k1 points, since
+// their witness does not commit to one).
 type CreatePtlcParam struct {
 	ExpirationTime int64         `json:"expirationTime"`
 	PointType      uint8         `json:"pointType"`
@@ -90,6 +116,11 @@ type CreatePtlcParam struct {
 	Destination    types.Address `json:"destination"`
 }
 
+// PtlcInfo is one stored PTLC entry: the creator (TimeLocked), the
+// locked token and amount (smallest units), the expiration time, the
+// point the funds are locked to, and the destination they may be
+// unlocked to (zero means any payable address). Id is the hash of the
+// Create send block and is recovered from the storage key.
 type PtlcInfo struct {
 	Id             types.Hash               `json:"id"`
 	TimeLocked     types.Address            `json:"timeLocked"`
@@ -101,6 +132,8 @@ type PtlcInfo struct {
 	Destination    types.Address            `json:"destination"`
 }
 
+// PtlcInfoMarshal is the JSON wire form of PtlcInfo, with Amount as a
+// base-10 string.
 type PtlcInfoMarshal struct {
 	Id             types.Hash               `json:"id"`
 	TimeLocked     types.Address            `json:"timeLocked"`
@@ -112,6 +145,7 @@ type PtlcInfoMarshal struct {
 	Destination    types.Address            `json:"destination"`
 }
 
+// ToPtlcInfoMarshal converts the entry to its JSON wire form.
 func (p *PtlcInfo) ToPtlcInfoMarshal() *PtlcInfoMarshal {
 	return &PtlcInfoMarshal{
 		Id:             p.Id,
@@ -125,10 +159,13 @@ func (p *PtlcInfo) ToPtlcInfoMarshal() *PtlcInfoMarshal {
 	}
 }
 
+// MarshalJSON encodes the entry via PtlcInfoMarshal.
 func (p *PtlcInfo) MarshalJSON() ([]byte, error) {
 	return json.Marshal(p.ToPtlcInfoMarshal())
 }
 
+// UnmarshalJSON decodes the PtlcInfoMarshal form; an amount that is not
+// a base-10 integer is an error.
 func (p *PtlcInfo) UnmarshalJSON(data []byte) error {
 	aux := new(PtlcInfoMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -149,21 +186,31 @@ func (p *PtlcInfo) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// String renders the entry on one line for logs, with the point lock in
+// base64.
 func (p PtlcInfo) String() string {
 	return fmt.Sprintf("Id:%s TimeLocked:%s TokenStandard:%s Amount:%s ExpirationTime:%d PointType:%d PointLock:%s Destination:%s ", p.Id, p.TimeLocked, p.TokenStandard, p.Amount, p.ExpirationTime, p.PointType, base64.StdEncoding.EncodeToString(p.PointLock), p.Destination)
 }
 
+// UnlockPtlcParam is the argument of Unlock: the entry id and the
+// witness for its point (a signature over the unlock message bound to
+// the caller, or the scalar for a secp256k1 point).
 type UnlockPtlcParam struct {
 	Id        types.Hash
 	Signature []byte
 }
 
+// ProxyUnlockPtlcParam is the argument of ProxyUnlock: the entry id, the
+// address to pay, and the witness for the entry's point (a signature
+// over the unlock message bound to that address, or the scalar for a
+// secp256k1 point).
 type ProxyUnlockPtlcParam struct {
 	Id          types.Hash
 	Destination types.Address
 	Signature   []byte
 }
 
+// Save stores the entry under its id.
 func (entry *PtlcInfo) Save(context db.DB) error {
 	data, err := ABIPtlc.PackVariable(
 		variableNamePtlcInfo,
@@ -180,6 +227,8 @@ func (entry *PtlcInfo) Save(context db.DB) error {
 	}
 	return context.Put(getPtlcInfoKey(entry.Id), data)
 }
+
+// Delete removes the entry once it has been unlocked or reclaimed.
 func (entry *PtlcInfo) Delete(context db.DB) error {
 	return context.Delete(getPtlcInfoKey(entry.Id))
 }
@@ -204,6 +253,13 @@ func unmarshalPtlcInfoKey(key []byte) (*types.Hash, error) {
 	return h, nil
 }
 
+// GetPtlcUnlockMessage returns the 32-byte message a signature witness
+// (Ed25519 or BIP-340) must sign: the SHA3-256 hash of the domain
+// prefix, the chain identifier, the PTLC contract address, the point
+// type, the entry id and the destination, so such a witness is valid
+// for one entry, one destination and one chain. A secp256k1-point
+// witness is the scalar itself and does not sign this message; its
+// destination is enforced by the entry's fixed Destination instead.
 func GetPtlcUnlockMessage(chainIdentifier uint64, pointType uint8, id types.Hash, destination types.Address) []byte {
 	return crypto.Hash(common.JoinBytes(
 		[]byte(PtlcUnlockMessageDomain),
@@ -231,6 +287,9 @@ func parsePtlcInfo(key, data []byte) (*PtlcInfo, error) {
 		return nil, constants.ErrDataNonExistent
 	}
 }
+
+// GetPtlcInfo returns the entry stored under id, or
+// constants.ErrDataNonExistent if there is none.
 func GetPtlcInfo(context db.DB, id types.Hash) (*PtlcInfo, error) {
 	key := getPtlcInfoKey(id)
 	if data, err := context.Get(key); err != nil {

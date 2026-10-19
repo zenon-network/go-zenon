@@ -34,10 +34,14 @@ type ErrCanonicalStateUncertain struct {
 	RollbackErr error
 }
 
+// Error describes both the operation that failed and the recovery that
+// failed after it.
 func (e *ErrCanonicalStateUncertain) Error() string {
 	return fmt.Sprintf("canonical chain state uncertain: operation failed (%v); recovery failed (%v)", e.Cause, e.RollbackErr)
 }
 
+// Unwrap returns the original failure, so errors.Is and errors.As see
+// through to it.
 func (e *ErrCanonicalStateUncertain) Unwrap() error {
 	return e.Cause
 }
@@ -242,7 +246,13 @@ func (c *momentumPool) RollbackTo(insertLocker sync.Locker, identifier types.Has
 	return nil
 }
 
-// Checks whatever or not all active sporks are implemented
+// GotAllActiveSporksImplemented checks every spork defined on-chain
+// against types.ImplementedSporksMap: unimplemented collects the
+// activated sporks at or past their enforcement height that this
+// build does not know how to enforce, and justNow is the spork whose
+// enforcement height equals the frontier height, if any. It is called
+// at chain Init and after every momentum insertion; a non-nil
+// unimplemented list makes the node terminate with exit status 2.
 func GotAllActiveSporksImplemented(store store.Momentum) (justNow *definition.Spork, unimplemented []*definition.Spork, err error) {
 	momentum, err := store.GetFrontierMomentum()
 	if err != nil {
@@ -302,6 +312,8 @@ func (c *momentumPool) GetStableAccountDB(address types.Address) db.DB {
 	return c.getFrontierStore().GetAccountDB(address)
 }
 
+// NewMomentumPool returns a momentum pool over chainManager with a
+// fresh event manager and no listeners; NewChain is its only caller.
 func NewMomentumPool(chainManager db.Manager, genesis store.Genesis) *momentumPool {
 	return &momentumPool{
 		momentumEventManager: newMomentumEventManager(),

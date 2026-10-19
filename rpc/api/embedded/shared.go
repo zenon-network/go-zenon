@@ -1,3 +1,16 @@
+// Package embedded exposes JSON-RPC handlers for the embedded contracts
+// (pillar, plasma, sentinel, token, stake, spork, swap, accelerator,
+// htlc, bridge, liquidity). Method results combine contract state read
+// at the account-pool frontier — the latest state, including the
+// contract's executed receive blocks not yet confirmed by a momentum
+// (see api.GetFrontierContext) — with computed values such as uncollected
+// rewards or revocation cooldowns; each API's exported methods are
+// served as embedded.<contract>.<lowerCamelMethodName>.
+//
+// Throughout the package, epochs are consecutive 24-hour windows
+// counted from the genesis timestamp, starting at epoch 0, and token
+// amounts are expressed in the smallest unit (10^8 per ZNN or QSR) with
+// *big.Int values rendered as base-10 JSON strings.
 package embedded
 
 import (
@@ -31,18 +44,27 @@ func getUncollectedReward(chain chain.Chain, contract types.Address, address typ
 	return definition.GetRewardDeposit(context.Storage(), &address)
 }
 
+// RewardHistoryEntry is the reward an address earned from one embedded
+// contract during one epoch: the epoch number and the ZNN and QSR
+// amounts credited for it, in smallest units.
 type RewardHistoryEntry struct {
 	Epoch int64    `json:"epoch"`
 	Znn   *big.Int `json:"znnAmount"`
 	Qsr   *big.Int `json:"qsrAmount"`
 }
 
+// RewardHistoryEntryMarshal is the JSON wire form of
+// RewardHistoryEntry, with the ZNN and QSR amounts rendered as base-10
+// strings. It exists so the custom MarshalJSON/UnmarshalJSON of
+// RewardHistoryEntry can round-trip amounts without precision loss.
 type RewardHistoryEntryMarshal struct {
 	Epoch int64  `json:"epoch"`
 	Znn   string `json:"znnAmount"`
 	Qsr   string `json:"qsrAmount"`
 }
 
+// ToRewardDepositMarshal converts the entry to its JSON wire
+// representation, rendering the ZNN and QSR amounts as base-10 strings.
 func (r *RewardHistoryEntry) ToRewardDepositMarshal() *RewardHistoryEntryMarshal {
 	aux := &RewardHistoryEntryMarshal{
 		Epoch: r.Epoch,
@@ -53,10 +75,15 @@ func (r *RewardHistoryEntry) ToRewardDepositMarshal() *RewardHistoryEntryMarshal
 	return aux
 }
 
+// MarshalJSON encodes the entry via its RewardHistoryEntryMarshal wire
+// form, so the amounts appear as base-10 JSON strings.
 func (r *RewardHistoryEntry) MarshalJSON() ([]byte, error) {
 	return json.Marshal(r.ToRewardDepositMarshal())
 }
 
+// UnmarshalJSON decodes the RewardHistoryEntryMarshal wire form
+// produced by MarshalJSON. Amount strings that are not valid base-10
+// integers decode to 0 rather than producing an error.
 func (r *RewardHistoryEntry) UnmarshalJSON(data []byte) error {
 	aux := new(RewardHistoryEntryMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -68,6 +95,10 @@ func (r *RewardHistoryEntry) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// RewardHistoryList is one page of per-epoch reward history. Count is
+// the total number of epochs the contract has processed so far (last
+// processed epoch + 1), not the number of entries in List; List holds
+// the requested page in descending epoch order.
 type RewardHistoryList struct {
 	Count int64                 `json:"count"`
 	List  []*RewardHistoryEntry `json:"list"`

@@ -161,6 +161,10 @@ func (c *chainCache) Init(chainManager db.Manager, momentumStore store.Momentum)
 	return nil
 }
 
+// NewChainCache returns the chain cache over cacheManager, the
+// per-address derived state (fused amounts, chain plasma, spork
+// activations) kept in <DataDir>/cache and rolled forward and back in
+// step with the momentum chain.
 func NewChainCache(cacheManager storage.CacheManager) *chainCache {
 	return &chainCache{
 		manager: cacheManager,

@@ -43,6 +43,11 @@ func newMemDBInternal() db {
 	}
 }
 
+// NewMemDB returns an empty in-memory DB. Unlike the LevelDB-backed
+// flavours it fully supports Changes, so it serves as the scratch
+// state for building patches (for example the frontier bookkeeping in
+// Manager.Add), as the account pool's uncommitted state, and in
+// tests.
 func NewMemDB() DB {
 	return enableDelete(newMemDBInternal(), false)
 }

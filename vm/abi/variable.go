@@ -11,6 +11,8 @@ type Variable struct {
 	Inputs Arguments
 }
 
+// String renders the variable like a struct declaration, e.g.
+// "struct fusionInfo { uint256 amount,uint64 expirationHeight,address beneficiary }".
 func (v Variable) String() string {
 	inputs := make([]string, len(v.Inputs))
 	for i, input := range v.Inputs {

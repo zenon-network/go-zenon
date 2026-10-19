@@ -54,11 +54,17 @@ type jsonWriter interface {
 	remoteAddr() string
 }
 
+// BlockNumber is a height argument accepted by RPC methods. Non-
+// negative values denote a concrete height; negative values denote
+// the named positions below.
 type BlockNumber int64
 
 const (
-	PendingBlockNumber  = BlockNumber(-2)
-	LatestBlockNumber   = BlockNumber(-1)
+	// PendingBlockNumber is the wire value "pending".
+	PendingBlockNumber = BlockNumber(-2)
+	// LatestBlockNumber is the wire value "latest".
+	LatestBlockNumber = BlockNumber(-1)
+	// EarliestBlockNumber is the wire value "earliest", height 0.
 	EarliestBlockNumber = BlockNumber(0)
 )
 
@@ -97,16 +103,24 @@ func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Int64 returns the block number as a plain int64.
 func (bn BlockNumber) Int64() int64 {
 	return (int64)(bn)
 }
 
+// BlockNumberOrHash identifies a block by height or by hash. At most
+// one of BlockNumber and BlockHash is set. RequireCanonical asks that
+// a block referenced by hash also lie on the canonical chain.
 type BlockNumberOrHash struct {
 	BlockNumber      *BlockNumber `json:"blockNumber,omitempty"`
 	BlockHash        *common.Hash `json:"blockHash,omitempty"`
 	RequireCanonical bool         `json:"requireCanonical,omitempty"`
 }
 
+// UnmarshalJSON parses either the object form of BlockNumberOrHash or
+// a bare string. A string is read as one of "earliest", "latest" or
+// "pending", as a 66-character hex block hash, or as a hex height. It
+// is an error to specify both a block number and a block hash.
 func (bnh *BlockNumberOrHash) UnmarshalJSON(data []byte) error {
 	type erased BlockNumberOrHash
 	e := erased{}
@@ -162,6 +176,8 @@ func (bnh *BlockNumberOrHash) UnmarshalJSON(data []byte) error {
 	}
 }
 
+// Number returns the block number and true when this value identifies
+// a block by height, or zero and false otherwise.
 func (bnh *BlockNumberOrHash) Number() (BlockNumber, bool) {
 	if bnh.BlockNumber != nil {
 		return *bnh.BlockNumber, true
@@ -169,6 +185,8 @@ func (bnh *BlockNumberOrHash) Number() (BlockNumber, bool) {
 	return BlockNumber(0), false
 }
 
+// Hash returns the block hash and true when this value identifies a
+// block by hash, or the zero hash and false otherwise.
 func (bnh *BlockNumberOrHash) Hash() (common.Hash, bool) {
 	if bnh.BlockHash != nil {
 		return *bnh.BlockHash, true
@@ -176,6 +194,8 @@ func (bnh *BlockNumberOrHash) Hash() (common.Hash, bool) {
 	return common.Hash{}, false
 }
 
+// BlockNumberOrHashWithNumber builds a BlockNumberOrHash that
+// identifies a block by the given height.
 func BlockNumberOrHashWithNumber(blockNr BlockNumber) BlockNumberOrHash {
 	return BlockNumberOrHash{
 		BlockNumber:      &blockNr,
@@ -184,6 +204,9 @@ func BlockNumberOrHashWithNumber(blockNr BlockNumber) BlockNumberOrHash {
 	}
 }
 
+// BlockNumberOrHashWithHash builds a BlockNumberOrHash that
+// identifies a block by hash. When canonical is true the referenced
+// block is also required to be on the canonical chain.
 func BlockNumberOrHashWithHash(hash common.Hash, canonical bool) BlockNumberOrHash {
 	return BlockNumberOrHash{
 		BlockNumber:      nil,

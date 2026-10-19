@@ -9,6 +9,11 @@ import (
 	"github.com/zenon-network/go-zenon/protocol"
 )
 
+// EventPrinter is the chain listener that logs momentum activity to
+// stdout. As a MomentumEventListener it prints a line on every deleted
+// momentum and on inserted momentums — every one once the node is in
+// sync, every fiftieth while it is syncing (see NewEventPrinter); Start
+// registers it with the chain and Stop unregisters it.
 type EventPrinter interface {
 	chain.MomentumEventListener
 
@@ -22,6 +27,10 @@ type eventPrinter struct {
 	broadcaster protocol.Broadcaster
 }
 
+// NewEventPrinter returns an EventPrinter for the given chain. The
+// broadcaster's sync state gates inserted-momentum logging: while
+// syncing only every fiftieth momentum is printed, and once the sync
+// is done every momentum is.
 func NewEventPrinter(chain chain.Chain, broadcaster protocol.Broadcaster) EventPrinter {
 	return &eventPrinter{
 		chain:       chain,
