@@ -135,17 +135,30 @@ type Peer struct {
 	protoErr chan error
 	closed   chan struct{}
 	disc     chan p2p.DiscReason
+
+	// pongPending holds at most one pong reply that has not started yet.
+	// handle puts a token in it for a ping and pingLoop writes the pong, so
+	// ping and pong writes for a peer come from one goroutine: a write that
+	// cannot complete holds up further replies instead of piling up
+	// writers, and pings that arrive while a pong is pending are answered
+	// by that pong.
+	pongPending chan struct{}
+
+	// pingC delivers the periodic ping ticks to pingLoop. It is nil for
+	// production peers, which use a ticker; tests supply their own.
+	pingC <-chan time.Time
 }
 
 // NewPeer returns a peer for testing purposes.
 func NewPeer(id discover.NodeID, name string, caps []p2p.Cap) *Peer {
 	conn := &peerConn{id: id, caps: caps, name: name}
 	p := &Peer{
-		rw:       conn,
-		running:  make(map[string]*protoRW),
-		disc:     make(chan p2p.DiscReason),
-		protoErr: make(chan error, 1),
-		closed:   make(chan struct{}),
+		rw:          conn,
+		running:     make(map[string]*protoRW),
+		disc:        make(chan p2p.DiscReason),
+		protoErr:    make(chan error, 1),
+		closed:      make(chan struct{}),
+		pongPending: make(chan struct{}, 1),
 	}
 	close(p.closed)
 	return p
@@ -162,11 +175,12 @@ func newPeerFromStream(rw *StreamRW, s network.Stream, id discover.NodeID, caps 
 	}
 	protomap := matchProtocols(protocols, caps, rw)
 	p := &Peer{
-		rw:       conn,
-		running:  protomap,
-		disc:     make(chan p2p.DiscReason),
-		protoErr: make(chan error, len(protomap)+1),
-		closed:   make(chan struct{}),
+		rw:          conn,
+		running:     protomap,
+		disc:        make(chan p2p.DiscReason),
+		protoErr:    make(chan error, len(protomap)+1),
+		closed:      make(chan struct{}),
+		pongPending: make(chan struct{}, 1),
 	}
 	return p
 }
@@ -287,13 +301,26 @@ loop:
 	return reason
 }
 
+// pingLoop sends our periodic pings and the pong replies to the remote
+// peer's pings, so ping and pong writes for a peer come from one goroutine
+// and a write that cannot complete holds up further replies instead of
+// piling up writers.
 func (p *Peer) pingLoop() {
-	ping := time.NewTicker(pingInterval)
-	defer ping.Stop()
+	tick := p.pingC
+	if tick == nil {
+		ticker := time.NewTicker(pingInterval)
+		defer ticker.Stop()
+		tick = ticker.C
+	}
 	for {
 		select {
-		case <-ping.C:
+		case <-tick:
 			if err := p2p.SendItems(p.rw.rw, pingMsg); err != nil {
+				p.protoErr <- err
+				return
+			}
+		case <-p.pongPending:
+			if err := p2p.SendItems(p.rw.rw, pongMsg); err != nil {
 				p.protoErr <- err
 				return
 			}
@@ -322,11 +349,12 @@ func (p *Peer) handle(msg p2p.Msg) error {
 	switch {
 	case msg.Code == pingMsg:
 		msg.Discard()
-		p.wg.Add(1)
-		go func() {
-			p2p.SendItems(p.rw.rw, pongMsg)
-			p.wg.Done()
-		}()
+		// Hand the reply to the keepalive loop. A pong that is already
+		// pending answers this ping as well.
+		select {
+		case p.pongPending <- struct{}{}:
+		default:
+		}
 	case msg.Code == discMsg:
 		var reason [1]p2p.DiscReason
 		rlp.Decode(msg.Payload, &reason)
