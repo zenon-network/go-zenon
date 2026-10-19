@@ -924,3 +924,54 @@ func TestDelegationNilBackend(t *testing.T) {
 	// AddPeer should not panic.
 	srv.AddPeer(&discover.Node{})
 }
+
+// TestStartFailureStopsBackendAndAllowsRetry pins what a failed backend
+// start leaves behind: the backend that failed is stopped, so whatever it
+// opened before failing is released, and the switcher is ready for another
+// Start without an intervening Stop. Both the legacy path and the libp2p
+// path are covered.
+func TestStartFailureStopsBackendAndAllowsRetry(t *testing.T) {
+	cases := []struct {
+		name   string
+		active bool
+		pick   func(legacy, libp2p *mockBackend) *mockBackend
+	}{
+		{"legacy", false, func(legacy, _ *mockBackend) *mockBackend { return legacy }},
+		{"libp2p", true, func(_, libp2p *mockBackend) *mockBackend { return libp2p }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oracle := &fakeOracle{active: tc.active}
+			srv, legacyMock, libp2pMock := newMockServer(t, oracle)
+			failing := tc.pick(legacyMock, libp2pMock)
+			failing.startErr = errors.New("port in use")
+
+			if err := srv.Start(); err == nil {
+				t.Fatal("Start() must fail when the backend fails to start")
+			}
+			if !failing.isStopped() {
+				t.Fatalf("the %s backend was not stopped after its Start failed", tc.name)
+			}
+			if srv.activeBackend() != nil {
+				t.Fatal("a backend is active after a failed Start")
+			}
+
+			// The cause goes away; Start must work again without a Stop in
+			// between.
+			failing.mu.Lock()
+			failing.startErr = nil
+			failing.stopped = false
+			failing.mu.Unlock()
+			if err := srv.Start(); err != nil {
+				t.Fatalf("Start() after a failed start: %v", err)
+			}
+			if !failing.isStarted() {
+				t.Fatalf("the %s backend was not started on retry", tc.name)
+			}
+			srv.Stop()
+			if !failing.isStopped() {
+				t.Fatalf("the %s backend was not stopped by Stop after the retry", tc.name)
+			}
+		})
+	}
+}
