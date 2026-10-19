@@ -112,8 +112,10 @@ type BalanceInfoMarshal struct {
 
 func (b *BalanceInfo) ToBalanceInfoMarshal() BalanceInfoMarshal {
 	aux := BalanceInfoMarshal{
-		TokenInfo: b.TokenInfo.ToTokenMarshal(),
-		Balance:   b.Balance.String(),
+		Balance: b.Balance.String(),
+	}
+	if b.TokenInfo != nil {
+		aux.TokenInfo = b.TokenInfo.ToTokenMarshal()
 	}
 	return aux
 }
@@ -126,7 +128,9 @@ func (b *BalanceInfo) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	b.TokenInfo = aux.TokenInfo.FromTokenMarshal()
+	if aux.TokenInfo != nil {
+		b.TokenInfo = aux.TokenInfo.FromTokenMarshal()
+	}
 	b.Balance = common.StringToBigInt(aux.Balance)
 	return nil
 }
@@ -257,6 +261,9 @@ func (abl *AccountBlockList) UnmarshalJSON(data []byte) error {
 
 	abl.List = make([]*AccountBlock, 0)
 	for _, accBl := range aux.List {
+		if accBl == nil {
+			continue
+		}
 		block := accBl.FromApiMarshalJson()
 		abl.List = append(abl.List, block)
 	}
