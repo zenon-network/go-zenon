@@ -438,12 +438,17 @@ func TestSimple_MomentumAcknowledgedHashHeight(t *testing.T) {
 }
 
 // Test that an address cannot receive a send block that it is not the receiver of
+// The mock chain is not mainnet, so a receive by an account other than the
+// send's recipient is rejected from the first momentum, before and after
+// the mainnet enforcement height; only the recipient's own receive lands.
 func TestSendBlockReceiver(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
 	ledgerApi := api.NewLedgerApi(z)
 
+	savedHeight := verifier.ReceiverMismatchEnforcementHeight
 	verifier.ReceiverMismatchEnforcementHeight = 10
+	defer func() { verifier.ReceiverMismatchEnforcementHeight = savedHeight }()
 
 	// Send 10k ZNN to user 2
 	ab := &nom.AccountBlock{
@@ -461,6 +466,13 @@ func TestSendBlockReceiver(t *testing.T) {
 	unreceived, err := ledgerApi.GetUnreceivedBlocksByAddress(g.User2.Address, 0, 1)
 	common.FailIfErr(t, err)
 
+	// User 3 tries to receive before the mainnet enforcement height: not the
+	// recipient, so rejected on this chain regardless of the height.
+	z.InsertReceiveBlock(unreceived.List[0].Header(), &nom.AccountBlock{
+		Address:              g.User3.Address,
+		MomentumAcknowledged: frontierMomentum.Identifier(),
+	}, verifier.ErrABFromBlockReceiverMismatch, mock.SkipVmChanges)
+
 	// User 2 sends receive transaction
 	z.InsertReceiveBlock(unreceived.List[0].Header(), &nom.AccountBlock{
 		Address:              g.User2.Address,
@@ -468,22 +480,12 @@ func TestSendBlockReceiver(t *testing.T) {
 	}, nil, mock.SkipVmChanges)
 	z.InsertNewMomentum()
 
-	// User 3 also sends receive transaction even though they are not the
-	// correct receiver -> is accepted before receiver mismatch check is enforced
-	z.InsertReceiveBlock(unreceived.List[0].Header(), &nom.AccountBlock{
-		Address:              g.User3.Address,
-		MomentumAcknowledged: frontierMomentum.Identifier(),
-	}, nil, mock.SkipVmChanges)
-	z.InsertNewMomentum()
-
 	frontierMomentum, err = ledgerApi.GetFrontierMomentum()
 	common.FailIfErr(t, err)
 
-	// Wait until receiver mismatch check is enforced
+	// Past the mainnet enforcement height the answer is the same.
 	z.InsertMomentumsTo(10)
 
-	// User 4 sends receive transaction after mismatch check is enforced
-	// -> not accepted
 	z.InsertReceiveBlock(unreceived.List[0].Header(), &nom.AccountBlock{
 		Address:              g.User4.Address,
 		MomentumAcknowledged: frontierMomentum.Identifier(),
