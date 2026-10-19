@@ -112,8 +112,10 @@ type BalanceInfoMarshal struct {
 
 func (b *BalanceInfo) ToBalanceInfoMarshal() BalanceInfoMarshal {
 	aux := BalanceInfoMarshal{
-		TokenInfo: b.TokenInfo.ToTokenMarshal(),
-		Balance:   b.Balance.String(),
+		Balance: b.Balance.String(),
+	}
+	if b.TokenInfo != nil {
+		aux.TokenInfo = b.TokenInfo.ToTokenMarshal()
 	}
 	return aux
 }

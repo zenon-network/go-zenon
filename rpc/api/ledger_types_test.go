@@ -48,6 +48,32 @@ func TestBalanceInfo_UnmarshalJSON_ValidToken(t *testing.T) {
 	require.Equal(t, "ZNN", bi.TokenInfo.TokenSymbol)
 }
 
+// TestBalanceInfo_RoundTrip_NullToken verifies that a BalanceInfo decoded
+// from {"token":null,...} can be re-marshalled without panicking, and that
+// the null TokenInfo is preserved as null in the output.
+func TestBalanceInfo_RoundTrip_NullToken(t *testing.T) {
+	data := `{"token":null,"balance":"100"}`
+	var bi BalanceInfo
+	require.NotPanics(t, func() {
+		err := json.Unmarshal([]byte(data), &bi)
+		require.NoError(t, err)
+	})
+	require.Nil(t, bi.TokenInfo)
+
+	// Re-marshal: must not panic and must preserve null token.
+	var out []byte
+	require.NotPanics(t, func() {
+		var err error
+		out, err = json.Marshal(&bi)
+		require.NoError(t, err)
+	})
+	var roundTripped map[string]interface{}
+	require.NoError(t, json.Unmarshal(out, &roundTripped))
+	tokenVal, hasToken := roundTripped["token"]
+	require.True(t, hasToken, "token key should be present in output")
+	require.Nil(t, tokenVal, "token should be null in output")
+}
+
 func TestAccountBlockList_UnmarshalJSON_NullElement(t *testing.T) {
 	// A null element in the list must be skipped, not panic.
 	data := `{"list":[null],"count":0,"more":false}`
