@@ -98,7 +98,7 @@ All contention among user blocks is resolved by the plasma price market — ther
 
 The verifier (`verifier/momentum.go:198-231`) enforces these by iterating blocks and checking `basePlasma.Total() > config.MaxBasePlasmaInMomentum` for user blocks and `contractBlockCount > plasma.MaxContractBlocksInMomentum()` for contract blocks. The old `MaxAccountBlocksInMomentum` check only runs on the pre-DP branch (line 233).
 
-**Can the limit be raised?** Yes — `maxBasePlasmaInMomentum` is already configurable via `SetVariables` on the Plasma contract. Raising it directly increases both the user block and contract block caps. The upper bound is `MaxBasePlasmaInMomentumUpperLimit` (210,000,000,000,000 — effectively 10 billion simple sends per momentum). However, see the trade-offs below.
+**Can the limit be raised?** Yes — `maxBasePlasmaInMomentum` is already configurable via `SetVariables` on the Plasma contract. Raising it directly increases both the user block and contract block caps. The upper bound is `MaxBasePlasmaInMomentumUpperLimit` (2,100,000,000, i.e. 100,000 simple sends per momentum, well above what the 10 MiB protocol message cap can carry, which is a few tens of thousands of simple sends). However, see the trade-offs below.
 
 | `maxBasePlasmaInMomentum` | Max user blocks (simple sends) | Max contract blocks |
 |---------------------------|-------------------------------|---------------------|
@@ -135,7 +135,7 @@ Parameters are stored on-chain in the Plasma contract and adjustable via `SetVar
 
 | Parameter | Default | Bounds | Description |
 |-----------|---------|--------|-------------|
-| `maxBasePlasmaInMomentum` | 4,200,000 | 210,000 – 210,000,000,000,000 | Max base plasma per momentum (default = 200× `AccountBlockBasePlasma`) |
+| `maxBasePlasmaInMomentum` | 4,200,000 | 210,000 – 2,100,000,000 | Max base plasma per momentum (default = 200× `AccountBlockBasePlasma`) |
 | `fusedPlasmaTarget` | 1,050,000 | ≥ 1 (and `fusedPlasmaTarget + powPlasmaTarget ≤ maxBasePlasmaInMomentum`) | Target fused plasma usage per momentum (default = 25% of max) |
 | `powPlasmaTarget` | 1,050,000 | ≥ 1 (same combined constraint as above) | Target PoW plasma usage per momentum (default = 25% of max) |
 | `maxPriceChangePercent` | 10 | 1 – 100 | Max price change per adjustment |
@@ -357,8 +357,8 @@ After activation, new momentums will have `version: 2` with `nextFusionPrice` an
 | `PoWDifficultyPerPlasma` | 1500 | `vm/constants/plasma.go:39` |
 | `AccountBlockBasePlasma` | 21000 | `vm/constants/plasma.go:28` |
 | `EmbeddedSimplePlasma` | 52500 | `vm/constants/plasma.go:31` |
-| `MaxBasePlasmaInMomentumUpperLimit` | 210,000,000,000,000 | `vm/embedded/definition/plasma.go:53` |
-| `MaxBasePlasmaInMomentumLowerLimit` | 210,000 | `vm/embedded/definition/plasma.go:54` |
+| `MaxBasePlasmaInMomentumUpperLimit` | 2,100,000,000 | `vm/embedded/definition/plasma.go` |
+| `MaxBasePlasmaInMomentumLowerLimit` | 210,000 | `vm/embedded/definition/plasma.go` |
 
 ### RPC Methods
 
