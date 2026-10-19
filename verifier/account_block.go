@@ -24,7 +24,10 @@ var (
 )
 
 // mainnetChainIdentifier is the chain identifier of the embedded alphanet
-// genesis, the only chain whose history predates the receiver rule.
+// genesis, the only chain whose history predates the receiver rule. The
+// relaxation below is keyed on this value alone, so a custom network must
+// not reuse identifier 1 in its genesis, or it inherits mainnet's historical
+// exception until its own frontier passes ReceiverMismatchEnforcementHeight.
 const mainnetChainIdentifier uint64 = 1
 
 // receiverMismatchTolerated reports whether a receive block whose address is
