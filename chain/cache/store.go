@@ -58,6 +58,9 @@ func (cs *cacheStore) findValue(prefix []byte) ([]byte, error) {
 	defer iterator.Release()
 
 	if !iterator.Last() {
+		if err := iterator.Error(); err != nil {
+			return nil, err
+		}
 		return []byte{}, nil
 	}
 
