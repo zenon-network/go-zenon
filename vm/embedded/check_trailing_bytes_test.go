@@ -26,17 +26,17 @@ func (ctx *testTrailingBytesContext) MomentumStore() store.Momentum { return nil
 func (ctx *testTrailingBytesContext) GetFrontierMomentum() (*nom.Momentum, error) {
 	return nil, nil
 }
-func (ctx *testTrailingBytesContext) GetGenesisMomentum() *nom.Momentum { return nil }
-func (ctx *testTrailingBytesContext) Save()                             {}
-func (ctx *testTrailingBytesContext) Reset()                            {}
-func (ctx *testTrailingBytesContext) Done()                             {}
+func (ctx *testTrailingBytesContext) GetGenesisMomentum() *nom.Momentum              { return nil }
+func (ctx *testTrailingBytesContext) Save()                                          {}
+func (ctx *testTrailingBytesContext) Reset()                                         {}
+func (ctx *testTrailingBytesContext) Done()                                          {}
 func (ctx *testTrailingBytesContext) AddBalance(*types.ZenonTokenStandard, *big.Int) {}
 func (ctx *testTrailingBytesContext) SubBalance(*types.ZenonTokenStandard, *big.Int) {}
-func (ctx *testTrailingBytesContext) IsAcceleratorSporkEnforced() bool       { return true }
-func (ctx *testTrailingBytesContext) IsHtlcSporkEnforced() bool              { return true }
-func (ctx *testTrailingBytesContext) IsBridgeAndLiquiditySporkEnforced() bool { return true }
-func (ctx *testTrailingBytesContext) IsDynamicPlasmaSporkEnforced() bool      { return ctx.dpEnforced }
-func (ctx *testTrailingBytesContext) IsPtlcSporkEnforced() bool               { return true }
+func (ctx *testTrailingBytesContext) IsAcceleratorSporkEnforced() bool               { return true }
+func (ctx *testTrailingBytesContext) IsHtlcSporkEnforced() bool                      { return true }
+func (ctx *testTrailingBytesContext) IsBridgeAndLiquiditySporkEnforced() bool        { return true }
+func (ctx *testTrailingBytesContext) IsDynamicPlasmaSporkEnforced() bool             { return ctx.dpEnforced }
+func (ctx *testTrailingBytesContext) IsPtlcSporkEnforced() bool                      { return true }
 func (ctx *testTrailingBytesContext) GetPillarWeights() (map[string]*big.Int, error) {
 	return nil, nil
 }

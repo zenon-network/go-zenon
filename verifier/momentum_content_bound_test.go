@@ -144,8 +144,8 @@ func TestRawMomentumVerifier_Content_ExactBound_Accepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
-	if len(serialized) > MaxMomentumContentBytes {
-		t.Fatalf("test setup: block size %d exceeds target %d", len(serialized), MaxMomentumContentBytes)
+	if len(serialized) != MaxMomentumContentBytes {
+		t.Fatalf("test setup: block size %d != target %d", len(serialized), MaxMomentumContentBytes)
 	}
 
 	rmv := &rawMomentumVerifier{

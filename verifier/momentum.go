@@ -85,9 +85,11 @@ func NewMomentumVerifier(chain chain.Chain, consensus consensus.Consensus, canon
 }
 
 // MaxMomentumContentBytes is the cumulative protobuf-serialized size limit
-// for all account blocks listed in a momentum's content. It is well under
-// ProtocolMaxMsgSize (10 MiB) so that a DetailedMomentum carrying these
-// blocks always fits in a single protocol message.
+// for all account blocks listed in a momentum's content. The pillar content
+// selector enforces the same budget so the producer never emits a momentum
+// the verifier would reject. It is well under ProtocolMaxMsgSize (10 MiB)
+// so that a DetailedMomentum carrying these blocks always fits in a single
+// protocol message.
 const MaxMomentumContentBytes = 8 * 1024 * 1024 // 8 MiB
 
 type rawMomentumVerifier struct {
@@ -241,7 +243,9 @@ func maxContentUnderPlasma(config *definition.PlasmaVariables) uint64 {
 // contentByteBound rejects a momentum whose prefetched account blocks
 // exceed MaxMomentumContentBytes in cumulative protobuf-serialized size.
 // It runs before any per-block matching or price work so an oversized
-// momentum is caught early, before any allocation sized from its content.
+// momentum is caught early. Note that on the sync path the account blocks
+// have already been applied to the pool by the time content() runs; the
+// early placement saves matching and price work, not the pool application.
 func (rmv *rawMomentumVerifier) contentByteBound() error {
 	var total int
 	for _, block := range rmv.accountBlocks {

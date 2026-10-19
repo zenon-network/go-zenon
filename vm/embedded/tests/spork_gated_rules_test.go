@@ -172,6 +172,13 @@ func TestSporkGated_PreSporkEmbeddedSendReceivedAfterSpork(t *testing.T) {
 	defer z.StopPanic()
 	saveSporkState(t)
 
+	// Snapshot the Plasma contract frontier before the send so we can prove
+	// the auto-receive advanced it (Height >= 1 holds from genesis, so a
+	// bare >= 1 assertion would pass even if the fuse was never processed).
+	plasmaStoreBefore := z.Chain().GetFrontierAccountStore(types.PlasmaContract)
+	plasmaFrontierBefore, err := plasmaStoreBefore.Frontier()
+	common.FailIfErr(t, err)
+
 	// Create a Plasma.Fuse embedded send BEFORE the spork.
 	fuseData := definition.ABIPlasma.PackMethodPanic(definition.FuseMethodName, g.User1.Address)
 	z.InsertSendBlock(&nom.AccountBlock{
@@ -188,11 +195,12 @@ func TestSporkGated_PreSporkEmbeddedSendReceivedAfterSpork(t *testing.T) {
 	// skips it and the fusion is processed normally.
 	activateDynamicPlasma(t, z)
 
-	// Verify the Plasma contract processed the fuse: its account chain grew.
-	plasmaStore := z.Chain().GetFrontierAccountStore(types.PlasmaContract)
-	plasmaFrontier, err := plasmaStore.Frontier()
+	// Verify the Plasma contract processed the fuse: its account chain grew
+	// beyond the pre-send snapshot.
+	plasmaStoreAfter := z.Chain().GetFrontierAccountStore(types.PlasmaContract)
+	plasmaFrontierAfter, err := plasmaStoreAfter.Frontier()
 	common.FailIfErr(t, err)
-	common.Expect(t, true, plasmaFrontier.Height >= 1)
+	common.Expect(t, true, plasmaFrontierAfter.Height > plasmaFrontierBefore.Height)
 }
 
 // Test 7: A pre-signed external block with non-empty Data on a receive is

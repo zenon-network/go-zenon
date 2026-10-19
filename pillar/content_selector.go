@@ -11,6 +11,7 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/protocol"
+	"github.com/zenon-network/go-zenon/verifier"
 )
 
 var log = common.PillarLogger.New("submodule", "content-selector")
@@ -42,6 +43,19 @@ func contentEntrySize(block *nom.AccountBlock) int {
 		return -1
 	}
 	return len(encoded)
+}
+
+// blockProtoSize returns the protobuf-serialized size of block, which is the
+// representation the verifier's contentByteBound measures against
+// protocol.MaxMomentumContentBytes.  For empty-data user sends the protobuf
+// encoding can be larger than the RLP encoding, so the selector tracks both
+// budgets independently.  Returns -1 on serialization failure.
+func blockProtoSize(block *nom.AccountBlock) int {
+	data, err := block.Serialize()
+	if err != nil {
+		return -1
+	}
+	return len(data)
 }
 
 // listPrefixAllowance bounds the RLP list-prefix growth that the byte
@@ -205,6 +219,12 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 	// Any real momentum will be at most this size, so the estimate is
 	// always conservative.
 	sizeEstimate := worstCaseMomentumHeaderSize() + listPrefixAllowance
+	// protoSizeEstimate tracks the cumulative protobuf-serialized size of
+	// all selected blocks, which is the representation the verifier's
+	// contentByteBound measures against protocol.MaxMomentumContentBytes.
+	// The two budgets (RLP wire size and protobuf content size) measure
+	// different bytes and can disagree per block, so both are enforced.
+	protoSizeEstimate := 0
 	toCommit := make([]*nom.AccountBlock, 0, len(blocks))
 	// A batch can never hold more blocks than were offered, so size it by
 	// the input. The configured contract-block cap is only a limit on what
@@ -237,6 +257,7 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 			// Each committed block also adds a content entry (AccountHeader)
 			// to the momentum.
 			batchSize := 0
+			batchProtoSize := 0
 			encodeFailed := false
 			for _, b := range contractBatch {
 				sz := blockWireSize(b)
@@ -245,6 +266,12 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 					break
 				}
 				batchSize += sz + contentEntrySize(b)
+				ps := blockProtoSize(b)
+				if ps < 0 {
+					encodeFailed = true
+					break
+				}
+				batchProtoSize += ps
 			}
 			if encodeFailed {
 				log.Debug("content selector: dropping contract batch with unencodable block", "addresses", len(contractBatch))
@@ -262,6 +289,15 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 				contractBatch = contractBatch[:0]
 				continue
 			}
+			if protoSizeEstimate+batchProtoSize > verifier.MaxMomentumContentBytes {
+				log.Debug("content selector: dropping contract batch over protobuf budget", "addresses", len(contractBatch))
+				for _, dropped := range contractBatch {
+					skippedAddresses[dropped.Address] = true
+				}
+				contractBatch = contractBatch[:0]
+				continue
+			}
+			protoSizeEstimate += batchProtoSize
 			sizeEstimate += batchSize
 			toCommit = append(toCommit, contractBatch...)
 			contractBlockCount += len(contractBatch)
@@ -305,12 +341,24 @@ func (cs *contentSelector) filterBlocksToCommit(blocks []*nom.AccountBlock) []*n
 				skippedAddresses[block.Address] = true
 				continue
 			}
+			protoSize := blockProtoSize(block)
+			if protoSize < 0 {
+				log.Debug("content selector: skipping unserializable block", "address", block.Address, "height", block.Height)
+				skippedAddresses[block.Address] = true
+				continue
+			}
 			blockSize := wireSize + entrySize
 			if sizeEstimate+blockSize > protocol.MaxDetailedMomentumWireSize {
 				log.Debug("content selector: skipping block over byte budget", "address", block.Address, "height", block.Height)
 				skippedAddresses[block.Address] = true
 				continue
 			}
+			if protoSizeEstimate+protoSize > verifier.MaxMomentumContentBytes {
+				log.Debug("content selector: skipping block over protobuf budget", "address", block.Address, "height", block.Height)
+				skippedAddresses[block.Address] = true
+				continue
+			}
+			protoSizeEstimate += protoSize
 			sizeEstimate += blockSize
 			basePlasma += block.BasePlasma
 			toCommit = append(toCommit, block)

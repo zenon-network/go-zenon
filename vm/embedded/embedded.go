@@ -285,13 +285,10 @@ func buildEmbeddedVariants() {
 // - returns constants.ErrNotContractAddress in case address is not an embedded address (bad prefix)
 // - returns constants.ErrContractDoesntExist in case the address doesn't link to a valid embedded contract
 // - returns constants.ErrContractMethodNotFound if the method doesn't exist
-func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Address, abiSelector []byte) (Method, error) {
-	if !types.IsEmbeddedAddress(address) {
-		return nil, constants.ErrNotContractAddress
-	}
-
-	embeddedVariantsOnce.Do(buildEmbeddedVariants)
-
+// sporkVariantKey computes the bitmask that selects which embedded contract
+// variant is active for the given context. GetEmbeddedMethod and
+// CheckNoTrailingBytes must agree on this key, so it lives in one place.
+func sporkVariantKey(context vm_context.AccountVmContext) int {
 	key := 0
 	if context.IsAcceleratorSporkEnforced() {
 		key |= acceleratorSporkBit
@@ -309,7 +306,17 @@ func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Addres
 		key |= ptlcSporkBit
 	}
 	// No change for NoPillarRegSpork
-	contractsMap := embeddedVariants[key]
+	return key
+}
+
+func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Address, abiSelector []byte) (Method, error) {
+	if !types.IsEmbeddedAddress(address) {
+		return nil, constants.ErrNotContractAddress
+	}
+
+	embeddedVariantsOnce.Do(buildEmbeddedVariants)
+
+	contractsMap := embeddedVariants[sporkVariantKey(context)]
 
 	// contract address must exist in map
 	if p, found := contractsMap[address]; found {
@@ -334,6 +341,13 @@ func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Addres
 // canonically, and compares the re-packed length (plus the 4-byte selector)
 // with len(data).
 //
+// This rule does not change what can land on chain: every ValidateSendBlock
+// already replaces block.Data with the canonical PackMethod output, and
+// packBlock checks the hash after the repack, so a send whose signed Data
+// carries trailing bytes already fails with ErrABHashInvalid. The rule
+// changes GenerateFromTemplate (used for the pillar's own template block)
+// from normalising to rejecting, giving a clearer error at generation time.
+//
 // A nil error means either the data is clean or the lookup failed in a way
 // that ValidateSendBlock will catch and report; this function only adds the
 // trailing-bytes rejection on top of the normal validation path.
@@ -347,23 +361,7 @@ func CheckNoTrailingBytes(context vm_context.AccountVmContext, address types.Add
 
 	embeddedVariantsOnce.Do(buildEmbeddedVariants)
 
-	key := 0
-	if context.IsAcceleratorSporkEnforced() {
-		key |= acceleratorSporkBit
-	}
-	if context.IsBridgeAndLiquiditySporkEnforced() {
-		key |= bridgeAndLiquiditySporkBit
-	}
-	if context.IsHtlcSporkEnforced() {
-		key |= htlcSporkBit
-	}
-	if context.IsDynamicPlasmaSporkEnforced() {
-		key |= dynamicPlasmaSporkBit
-	}
-	if context.IsPtlcSporkEnforced() {
-		key |= ptlcSporkBit
-	}
-	contractsMap := embeddedVariants[key]
+	contractsMap := embeddedVariants[sporkVariantKey(context)]
 
 	p, found := contractsMap[address]
 	if !found {

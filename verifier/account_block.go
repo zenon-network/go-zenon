@@ -126,6 +126,7 @@ func (av *accountVerifier) AccountBlockTransaction(transaction *nom.AccountBlock
 		accountStore:  accountStore,
 		momentumStore: momentumStore,
 		frontierStore: av.chain.GetFrontierMomentumStore(),
+		chain:         av.chain,
 	}).all()
 }
 
@@ -419,6 +420,25 @@ func (abv *accountBlockVerifier) sequencer() error {
 	return nil
 }
 
+// isDynamicPlasmaActiveAtMA reports whether the Dynamic Plasma spork is
+// enforced at the block's acknowledged momentum height. It prefers the
+// momentum store already attached to the verifier; when that is nil (user
+// blocks), it reads from the cache store at the MA height, which answers
+// spork queries from the momentum's patch set without replaying rollbacks.
+func (abv *accountBlockVerifier) isDynamicPlasmaActiveAtMA() (bool, error) {
+	if abv.momentumStore != nil {
+		return abv.momentumStore.IsSporkActive(types.DynamicPlasmaSpork)
+	}
+	if abv.chain == nil {
+		return false, ErrABMAMissing
+	}
+	cacheStore := abv.chain.GetCacheStore(abv.block.MomentumAcknowledged)
+	if cacheStore == nil {
+		return false, ErrABMAMissing
+	}
+	return cacheStore.IsSporkActive(types.DynamicPlasmaSpork)
+}
+
 // receiveData rejects user receive blocks that carry non-empty Data once the
 // Dynamic Plasma spork is enforced at the block's acknowledged momentum height.
 // Before the spork, receive blocks always get flat plasma regardless of Data
@@ -433,24 +453,11 @@ func (abv *accountBlockVerifier) receiveData() error {
 	if len(abv.block.Data) == 0 {
 		return nil
 	}
-	// Use the momentum store at the block's acknowledged height, not the
-	// frontier, so that pre-enforcement blocks replayed after the spork are
-	// validated with the rules that were active at their MA.
-	maStore := abv.momentumStore
-	if maStore == nil {
-		if abv.chain == nil {
-			return ErrABMAMissing
-		}
-		maStore = abv.chain.GetMomentumStore(abv.block.MomentumAcknowledged)
-		if maStore == nil {
-			return ErrABMAMissing
-		}
-	}
-	isDynamicPlasmaActive, err := maStore.IsSporkActive(types.DynamicPlasmaSpork)
+	active, err := abv.isDynamicPlasmaActiveAtMA()
 	if err != nil {
-		return InternalError(err)
+		return err
 	}
-	if isDynamicPlasmaActive {
+	if active {
 		return ErrABDataMustBeEmpty
 	}
 	return nil
@@ -461,6 +468,7 @@ type accountBlockTransactionVerifier struct {
 	accountStore  store.Account
 	momentumStore store.Momentum
 	frontierStore store.Momentum
+	chain         chain.Chain
 }
 
 func (abvt *accountBlockTransactionVerifier) all() error {
@@ -542,6 +550,7 @@ func (abvt *accountBlockTransactionVerifier) descendantBlocks() error {
 			accountStore:  abvt.accountStore,
 			momentumStore: abvt.momentumStore,
 			frontierStore: abvt.frontierStore,
+			chain:         abvt.chain,
 		}).all(); err != nil {
 			return DescendantVerifyError(err)
 		}
