@@ -1,11 +1,15 @@
 // Package abi packs and unpacks the call data and stored variables of
 // the embedded contracts. It is derived from go-ethereum's abi package
-// and keeps the Ethereum ABI wire format: every elementary static value
-// occupies one big-endian 32-byte word (WordSize), while dynamic values
-// (string, bytes, slices) are stored out-of-line behind a word holding
-// their byte offset, followed at that offset by a length word and the
+// and keeps the Ethereum ABI wire format for elementary types, strings,
+// bytes and slices: every elementary static value occupies one
+// big-endian 32-byte word (WordSize), while dynamic values (string,
+// bytes, slices) are stored out-of-line behind a word holding their
+// byte offset, followed at that offset by a length word and the
 // right-padded payload. Fixed-size arrays are encoded inline, element
-// by element.
+// by element, and that holds for arrays of dynamic types too: their
+// elements' offset words and payloads follow in place, with no outer
+// offset word, which differs from the Ethereum ABI (where such an
+// array is itself a dynamic type).
 //
 // On top of the Ethereum types the package adds three Zenon-specific
 // argument types: "address" (types.Address), "tokenStandard"

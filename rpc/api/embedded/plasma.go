@@ -328,9 +328,11 @@ type GetRequiredParam struct {
 // the plasma currently available to the address from fused QSR, the
 // minimum plasma the described block requires, the proof-of-work
 // difficulty that would cover the shortfall (0 when the available
-// plasma already suffices) and, once Dynamic Plasma is enforced, the
-// total fused plasma a fused-only block must carry at the current
-// fusion price.
+// plasma already suffices) and the total fused plasma a fused-only
+// block must carry: the block's base plasma before Dynamic Plasma, and
+// the base plasma scaled by the frontier momentum's NextFusionPrice
+// once Dynamic Plasma is enforced and the frontier momentum is a
+// version-2 momentum.
 type GetRequiredResult struct {
 	AvailablePlasma    uint64 `json:"availablePlasma"`
 	BasePlasma         uint64 `json:"basePlasma"`

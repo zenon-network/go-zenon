@@ -23,7 +23,10 @@ func DescendantVerifyError(err error) error {
 // verifying (see InternalError) rather than a merely invalid block. The
 // remaining values are validation errors: those prefixed ErrAB reject an
 // invalid account-block and those prefixed ErrM reject an invalid momentum,
-// each naming the specific rule that failed.
+// each naming the specific rule that failed. One pair is swapped: the
+// account-block verifier returns ErrMChainIdentifierMissing and
+// ErrMChainIdentifierMismatch, and the momentum verifier returns
+// ErrABChainIdentifierMissing and ErrABChainIdentifierMismatch.
 var (
 	ErrVerifierInternal = errors.New("internal error while verifying")
 

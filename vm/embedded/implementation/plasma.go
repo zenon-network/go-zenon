@@ -178,9 +178,11 @@ func (p *CancelFuseMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 }
 
 // SetVariablesMethod implements SetVariables: it replaces the on-chain
-// PlasmaVariables that drive Dynamic Plasma. Only the governing address
-// may call it; the new values must satisfy the limits in
-// vm/embedded/definition and the send must carry no tokens.
+// PlasmaVariables that drive Dynamic Plasma. Only types.SporkAddress and
+// types.CommunitySporkAddress may call it, and the community address
+// only inside its momentum-height window
+// (checkCommunitySporkAddressValidity); the new values must satisfy the
+// limits in vm/embedded/definition and the send must carry no tokens.
 type SetVariablesMethod struct {
 	MethodName string
 }

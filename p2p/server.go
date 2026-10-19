@@ -14,7 +14,11 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-// Package p2p implements the Ethereum p2p network protocols.
+// Package p2p is the transport-neutral surface of the networking layer:
+// the Server interface, its configuration, the message and protocol
+// types and the disconnect reasons. Two backends implement it, the
+// devp2p stack in p2p/legacy and the libp2p stack in p2p/libp2p, and
+// p2p/switcher selects between them by spork.
 package p2p
 
 import "github.com/zenon-network/go-zenon/p2p/discover"
