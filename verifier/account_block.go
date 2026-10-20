@@ -108,6 +108,7 @@ func (av *accountVerifier) AccountBlock(block *nom.AccountBlock) error {
 		accountStore:  accountStore,
 		momentumStore: momentumStore,
 		frontierStore: av.chain.GetFrontierMomentumStore(),
+		chain:         av.chain,
 	}).all()
 }
 func (av *accountVerifier) AccountBlockTransaction(transaction *nom.AccountBlockTransaction) error {
@@ -125,6 +126,7 @@ func (av *accountVerifier) AccountBlockTransaction(transaction *nom.AccountBlock
 		accountStore:  accountStore,
 		momentumStore: momentumStore,
 		frontierStore: av.chain.GetFrontierMomentumStore(),
+		chain:         av.chain,
 	}).all()
 }
 
@@ -144,6 +146,7 @@ type accountBlockVerifier struct {
 	accountStore  store.Account
 	momentumStore store.Momentum
 	frontierStore store.Momentum
+	chain         chain.Chain
 }
 
 func (abv *accountBlockVerifier) all() error {
@@ -172,6 +175,9 @@ func (abv *accountBlockVerifier) all() error {
 		return err
 	}
 	if err := abv.sequencer(); err != nil {
+		return err
+	}
+	if err := abv.receiveData(); err != nil {
 		return err
 	}
 	return nil
@@ -414,11 +420,55 @@ func (abv *accountBlockVerifier) sequencer() error {
 	return nil
 }
 
+// isDynamicPlasmaActiveAtMA reports whether the Dynamic Plasma spork is
+// enforced at the block's acknowledged momentum height. It prefers the
+// momentum store already attached to the verifier; when that is nil (user
+// blocks), it reads from the cache store at the MA height, which answers
+// spork queries from the momentum's patch set without replaying rollbacks.
+func (abv *accountBlockVerifier) isDynamicPlasmaActiveAtMA() (bool, error) {
+	if abv.momentumStore != nil {
+		return abv.momentumStore.IsSporkActive(types.DynamicPlasmaSpork)
+	}
+	if abv.chain == nil {
+		return false, ErrABMAMissing
+	}
+	cacheStore := abv.chain.GetCacheStore(abv.block.MomentumAcknowledged)
+	if cacheStore == nil {
+		return false, InternalError(fmt.Errorf("no cache store at momentum %s", abv.block.MomentumAcknowledged.Hash))
+	}
+	return cacheStore.IsSporkActive(types.DynamicPlasmaSpork)
+}
+
+// receiveData rejects user receive blocks that carry non-empty Data once the
+// Dynamic Plasma spork is enforced at the block's acknowledged momentum height.
+// Before the spork, receive blocks always get flat plasma regardless of Data
+// size, which lets anyone commit large data at minimum cost.
+func (abv *accountBlockVerifier) receiveData() error {
+	if !abv.block.IsReceiveBlock() {
+		return nil
+	}
+	if types.IsEmbeddedAddress(abv.block.Address) {
+		return nil
+	}
+	if len(abv.block.Data) == 0 {
+		return nil
+	}
+	active, err := abv.isDynamicPlasmaActiveAtMA()
+	if err != nil {
+		return err
+	}
+	if active {
+		return ErrABDataMustBeEmpty
+	}
+	return nil
+}
+
 type accountBlockTransactionVerifier struct {
 	transaction   *nom.AccountBlockTransaction
 	accountStore  store.Account
 	momentumStore store.Momentum
 	frontierStore store.Momentum
+	chain         chain.Chain
 }
 
 func (abvt *accountBlockTransactionVerifier) all() error {
@@ -500,6 +550,7 @@ func (abvt *accountBlockTransactionVerifier) descendantBlocks() error {
 			accountStore:  abvt.accountStore,
 			momentumStore: abvt.momentumStore,
 			frontierStore: abvt.frontierStore,
+			chain:         abvt.chain,
 		}).all(); err != nil {
 			return DescendantVerifyError(err)
 		}

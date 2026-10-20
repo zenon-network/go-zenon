@@ -266,4 +266,8 @@ var (
 	// ErrInvalidRewards rejects malformed liquidity stake reward
 	// parameters.
 	ErrInvalidRewards = errors.New("invalid liquidity stake rewards")
+
+	// ErrABDataTrailingBytes rejects account-block data that carries
+	// bytes past the ABI-encoded arguments (Dynamic Plasma spork).
+	ErrABDataTrailingBytes = errors.New("account-block data has trailing bytes past ABI-encoded arguments")
 )

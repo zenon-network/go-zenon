@@ -148,6 +148,13 @@ func GetBasePlasmaForAccountBlock(context vm_context.AccountVmContext, block *no
 		return 0, nil
 	}
 	if block.IsReceiveBlock() {
+		// The receive-data rule (reject non-empty Data once the Dynamic
+		// Plasma spork is enforced) is verified exclusively in the account
+		// block verifier (receiveData), which reads spork state from the
+		// block's acknowledged momentum height. This plasma calculator
+		// answers "how much plasma does this block need", not "is this
+		// block valid", and its context may be frontier-based, which can
+		// disagree with the MA-height check for historical blocks.
 		return constants.AccountBlockBasePlasma, nil
 	} else {
 		if method, err := embedded.GetEmbeddedMethod(context, block.ToAddress, block.Data); err == constants.ErrNotContractAddress {

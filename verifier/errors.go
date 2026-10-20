@@ -76,6 +76,7 @@ var (
 	ErrABFromBlockReceiverMismatch = errors.New("account-block from-block receiver mismatch")
 	ErrABSequencerNothing          = errors.New("account-block failed to pass sequencer checks. Nothing to receive")
 	ErrABSequencerNotNext          = errors.New("account-block failed to pass sequencer checks. Not next in line to receive")
+	ErrABDataMustBeEmpty           = errors.New("account-block data must be empty on receive blocks")
 
 	ErrMVersionMissing          = errors.New("momentum version is missing")
 	ErrMVersionInvalid          = errors.New("momentum version is invalid")
