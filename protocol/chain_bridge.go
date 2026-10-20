@@ -396,8 +396,8 @@ func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.Detail
 // plasma it is a fixed count, after it a plasma budget, and which rule
 // applies is known only against the chain the momentum extends. That check
 // (verifier.MaxMomentumContent) runs in insertMomentums, when the frontier
-// is the momentum's previous, before any lock-held copy or snapshot and
-// before any block reaches the pool, and again in the momentum verifier.
+// is the momentum's previous, before the copy and snapshot and before any
+// block reaches the pool, and again in the momentum verifier.
 // The work here is linear in the list, which the protocol message size
 // bounds. The supplied momentum is not modified.
 func validatePrefetchedBlocks(detailed *nom.DetailedMomentum) error {
@@ -455,9 +455,9 @@ func momentumAddresses(detailed *nom.DetailedMomentum) []types.Address {
 // frontierBefore is the canonical frontier the caller observed before the
 // call; it tells a commit failure apart from a failure after the commit.
 func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMomentum, frontierBefore types.HashHeight) error {
-	// The content limit was already checked by insertMomentums before any
-	// lock-held work; the verifier applies the same rule to the momentum
-	// later.
+	// The content limit was already checked by insertMomentums before
+	// the copy and snapshot; the verifier applies the same rule to the
+	// momentum later.
 	for _, block := range detailed.AccountBlocks {
 		if block.BlockType == nom.BlockTypeContractSend {
 			continue
