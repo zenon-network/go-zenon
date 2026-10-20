@@ -13,4 +13,9 @@ var (
 	ErrNotOurEvent        = errors.Errorf("not our event")
 	ErrEventHasNotStarted = errors.Errorf("current time is before start time")
 	ErrEventEnded         = errors.Errorf("current time is after the event's finish time")
+
+	// ErrUpdatePredecessorMissing is returned when an underpriced Update
+	// block is to be replaced but the account pool no longer holds the
+	// state before it. The round is skipped and retried on the next momentum.
+	ErrUpdatePredecessorMissing = errors.Errorf("account pool has no store before the update block to replace")
 )

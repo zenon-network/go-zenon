@@ -169,6 +169,23 @@ func TestDynamicPlasma_PillarUpdateReplacedAtSameHeightWhenUnderpriced(t *testin
 		if block.FusedPlasma <= original.FusedPlasma {
 			t.Fatalf("replacement %v pays %v, the original paid %v", block.Header(), block.FusedPlasma, original.FusedPlasma)
 		}
+		if !plasma.ValidPrice(block) {
+			t.Fatalf("replacement %v paying %v is underpriced at fusion price %v", block.Header(), block.FusedPlasma, frontierMomentum(t, z).NextFusionPrice)
+		}
+	}
+
+	// With the burst over, the replacements confirm. Each momentum fits two
+	// Update blocks, so the wait is bounded by the number pending.
+	for i := 0; i < len(pending) && len(z.Chain().GetUncommittedAccountBlocksByAddress(producer)) > 0; i++ {
+		z.InsertNewMomentum()
+	}
+	store := z.Chain().GetFrontierMomentumStore()
+	for _, block := range pending {
+		confirmation, err := store.GetBlockConfirmationHeight(block.Hash)
+		common.FailIfErr(t, err)
+		if confirmation == 0 {
+			t.Fatalf("replacement %v to %v paying %v is not confirmed", block.Header(), block.ToAddress, block.FusedPlasma)
+		}
 	}
 }
 

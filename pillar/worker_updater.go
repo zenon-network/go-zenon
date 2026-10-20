@@ -131,10 +131,19 @@ func (w *worker) lowestUnderpricedUpdate(plasma dp.DynamicPlasma) *nom.AccountBl
 }
 
 func (w *worker) priceUpdate(momentumStore store.Momentum, fusionPrice uint64, template, replaced *nom.AccountBlock) error {
-	account := w.chain.GetFrontierAccountStore(w.coinbase.Address)
-	if replaced != nil {
-		template.Height, template.PreviousHash = replaced.Height, replaced.PreviousHash
+	var account store.Account
+	if replaced == nil {
+		account = w.chain.GetFrontierAccountStore(w.coinbase.Address)
+	} else {
+		// The pending list can change between lowestUnderpricedUpdate and
+		// here (a rollback, or the stale block confirming), and the pool then
+		// has no store at the predecessor. Give up the round; the next one
+		// looks again.
 		account = w.chain.GetAccountStore(w.coinbase.Address, replaced.Previous())
+		if account == nil {
+			return ErrUpdatePredecessorMissing
+		}
+		template.Height, template.PreviousHash = replaced.Height, replaced.PreviousHash
 	}
 	template.MomentumAcknowledged = momentumStore.Identifier()
 	cache := w.chain.GetCacheStore(template.MomentumAcknowledged)
