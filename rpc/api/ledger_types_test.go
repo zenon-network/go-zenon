@@ -219,3 +219,25 @@ func TestAccountBlockList_UnmarshalJSON_NullDescendantInElementIsAnError(t *test
 		t.Fatal(err)
 	}
 }
+
+// A detailed momentum carries account blocks through the same decoder, so
+// a null descendant inside one of them is refused at the container level.
+func TestDetailedMomentumList_UnmarshalJSON_NullDescendantIsAnError(t *testing.T) {
+	var list DetailedMomentumList
+	data := `{"list":[{"momentum":{"height":1},"blocks":[{"height":1,"nonce":"0000000000000000","descendantBlocks":[null]}]}],"count":1}`
+	err := json.Unmarshal([]byte(data), &list)
+	if err == nil {
+		t.Fatal("null descendant inside a detailed momentum decoded without error")
+	}
+	if !strings.Contains(err.Error(), "index 0") {
+		t.Fatalf("error does not name the index: %v", err)
+	}
+
+	data = `{"list":[{"momentum":{"height":1},"blocks":[{"height":1,"nonce":"0000000000000000","descendantBlocks":[{"height":2,"nonce":"0000000000000000"}]}]}],"count":1}`
+	if err := json.Unmarshal([]byte(data), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.List) != 1 || len(list.List[0].AccountBlocks) != 1 || len(list.List[0].AccountBlocks[0].DescendantBlocks) != 1 {
+		t.Fatalf("valid detailed momentum lost its blocks: %+v", list.List)
+	}
+}
