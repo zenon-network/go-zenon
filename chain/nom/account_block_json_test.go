@@ -33,9 +33,12 @@ func TestAccountBlock_UnmarshalJSON_NullDescendantIsAnError(t *testing.T) {
 	}
 
 	// Nested: a null inside a descendant's own list.
-	_, err = decodeBlockJSON(t, `{"descendantBlocks":[{"height":1,"nonce":"0000000000000000","descendantBlocks":[null]}]}`)
+	_, err = decodeBlockJSON(t, `{"nonce":"0000000000000000","descendantBlocks":[{"height":1,"nonce":"0000000000000000","descendantBlocks":[null]}]}`)
 	if err == nil {
 		t.Fatal("nested null descendant decoded without error")
+	}
+	if !strings.Contains(err.Error(), "descendant block at index 0 is null") {
+		t.Fatalf("nested null: error is not the descendant check: %v", err)
 	}
 }
 

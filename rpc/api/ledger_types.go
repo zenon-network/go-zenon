@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/big"
 
 	"github.com/zenon-network/go-zenon/chain"
@@ -99,7 +100,7 @@ func (block *AccountBlock) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
-	if err := aux.CheckDescendants(); err != nil {
+	if err := aux.checkDescendantsDeep(); err != nil {
 		return err
 	}
 
@@ -114,9 +115,28 @@ func (block *AccountBlock) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// checkDescendantsDeep rejects a null entry in this block's descendant
+// list or in the list of any block in its paired chain, naming the
+// index and, for a paired block, its depth. Every JSON decoder that
+// yields an AccountBlock calls it, since FromApiMarshalJson itself
+// copies the pointers unchecked.
+func (a *AccountBlockMarshal) checkDescendantsDeep() error {
+	for depth := 0; a != nil; depth, a = depth+1, a.PairedAccountBlock {
+		if err := a.CheckDescendants(); err != nil {
+			if depth > 0 {
+				return fmt.Errorf("paired block at depth %d: %w", depth, err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
 // FromApiMarshalJson converts the wire representation back to an
 // AccountBlock, parsing string-encoded amounts into *big.Int and
 // converting the token info and paired block (recursively) as well.
+// It does not validate; the JSON decoders check the descendant lists
+// before calling it.
 func (a *AccountBlockMarshal) FromApiMarshalJson() *AccountBlock {
 	aux := &AccountBlock{
 		ConfirmationDetail: a.ConfirmationDetail,
@@ -337,6 +357,8 @@ func (abl *AccountBlockList) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the AccountBlockListMarshal wire form produced
 // by MarshalJSON, converting string-encoded amounts back to *big.Int.
+// A null list element is skipped; a null entry in any element's
+// descendant list (or its paired chain) is an error.
 func (abl *AccountBlockList) UnmarshalJSON(data []byte) error {
 	aux := new(AccountBlockListMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -344,9 +366,12 @@ func (abl *AccountBlockList) UnmarshalJSON(data []byte) error {
 	}
 
 	abl.List = make([]*AccountBlock, 0)
-	for _, accBl := range aux.List {
+	for index, accBl := range aux.List {
 		if accBl == nil {
 			continue
+		}
+		if err := accBl.checkDescendantsDeep(); err != nil {
+			return fmt.Errorf("list element %d: %w", index, err)
 		}
 		block := accBl.FromApiMarshalJson()
 		abl.List = append(abl.List, block)
