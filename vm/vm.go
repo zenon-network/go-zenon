@@ -40,6 +40,8 @@ import (
 	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded"
+	"github.com/zenon-network/go-zenon/vm/embedded/definition"
+	"github.com/zenon-network/go-zenon/vm/embedded/implementation"
 	"github.com/zenon-network/go-zenon/vm/vm_context"
 )
 
@@ -195,6 +197,18 @@ func (vm *VM) applySend(block *nom.AccountBlock) error {
 		err = method.ValidateSendBlock(block)
 		if err != nil {
 			return err
+		}
+
+		// reject per-token percentages above the denominator (issue #198)
+		if vm.context.IsDynamicPlasmaSporkEnforced() {
+			if _, ok := method.(*implementation.SetTokenTupleMethod); ok {
+				param := new(definition.TokenTuplesParam)
+				if err := definition.ABILiquidity.UnpackMethod(param, definition.SetTokenTupleMethodName, block.Data); err == nil {
+					if err := implementation.CheckTokenTuplePercentages(param); err != nil {
+						return err
+					}
+				}
+			}
 		}
 	}
 

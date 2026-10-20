@@ -366,6 +366,32 @@ func (p *SetTokenTupleMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	return err
 }
 
+// CheckTokenTuplePercentages is the stricter SetTokenTuple validation
+// gated on DynamicPlasmaSpork (issue #198). It rejects any per-token
+// ZNN or QSR percentage above its denominator and sums in uint64 so a
+// pair of oversized values cannot wrap to exactly the denominator.
+// Callers must gate on the spork: the check changes what every node
+// accepts.
+func CheckTokenTuplePercentages(param *definition.TokenTuplesParam) error {
+	var totalZnn, totalQsr uint64
+	for i := range param.ZnnPercentages {
+		if param.ZnnPercentages[i] > constants.LiquidityZnnTotalPercentages {
+			return constants.ErrInvalidPercentages
+		}
+		totalZnn += uint64(param.ZnnPercentages[i])
+	}
+	for i := range param.QsrPercentages {
+		if param.QsrPercentages[i] > constants.LiquidityQsrTotalPercentages {
+			return constants.ErrInvalidPercentages
+		}
+		totalQsr += uint64(param.QsrPercentages[i])
+	}
+	if totalZnn != uint64(constants.LiquidityZnnTotalPercentages) || totalQsr != uint64(constants.LiquidityQsrTotalPercentages) {
+		return constants.ErrInvalidPercentages
+	}
+	return nil
+}
+
 // ReceiveBlock replaces the token-tuple list in the LiquidityInfo.
 // Security must be initialized (CheckSecurityInitialized) and the
 // sender must be the administrator, else
@@ -382,6 +408,12 @@ func (p *SetTokenTupleMethod) ReceiveBlock(context vm_context.AccountVmContext, 
 	err := definition.ABILiquidity.UnpackMethod(param, p.MethodName, sendBlock.Data)
 	if err != nil {
 		return nil, err
+	}
+
+	if context.IsDynamicPlasmaSporkEnforced() {
+		if err := CheckTokenTuplePercentages(param); err != nil {
+			return nil, err
+		}
 	}
 
 	if _, errSec := CheckSecurityInitialized(context); errSec != nil {
