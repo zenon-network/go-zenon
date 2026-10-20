@@ -11,7 +11,10 @@ func (ms *momentumStore) GetBlockWhichReceives(hash types.Hash) (*nom.AccountBlo
 		return nil, err
 	}
 
-	fromHeader := ms.GetAccountMailbox(block.Address).GetBlockWhichReceives(hash)
+	fromHeader, err := ms.GetAccountMailbox(block.Address).GetBlockWhichReceives(hash)
+	if err != nil {
+		return nil, err
+	}
 	if fromHeader == nil {
 		return nil, nil
 	}

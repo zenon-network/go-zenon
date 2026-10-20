@@ -8,8 +8,7 @@
 package mailbox
 
 import (
-	"fmt"
-
+	"github.com/pkg/errors"
 	"github.com/syndtr/goleveldb/leveldb"
 
 	"github.com/zenon-network/go-zenon/chain/store"
@@ -18,17 +17,17 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
-func parseAccountHeader(data []byte, err error) *types.AccountHeader {
+func parseAccountHeader(data []byte, err error) (*types.AccountHeader, error) {
 	if err == leveldb.ErrNotFound {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	if header, err := types.DeserializeAccountHeader(data); err != nil {
-		panic(fmt.Sprintf("m.Deserialize failed, Error: %v", err))
+		return nil, errors.Errorf("failed to deserialize account-header; reason: %v", err.Error())
 	} else {
-		return header
+		return header, nil
 	}
 }
 
@@ -87,7 +86,7 @@ func (m *mailbox) MarkBlockThatReceives(hash types.Hash, receiveHeader types.Acc
 	return m.DB.Put(getBlockWhichReceivesKey(hash), data)
 }
 
-func (m *mailbox) GetBlockWhichReceives(fromHash types.Hash) *types.AccountHeader {
+func (m *mailbox) GetBlockWhichReceives(fromHash types.Hash) (*types.AccountHeader, error) {
 	return parseAccountHeader(m.DB.Get(getBlockWhichReceivesKey(fromHash)))
 }
 func (m *mailbox) GetUnreceivedAccountBlockHashes(atMost uint64) ([]types.Hash, error) {
@@ -137,6 +136,6 @@ func (m *mailbox) SequencerPushBack(header types.AccountHeader) {
 	common.DealWithErr(err)
 	common.DealWithErr(m.DB.Put(getSequencerHeaderByHeightKey(total), data))
 }
-func (m *mailbox) SequencerByHeight(height uint64) *types.AccountHeader {
+func (m *mailbox) SequencerByHeight(height uint64) (*types.AccountHeader, error) {
 	return parseAccountHeader(m.DB.Get(getSequencerHeaderByHeightKey(height)))
 }
