@@ -27,6 +27,9 @@ import (
 
 const (
 	gcmAdditionData = "zenon"
+	// gcmNonceSize is the standard GCM nonce length (cipher.NewGCM's
+	// NonceSize); every nonce this package writes or accepts has it.
+	gcmNonceSize = 12
 )
 
 func aesGCMEncrypt(key, inText []byte) (outText, nonce []byte, err error) {
@@ -39,7 +42,7 @@ func aesGCMEncrypt(key, inText []byte) (outText, nonce []byte, err error) {
 		return nil, nil, err
 	}
 
-	nonce = GetEntropyCSPRNG(12)
+	nonce = GetEntropyCSPRNG(gcmNonceSize)
 
 	outText = stream.Seal(nil, nonce, inText, []byte(gcmAdditionData))
 	return outText, nonce, err
@@ -53,6 +56,12 @@ func aesGCMDecrypt(key, cipherText, nonce []byte) ([]byte, error) {
 	stream, err := cipher.NewGCM(aesBlock)
 	if err != nil {
 		return nil, err
+	}
+	// cipher.AEAD.Open panics on a nonce of the wrong length rather than
+	// returning an error; refuse it here so a malformed key file cannot
+	// take the process down.
+	if len(nonce) != stream.NonceSize() {
+		return nil, ErrKeyFileInvalidNonce
 	}
 
 	outText, err := stream.Open(nil, nonce, cipherText, []byte(gcmAdditionData))

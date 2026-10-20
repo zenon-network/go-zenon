@@ -49,9 +49,10 @@ type argon2Params struct {
 // ReadKeyFile reads and JSON-decodes the key file at path, recording
 // the path on the returned KeyFile unless the file itself carries a
 // "Path" value, which wins. It rejects files whose version,
-// cipher, or KDF do not match what this build supports, returning
-// ErrKeyFileInvalidVersion, ErrKeyFileInvalidCipher, or
-// ErrKeyFileInvalidKDF respectively. It does not decrypt the contents.
+// cipher, KDF, or nonce length do not match what this build supports,
+// returning ErrKeyFileInvalidVersion, ErrKeyFileInvalidCipher,
+// ErrKeyFileInvalidKDF, or ErrKeyFileInvalidNonce respectively. It does
+// not decrypt the contents.
 func ReadKeyFile(path string) (*KeyFile, error) {
 	keyFileJson, err := os.ReadFile(path)
 	if err != nil {
@@ -76,6 +77,9 @@ func ReadKeyFile(path string) (*KeyFile, error) {
 	if k.Crypto.KDF != argonName {
 		return nil, ErrKeyFileInvalidKDF
 	}
+	if len(k.Crypto.AesNonce) != gcmNonceSize {
+		return nil, ErrKeyFileInvalidNonce
+	}
 	return k, nil
 }
 
@@ -94,8 +98,12 @@ func (kf *KeyFile) Write() error {
 // the AES-256-GCM ciphertext to recover the BIP-39 entropy, and rebuilds
 // the key store (mnemonic, seed, and base address) from it. It returns
 // ErrWrongPassword when the password does not authenticate the
-// ciphertext.
+// ciphertext, and ErrKeyFileInvalidNonce, before any key derivation,
+// when the stored nonce is not the length the cipher expects.
 func (kf *KeyFile) Decrypt(password string) (*KeyStore, error) {
+	if len(kf.Crypto.AesNonce) != gcmNonceSize {
+		return nil, ErrKeyFileInvalidNonce
+	}
 	derivedKey := new(passwordHash)
 	err := derivedKey.SetFromJSON(password, kf.Crypto.Argon2Params)
 	if err != nil {

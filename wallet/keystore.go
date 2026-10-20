@@ -109,8 +109,13 @@ func (ks *KeyStore) FindAddress(address types.Address) (key *KeyPair, index uint
 // BIP-39 entropy with AES-256-GCM under that key, and records the
 // cipher, KDF, salt, nonce, base address, and a UTC creation timestamp.
 // The returned KeyFile has no Path set; the caller assigns one before
-// writing it.
+// writing it. It returns ErrKeyStoreNoEntropy if the store holds no
+// valid BIP-39 entropy (for example after Zero), since the file it
+// would write could never be decrypted back into a key store.
 func (ks *KeyStore) Encrypt(password string) (*KeyFile, error) {
+	if _, err := bip39.NewMnemonic(ks.Entropy); err != nil {
+		return nil, ErrKeyStoreNoEntropy
+	}
 	derivedKey := new(passwordHash)
 	err := derivedKey.Set(password)
 	if err != nil {
