@@ -434,7 +434,7 @@ func (abv *accountBlockVerifier) isDynamicPlasmaActiveAtMA() (bool, error) {
 	}
 	cacheStore := abv.chain.GetCacheStore(abv.block.MomentumAcknowledged)
 	if cacheStore == nil {
-		return false, ErrABMAMissing
+		return false, InternalError(fmt.Errorf("no cache store at momentum %s", abv.block.MomentumAcknowledged.Hash))
 	}
 	return cacheStore.IsSporkActive(types.DynamicPlasmaSpork)
 }
