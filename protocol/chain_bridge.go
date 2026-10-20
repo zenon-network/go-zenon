@@ -338,10 +338,10 @@ func (c chainBridge) restoreBranch(insert sync.Locker, target types.HashHeight, 
 // that reason about the committed prefix must use committed, not failed.
 func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.DetailedMomentum) (failed, committed int, err error) {
 	for index, supplied := range momentums {
-		// Reject an oversized momentum before any lock-held work. The
-		// verifier applies the same rule inside insertMomentum; checking
-		// here first keeps the momentum's blocks out of the pool and the
-		// VM, and avoids the copy and snapshot below for a momentum that
+		// Reject an oversized momentum before the copy and snapshot
+		// below. The verifier applies the same rule inside insertMomentum;
+		// checking here first keeps the momentum's blocks out of the pool
+		// and the VM, and avoids the copy and snapshot for a momentum that
 		// would be rejected anyway.
 		maxContent, err := verifier.MaxMomentumContent(c.chain.GetFrontierMomentumStore())
 		if err != nil {
