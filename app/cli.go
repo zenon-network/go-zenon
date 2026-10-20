@@ -90,7 +90,7 @@ func beforeAction(ctx *cli.Context) error {
 	runtime.GOMAXPROCS(max)
 
 	// pprof server
-	if ctx.IsSet(PprofFlag.Name) {
+	if pprofRequested(ctx) {
 		listenHost := ctx.String(PprofAddrFlag.Name)
 
 		port := ctx.Int(PprofPortFlag.Name)
@@ -106,6 +106,13 @@ func beforeAction(ctx *cli.Context) error {
 	}
 
 	return nil
+}
+
+// pprofRequested reports whether the pprof server should start: the
+// value of --pprof, so that --pprof=false keeps it off. (Testing the
+// flag's presence instead used to start it for --pprof=false.)
+func pprofRequested(ctx *cli.Context) bool {
+	return ctx.Bool(PprofFlag.Name)
 }
 
 func action(ctx *cli.Context) error {
