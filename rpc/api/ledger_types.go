@@ -92,10 +92,14 @@ func (block *AccountBlock) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON decodes the AccountBlockMarshal wire form produced by
-// MarshalJSON, converting string-encoded amounts back to *big.Int.
+// MarshalJSON, converting string-encoded amounts back to *big.Int. A
+// null entry in descendantBlocks is an error.
 func (block *AccountBlock) UnmarshalJSON(data []byte) error {
 	aux := new(AccountBlockMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if err := aux.CheckDescendants(); err != nil {
 		return err
 	}
 

@@ -616,6 +616,20 @@ func (ab *AccountBlockMarshal) FromNomMarshalJson() *AccountBlock {
 	return aux
 }
 
+// CheckDescendants returns an error naming the index of the first null
+// entry in DescendantBlocks. JSON decoding leaves a null list element
+// as a nil pointer, which every consumer of the list (Copy, hashing,
+// the verifier) dereferences; the decoders call this so such input is
+// rejected at the boundary instead.
+func (ab *AccountBlockMarshal) CheckDescendants() error {
+	for index, dBlock := range ab.DescendantBlocks {
+		if dBlock == nil {
+			return fmt.Errorf("descendant block at index %d is null", index)
+		}
+	}
+	return nil
+}
+
 // MarshalJSON encodes the block via its AccountBlockMarshal wire
 // form, so Amount appears as a base-10 JSON string and Nonce as hex.
 func (ab *AccountBlock) MarshalJSON() ([]byte, error) {
@@ -624,10 +638,14 @@ func (ab *AccountBlock) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the AccountBlockMarshal wire form produced by
 // MarshalJSON. An invalid Amount string silently decodes to 0, while
-// an invalid Nonce string is reported as an error.
+// an invalid Nonce string or a null descendant entry is reported as an
+// error.
 func (ab *AccountBlock) UnmarshalJSON(data []byte) error {
 	aux := new(AccountBlockMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if err := aux.CheckDescendants(); err != nil {
 		return err
 	}
 

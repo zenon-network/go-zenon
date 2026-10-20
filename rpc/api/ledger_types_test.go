@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -111,4 +112,35 @@ func TestAccountBlockList_UnmarshalJSON_MixedNullAndValid(t *testing.T) {
 	})
 	require.Len(t, abl.List, 1)
 	require.Equal(t, uint64(1), abl.List[0].Version)
+}
+
+// The RPC block form shares the ledger block's descendant list; a null
+// entry is rejected when the request is decoded, before ToLedgerBlock
+// copies the block for ledger.publishRawTransaction.
+func TestAccountBlock_UnmarshalJSON_NullDescendantIsAnError(t *testing.T) {
+	var block AccountBlock
+	err := json.Unmarshal([]byte(`{"height":1,"nonce":"0000000000000000","descendantBlocks":[null]}`), &block)
+	if err == nil {
+		t.Fatal("descendantBlocks:[null] decoded without error")
+	}
+	if !strings.Contains(err.Error(), "index 0") {
+		t.Fatalf("error does not name the index: %v", err)
+	}
+
+	err = json.Unmarshal([]byte(`{"height":1,"nonce":"0000000000000000","descendantBlocks":[{"height":2,"nonce":"0000000000000000","descendantBlocks":[null]}]}`), &block)
+	if err == nil {
+		t.Fatal("nested null descendant decoded without error")
+	}
+
+	err = json.Unmarshal([]byte(`{"height":1,"nonce":"0000000000000000","descendantBlocks":[{"height":2,"nonce":"0000000000000000"}]}`), &block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := block.ToLedgerBlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ledger.DescendantBlocks) != 1 || ledger.DescendantBlocks[0].Height != 2 {
+		t.Fatalf("descendants lost in ToLedgerBlock: %+v", ledger.DescendantBlocks)
+	}
 }
