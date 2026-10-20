@@ -94,6 +94,33 @@ func TestMoreByHeight_RangeIsCutAtTheFrontier(t *testing.T) {
 	}
 }
 
+// A height missing below the frontier means the store is damaged: it is an
+// error, not a nil entry and not a partial result.
+func TestMoreByHeight_MissingBlockBelowTheFrontierIsAnError(t *testing.T) {
+	address := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	memdb := db.NewMemDB()
+	// Height 2 is written as the frontier but height 1 never was.
+	block := &nom.AccountBlock{Version: 1, ChainIdentifier: 100, BlockType: nom.BlockTypeUserSend, Address: address, Height: 2, Amount: common.Big0}
+	block.Hash = block.ComputeHash()
+	data, err := block.Serialize()
+	common.FailIfErr(t, err)
+	common.FailIfErr(t, db.SetFrontier(memdb, block.Identifier(), data))
+	store := NewAccountStore(address, memdb)
+
+	got, err := store.MoreByHeight(1, 2)
+	if err == nil {
+		t.Fatalf("MoreByHeight over a missing height returned %v entries and no error", heights(got))
+	}
+	if got != nil {
+		t.Fatalf("MoreByHeight returned a partial result %v alongside the error", heights(got))
+	}
+
+	// Height 0 is never a block.
+	got, err = store.MoreByHeight(0, 3)
+	common.FailIfErr(t, err)
+	common.Expect(t, len(got), 0)
+}
+
 func equalU64(a, b []uint64) bool {
 	for i := range a {
 		if a[i] != b[i] {
