@@ -144,15 +144,13 @@ func TestReadFixedBytes_WidthAboveOneWordIsAnError(t *testing.T) {
 	})
 	t.Run("33 wide on 64 bytes", func(t *testing.T) {
 		// Above the word even though the input is long enough.
-		if _, err := readFixedBytes(fixedBytesType(33), output[0:64]); err == nil {
-			t.Fatal("accepted")
-		}
+		_, err := readFixedBytes(fixedBytesType(33), output[0:64])
+		common.ExpectError(t, err, errFixedBytesTooWide)
 	})
 	t.Run("20 wide on 19 bytes", func(t *testing.T) {
 		// Within the word but longer than the input.
-		if _, err := readFixedBytes(fixedBytesType(20), output[0:19]); err == nil {
-			t.Fatal("accepted")
-		}
+		_, err := readFixedBytes(fixedBytesType(20), output[0:19])
+		common.ExpectError(t, err, errFixedBytesInputShort)
 	})
 	t.Run("20 wide on a word", func(t *testing.T) {
 		got, err := readFixedBytes(fixedBytesType(20), output[32:64])
@@ -178,10 +176,11 @@ func TestBytes_Padding(t *testing.T) {
 	payload := bytes.Repeat([]byte{0xab}, 40)
 	packed, err = dynamic.pack(reflect.ValueOf(payload))
 	common.FailIfErr(t, err)
-	common.Expect(t, len(packed), WordSize+2*WordSize) // length word + 40 bytes padded to 64
-	common.Expect(t, int(packed[WordSize-1]), 40)
-	if !bytes.Equal(packed[WordSize:WordSize+40], payload) {
-		t.Fatalf("dynamic bytes payload not preserved: %x", packed[WordSize:])
+	lengthWord := make([]byte, WordSize)
+	lengthWord[WordSize-1] = 40
+	wantDynamic := append(append(lengthWord, payload...), make([]byte, 24)...) // length word + 40 bytes padded to 64
+	if !bytes.Equal(packed, wantDynamic) {
+		t.Fatalf("dynamic bytes packed as %x, want %x", packed, wantDynamic)
 	}
 }
 

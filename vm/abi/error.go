@@ -22,6 +22,7 @@ var (
 	errPureUnderscoredOutput       = errors.New("abi: purely underscored output cannot unpack to struct")
 	errInvalidlFixedBytesType      = errors.New("abi: invalid type in call to make fixed byte array")
 	errFixedBytesTooWide           = errors.New("abi: fixed byte array wider than one word")
+	errFixedBytesInputShort        = errors.New("abi: input shorter than the fixed byte array")
 	errInvalidlArrayType           = errors.New("abi: invalid type in array/slice unpacking stage")
 )
 
