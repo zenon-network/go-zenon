@@ -55,6 +55,11 @@ func readFixedBytes(t Type, word []byte) (interface{}, error) {
 	if t.T != FixedBytesTy {
 		return nil, errInvalidlFixedBytesType
 	}
+	// NewType refuses widths above one word; a Type built by hand must
+	// not read past the word it was handed.
+	if t.Size > WordSize || t.Size > len(word) {
+		return nil, errFixedBytesTooWide
+	}
 	// convert
 	array := reflect.New(t.Type).Elem()
 
