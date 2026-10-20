@@ -126,14 +126,18 @@ func (e wsHandshakeError) Error() string {
 	return s
 }
 
+// originIsAllowed reports whether any rule in allowedOrigins admits
+// browserOrigin. It walks the set with Each rather than Iterator: an
+// Iterator is served by a goroutine that only exits once the set is
+// exhausted or Stop is called, so returning on an early match used to
+// strand one goroutine per handshake.
 func originIsAllowed(allowedOrigins mapset.Set, browserOrigin string) bool {
-	it := allowedOrigins.Iterator()
-	for origin := range it.C {
-		if ruleAllowsOrigin(origin.(string), browserOrigin) {
-			return true
-		}
-	}
-	return false
+	allowed := false
+	allowedOrigins.Each(func(origin interface{}) bool {
+		allowed = ruleAllowsOrigin(origin.(string), browserOrigin)
+		return allowed // true stops the walk
+	})
+	return allowed
 }
 
 func ruleAllowsOrigin(allowedOrigin string, browserOrigin string) bool {
