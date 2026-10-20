@@ -553,7 +553,10 @@ func (a *PillarApi) GetPillarEpochHistory(pillarName string, pageIndex, pageSize
 		return nil, err
 	}
 
-	epoch := lastEpoch.LastEpoch - int64(pageIndex*pageSize)
+	// Widen before multiplying: pageIndex*pageSize in uint32 wraps for a
+	// large pageIndex and would hand back the newest epochs instead of an
+	// empty page.
+	epoch := lastEpoch.LastEpoch - int64(pageIndex)*int64(pageSize)
 
 	result := &PillarEpochHistoryList{
 		Count: lastEpoch.LastEpoch + 1,
