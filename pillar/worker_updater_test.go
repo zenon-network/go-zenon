@@ -53,8 +53,6 @@ func TestUpdateFusedPlasma(t *testing.T) {
 	}
 }
 
-// poolWithoutPredecessor answers GetAccountStore as the account pool does for
-// an identifier it does not hold: nil. Any other chain call panics.
 type poolWithoutPredecessor struct {
 	chain.Chain
 	asked []types.HashHeight

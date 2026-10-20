@@ -174,8 +174,6 @@ func TestDynamicPlasma_PillarUpdateReplacedAtSameHeightWhenUnderpriced(t *testin
 		}
 	}
 
-	// With the burst over, the replacements confirm. Each momentum fits two
-	// Update blocks, so the wait is bounded by the number pending.
 	for i := 0; i < len(pending) && len(z.Chain().GetUncommittedAccountBlocksByAddress(producer)) > 0; i++ {
 		z.InsertNewMomentum()
 	}
