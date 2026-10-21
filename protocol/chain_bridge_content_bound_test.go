@@ -540,6 +540,8 @@ func TestInsertChain_OversizedContentIsRefusedBeforePoolWork(t *testing.T) {
 	_, err := b.bridge.InsertChain([]*nom.DetailedMomentum{extendingListing(t, z, chain.MaxAccountBlocksInMomentum+1)})
 	expectRefusedOnCount(t, err)
 	common.Expect(t, b.verifier.momentums, 0)
+	common.Expect(t, b.pool.snapshots, 0)
+	common.Expect(t, b.pool.restores, 0)
 	expectUntouched(t, z, original, b)
 }
 
@@ -558,5 +560,7 @@ func TestInsertChain_OversizedSideChainIsRefusedBeforeRollback(t *testing.T) {
 	_, err := b.bridge.InsertChain(sideChainListing(t, z, target, chain.MaxAccountBlocksInMomentum+1))
 	expectRefusedOnCount(t, err)
 	common.Expect(t, b.verifier.momentums, 1)
+	common.Expect(t, b.pool.snapshots, 0)
+	common.Expect(t, b.pool.restores, 0)
 	expectUntouched(t, z, original, b)
 }
