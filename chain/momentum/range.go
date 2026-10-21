@@ -83,7 +83,9 @@ func (ms *momentumStore) binarySearchBeforeTime(start, end *nom.Momentum, timeNa
 	n := int(end.Height - start.Height + 1)
 
 	var err error
-	blockMap := make(map[int]*nom.Momentum, n)
+	// The search visits O(log n) momentums; sizing the map for the whole
+	// span allocated hundreds of megabytes per lookup on a long chain.
+	blockMap := make(map[int]*nom.Momentum)
 
 	i := sort.Search(n, func(i int) bool {
 		if err != nil {
