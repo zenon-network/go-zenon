@@ -15,7 +15,7 @@ func (as *accountStore) sequencerFrontIndex() (uint64, error) {
 		return 0, nil
 	}
 	if err != nil {
-		return 0, errors.Errorf("failed to read sequencer front index for account %s: %v", as.address, err)
+		return 0, errors.Wrapf(err, "failed to read sequencer front index for account %s", as.address)
 	}
 	if len(data) < 8 {
 		return 0, errors.Errorf("sequencer front index for account %s is too short: got %d bytes, want 8", as.address, len(data))
@@ -42,8 +42,6 @@ func (as *accountStore) SequencerFront(mailbox store.AccountMailbox) (*types.Acc
 }
 func (as *accountStore) SequencerPopFront() {
 	last, err := as.sequencerFrontIndex()
-	if err != nil {
-		common.DealWithErr(err)
-	}
+	common.DealWithErr(err)
 	common.DealWithErr(as.DB.Put(sequencerLastReceivedKey, common.Uint64ToBytes(last+1)))
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 )
@@ -63,5 +64,20 @@ func TestSequencerSizeNormal(t *testing.T) {
 	}
 	if size != 1 {
 		t.Fatalf("expected 1, got: %d", size)
+	}
+}
+
+// TestSequencerSizeReadError verifies that SequencerSize returns a
+// diagnostic error (not a panic) when the underlying store fails.
+func TestSequencerSizeReadError(t *testing.T) {
+	wrapper, raw := db.NewLevelDB(t.TempDir())
+	common.FailIfErr(t, raw.Close())
+	m := NewAccountMailbox(types.PillarContract, wrapper)
+	_, err := m.SequencerSize()
+	if err == nil {
+		t.Fatal("expected error for closed DB, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to read sequencer size") {
+		t.Fatalf("expected read diagnostic, got: %v", err)
 	}
 }

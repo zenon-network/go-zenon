@@ -98,8 +98,9 @@ type Account interface {
 // The Sequencer methods maintain the FIFO queue of send-block headers
 // addressed to an embedded contract: SequencerPushBack appends a
 // header (heights are 1-based), SequencerSize returns the number of
-// headers ever pushed and SequencerByHeight reads one. The consumed
-// cursor lives in the account store (see Account.SequencerFront).
+// headers ever pushed (or a storage error) and SequencerByHeight reads
+// one. The consumed cursor lives in the account store (see
+// Account.SequencerFront).
 type AccountMailbox interface {
 	Address() types.Address
 	Snapshot() AccountMailbox

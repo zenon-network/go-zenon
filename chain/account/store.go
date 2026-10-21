@@ -38,7 +38,7 @@ func (as *accountStore) Snapshot() store.Account {
 func (as *accountStore) Identifier() types.HashHeight {
 	frontier, err := as.Frontier()
 	if err != nil {
-		common.DealWithErr(errors.Errorf("account store %s: failed to read frontier entry: %v", as.address, err))
+		common.DealWithErr(errors.Wrapf(err, "account store %s: failed to read frontier entry at height %d", as.address, db.GetFrontierIdentifier(as.DB).Height))
 	}
 	if frontier == nil {
 		return types.ZeroHashHeight

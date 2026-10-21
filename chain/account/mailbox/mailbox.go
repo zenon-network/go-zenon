@@ -128,7 +128,7 @@ func (m *mailbox) SequencerSize() (uint64, error) {
 		return 0, nil
 	}
 	if err != nil {
-		return 0, errors.Errorf("failed to read sequencer size for mailbox %s: %v", m.address, err)
+		return 0, errors.Wrapf(err, "failed to read sequencer size for mailbox %s", m.address)
 	}
 	if len(data) < 8 {
 		return 0, errors.Errorf("sequencer size for mailbox %s is too short: got %d bytes, want 8", m.address, len(data))
@@ -137,9 +137,7 @@ func (m *mailbox) SequencerSize() (uint64, error) {
 }
 func (m *mailbox) SequencerPushBack(header types.AccountHeader) {
 	total, err := m.SequencerSize()
-	if err != nil {
-		common.DealWithErr(err)
-	}
+	common.DealWithErr(err)
 	total++
 	common.DealWithErr(m.DB.Put(sequencerNumInsertedKey, common.Uint64ToBytes(total)))
 	data, err := header.Serialize()

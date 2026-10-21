@@ -33,7 +33,7 @@ func (w *worker) generateNext(momentumStore store.Momentum, embedded types.Addre
 
 	sendBlock, err := momentumStore.GetAccountBlock(*toReceive)
 	if err != nil {
-		return nil, errors.Errorf("failed to read send block %s for sequencer entry: %v", toReceive.Hash, err)
+		return nil, errors.Wrapf(err, "failed to read send block %s for sequencer entry", toReceive.Hash)
 	}
 	if sendBlock == nil {
 		return nil, errors.Errorf("can't get block but it exists in sequencer")
