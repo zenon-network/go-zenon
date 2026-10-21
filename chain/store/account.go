@@ -22,8 +22,12 @@ import (
 //
 // Identifier returns the hash-height of the frontier account block
 // (zero if the chain is empty) and Frontier the block itself.
-// ByHash, ByHeight and MoreByHeight return nil blocks with a nil
-// error when an entry does not exist.
+// ByHash and ByHeight return a nil block with a nil error when an
+// entry does not exist. MoreByHeight returns the blocks from a height
+// upwards, at most count and never past the frontier, so a start above
+// the frontier (or height 0, which is never a block) yields an empty
+// list and the result holds no nil entries; a height missing below the
+// frontier is reported as an error, since it means the store is damaged.
 //
 // Storage returns the embedded-contract key-value storage: a subset
 // of the account database wrapped with db.DisableNotFound, so missing
