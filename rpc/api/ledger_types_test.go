@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -111,4 +112,132 @@ func TestAccountBlockList_UnmarshalJSON_MixedNullAndValid(t *testing.T) {
 	})
 	require.Len(t, abl.List, 1)
 	require.Equal(t, uint64(1), abl.List[0].Version)
+}
+
+// The RPC block form shares the ledger block's descendant list; a null
+// entry is rejected when the request is decoded, before ToLedgerBlock
+// copies the block for ledger.publishRawTransaction.
+func TestAccountBlock_UnmarshalJSON_NullDescendantIsAnError(t *testing.T) {
+	var block AccountBlock
+	err := json.Unmarshal([]byte(`{"height":1,"nonce":"0000000000000000","descendantBlocks":[null]}`), &block)
+	if err == nil {
+		t.Fatal("descendantBlocks:[null] decoded without error")
+	}
+	if !strings.Contains(err.Error(), "index 0") {
+		t.Fatalf("error does not name the index: %v", err)
+	}
+
+	err = json.Unmarshal([]byte(`{"height":1,"nonce":"0000000000000000","descendantBlocks":[{"height":2,"nonce":"0000000000000000","descendantBlocks":[null]}]}`), &block)
+	if err == nil {
+		t.Fatal("nested null descendant decoded without error")
+	}
+
+	err = json.Unmarshal([]byte(`{"height":1,"nonce":"0000000000000000","descendantBlocks":[{"height":2,"nonce":"0000000000000000"}]}`), &block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := block.ToLedgerBlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ledger.DescendantBlocks) != 1 || ledger.DescendantBlocks[0].Height != 2 {
+		t.Fatalf("descendants lost in ToLedgerBlock: %+v", ledger.DescendantBlocks)
+	}
+
+	// A missing field, an empty list and a whole-field null all decode to
+	// an allocated empty list.
+	for _, text := range []string{`{"height":1,"nonce":"0000000000000000"}`, `{"height":1,"nonce":"0000000000000000","descendantBlocks":[]}`, `{"height":1,"nonce":"0000000000000000","descendantBlocks":null}`} {
+		var b AccountBlock
+		if err := json.Unmarshal([]byte(text), &b); err != nil {
+			t.Fatalf("%s: %v", text, err)
+		}
+		if b.DescendantBlocks == nil || len(b.DescendantBlocks) != 0 {
+			t.Fatalf("%s: descendants = %#v, want an empty list", text, b.DescendantBlocks)
+		}
+	}
+	// A null at a nonzero index names that index.
+	err = json.Unmarshal([]byte(`{"height":1,"nonce":"0000000000000000","descendantBlocks":[{"height":2,"nonce":"0000000000000000"},null]}`), &block)
+	if err == nil || !strings.Contains(err.Error(), "index 1") {
+		t.Fatalf("second null entry: got %v", err)
+	}
+}
+
+// The paired block and the elements of a block list are decoded through
+// a path of their own; a null descendant there must be refused too.
+func TestAccountBlock_UnmarshalJSON_NullDescendantInPairedBlockIsAnError(t *testing.T) {
+	var block AccountBlock
+	paired := `{"height":1,"nonce":"0000000000000000","pairedAccountBlock":{"height":2,"nonce":"0000000000000000","descendantBlocks":[null]}}`
+	err := json.Unmarshal([]byte(paired), &block)
+	if err == nil {
+		t.Fatal("null descendant in the paired block decoded without error")
+	}
+	if !strings.Contains(err.Error(), "depth 1") || !strings.Contains(err.Error(), "index 0") {
+		t.Fatalf("error does not locate the entry: %v", err)
+	}
+
+	nested := `{"height":1,"nonce":"0000000000000000","pairedAccountBlock":{"height":2,"nonce":"0000000000000000","pairedAccountBlock":{"height":3,"nonce":"0000000000000000","descendantBlocks":[{"height":4,"nonce":"0000000000000000"},null]}}}`
+	err = json.Unmarshal([]byte(nested), &block)
+	if err == nil || !strings.Contains(err.Error(), "depth 2") || !strings.Contains(err.Error(), "index 1") {
+		t.Fatalf("nested paired block: got %v", err)
+	}
+
+	valid := `{"height":1,"nonce":"0000000000000000","pairedAccountBlock":{"height":2,"nonce":"0000000000000000","descendantBlocks":[{"height":3,"nonce":"0000000000000000"}]}}`
+	if err := json.Unmarshal([]byte(valid), &block); err != nil {
+		t.Fatal(err)
+	}
+	if block.PairedAccountBlock == nil || len(block.PairedAccountBlock.DescendantBlocks) != 1 {
+		t.Fatalf("valid paired descendants lost: %+v", block.PairedAccountBlock)
+	}
+}
+
+func TestAccountBlockList_UnmarshalJSON_NullDescendantInElementIsAnError(t *testing.T) {
+	var list AccountBlockList
+	data := `{"list":[null,{"height":1,"nonce":"0000000000000000","descendantBlocks":[null]}],"count":1,"more":false}`
+	err := json.Unmarshal([]byte(data), &list)
+	if err == nil {
+		t.Fatal("null descendant inside a list element decoded without error")
+	}
+	if !strings.Contains(err.Error(), "list element 1") || !strings.Contains(err.Error(), "index 0") {
+		t.Fatalf("error does not locate the entry: %v", err)
+	}
+
+	data = `{"list":[{"height":1,"nonce":"0000000000000000","pairedAccountBlock":{"height":2,"nonce":"0000000000000000","descendantBlocks":[null]}}],"count":1,"more":false}`
+	err = json.Unmarshal([]byte(data), &list)
+	if err == nil || !strings.Contains(err.Error(), "list element 0") || !strings.Contains(err.Error(), "depth 1") {
+		t.Fatalf("paired block inside a list element: got %v", err)
+	}
+
+	// Null outer elements are still skipped, and valid elements copy.
+	data = `{"list":[null,{"height":1,"nonce":"0000000000000000","descendantBlocks":[{"height":2,"nonce":"0000000000000000"}]}],"count":1,"more":false}`
+	if err := json.Unmarshal([]byte(data), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.List) != 1 {
+		t.Fatalf("list has %d elements, want 1", len(list.List))
+	}
+	if _, err := list.List[0].ToLedgerBlock(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A detailed momentum carries account blocks through the same decoder, so
+// a null descendant inside one of them is refused at the container level.
+func TestDetailedMomentumList_UnmarshalJSON_NullDescendantIsAnError(t *testing.T) {
+	var list DetailedMomentumList
+	data := `{"list":[{"momentum":{"height":1},"blocks":[{"height":1,"nonce":"0000000000000000","descendantBlocks":[null]}]}],"count":1}`
+	err := json.Unmarshal([]byte(data), &list)
+	if err == nil {
+		t.Fatal("null descendant inside a detailed momentum decoded without error")
+	}
+	if !strings.Contains(err.Error(), "index 0") {
+		t.Fatalf("error does not name the index: %v", err)
+	}
+
+	data = `{"list":[{"momentum":{"height":1},"blocks":[{"height":1,"nonce":"0000000000000000","descendantBlocks":[{"height":2,"nonce":"0000000000000000"}]}]}],"count":1}`
+	if err := json.Unmarshal([]byte(data), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.List) != 1 || len(list.List[0].AccountBlocks) != 1 || len(list.List[0].AccountBlocks[0].DescendantBlocks) != 1 {
+		t.Fatalf("valid detailed momentum lost its blocks: %+v", list.List)
+	}
 }
