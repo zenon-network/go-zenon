@@ -315,11 +315,9 @@ func writeKeystore(ks *wallet.KeyStore, producer types.Address, dst string) erro
 	if err != nil {
 		return fmt.Errorf("encrypt keystore: %w", err)
 	}
-	// KeyFile.Path has no JSON tag, so it ends up in the serialised JSON.
-	// wallet.Manager keys its in-memory map on the value read back from disk,
-	// so we have to write the *container* path here (where znnd will read it
-	// from) rather than the host path.
-	kf.Path = "/root/.znn/wallet/" + producer.String()
+	// ReadKeyFile sets Path from the scanned location, so the serialized
+	// value is informational only. The node inside the container reads
+	// from /root/.znn/wallet/<address>, which is where this file lands.
 	b, err := json.MarshalIndent(kf, "", "    ")
 	if err != nil {
 		return fmt.Errorf("marshal keystore: %w", err)
