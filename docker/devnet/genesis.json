@@ -65,7 +65,7 @@
                 "tokenName": "QSR",
                 "tokenSymbol": "QSR",
                 "tokenDomain": "zenon.devnet",
-                "totalSupply": 1160000000000000,
+                "totalSupply": 1163000000000000,
                 "maxSupply": 9007199254740991,
                 "decimals": 8,
                 "isMintable": true,
@@ -183,6 +183,12 @@
                 "BalanceList": {
                     "zts1qsrxxxxxxxxxxxxxmrhjll": 50000000000000,
                     "zts1znnxxxxxxxxxxxxx9z4ulx": 5000000000000
+                }
+            },
+            {
+                "Address": "z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp",
+                "BalanceList": {
+                    "zts1qsrxxxxxxxxxxxxxmrhjll": 3000000000000
                 }
             }
         ]
