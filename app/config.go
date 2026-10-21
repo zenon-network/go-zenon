@@ -114,17 +114,24 @@ func applyFlagsToConfig(ctx *cli.Context, cfg *node.Config) {
 		cfg.LogLevel = logLevel
 	}
 }
-func readConfigFromFile(ctx *cli.Context, cfg *node.Config) error {
-	if file := ctx.String(ConfigFileFlag.Name); file != "" {
-		if jsonConf, err := os.ReadFile(file); err == nil {
-			err = json.Unmarshal(jsonConf, &cfg)
-			if err == nil {
-				return nil
-			}
 
-			log.Error("Config malformed: cannot unmarshal the config file content", "error", err)
+// readConfigFromFile overlays the JSON config file onto cfg. An explicit
+// --config names the file, and a file that cannot be read or parsed is an
+// error. Without --config the file is <data path>/config.json, and a
+// missing file is not an error; the flag's default value is only a
+// placeholder for the help text and is never opened.
+func readConfigFromFile(ctx *cli.Context, cfg *node.Config) error {
+	if file := ctx.String(ConfigFileFlag.Name); ctx.IsSet(ConfigFileFlag.Name) && file != "" {
+		jsonConf, err := os.ReadFile(file)
+		if err != nil {
+			log.Error("Config file given with --config cannot be read", "configPath", file, "error", err)
 			return err
 		}
+		if err := json.Unmarshal(jsonConf, &cfg); err != nil {
+			log.Error("Config malformed: cannot unmarshal the config file content", "configPath", file, "error", err)
+			return err
+		}
+		return nil
 	}
 
 	// second read default settings

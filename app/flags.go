@@ -36,6 +36,9 @@ var (
 
 	// config
 
+	// ConfigFileFlag names the config file. Its default value is shown in
+	// the help text only; when the flag is not given, the file read is
+	// config.json under the data path (see readConfigFromFile).
 	ConfigFileFlag = &cli.StringFlag{
 		Name:  "config",
 		Usage: "Node configuration file in JSON format",
