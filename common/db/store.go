@@ -56,9 +56,15 @@ func GetFrontierIdentifier(db DB) types.HashHeight {
 	if err == leveldb.ErrNotFound {
 		return types.ZeroHashHeight
 	}
-	common.DealWithErr(err)
+	if err != nil {
+		common.ChainLogger.Error("failed to read frontier identifier", "store", "common/db", "key", getFrontierIdentifierKey(), "err", err)
+		common.DealWithErr(err)
+	}
 	hh, err := types.DeserializeHashHeight(data)
-	common.DealWithErr(err)
+	if err != nil {
+		common.ChainLogger.Error("failed to deserialize frontier identifier", "store", "common/db", "key", getFrontierIdentifierKey(), "err", err)
+		common.DealWithErr(err)
+	}
 	return *hh
 }
 

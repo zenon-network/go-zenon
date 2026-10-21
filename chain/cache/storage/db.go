@@ -15,6 +15,7 @@ import (
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	"github.com/syndtr/goleveldb/leveldb/util"
+
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -92,9 +93,15 @@ func GetFrontierIdentifier(db db.DB) types.HashHeight {
 	if err == leveldb.ErrNotFound {
 		return types.ZeroHashHeight
 	}
-	common.DealWithErr(err)
+	if err != nil {
+		common.ChainLogger.Error("failed to read frontier identifier", "store", "cache/storage", "key", frontierIdentifierKey, "err", err)
+		common.DealWithErr(err)
+	}
 	hh, err := types.DeserializeHashHeight(data)
-	common.DealWithErr(err)
+	if err != nil {
+		common.ChainLogger.Error("failed to deserialize frontier identifier", "store", "cache/storage", "key", frontierIdentifierKey, "err", err)
+		common.DealWithErr(err)
+	}
 	return *hh
 }
 

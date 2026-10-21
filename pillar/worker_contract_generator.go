@@ -23,7 +23,10 @@ func (w *worker) generateNext(momentumStore store.Momentum, embedded types.Addre
 	defer insert.Unlock()
 
 	store := w.chain.GetFrontierAccountStore(embedded)
-	toReceive := store.SequencerFront(momentumStore.GetAccountMailbox(embedded))
+	toReceive, err := store.SequencerFront(momentumStore.GetAccountMailbox(embedded))
+	if err != nil {
+		return nil, err
+	}
 
 	if toReceive == nil {
 		return nil, ErrNothingToGenerate

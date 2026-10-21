@@ -404,7 +404,10 @@ func (abv *accountBlockVerifier) sequencer() error {
 		return nil
 	}
 
-	nextInLine := abv.accountStore.SequencerFront(abv.momentumStore.GetAccountMailbox(abv.block.Address))
+	nextInLine, err := abv.accountStore.SequencerFront(abv.momentumStore.GetAccountMailbox(abv.block.Address))
+	if err != nil {
+		return InternalError(err)
+	}
 	if nextInLine == nil {
 		return ErrABSequencerNothing
 	}

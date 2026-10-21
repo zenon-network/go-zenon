@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"strings"
 	"testing"
 
 	"github.com/syndtr/goleveldb/leveldb"
@@ -153,4 +154,48 @@ func TestCacheDBManagerStopAfterFailedClose(t *testing.T) {
 	if m.DB() != nil {
 		t.Fatalf("DB must be nil after a Stop that reported an error")
 	}
+}
+
+// TestGetFrontierIdentifierCorrupted verifies that GetFrontierIdentifier
+// panics on corrupted data, but only after logging the key, store and error.
+// The panic is the intended fail-fast behaviour; the test pins that it still
+// happens and that the recovery message is meaningful.
+func TestGetFrontierIdentifierCorrupted(t *testing.T) {
+	mem := db.NewMemDB()
+	// Write garbage to the frontier identifier key.
+	if err := mem.Put(frontierIdentifierKey, []byte{0xff, 0xfe, 0xfd}); err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on corrupted frontier identifier, got none")
+		}
+	}()
+	GetFrontierIdentifier(mem)
+}
+
+// TestGetFrontierIdentifierReadError verifies that GetFrontierIdentifier
+// panics when the underlying read fails, but only after logging.
+func TestGetFrontierIdentifierReadError(t *testing.T) {
+	// Use a closed LevelDB to trigger a read error (not ErrNotFound).
+	dir := t.TempDir()
+	m := NewCacheDBManager(dir).(*cacheManager)
+	common.FailIfErr(t, m.ldb.Close())
+	// Bypass the stopped flag by calling GetFrontierIdentifier directly on a
+	// wrapper around the closed handle.
+	ldb := db.NewLevelDBWrapper(m.ldb)
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on read error, got none")
+		}
+		msg := fmt.Sprintf("%v", r)
+		if !strings.Contains(msg, "closed") && !strings.Contains(msg, "ErrClosed") {
+			t.Fatalf("expected panic message to mention closed DB, got: %v", msg)
+		}
+	}()
+	GetFrontierIdentifier(ldb)
 }

@@ -74,7 +74,7 @@ type Account interface {
 	MarkAsReceived(hash types.Hash) error
 	IsReceived(hash types.Hash) bool
 
-	SequencerFront(mailbox AccountMailbox) *types.AccountHeader
+	SequencerFront(mailbox AccountMailbox) (*types.AccountHeader, error)
 	SequencerPopFront()
 
 	Apply(patch db.Patch) error
@@ -108,10 +108,10 @@ type AccountMailbox interface {
 	MarkAsReceived(hash types.Hash) error
 	MarkBlockThatReceives(hash types.Hash, receiveHeader types.AccountHeader) error
 
-	GetBlockWhichReceives(fromHash types.Hash) *types.AccountHeader
+	GetBlockWhichReceives(fromHash types.Hash) (*types.AccountHeader, error)
 	GetUnreceivedAccountBlockHashes(atMost uint64) ([]types.Hash, error)
 
 	SequencerPushBack(types.AccountHeader)
 	SequencerSize() uint64
-	SequencerByHeight(uint64) *types.AccountHeader
+	SequencerByHeight(uint64) (*types.AccountHeader, error)
 }

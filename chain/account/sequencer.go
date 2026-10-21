@@ -16,14 +16,14 @@ func (as *accountStore) sequencerFrontIndex() uint64 {
 	return common.BytesToUint64(data)
 }
 
-func (as *accountStore) SequencerFront(mailbox store.AccountMailbox) *types.AccountHeader {
+func (as *accountStore) SequencerFront(mailbox store.AccountMailbox) (*types.AccountHeader, error) {
 	if mailbox.Address() != as.address {
 		panic("not my mailbox")
 	}
 	last := as.sequencerFrontIndex()
 	total := mailbox.SequencerSize()
 	if last == total {
-		return nil
+		return nil, nil
 	}
 	return mailbox.SequencerByHeight(last + 1)
 }
