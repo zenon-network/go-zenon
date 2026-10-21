@@ -9,6 +9,8 @@
 package account
 
 import (
+	"github.com/pkg/errors"
+
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
@@ -35,7 +37,9 @@ func (as *accountStore) Snapshot() store.Account {
 }
 func (as *accountStore) Identifier() types.HashHeight {
 	frontier, err := as.Frontier()
-	common.DealWithErr(err)
+	if err != nil {
+		common.DealWithErr(errors.Errorf("account store %s: failed to read frontier entry: %v", as.address, err))
+	}
 	if frontier == nil {
 		return types.ZeroHashHeight
 	}

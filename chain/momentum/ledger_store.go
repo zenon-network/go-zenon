@@ -127,7 +127,7 @@ func (ms *momentumStore) Identifier() types.HashHeight {
 	frontier, err := ms.GetFrontierMomentum()
 	if err != nil && err != leveldb.ErrNotFound {
 		// A deserialization or I/O error must not be silently swallowed.
-		common.DealWithErr(err)
+		common.DealWithErr(errors.Errorf("momentum store: failed to read frontier momentum entry: %v", err))
 	}
 	if frontier == nil {
 		return types.HashHeight{

@@ -112,6 +112,6 @@ type AccountMailbox interface {
 	GetUnreceivedAccountBlockHashes(atMost uint64) ([]types.Hash, error)
 
 	SequencerPushBack(types.AccountHeader)
-	SequencerSize() uint64
+	SequencerSize() (uint64, error)
 	SequencerByHeight(uint64) (*types.AccountHeader, error)
 }
