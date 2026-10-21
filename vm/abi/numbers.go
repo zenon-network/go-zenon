@@ -38,9 +38,11 @@ var (
 	hashT          = reflect.TypeOf(types.Hash{})
 )
 
-// U256 converts a big Int into a 256bit VM number.
+// U256 encodes n as one 256-bit ABI word: the value masked to 256 bits
+// (two's complement for a negative n) and left-padded to WordSize bytes.
+// n itself is left unchanged.
 func U256(n *big.Int) []byte {
-	return PaddedBigBytes(n.And(n, common.BigP256m1), WordSize)
+	return PaddedBigBytes(new(big.Int).And(n, common.BigP256m1), WordSize)
 }
 
 // PaddedBigBytes encodes bigint as a big-endian byte slice

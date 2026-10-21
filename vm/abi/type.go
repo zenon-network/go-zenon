@@ -43,6 +43,9 @@ type Type struct {
 var (
 	// typeRegex parses the abi sub types
 	typeRegex = regexp.MustCompile("([a-zA-Z]+)([0-9]+)?")
+	// arrayCellRegex matches the whole bracket suffix of an array or
+	// slice declaration: "[]" or "[<digits>]" and nothing else.
+	arrayCellRegex = regexp.MustCompile(`^\[([0-9]*)\]$`)
 )
 
 // NewType creates a new reflection type of abi type given in t.
@@ -69,20 +72,22 @@ func NewType(t string) (typ Type, err error) {
 		if err != nil {
 			return Type{}, err
 		}
-		// grab the last cell and create a type from there
+		// The suffix must be exactly "[]" (slice) or "[<digits>]" (array);
+		// anything else in the brackets is a malformed declaration.
 		sliced := t[i:]
-		// grab the slice size with regexp
-		re := regexp.MustCompile("[0-9]+")
-		intz := re.FindAllString(sliced, -1)
+		cell := arrayCellRegex.FindStringSubmatch(sliced)
+		if cell == nil {
+			return Type{}, errInvalidArrayTypeFormatting
+		}
 
-		if len(intz) == 0 {
+		if cell[1] == "" {
 			// is a slice
 			typ.T = SliceTy
 			typ.Kind = reflect.Slice
 			typ.Elem = &embeddedType
 			typ.Type = reflect.SliceOf(embeddedType.Type)
-		} else if len(intz) == 1 {
-			size, err := strconv.Atoi(intz[0])
+		} else {
+			size, err := strconv.Atoi(cell[1])
 			if err != nil {
 				return Type{}, errParsingVariableSize(err)
 			}
@@ -95,8 +100,6 @@ func NewType(t string) (typ Type, err error) {
 			typ.Elem = &embeddedType
 			typ.Size = size
 			typ.Type = reflect.ArrayOf(typ.Size, embeddedType.Type)
-		} else {
-			return Type{}, errInvalidArrayTypeFormatting
 		}
 		return typ, err
 	}
@@ -152,6 +155,10 @@ func NewType(t string) (typ Type, err error) {
 			typ.Kind = reflect.Slice
 			typ.Type = reflect.SliceOf(reflect.TypeOf(byte(0)))
 		} else {
+			// bytesN is packed into, and decoded from, exactly one word.
+			if varSize > WordSize {
+				return Type{}, errFixedBytesTooWide
+			}
 			typ.T = FixedBytesTy
 			typ.Kind = reflect.Array
 			typ.Size = varSize
