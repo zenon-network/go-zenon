@@ -14,6 +14,10 @@ var (
 	// ErrKeyFileInvalidKDF is returned when a KeyFile names a key
 	// derivation function other than the expected Argon2id.
 	ErrKeyFileInvalidKDF = errors.New("unable to read KeyFile. Invalid key derivation function (KDF)")
+	// ErrKeyFileInvalidNonce is returned when a KeyFile's GCM nonce is
+	// not the length the cipher expects, so the file cannot have been
+	// written by this code and decrypting it is refused up front.
+	ErrKeyFileInvalidNonce = errors.New("unable to read KeyFile. Invalid nonce length")
 
 	// === keyStore errors ===
 
@@ -23,6 +27,11 @@ var (
 	// ErrWrongPassword is returned when a KeyFile cannot be decrypted
 	// with the supplied password.
 	ErrWrongPassword = errors.New("the key store could not be decrypted with the provided password")
+	// ErrKeyStoreNoEntropy is returned by Encrypt when the key store
+	// holds no valid BIP-39 entropy (it was zeroed, or never populated),
+	// since the resulting file could never be decrypted into a key
+	// store.
+	ErrKeyStoreNoEntropy = errors.New("the key store holds no valid entropy to encrypt")
 
 	// === manager errors ===
 
