@@ -373,6 +373,9 @@ func (p *SetTokenTupleMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 // Callers must gate on the spork: the check changes what every node
 // accepts.
 func CheckTokenTuplePercentages(param *definition.TokenTuplesParam) error {
+	if len(param.ZnnPercentages) == 0 {
+		return nil
+	}
 	var totalZnn, totalQsr uint64
 	for i := range param.ZnnPercentages {
 		if param.ZnnPercentages[i] > constants.LiquidityZnnTotalPercentages {

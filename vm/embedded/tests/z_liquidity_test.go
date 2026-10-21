@@ -913,6 +913,14 @@ func TestLiquidity_SetTokenTuplesUint32Wrap(t *testing.T) {
 	// Legitimate tuples still pass.
 	z.InsertSendBlock(setTokensTupleStep(g.User5.Address, tokensString, validZnn, validQsr, minAmounts),
 		nil, mock.SkipVmChanges)
+
+	// Empty tuple list is accepted (matches pre-spork behaviour).
+	emptyTokens := []string{}
+	emptyZnn := []uint32{}
+	emptyQsr := []uint32{}
+	emptyMin := []*big.Int{}
+	z.InsertSendBlock(setTokensTupleStep(g.User5.Address, emptyTokens, emptyZnn, emptyQsr, emptyMin),
+		nil, mock.SkipVmChanges)
 }
 
 func TestLiquidity_StakeLiquidity(t *testing.T) {
