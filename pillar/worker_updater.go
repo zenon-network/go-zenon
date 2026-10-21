@@ -143,6 +143,9 @@ func (w *worker) priceUpdate(momentumStore store.Momentum, fusionPrice uint64, t
 	}
 	template.MomentumAcknowledged = momentumStore.Identifier()
 	cache := w.chain.GetCacheStore(template.MomentumAcknowledged)
+	if cache == nil {
+		return ErrUpdateCacheStoreMissing
+	}
 	basePlasma, err := vm.GetBasePlasmaForAccountBlock(vm_context.NewAccountContext(nil, account, cache, nil), template)
 	if err != nil {
 		return err

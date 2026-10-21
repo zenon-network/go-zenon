@@ -5,9 +5,11 @@ import (
 	"testing"
 
 	"github.com/zenon-network/go-zenon/chain"
+	"github.com/zenon-network/go-zenon/chain/account"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/vm/constants"
@@ -63,6 +65,22 @@ func (p *poolWithoutPredecessor) GetAccountStore(_ types.Address, identifier typ
 	return nil
 }
 
+// poolWithFrontierButNoCache returns a real in-memory account store for
+// the frontier lookup but nil for every GetCacheStore call, so
+// priceUpdate's new nil guard is what the test exercises.
+type poolWithFrontierButNoCache struct {
+	chain.Chain
+	frontier store.Account
+}
+
+func (p *poolWithFrontierButNoCache) GetFrontierAccountStore(_ types.Address) store.Account {
+	return p.frontier
+}
+
+func (p *poolWithFrontierButNoCache) GetCacheStore(_ types.HashHeight) store.Cache {
+	return nil
+}
+
 func TestPriceUpdate_ReplacedPredecessorMissing(t *testing.T) {
 	producer := types.ParseAddressPanic("z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju")
 	pool := &poolWithoutPredecessor{}
@@ -81,4 +99,41 @@ func TestPriceUpdate_ReplacedPredecessorMissing(t *testing.T) {
 	common.Expect(t, len(pool.asked), 1)
 	common.Expect(t, pool.asked[0], replaced.Previous())
 	common.ExpectUint64(t, template.Height, 0)
+}
+
+// stubMomentumStoreForPricing returns a fixed identifier and nil for
+// every other lookup, which is enough for priceUpdate's
+// momentumStore.Identifier() call.
+type stubMomentumStoreForPricing struct {
+	store.Momentum
+	id types.HashHeight
+}
+
+func (s *stubMomentumStoreForPricing) Identifier() types.HashHeight { return s.id }
+
+// TestPriceUpdate_CacheStoreMissing drives priceUpdate with a valid
+// frontier account store and a valid momentum store, but a chain whose
+// GetCacheStore returns nil. Before the nil guard, the nil cache
+// reached vm.GetBasePlasmaForAccountBlock, which dereferences it while
+// resolving the embedded method's spork variant, panicking inside the
+// producer goroutine. The guard must return ErrUpdateCacheStoreMissing.
+func TestPriceUpdate_CacheStoreMissing(t *testing.T) {
+	producer := types.ParseAddressPanic("z1qz8v73ea2vy2rrlq7skssngu8cm8mknjjkr2ju")
+	frontier := account.NewAccountStore(producer, db.NewMemDB())
+	pool := &poolWithFrontierButNoCache{frontier: frontier}
+	w := &worker{
+		log:      common.PillarLogger.New("submodule", "worker"),
+		coinbase: &wallet.KeyPair{Address: producer},
+		chain:    pool,
+	}
+	ms := &stubMomentumStoreForPricing{
+		id: types.HashHeight{
+			Hash:   types.HexToHashPanic("01aab631b44daf47f68810a416bea4ed3695e89c0ab9668a0ab8acb834dfb900"),
+			Height: 1,
+		},
+	}
+
+	template := newUpdateTemplate(producer, types.PillarContract)
+	err := w.priceUpdate(ms, dp.MinResourcePrice, template, nil)
+	common.ExpectError(t, err, ErrUpdateCacheStoreMissing)
 }
