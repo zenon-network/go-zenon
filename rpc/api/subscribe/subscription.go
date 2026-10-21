@@ -89,6 +89,13 @@ type Subscription struct {
 	options  *subscriptionOptions
 	notifier *rpc.Notifier
 	rpc      *rpc.Subscription
+
+	// deliverCh queues events for the subscription's own delivery
+	// goroutine so the shared broadcast worker never blocks on a
+	// network write. The worker does a non-blocking send; a full
+	// queue means the delivery side has fallen behind and the event
+	// is dropped for this subscription only.
+	deliverCh chan interface{}
 }
 
 // NewSubscription creates a Subscription on the given notifier with a
@@ -98,10 +105,11 @@ type Subscription struct {
 func NewSubscription(notifier *rpc.Notifier, options *subscriptionOptions) *Subscription {
 	rpcSub := notifier.CreateSubscription()
 	return &Subscription{
-		log:      common.RPCLogger.New("module", "subscription", "id", rpcSub.ID),
-		options:  options,
-		notifier: notifier,
-		rpc:      rpcSub,
+		log:       common.RPCLogger.New("module", "subscription", "id", rpcSub.ID),
+		options:   options,
+		notifier:  notifier,
+		rpc:       rpcSub,
+		deliverCh: make(chan interface{}, deliverQueueSize),
 	}
 }
 

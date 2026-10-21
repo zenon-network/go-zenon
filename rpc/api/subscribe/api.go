@@ -65,6 +65,13 @@ const (
 	mChanSize   = 100
 	installSize = 100
 
+	// deliverQueueSize bounds the events queued per subscription between
+	// the broadcast worker and the subscription's own delivery goroutine.
+	// It must be at least rpc/server's maxPendingNotifications so that
+	// pre-activation buffering can still overflow the notifier and tear
+	// the connection down (see TestOverflowBeforeActivationTearsDownConnection).
+	deliverQueueSize = 256
+
 	// DefaultMaxSubscriptions bounds the subscriptions kept installed across
 	// all connections unless Server.SetMaxSubscriptions configures another
 	// limit. Every matching chain event is delivered to each of them from the
@@ -367,41 +374,60 @@ func (s *Server) work() {
 }
 
 // BroadcastStats counts, for one broadcast pass, how many subscriptions
-// were notified and how many were found closed and uninstalled. It only
-// feeds the log line emitted after each pass.
+// were queued, how many events were dropped because the subscription's
+// delivery queue was full, and how many subscriptions were found closed
+// and uninstalled. It only feeds the log line emitted after each pass.
 type BroadcastStats struct {
 	NumNotify     int
+	NumDropped    int
 	NumUninstalls int
 }
 
 func (s *Server) install(subscription *Subscription) {
 	s.log.Debug("install", "id", subscription.rpc.ID)
-	// The watcher's signals are read here, on the worker, which owns
-	// subscription.notifier: the next broadcast may find the client gone and
-	// clear that field in Closed before the goroutine launched below has
-	// run, so the watcher is handed the channels and never reads the field.
+	// The watcher's signals and the notifier are captured here, on the
+	// worker, which owns subscription.notifier: the next broadcast may find
+	// the client gone and clear that field in Closed before the goroutine
+	// launched below has run, so the watcher is handed the channels and the
+	// notifier reference and never reads the field.
 	unsubscribed, disconnected := subscription.rpc.Err(), subscription.notifier.Closed()
+	notifier := subscription.notifier
 	s.subsMu.Lock()
 	s.subscriptions[subscription.options.subscriptionType][subscription.rpc.ID] = subscription
 	s.subsMu.Unlock()
 	s.wg.Add(1)
-	go s.watch(subscription, unsubscribed, disconnected)
+	go s.watch(subscription, notifier, unsubscribed, disconnected)
 }
 
-// watch removes the subscription as soon as its client unsubscribes or its
-// connection closes, the same two signals Closed reports, captured by
-// install. Of the subscription itself it only uses the immutable options and
-// rpc fields to find the entry. A client that went away while the entry was
-// still queued is removed right after install.
-func (s *Server) watch(subscription *Subscription, unsubscribed <-chan error, disconnected <-chan interface{}) {
+// watch delivers queued events to the subscription and removes it as soon
+// as its client unsubscribes or its connection closes, the same two signals
+// Closed reports, captured by install together with the notifier reference.
+// Running delivery and cleanup in one goroutine per subscription isolates
+// the shared broadcast worker from slow writes: a blocked connection only
+// delays its own delivery goroutine, never other subscribers. Of the
+// subscription itself it only uses the immutable options and rpc fields to
+// find the entry; the notifier is the reference captured at install time.
+// A client that went away while the entry was still queued is removed right
+// after install.
+func (s *Server) watch(subscription *Subscription, notifier *rpc.Notifier, unsubscribed <-chan error, disconnected <-chan interface{}) {
 	defer s.wg.Done()
-	select {
-	case <-s.stopped:
-		return
-	case <-unsubscribed:
-	case <-disconnected:
+	for {
+		select {
+		case <-s.stopped:
+			return
+		case <-unsubscribed:
+			s.uninstall(subscription)
+			return
+		case <-disconnected:
+			s.uninstall(subscription)
+			return
+		case data := <-subscription.deliverCh:
+			err := notifier.Notify(subscription.rpc.ID, data)
+			if err != nil {
+				subscription.log.Info("failed to notify", "reason", err)
+			}
+		}
 	}
-	s.uninstall(subscription)
 }
 
 func (s *Server) uninstall(subscription *Subscription) {
@@ -430,13 +456,22 @@ func (s *Server) installed(subscriptionType SubscriptionType) []*Subscription {
 	}
 	return snapshot
 }
+
+// broadcast queues data for one subscription's own delivery goroutine.
+// The send is non-blocking: when the subscription's queue is full the
+// event is dropped for that subscription only, so a slow or blocked
+// connection never stalls the shared worker or delays other subscribers.
 func (s *Server) broadcast(subscription *Subscription, data interface{}, stats *BroadcastStats) {
 	if subscription.Closed() {
 		stats.NumUninstalls += 1
 		s.uninstall(subscription)
 	} else {
 		stats.NumNotify += 1
-		subscription.Notify(data)
+		select {
+		case subscription.deliverCh <- data:
+		default:
+			stats.NumDropped += 1
+		}
 	}
 }
 func (s *Server) broadcastMomentums(momentum *Momentum) {
@@ -452,6 +487,7 @@ func (s *Server) broadcastMomentums(momentum *Momentum) {
 
 	s.log.Info("finish broadcasting momentum", "identifier", momentum, "elapsed", common.Clock.Now().Sub(startTime), "stats", stats)
 }
+
 func (s *Server) broadcastBlocks(blocks []*AccountBlock) {
 	if len(blocks) == 0 {
 		return
