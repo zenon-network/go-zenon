@@ -158,13 +158,18 @@ func New(getBlock blockRetrievalFn, verifyBlock blockVerifierFn, broadcastBlock 
 // Start boots up the announcement based synchoniser, accepting and processing
 // hash notifications and block fetches until termination requested.
 func (f *Fetcher) Start() {
+	f.wg.Add(1)
 	go func() {
+		defer f.wg.Done()
 		f.loop()
 	}()
 }
 
-// Stop terminates the announcement based synchroniser, canceling all pending
-// operations.
+// Stop terminates the announcement based synchroniser and returns once the
+// event loop and every import it started have finished. Imports are
+// accounted on the wait group by the loop before they are spawned, so a
+// loop joined here cannot leave one behind; an import that completes after
+// the loop has exited does not block on its completion notice.
 func (f *Fetcher) Stop() {
 	close(f.quit)
 	f.wg.Wait()
@@ -480,10 +485,21 @@ func (f *Fetcher) enqueue(peer string, detailed *nom.DetailedMomentum) {
 func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 	momentum := detailed.Momentum
 	hash := momentum.Hash
-	// Run the import on a new thread
+	// Run the import on a new thread. The whole import, from the parent
+	// lookup to the broadcast, is accounted on the wait group before the
+	// goroutine starts, so Stop waits for it wherever it is.
 	log.Info("Peer importing momentum", "peer", peer, "momentum", momentum.Height, "hash", hash[:4])
+	f.wg.Add(1)
 	go func() {
-		defer func() { f.done <- hash }()
+		defer f.wg.Done()
+		defer func() {
+			// The loop is the only receiver; once it has exited on quit
+			// nobody will take the notice, so do not wait for it.
+			select {
+			case f.done <- hash:
+			case <-f.quit:
+			}
+		}()
 
 		// If the parent's unknown, abort insertion
 		parent := f.getBlock(momentum.PreviousHash)
@@ -497,16 +513,14 @@ func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 			return
 		}
 		// Run the actual import and log any issues
-		f.wg.Add(1)
 		if _, err := f.insertChain([]*nom.DetailedMomentum{detailed}); err != nil {
 			log.Warn("momentum import failed", "peer", peer, "momentum", momentum.Height, "hash", hash[:4], "reason", err)
-			f.wg.Done()
 			return
-		} else {
-			f.wg.Done()
 		}
 		// If import succeeded, broadcast the momentum
+		f.wg.Add(1)
 		go func() {
+			defer f.wg.Done()
 			f.broadcastBlock(detailed, true)
 		}()
 
