@@ -304,7 +304,10 @@ func (s *Server) Start() error {
 // Stop unregisters from the chain, signals the worker goroutine to exit
 // and waits for it, and clears the package singleton so a new server
 // can be created. Active subscriptions are not notified; the worker
-// simply drops its tables on exit. It always returns nil.
+// simply drops its tables on exit. Shutdown is bounded by the notifier's
+// write deadline: each subscription's watch goroutine observes stopped at
+// once and closes done, and the deliver goroutine exits after its current
+// write completes or times out. It always returns nil.
 func (s *Server) Stop() error {
 	s.log.Info("stop")
 	defer s.log.Info("finish stop")
@@ -434,12 +437,12 @@ func (s *Server) watch(subscription *Subscription, done chan<- struct{}, unsubsc
 }
 
 // deliver drains the subscription's delivery queue and writes each event to
-// the notifier. It checks done between writes so an unsubscribe or
-// disconnect during a blocked write takes effect as soon as the current
-// write returns or times out; the notifier's own write deadline bounds how
-// long a single write can stall. Delivery and lifecycle run in separate
-// goroutines so a slow connection only delays its own events, never other
-// subscribers and never slot reclamation.
+// the notifier. It checks done between writes so an unsubscribe, disconnect
+// or Stop during a blocked write takes effect as soon as the current write
+// returns or times out; the notifier's own write deadline bounds how long a
+// single write can stall. Delivery and lifecycle run in separate goroutines
+// so a slow connection only delays its own events, never other subscribers
+// and never slot reclamation.
 func (s *Server) deliver(subscription *Subscription, notifier *rpc.Notifier, done <-chan struct{}) {
 	defer s.wg.Done()
 	for {

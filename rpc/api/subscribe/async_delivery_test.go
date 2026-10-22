@@ -454,4 +454,68 @@ func TestUnsubscribeDuringBlockedWriteReclaimsSlot(t *testing.T) {
 	}
 
 	waitLive(t, server, 0)
+
+	// A replacement subscription on a different connection must be
+	// admitted before the gated connection's write completes, proving
+	// the slot was actually released and is reusable.
+	replacement := rpc.DialInProc(rpcServer)
+	t.Cleanup(replacement.Close)
+	replacementEvents := make(chan interface{}, 4)
+	if _, err := replacement.Subscribe(context.Background(), "ledger", replacementEvents, "momentums"); err != nil {
+		t.Fatal(err)
+	}
+	waitLive(t, server, 1)
+
+	// The replacement receives events while the original connection's
+	// write is still gated.
+	server.InsertMomentum(momentumAt(2))
+	select {
+	case <-replacementEvents:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement subscription did not receive an event " +
+			"while the original connection's write was still gated")
+	}
+}
+
+// Closing the connection during a blocked write also reclaims the slot:
+// the lifecycle goroutine sees the disconnect signal immediately, without
+// waiting for the delivery goroutine's write to return. Fails if lifecycle
+// and delivery share one goroutine: the watcher cannot service disconnected
+// until the write returns.
+func TestDisconnectDuringBlockedWriteReclaimsSlot(t *testing.T) {
+	server, rpcServer := startTestServer(t)
+
+	serverEnd, clientEnd := net.Pipe()
+	conn := &signaledGateConn{
+		Conn:    serverEnd,
+		gate:    make(chan struct{}),
+		entered: make(chan struct{}),
+	}
+	go rpcServer.ServeCodec(rpc.NewCodec(conn), 0)
+	dec := json.NewDecoder(clientEnd)
+	rawSubscribe(t, clientEnd, dec, 1, `["momentums"]`)
+	waitInstalled(t, server, MomentumsSubscription, 1)
+
+	// Gate writes, broadcast, wait for the delivery write to enter the gate.
+	conn.blockWrites()
+	server.InsertMomentum(momentumAt(1))
+	select {
+	case <-conn.entered:
+	case <-time.After(5 * time.Second):
+		close(conn.gate)
+		serverEnd.Close()
+		clientEnd.Close()
+		t.Fatal("notification write never entered the gate")
+	}
+
+	// Close the client end: the server-side codec sees the disconnect,
+	// and the lifecycle goroutine must release the slot without waiting
+	// for the gated write.
+	clientEnd.Close()
+	waitLive(t, server, 0)
+
+	// Release the gate so the delivery goroutine can exit and ServeCodec
+	// can return; then close the server end.
+	close(conn.gate)
+	serverEnd.Close()
 }
