@@ -140,7 +140,15 @@ func TestSerializedPathVariants(t *testing.T) {
 // TestRelativeWalletDirConsistency verifies that absolute and relative
 // wallet directories behave the same for lookup and unlock.
 func TestRelativeWalletDirConsistency(t *testing.T) {
-	base := t.TempDir()
+	// Resolve symlinks so that os.Getwd (which resolves symlinks) and
+	// filepath.Abs (which does not) agree on the spelling of base. On
+	// macOS t.TempDir returns /var/folders/..., a symlink to
+	// /private/var/folders/...; the same happens on Linux with a
+	// symlinked $TMPDIR.
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	ks := testKeyStore(t)
 
 	// Create a wallet dir with one key file, using an absolute path.
@@ -220,6 +228,9 @@ func TestRelativeWalletDirConsistency(t *testing.T) {
 		t.Fatalf("relative-dir IsUnlocked by absolute path = %v, %v; want true, nil", unlocked, err)
 	}
 	mRel.Lock(absFilePath)
+	if unlocked, err := mRel.IsUnlocked(absFilePath); err != nil || unlocked {
+		t.Fatalf("after Lock: IsUnlocked(%q) = %v, %v; want false, nil", absFilePath, unlocked, err)
+	}
 }
 
 // TestRenamedKeyFileLoads verifies that a normally generated key file

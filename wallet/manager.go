@@ -67,6 +67,8 @@ func New(config *Config) *Manager {
 // configured. This keeps absolute-path lookups working when WalletDir
 // is relative: MakePathAbsolut leaves an absolute argument unchanged,
 // so the lookup key would not match a relatively-scanned index entry.
+// The resolved directory is written back into Config.WalletDir; an empty
+// WalletDir means the current working directory.
 func (m *Manager) Start() error {
 	// Resolve the wallet directory to an absolute path so that scanned
 	// paths and lookup keys are always consistent.
