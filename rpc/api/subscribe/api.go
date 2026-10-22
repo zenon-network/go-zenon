@@ -304,10 +304,13 @@ func (s *Server) Start() error {
 // Stop unregisters from the chain, signals the worker goroutine to exit
 // and waits for it, and clears the package singleton so a new server
 // can be created. Active subscriptions are not notified; the worker
-// simply drops its tables on exit. Shutdown is bounded by the notifier's
-// write deadline: each subscription's watch goroutine observes stopped at
-// once and closes done, and the deliver goroutine exits after its current
-// write completes or times out. It always returns nil.
+// simply drops its tables on exit. Shutdown is bounded by the pending
+// slow writes on each connection times the notifier's write deadline
+// (writes on one connection are serialized through the encoder lock, so
+// the deadline starts per write, not per connection): each subscription's
+// watch goroutine observes stopped at once and closes done, and the
+// deliver goroutine exits after its current write completes or times out.
+// It always returns nil.
 func (s *Server) Stop() error {
 	s.log.Info("stop")
 	defer s.log.Info("finish stop")
