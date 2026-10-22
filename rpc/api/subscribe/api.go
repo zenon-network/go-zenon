@@ -405,31 +405,51 @@ func (s *Server) install(subscription *Subscription) {
 	s.subsMu.Lock()
 	s.subscriptions[subscription.options.subscriptionType][subscription.rpc.ID] = subscription
 	s.subsMu.Unlock()
-	s.wg.Add(1)
-	go s.watch(subscription, notifier, unsubscribed, disconnected)
+	done := make(chan struct{})
+	s.wg.Add(2)
+	go s.watch(subscription, done, unsubscribed, disconnected)
+	go s.deliver(subscription, notifier, done)
 }
 
-// watch delivers queued events to the subscription and removes it as soon
-// as its client unsubscribes or its connection closes, the same two signals
-// Closed reports, captured by install together with the notifier reference.
-// Running delivery and cleanup in one goroutine per subscription isolates
-// the shared broadcast worker from slow writes: a blocked connection only
-// delays its own delivery goroutine, never other subscribers. Of the
-// subscription itself it only uses the immutable options and rpc fields to
-// find the entry; the notifier is the reference captured at install time.
-// A client that went away while the entry was still queued is removed right
-// after install.
-func (s *Server) watch(subscription *Subscription, notifier *rpc.Notifier, unsubscribed <-chan error, disconnected <-chan interface{}) {
+// watch removes the subscription as soon as its client unsubscribes or its
+// connection closes, the same two signals Closed reports, captured by
+// install together with the notifier reference. It then closes done, which
+// signals the delivery goroutine to exit. Keeping lifecycle separate from
+// delivery means a blocked write never delays uninstall: the global slot is
+// released immediately, the same as on dev where the worker was the one
+// blocked and the watcher released the slot at once. Of the subscription
+// itself it only uses the immutable options and rpc fields to find the
+// entry. A client that went away while the entry was still queued is
+// removed right after install.
+func (s *Server) watch(subscription *Subscription, done chan<- struct{}, unsubscribed <-chan error, disconnected <-chan interface{}) {
+	defer s.wg.Done()
+	defer close(done)
+	select {
+	case <-s.stopped:
+	case <-unsubscribed:
+		s.uninstall(subscription)
+	case <-disconnected:
+		s.uninstall(subscription)
+	}
+}
+
+// deliver drains the subscription's delivery queue and writes each event to
+// the notifier. It checks done between writes so an unsubscribe or
+// disconnect during a blocked write takes effect as soon as the current
+// write returns or times out; the notifier's own write deadline bounds how
+// long a single write can stall. Delivery and lifecycle run in separate
+// goroutines so a slow connection only delays its own events, never other
+// subscribers and never slot reclamation.
+func (s *Server) deliver(subscription *Subscription, notifier *rpc.Notifier, done <-chan struct{}) {
 	defer s.wg.Done()
 	for {
 		select {
-		case <-s.stopped:
+		case <-done:
 			return
-		case <-unsubscribed:
-			s.uninstall(subscription)
-			return
-		case <-disconnected:
-			s.uninstall(subscription)
+		default:
+		}
+		select {
+		case <-done:
 			return
 		case data := <-subscription.deliverCh:
 			err := notifier.Notify(subscription.rpc.ID, data)

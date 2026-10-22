@@ -122,13 +122,8 @@ func TestBlockedConnectionQueueOverflowDropsOnlyThatSubscription(t *testing.T) {
 		Conn: serverEnd,
 		gate: make(chan struct{}),
 	}
-	gateReleased := false
-	releaseGate := func() {
-		if !gateReleased {
-			gateReleased = true
-			close(conn.gate)
-		}
-	}
+	var gateOnce sync.Once
+	releaseGate := func() { gateOnce.Do(func() { close(conn.gate) }) }
 	t.Cleanup(releaseGate)
 	go rpcServer.ServeCodec(rpc.NewCodec(conn), 0)
 	dec := json.NewDecoder(clientEnd)
@@ -152,11 +147,14 @@ func TestBlockedConnectionQueueOverflowDropsOnlyThatSubscription(t *testing.T) {
 	// a starved healthy watcher can legitimately drop.
 	//
 	// The producer runs in a goroutine with a bounded completion check so
-	// a failure releases the gate instead of hanging to timeout.
+	// a failure releases the gate instead of hanging to timeout. The pace
+	// channel has capacity 1: the consumer never blocks on it, so the
+	// deadline branch and releaseGate always run.
 	const total = 300
-	pace := make(chan struct{}) // consumer signals the producer to send the next event
+	pace := make(chan struct{}, 1) // consumer signals the producer to send the next event
 	produceDone := make(chan *BroadcastStats, 1)
 	go func() {
+		defer releaseGate()
 		var totalStats BroadcastStats
 		for h := uint64(1); h <= total; h++ {
 			stats := server.broadcastMomentums(&Momentum{
@@ -185,7 +183,10 @@ func TestBlockedConnectionQueueOverflowDropsOnlyThatSubscription(t *testing.T) {
 		select {
 		case <-events:
 			received++
-			pace <- struct{}{} // let the producer send the next event
+			select {
+			case pace <- struct{}{}: // let the producer send the next event
+			default: // pace is full; the producer has not consumed the last token
+			}
 		case <-time.After(time.Until(deadline)):
 			releaseGate()
 			t.Fatalf("healthy subscriber received %d of %d events: blocked connection stalled the worker",
@@ -198,6 +199,7 @@ func TestBlockedConnectionQueueOverflowDropsOnlyThatSubscription(t *testing.T) {
 	select {
 	case stats = <-produceDone:
 	case <-time.After(5 * time.Second):
+		releaseGate()
 		t.Fatal("producer did not finish within 5s")
 	}
 
@@ -217,7 +219,7 @@ func TestBlockedConnectionQueueOverflowDropsOnlyThatSubscription(t *testing.T) {
 	}
 	var blockedSub *Subscription
 	for _, sub := range blockedSubs {
-		if sub.deliverCh != nil && len(sub.deliverCh) == deliverQueueSize {
+		if sub.deliverCh != nil && len(sub.deliverCh) >= deliverQueueSize-1 {
 			if blockedSub != nil {
 				t.Fatal("multiple subscriptions have full queues")
 			}
@@ -227,6 +229,55 @@ func TestBlockedConnectionQueueOverflowDropsOnlyThatSubscription(t *testing.T) {
 	if blockedSub == nil {
 		t.Fatal("no subscription has a full delivery queue after 300 broadcasts")
 	}
+
+	// Assert retained heights to distinguish drop-newest from drop-oldest:
+	// the queue must hold the earliest events (starting at height 1 or 2),
+	// proving the overflow policy drops the newest arrivals, not the oldest.
+	// The delivery goroutine may have consumed height 1 into a blocked write,
+	// so the first queued item is at most height 2.
+	retained := len(blockedSub.deliverCh)
+	if retained < deliverQueueSize-1 {
+		t.Fatalf("blocked subscription queue has %d events, want at least %d", retained, deliverQueueSize-1)
+	}
+	first := (<-blockedSub.deliverCh).([]interface{})
+	firstMomentum, ok := first[0].(*Momentum)
+	if !ok {
+		t.Fatalf("first retained event has unexpected type %T", first[0])
+	}
+	if firstMomentum.Height < 1 || firstMomentum.Height > 2 {
+		t.Fatalf("first retained event has height %d, want 1 or 2 (drop-newest policy violated)", firstMomentum.Height)
+	}
+}
+
+// signaledGateConn is the server side of a net.Pipe whose writes pass
+// freely until the test calls gate(); every write after that signals
+// entered (once) and then blocks until the test closes gate. This gives
+// the test a deterministic handshake: it can wait until a notification
+// write is actually in flight before asserting the healthy side.
+type signaledGateConn struct {
+	net.Conn
+	mu      sync.Mutex
+	block   bool
+	gate    chan struct{}
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (c *signaledGateConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	blocked := c.block
+	c.mu.Unlock()
+	if blocked {
+		c.once.Do(func() { close(c.entered) })
+		<-c.gate
+	}
+	return c.Conn.Write(p)
+}
+
+func (c *signaledGateConn) blockWrites() {
+	c.mu.Lock()
+	c.block = true
+	c.mu.Unlock()
 }
 
 // Slow-but-successful writes do not stall the worker either: a connection
@@ -235,13 +286,23 @@ func TestBlockedConnectionQueueOverflowDropsOnlyThatSubscription(t *testing.T) {
 func TestSlowConnectionDoesNotStallWorker(t *testing.T) {
 	server, rpcServer := startTestServer(t)
 
-	// Slow connection: writes complete after a short delay. Drain the
-	// client side so the delayed writes actually complete through the
-	// pipe; without a reader net.Pipe blocks forever and this would be
-	// just another blocked-connection test.
+	// Slow connection: writes pass through a gate that the test opens
+	// after asserting the healthy side has received the event. This
+	// replaces the old fixed 40 ms timer, which could pass under
+	// synchronous delivery when the healthy subscription was visited
+	// first. Drain the client side so the gated writes actually complete
+	// through the pipe; without a reader net.Pipe blocks forever and this
+	// would be just another blocked-connection test.
 	slowEnd, slowClient := net.Pipe()
 	t.Cleanup(func() { slowEnd.Close(); slowClient.Close() })
-	slowConn := &delayedConn{Conn: slowEnd, delay: 50 * time.Millisecond}
+	slowConn := &signaledGateConn{
+		Conn:    slowEnd,
+		gate:    make(chan struct{}),
+		entered: make(chan struct{}),
+	}
+	var slowGateOnce sync.Once
+	releaseSlowGate := func() { slowGateOnce.Do(func() { close(slowConn.gate) }) }
+	t.Cleanup(releaseSlowGate)
 	go rpcServer.ServeCodec(rpc.NewCodec(slowConn), 0)
 	slowDec := json.NewDecoder(slowClient)
 	rawSubscribe(t, slowClient, slowDec, 1, `["momentums"]`)
@@ -269,43 +330,35 @@ func TestSlowConnectionDoesNotStallWorker(t *testing.T) {
 	}
 	waitInstalled(t, server, MomentumsSubscription, 2)
 
-	// Broadcast one event and synchronize on the slow write being in
-	// flight: the healthy subscriber must make progress while the slow
-	// write is outstanding (50ms delay). Then assert the slow side
-	// received it too after the delay elapses.
-	//
-	// Synchronous delivery would block the worker on the slow write for
-	// 50ms before it could queue anything for the healthy side; the
-	// healthy event must arrive well under that bound.
+	// Gate the slow connection's writes, then broadcast. Wait for the
+	// slow write to actually enter the gate (deterministic handshake),
+	// then assert the healthy subscriber still receives the event.
+	// Synchronous delivery would block the worker on the gated write and
+	// the healthy event would never arrive.
+	slowConn.blockWrites()
 	server.InsertMomentum(momentumAt(1))
 
-	// Bound well below 450ms (9 slow writes × 50ms): the healthy event
-	// must arrive while the first slow write is still in flight.
+	select {
+	case <-slowConn.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow connection write never entered the gate")
+	}
+
 	select {
 	case <-events:
-	case <-time.After(40 * time.Millisecond):
-		t.Fatal("healthy subscriber did not receive the event within 40ms " +
+	case <-time.After(2 * time.Second):
+		t.Fatal("healthy subscriber did not receive the event " +
 			"(slow connection stalled the worker)")
 	}
 
-	// The slow connection's write completes after its 50ms delay; the
-	// event must arrive on the slow side as well.
+	// Open the gate so the slow connection's write completes; the event
+	// must arrive on the slow side as well.
+	releaseSlowGate()
 	select {
 	case <-slowCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("slow connection did not receive the event")
 	}
-}
-
-// delayedConn is a net.Conn whose writes complete after a fixed delay.
-type delayedConn struct {
-	net.Conn
-	delay time.Duration
-}
-
-func (c *delayedConn) Write(p []byte) (int, error) {
-	time.Sleep(c.delay)
-	return c.Conn.Write(p)
 }
 
 // Ordering within a subscription is preserved: events are delivered to the
@@ -356,4 +409,49 @@ func TestEventOrderingPreservedPerSubscription(t *testing.T) {
 			t.Fatalf("event %d has height %d, want %d (ordering violated)", i, h, want)
 		}
 	}
+}
+
+// A subscription whose notification write is blocked must still release its
+// global slot when the client unsubscribes over the same connection. On dev
+// the worker was the one blocked and the watcher released the slot at once;
+// with per-subscription delivery goroutines the lifecycle goroutine must do
+// the same even while the delivery goroutine sits inside a blocked write.
+// Fails if lifecycle and delivery share one goroutine: the watcher cannot
+// service unsubscribed until the write returns, and uninstall (which
+// releases the slot) waits.
+func TestUnsubscribeDuringBlockedWriteReclaimsSlot(t *testing.T) {
+	server, rpcServer := startTestServer(t)
+
+	serverEnd, clientEnd := net.Pipe()
+	t.Cleanup(func() { serverEnd.Close(); clientEnd.Close() })
+	conn := &signaledGateConn{
+		Conn:    serverEnd,
+		gate:    make(chan struct{}),
+		entered: make(chan struct{}),
+	}
+	t.Cleanup(func() { close(conn.gate) })
+	go rpcServer.ServeCodec(rpc.NewCodec(conn), 0)
+	dec := json.NewDecoder(clientEnd)
+	subID := rawSubscribe(t, clientEnd, dec, 1, `["momentums"]`)
+	waitInstalled(t, server, MomentumsSubscription, 1)
+
+	// Gate the connection's writes, then broadcast: the delivery
+	// goroutine picks up the event and blocks inside the write.
+	conn.blockWrites()
+	server.InsertMomentum(momentumAt(1))
+
+	// Wait until the write has actually entered the gate.
+	select {
+	case <-conn.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("notification write never entered the gate")
+	}
+
+	// Unsubscribe over the same (blocked) connection. The lifecycle
+	// goroutine must release the slot without waiting for the write.
+	if _, err := clientEnd.Write([]byte(`{"jsonrpc":"2.0","id":2,"method":"ledger.unsubscribe","params":["` + subID + `"]}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	waitLive(t, server, 0)
 }
