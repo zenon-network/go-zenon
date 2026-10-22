@@ -1,6 +1,7 @@
 package momentum
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 )
@@ -95,4 +97,26 @@ func TestIdentifier_MalformedFrontierMomentum(t *testing.T) {
 		}
 	}()
 	_ = store.Identifier()
+}
+
+// TestIdentifierCorruptFrontierEntry verifies that Identifier panics with
+// a diagnostic naming the momentum store and the frontier height when the
+// frontier entry exists but cannot be deserialized.
+func TestIdentifierCorruptFrontierEntry(t *testing.T) {
+	memdb := db.NewMemDB()
+	version := types.HashHeight{Height: 1, Hash: types.Hash{1}}
+	common.FailIfErr(t, db.SetFrontier(memdb, version, []byte{0xff, 0xfe, 0xfd}))
+	ms := &momentumStore{DB: memdb}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on corrupt frontier entry, got none")
+		}
+		msg := fmt.Sprintf("%v", r)
+		if !strings.Contains(msg, "momentum store: frontier momentum entry at height 1") {
+			t.Fatalf("expected diagnostic naming the momentum store and entry height, got: %v", msg)
+		}
+	}()
+	ms.Identifier()
 }

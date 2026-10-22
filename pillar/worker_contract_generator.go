@@ -7,7 +7,6 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/chain/store"
-	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 )
 
@@ -33,7 +32,9 @@ func (w *worker) generateNext(momentumStore store.Momentum, embedded types.Addre
 	}
 
 	sendBlock, err := momentumStore.GetAccountBlock(*toReceive)
-	common.DealWithErr(err)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to read send block %s for sequencer entry", toReceive.Hash)
+	}
 	if sendBlock == nil {
 		return nil, errors.Errorf("can't get block but it exists in sequencer")
 	}

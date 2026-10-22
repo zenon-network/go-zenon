@@ -122,15 +122,23 @@ func (m *mailbox) GetUnreceivedAccountBlockHashes(atMost uint64) ([]types.Hash, 
 	return list, nil
 }
 
-func (m *mailbox) SequencerSize() uint64 {
+func (m *mailbox) SequencerSize() (uint64, error) {
 	data, err := m.DB.Get(sequencerNumInsertedKey)
 	if err == leveldb.ErrNotFound {
-		return 0
+		return 0, nil
 	}
-	return common.BytesToUint64(data)
+	if err != nil {
+		return 0, errors.Wrapf(err, "failed to read sequencer size for mailbox %s", m.address)
+	}
+	if len(data) < 8 {
+		return 0, errors.Errorf("sequencer size for mailbox %s is too short: got %d bytes, want 8", m.address, len(data))
+	}
+	return common.BytesToUint64(data), nil
 }
 func (m *mailbox) SequencerPushBack(header types.AccountHeader) {
-	total := m.SequencerSize() + 1
+	total, err := m.SequencerSize()
+	common.DealWithErr(err)
+	total++
 	common.DealWithErr(m.DB.Put(sequencerNumInsertedKey, common.Uint64ToBytes(total)))
 	data, err := header.Serialize()
 	common.DealWithErr(err)

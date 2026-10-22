@@ -126,6 +126,7 @@ func (ms *momentumStore) AddAccountBlockTransaction(header types.AccountHeader, 
 func (ms *momentumStore) Identifier() types.HashHeight {
 	frontier, err := ms.GetFrontierMomentum()
 	if err != nil && err != leveldb.ErrNotFound {
+		// GetFrontierMomentum() already wraps with the entry height.
 		// A deserialization or I/O error must not be silently swallowed.
 		common.DealWithErr(err)
 	}

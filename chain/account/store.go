@@ -35,7 +35,10 @@ func (as *accountStore) Snapshot() store.Account {
 }
 func (as *accountStore) Identifier() types.HashHeight {
 	frontier, err := as.Frontier()
-	common.DealWithErr(err)
+	if err != nil {
+		// Frontier() already wraps with account and entry height.
+		common.DealWithErr(err)
+	}
 	if frontier == nil {
 		return types.ZeroHashHeight
 	}
