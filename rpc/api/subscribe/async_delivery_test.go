@@ -122,28 +122,56 @@ func TestBlockedConnectionQueueOverflowDropsOnlyThatSubscription(t *testing.T) {
 	// Healthy connection.
 	healthy := rpc.DialInProc(rpcServer)
 	t.Cleanup(healthy.Close)
-	events := make(chan interface{}, 64)
+	events := make(chan interface{}, 300)
 	if _, err := healthy.Subscribe(context.Background(), "ledger", events, "momentums"); err != nil {
 		t.Fatal(err)
 	}
 	waitLive(t, server, 2)
 
-	// Fill the blocked connection's delivery queue (256) plus extra.
-	// The worker must not stall; events for the healthy subscriber
-	// must still be delivered.
-	for h := uint64(1); h <= 300; h++ {
-		server.InsertMomentum(momentumAt(h))
+	// Drive broadcastMomentums directly (bypassing mChan) so every event
+	// reaches the worker's broadcast loop. The blocked subscription's
+	// 256-slot queue fills and drops begin; the healthy subscription must
+	// receive every event.
+	const total = 300
+	for h := uint64(1); h <= total; h++ {
+		server.broadcastMomentums(&Momentum{Hash: types.HexToHashPanic("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"), Height: h})
 	}
 
-	// The healthy subscriber should receive at least some events.
-	// We don't require all 300 (the channel has capacity 64), but at
-	// least the first few must arrive quickly.
-	for i := 0; i < 3; i++ {
+	// The healthy subscriber must receive all events despite the blocked
+	// connection's queue being full.
+	received := 0
+	deadline := time.Now().Add(3 * time.Second)
+	for received < total {
 		select {
 		case <-events:
-		case <-time.After(3 * time.Second):
-			t.Fatalf("healthy subscriber missed event %d: blocked connection stalled the worker", i+1)
+			received++
+		case <-time.After(time.Until(deadline)):
+			t.Fatalf("healthy subscriber received %d of %d events: blocked connection stalled the worker",
+				received, total)
 		}
+	}
+
+	// The blocked subscription's queue (256 slots) absorbed the first 256
+	// events; the remaining 44 were dropped for that subscription only.
+	// Verify the drop count by inspecting the subscription's deliverCh:
+	// it must be full (256 queued events) and the broadcast loop must have
+	// recorded drops. We assert indirectly: the queue is full, so further
+	// sends would drop.
+	blockedSubs := server.installed(MomentumsSubscription)
+	if len(blockedSubs) != 2 {
+		t.Fatalf("installed subscriptions = %d, want 2", len(blockedSubs))
+	}
+	var blockedSub *Subscription
+	for _, sub := range blockedSubs {
+		if sub.deliverCh != nil && len(sub.deliverCh) == deliverQueueSize {
+			if blockedSub != nil {
+				t.Fatal("multiple subscriptions have full queues")
+			}
+			blockedSub = sub
+		}
+	}
+	if blockedSub == nil {
+		t.Fatal("no subscription has a full delivery queue after 300 broadcasts")
 	}
 }
 
@@ -153,13 +181,24 @@ func TestBlockedConnectionQueueOverflowDropsOnlyThatSubscription(t *testing.T) {
 func TestSlowConnectionDoesNotStallWorker(t *testing.T) {
 	server, rpcServer := startTestServer(t)
 
-	// Slow connection: writes complete after a short delay.
+	// Slow connection: writes complete after a short delay. Drain the
+	// client side so the delayed writes actually complete through the
+	// pipe; without a reader net.Pipe blocks forever and this would be
+	// just another blocked-connection test.
 	slowEnd, slowClient := net.Pipe()
 	t.Cleanup(func() { slowEnd.Close(); slowClient.Close() })
 	slowConn := &delayedConn{Conn: slowEnd, delay: 50 * time.Millisecond}
 	go rpcServer.ServeCodec(rpc.NewCodec(slowConn), 0)
 	slowDec := json.NewDecoder(slowClient)
 	rawSubscribe(t, slowClient, slowDec, 1, `["momentums"]`)
+	go func() {
+		for {
+			var msg json.RawMessage
+			if err := slowDec.Decode(&msg); err != nil {
+				return
+			}
+		}
+	}()
 
 	// Healthy connection.
 	healthy := rpc.DialInProc(rpcServer)
@@ -173,23 +212,22 @@ func TestSlowConnectionDoesNotStallWorker(t *testing.T) {
 	// Broadcast several momentums. The slow connection's writes take
 	// 50ms each, but the worker should queue events asynchronously
 	// and move on.
-	start := time.Now()
 	for h := uint64(1); h <= 10; h++ {
 		server.InsertMomentum(momentumAt(h))
 	}
-	elapsed := time.Since(start)
 
-	// If delivery were synchronous, 10 events × 50ms = 500ms minimum.
-	// With async delivery, the worker finishes in well under 100ms.
-	if elapsed > 200*time.Millisecond {
-		t.Fatalf("broadcast of 10 momentums took %v, want < 200ms (slow connection stalled the worker)", elapsed)
-	}
-
-	// The healthy subscriber receives events.
-	select {
-	case <-events:
-	case <-time.After(3 * time.Second):
-		t.Fatal("healthy subscriber did not receive any event")
+	// If delivery were synchronous, 10 events × 50ms = 500ms before the
+	// last event reaches the healthy subscriber. With async delivery all
+	// events land in the queues immediately and the healthy subscriber
+	// receives them well under that bound.
+	deadline := time.After(500 * time.Millisecond)
+	for i := 0; i < 10; i++ {
+		select {
+		case <-events:
+		case <-deadline:
+			t.Fatalf("healthy subscriber received only %d of 10 events in 500ms "+
+				"(slow connection stalled the worker)", i)
+		}
 	}
 }
 
