@@ -174,7 +174,22 @@ func (s *Supervisor) ApplyMomentum(detailed *nom.DetailedMomentum) (result *nom.
 // then applied, ChangesHash is filled in from the produced patch, and
 // the completed block is signed once via signFunc. The pillar's node
 // uses it for embedded-contract update calls.
-func (s *Supervisor) GenerateFromTemplate(template *nom.AccountBlock, signFunc SignFunc) (*nom.AccountBlockTransaction, error) {
+func (s *Supervisor) GenerateFromTemplate(template *nom.AccountBlock, signFunc SignFunc) (transaction *nom.AccountBlockTransaction, internalErr error) {
+	// Matches GenerateAutoReceive. This runs on the pillar's producer
+	// goroutine, which common.NewTask starts without a handler of its own
+	// and where common.RecoverStack re-panics, so a panic that escapes here
+	// ends the process rather than the round. setAll and newBlockContext can
+	// panic when a rollback invalidates the account predecessor or the
+	// acknowledged momentum before the context is built.
+	defer func() {
+		if err := recover(); err != nil {
+			s.log.Error("vm panic when generating from template", "template", template.Header(), "reason", err, "stack", string(debug.Stack()))
+
+			transaction = nil
+			internalErr = constants.ErrVmRunPanic
+		}
+	}()
+
 	if err := s.setAll(template); err != nil {
 		return nil, err
 	}

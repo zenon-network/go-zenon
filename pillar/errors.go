@@ -15,4 +15,5 @@ var (
 	ErrEventEnded         = errors.Errorf("current time is after the event's finish time")
 
 	ErrUpdatePredecessorMissing = errors.Errorf("account pool has no store before the update block to replace")
+	ErrUpdateCacheStoreMissing  = errors.Errorf("chain cache has no store at the update block's acknowledged momentum")
 )
