@@ -1,6 +1,8 @@
 package abi
 
 import (
+	"fmt"
+	"math"
 	"strconv"
 	"testing"
 )
@@ -26,10 +28,14 @@ func TestNewType_Valid(t *testing.T) {
 
 // TestNewType_ArrayOverflow verifies that NewType returns an error instead
 // of panicking when a fixed-array declaration's size times the element size
-// overflows int (issue #197).
+// overflows int (issue #197). The test value is derived from math.MaxInt so
+// it exercises the overflow guard (not the Atoi guard) on both 32-bit and
+// 64-bit architectures.
 func TestNewType_ArrayOverflow(t *testing.T) {
-	// uint64[2305843009213693952] — size * 8 overflows int64.
-	_, err := NewType("uint64[2305843009213693952]")
+	// On 64-bit: uint64[2^61] fits in int but 2^61 * 8 overflows MaxInt64.
+	// On 32-bit: uint64[2^29] fits in int but 2^29 * 8 overflows MaxInt32.
+	size := math.MaxInt/8 + 1
+	_, err := NewType(fmt.Sprintf("uint64[%d]", size))
 	if err == nil {
 		t.Fatal("expected error for overflowing array size, got nil")
 	}
