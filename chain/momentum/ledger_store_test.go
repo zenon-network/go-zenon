@@ -114,8 +114,8 @@ func TestIdentifierCorruptFrontierEntry(t *testing.T) {
 			t.Fatal("expected panic on corrupt frontier entry, got none")
 		}
 		msg := fmt.Sprintf("%v", r)
-		if !strings.Contains(msg, "momentum store: failed to read frontier momentum entry") {
-			t.Fatalf("expected diagnostic naming the momentum store, got: %v", msg)
+		if !strings.Contains(msg, "momentum store: frontier momentum entry at height 1") {
+			t.Fatalf("expected diagnostic naming the momentum store and entry height, got: %v", msg)
 		}
 	}()
 	ms.Identifier()

@@ -24,7 +24,12 @@ func parseAccountBlock(data []byte, err error) (*nom.AccountBlock, error) {
 }
 
 func (as *accountStore) Frontier() (*nom.AccountBlock, error) {
-	return parseAccountBlock(db.GetEntryByHeight(as.DB, db.GetFrontierIdentifier(as.DB).Height))
+	height := db.GetFrontierIdentifier(as.DB).Height
+	block, err := parseAccountBlock(db.GetEntryByHeight(as.DB, height))
+	if err != nil {
+		return nil, errors.Wrapf(err, "account store %s: frontier entry at height %d", as.address, height)
+	}
+	return block, nil
 }
 func (as *accountStore) ByHash(hash types.Hash) (*nom.AccountBlock, error) {
 	return parseAccountBlock(db.GetEntryByHash(as.DB, hash))

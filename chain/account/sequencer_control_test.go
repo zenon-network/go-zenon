@@ -44,6 +44,40 @@ func TestSequencerFrontPropagatesReadError(t *testing.T) {
 	}
 }
 
+// TestSequencerFrontPropagatesMailboxCorruption verifies that a corrupt
+// (too-short) sequencer counter in the mailbox surfaces through
+// SequencerFront as a diagnostic error rather than a panic or silent nil.
+func TestSequencerFrontPropagatesMailboxCorruption(t *testing.T) {
+	memdb := db.NewMemDB()
+	mb := mailbox.NewAccountMailbox(controlAddress, memdb)
+
+	// Push a header so the counter is initialised to a valid value.
+	header := types.AccountHeader{
+		Address: controlAddress,
+		HashHeight: types.HashHeight{
+			Hash:   types.Hash{2},
+			Height: 1,
+		},
+	}
+	mb.SequencerPushBack(header)
+
+	// Corrupt the counter by overwriting it with a value too short for
+	// uint64 decoding.  The key is sequencerNumInsertedKey (see
+	// chain/account/mailbox/keys.go).
+	if err := memdb.Put([]byte{7}, []byte{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+
+	as := NewAccountStore(controlAddress, db.NewMemDB())
+	got, err := as.SequencerFront(mb)
+	if err == nil {
+		t.Fatalf("expected error for corrupt mailbox counter, got header %v", got)
+	}
+	if !strings.Contains(err.Error(), "too short") {
+		t.Fatalf("expected 'too short' diagnostic, got: %v", err)
+	}
+}
+
 func TestIdentifierCorruptFrontierEntry(t *testing.T) {
 	memdb := db.NewMemDB()
 	version := types.HashHeight{Height: 1, Hash: types.Hash{1}}
@@ -56,8 +90,8 @@ func TestIdentifierCorruptFrontierEntry(t *testing.T) {
 			t.Fatal("expected panic on corrupt frontier entry, got none")
 		}
 		msg := fmt.Sprintf("%v", r)
-		if !strings.Contains(msg, "account store "+controlAddress.String()) || !strings.Contains(msg, "failed to read frontier entry") {
-			t.Fatalf("expected diagnostic naming the account store, got: %v", msg)
+		if !strings.Contains(msg, "account store "+controlAddress.String()) || !strings.Contains(msg, "frontier entry at height 1") {
+			t.Fatalf("expected diagnostic naming the account store and entry height, got: %v", msg)
 		}
 	}()
 	as.Identifier()

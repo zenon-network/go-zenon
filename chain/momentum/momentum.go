@@ -3,6 +3,7 @@ package momentum
 import (
 	"fmt"
 
+	"github.com/pkg/errors"
 	"github.com/syndtr/goleveldb/leveldb"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
@@ -21,7 +22,12 @@ func parseMomentum(data []byte, err error) (*nom.Momentum, error) {
 }
 
 func (ms *momentumStore) GetFrontierMomentum() (*nom.Momentum, error) {
-	return parseMomentum(db.GetEntryByHeight(ms.DB, db.GetFrontierIdentifier(ms.DB).Height))
+	height := db.GetFrontierIdentifier(ms.DB).Height
+	momentum, err := parseMomentum(db.GetEntryByHeight(ms.DB, height))
+	if err != nil {
+		return nil, errors.Wrapf(err, "momentum store: frontier momentum entry at height %d", height)
+	}
+	return momentum, nil
 }
 func (ms *momentumStore) GetMomentumByHash(hash types.Hash) (*nom.Momentum, error) {
 	return parseMomentum(db.GetEntryByHash(ms.DB, hash))
