@@ -67,9 +67,10 @@ const (
 
 	// deliverQueueSize bounds the events queued per subscription between
 	// the broadcast worker and the subscription's own delivery goroutine.
-	// It must be at least rpc/server's maxPendingNotifications so that
-	// pre-activation buffering can still overflow the notifier and tear
-	// the connection down (see TestOverflowBeforeActivationTearsDownConnection).
+	// It must be greater than rpc/server's maxPendingNotifications (128)
+	// so that pre-activation buffering can still overflow the notifier and
+	// tear the connection down (see TestOverflowBeforeActivationTearsDownConnection):
+	// overflow needs the 129th arrival, and the queue holds 256.
 	deliverQueueSize = 256
 
 	// DefaultMaxSubscriptions bounds the subscriptions kept installed across
@@ -374,12 +375,21 @@ func (s *Server) work() {
 }
 
 // BroadcastStats counts, for one broadcast pass, how many subscriptions
-// were queued, how many events were dropped because the subscription's
-// delivery queue was full, and how many subscriptions were found closed
-// and uninstalled. It only feeds the log line emitted after each pass.
+// were visited for delivery, how many events were dropped because the
+// subscription's delivery queue was full, and how many subscriptions were
+// found closed and uninstalled. NumNotify counts attempted deliveries,
+// including those that were dropped. It only feeds the log line emitted
+// after each pass.
 type BroadcastStats struct {
-	NumNotify     int
-	NumDropped    int
+	// NumNotify counts attempted deliveries: every subscription the
+	// broadcast visited and tried to queue an event for, including the
+	// ones whose delivery queue was full and dropped the event.
+	NumNotify int
+	// NumDropped counts events dropped because the subscription's
+	// delivery queue was full.
+	NumDropped int
+	// NumUninstalls counts subscriptions found closed and uninstalled
+	// during the broadcast.
 	NumUninstalls int
 }
 
@@ -474,9 +484,9 @@ func (s *Server) broadcast(subscription *Subscription, data interface{}, stats *
 		}
 	}
 }
-func (s *Server) broadcastMomentums(momentum *Momentum) {
+func (s *Server) broadcastMomentums(momentum *Momentum) *BroadcastStats {
 	if momentum == nil {
-		return
+		return nil
 	}
 	startTime := common.Clock.Now()
 	stats := &BroadcastStats{}
@@ -486,6 +496,7 @@ func (s *Server) broadcastMomentums(momentum *Momentum) {
 	}
 
 	s.log.Info("finish broadcasting momentum", "identifier", momentum, "elapsed", common.Clock.Now().Sub(startTime), "stats", stats)
+	return stats
 }
 
 func (s *Server) broadcastBlocks(blocks []*AccountBlock) {

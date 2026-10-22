@@ -113,23 +113,6 @@ func NewSubscription(notifier *rpc.Notifier, options *subscriptionOptions) *Subs
 	}
 }
 
-// Notify pushes data to the client as a JSON-RPC notification carrying
-// the subscription id. It is a no-op when the subscription is closed.
-// A delivery failure is logged and otherwise ignored: the connection
-// stays open and the subscription installed, so a client that cannot
-// be written to keeps costing a write attempt per event until it
-// disconnects.
-func (s *Subscription) Notify(data interface{}) {
-	if s.Closed() {
-		return
-	}
-
-	err := s.notifier.Notify(s.rpc.ID, data)
-	if err != nil {
-		s.log.Info("failed to notify", "reason", err)
-	}
-}
-
 // Closed reports whether the subscription has ended, which happens when
 // the client sends an unsubscribe request or the underlying connection
 // closes. The check is non-blocking and latches: once either signal
