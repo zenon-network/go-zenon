@@ -22,11 +22,11 @@ type chainCache struct {
 }
 
 func (c *chainCache) getFrontierStore() store.Cache {
-	if db := c.manager.DB(); db == nil {
+	db := c.manager.DB()
+	if db == nil {
 		return nil
-	} else {
-		return cache.NewCacheStore(storage.GetFrontierIdentifier(db), c.manager)
 	}
+	return cache.NewCacheStore(storage.GetFrontierIdentifier(db), c.manager)
 }
 
 func (c *chainCache) GetFrontierCacheStore() store.Cache {
@@ -90,7 +90,11 @@ func (c *chainCache) RollbackCacheTo(insertLocker sync.Locker, identifier types.
 
 func (c *chainCache) rollbackTo(identifier types.HashHeight) error {
 	c.log.Info("rollbacking cache", "to-identifier", identifier)
-	frontier := c.getFrontierStore().Identifier()
+	frontierStore := c.getFrontierStore()
+	if frontierStore == nil {
+		return storage.ErrCacheStopped
+	}
+	frontier := frontierStore.Identifier()
 
 	if identifier.Height > frontier.Height {
 		return errors.Errorf("can't rollback cache. Expected identifier height %v is greater than frontier %v", identifier, frontier)
@@ -102,6 +106,9 @@ func (c *chainCache) rollbackTo(identifier types.HashHeight) error {
 
 	for {
 		store := c.getFrontierStore()
+		if store == nil {
+			return storage.ErrCacheStopped
+		}
 		frontier := store.Identifier()
 		if frontier.Height == identifier.Height {
 			break
@@ -119,7 +126,11 @@ func (c *chainCache) Init(chainManager db.Manager, momentumStore store.Momentum)
 	c.changes.Lock()
 	defer c.changes.Unlock()
 	chainFrontier := db.GetFrontierIdentifier(chainManager.Frontier())
-	cacheFrontier := storage.GetFrontierIdentifier(c.manager.DB())
+	managerDB := c.manager.DB()
+	if managerDB == nil {
+		return storage.ErrCacheStopped
+	}
+	cacheFrontier := storage.GetFrontierIdentifier(managerDB)
 
 	if cacheFrontier.Height == chainFrontier.Height {
 		if cacheFrontier.Hash != chainFrontier.Hash {

@@ -18,19 +18,24 @@ type cacheStore struct {
 // NewCacheStore returns a store.Cache that answers reads as of
 // identifier over manager's database, with its own in-memory change
 // set for writes made through ApplyMomentum. It returns nil when
-// identifier is above the cache frontier and panics on a nil manager.
+// identifier is above the cache frontier or when the manager is
+// stopped (DB returns nil), and panics on a nil manager.
 func NewCacheStore(identifier types.HashHeight, manager storage.CacheManager) store.Cache {
 	if manager == nil {
 		panic("cache store can't operate with nil db manager")
 	}
-	frontier := storage.GetFrontierIdentifier(manager.DB())
+	storeDB := manager.DB()
+	if storeDB == nil {
+		return nil
+	}
+	frontier := storage.GetFrontierIdentifier(storeDB)
 	if identifier.Height > frontier.Height {
 		return nil
 	}
 	return &cacheStore{
 		identifier: identifier,
 		changes:    db.NewMemDB(),
-		db:         manager.DB(),
+		db:         storeDB,
 	}
 }
 
