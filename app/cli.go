@@ -18,6 +18,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/metadata"
+	"github.com/zenon-network/go-zenon/node"
 )
 
 var (
@@ -35,6 +36,20 @@ func Run() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// RunWithConfig starts a node from an explicit node.Config, bypassing
+// CLI flag parsing entirely. It returns an error instead of exiting
+// the process, making it suitable for library consumers (libznn) that
+// embed the node and must remain alive on startup failures. The
+// caller is responsible for calling Stop to shut the node down.
+func RunWithConfig(cfg *node.Config) error {
+	var err error
+	nodeManager, err = NewNodeManagerFromConfig(cfg)
+	if err != nil {
+		return err
+	}
+	return nodeManager.Start()
 }
 
 // Stop stops the running node Manager and reports a clean shutdown. It is

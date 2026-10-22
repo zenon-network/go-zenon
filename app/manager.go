@@ -45,6 +45,22 @@ func NewNodeManager(ctx *cli.Context) (*Manager, error) {
 	}, nil
 }
 
+// NewNodeManagerFromConfig builds a Manager directly from an explicit
+// node.Config, bypassing the CLI flag-parsing path entirely. This is
+// the entry point for library consumers that need to pass configuration
+// programmatically rather than via os.Args.
+func NewNodeManagerFromConfig(nodeConfig *node.Config) (*Manager, error) {
+	newNode, err := node.NewNode(nodeConfig)
+	if err != nil {
+		log.Error("failed to create the node", "reason", err)
+		return nil, err
+	}
+
+	return &Manager{
+		node: newNode,
+	}, nil
+}
+
 // Start brings the node online and prints a short status to stdout: the
 // producer address if a pillar is configured and any RPC exposure
 // warnings. A start failure is logged at Crit and exits the process with
