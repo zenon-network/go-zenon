@@ -203,10 +203,13 @@ func (vm *VM) applySend(block *nom.AccountBlock) error {
 		if vm.context.IsDynamicPlasmaSporkEnforced() {
 			if _, ok := method.(*implementation.SetTokenTupleMethod); ok {
 				param := new(definition.TokenTuplesParam)
-				if err := definition.ABILiquidity.UnpackMethod(param, definition.SetTokenTupleMethodName, block.Data); err == nil {
-					if err := implementation.CheckTokenTuplePercentages(param); err != nil {
-						return err
-					}
+				if err := definition.ABILiquidity.UnpackMethod(param, definition.SetTokenTupleMethodName, block.Data); err != nil {
+					// ValidateSendBlock already unpacked and repacked this
+					// data; a failure here is an invariant violation.
+					return constants.ErrUnpackError
+				}
+				if err := implementation.CheckTokenTuplePercentages(param); err != nil {
+					return err
 				}
 			}
 		}
