@@ -45,6 +45,66 @@ func activateDynamicPlasma(t *testing.T, z mock.MockZenon) {
 	z.InsertMomentumsTo(20)
 }
 
+// activateDynamicPlasmaPastHeight activates the dynamic-plasma spork on a
+// chain that is already past height 550 and holds accelerator/bridge sporks.
+// Unlike activateDynamicPlasma (which assumes a fresh chain where the
+// create-spork send is List[0]), this helper uses the hash of the
+// create-spork send block as the spork ID, activates it, advances to its
+// recorded EnforcementHeight, and asserts IsSporkActive before returning.
+func activateDynamicPlasmaPastHeight(t *testing.T, z mock.MockZenon) {
+	saveSporkState(t)
+	createSend := z.InsertSendBlock(&nom.AccountBlock{
+		Address:   g.Spork.Address,
+		ToAddress: types.SporkContract,
+		Data: definition.ABISpork.PackMethodPanic(definition.SporkCreateMethodName,
+			"dynamic-plasma",           // name
+			"Activates Dynamic Plasma", // description
+		),
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+
+	// The spork ID is the hash of the create-spork send block.
+	id := createSend.Hash
+
+	z.InsertSendBlock(&nom.AccountBlock{
+		Address:   g.Spork.Address,
+		ToAddress: types.SporkContract,
+		Data: definition.ABISpork.PackMethodPanic(definition.SporkActivateMethodName,
+			id, // id
+		),
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+	types.DynamicPlasmaSpork.SporkId = id
+	types.ImplementedSporksMap[id] = true
+
+	// Advance past the spork's recorded EnforcementHeight.
+	sporkAPI := embedded.NewSporkApi(z)
+	sporkList, err := sporkAPI.GetAll(0, 10)
+	common.FailIfErr(t, err)
+	var enforcementHeight uint64
+	for _, s := range sporkList.List {
+		if s.Id == id {
+			enforcementHeight = s.EnforcementHeight
+			break
+		}
+	}
+	if enforcementHeight == 0 {
+		t.Fatal("dynamic plasma spork not found in spork list")
+	}
+	frontier, err := z.Chain().GetFrontierMomentumStore().GetFrontierMomentum()
+	common.FailIfErr(t, err)
+	if frontier.Height < enforcementHeight {
+		z.InsertMomentumsTo(enforcementHeight)
+	}
+
+	// Assert the spork is active before proceeding.
+	active, err := z.Chain().GetFrontierMomentumStore().IsSporkActive(types.DynamicPlasmaSpork)
+	common.FailIfErr(t, err)
+	if !active {
+		t.Fatal("dynamic plasma spork is not active after advancing to enforcement height")
+	}
+}
+
 func TestDynamicPlasma(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	ledgerApi := api.NewLedgerApi(z)

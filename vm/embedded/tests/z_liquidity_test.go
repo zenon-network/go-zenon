@@ -856,6 +856,103 @@ func TestLiquidity_SetTokenTuples(t *testing.T) {
 
 }
 
+// TestLiquidity_SetTokenTuplesUint32Wrap verifies that the SetTokenTuple
+// validation rejects percentage tuples whose individual values exceed
+// the denominator, and that the uint64 accumulator prevents the wrap
+// attack from issue #198. The stricter per-token check is gated on
+// DynamicPlasmaSpork.
+func TestLiquidity_SetTokenTuplesUint32Wrap(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+	saveSporkState(t)
+
+	activateLiquidityStep0(t, z)
+	issueMultipleTokensSetup(t, z)
+
+	liquidityAPI := embedded.NewLiquidityApi(z)
+	securityInfo, err := liquidityAPI.GetSecurityInfo()
+	common.FailIfErr(t, err)
+	guardians := []types.Address{g.User1.Address, g.User2.Address, g.User3.Address, g.User4.Address}
+	nominateGuardiansLiq(t, z, g.User5.Address, guardians, securityInfo.AdministratorDelay)
+
+	minAmounts := []*big.Int{big.NewInt(1000), big.NewInt(2000)}
+
+	// Without DynamicPlasmaSpork: the wrap attack passes validation
+	// (uint32 accumulator wraps to exactly 10,000).
+	wrapZnn := []uint32{4294957296, 20000} // sum mod 2^32 == 10000
+	wrapQsr := []uint32{5000, 5000}
+	z.InsertSendBlock(setTokensTupleStep(g.User5.Address, tokensString, wrapZnn, wrapQsr, minAmounts),
+		nil, mock.SkipVmChanges)
+	insertMomentums(z, 2)
+
+	// clean up: reset to valid tuples
+	validZnn := []uint32{5000, 5000}
+	validQsr := []uint32{5000, 5000}
+	setTokensTuple(t, z, g.User5.Address, tokensString, validZnn, validQsr, minAmounts)
+	insertMomentums(z, 2)
+
+	// Activate DynamicPlasmaSpork. Use the past-height variant because
+	// this fixture's chain already holds accelerator/bridge sporks.
+	activateDynamicPlasmaPastHeight(t, z)
+
+	// With DynamicPlasmaSpork: the wrap attack is rejected because the
+	// per-token range check fires (each value must be <= 10,000).
+	z.InsertSendBlock(setTokensTupleStep(g.User5.Address, tokensString, wrapZnn, wrapQsr, minAmounts),
+		constants.ErrInvalidPercentages, mock.SkipVmChanges)
+
+	// A single oversized value is also rejected.
+	bigZnn := []uint32{20000, 1} // 20000 > 10000
+	bigQsr := []uint32{5000, 5000}
+	z.InsertSendBlock(setTokensTupleStep(g.User5.Address, tokensString, bigZnn, bigQsr, minAmounts),
+		constants.ErrInvalidPercentages, mock.SkipVmChanges)
+
+	// Mirrored QSR overflow: the wrapping pair on the QSR side also
+	// passes the legacy uint32 sum check (wraps to 10,000) but is
+	// caught by the widened uint64 accumulator.
+	wrapQsr2 := []uint32{4294957296, 20000} // sum mod 2^32 == 10000
+	z.InsertSendBlock(setTokensTupleStep(g.User5.Address, tokensString, validZnn, wrapQsr2, minAmounts),
+		constants.ErrInvalidPercentages, mock.SkipVmChanges)
+
+	// Legitimate tuples still pass.
+	z.InsertSendBlock(setTokensTupleStep(g.User5.Address, tokensString, validZnn, validQsr, minAmounts),
+		nil, mock.SkipVmChanges)
+
+	// 0/10000 split is accepted.
+	zeroZnn := []uint32{0, 10000}
+	fullQsr := []uint32{10000, 0}
+	z.InsertSendBlock(setTokensTupleStep(g.User5.Address, tokensString, zeroZnn, fullQsr, minAmounts),
+		nil, mock.SkipVmChanges)
+
+	// Empty tuple list is accepted (matches pre-spork behaviour).
+	emptyTokens := []string{}
+	emptyZnn := []uint32{}
+	emptyQsr := []uint32{}
+	emptyMin := []*big.Int{}
+	z.InsertSendBlock(setTokensTupleStep(g.User5.Address, emptyTokens, emptyZnn, emptyQsr, emptyMin),
+		nil, mock.SkipVmChanges)
+
+	// Post-spork full receive cycle: set valid tuples via CallContract
+	// (send + receive through the time challenge) and assert the stored
+	// tuples.
+	postZnn := []uint32{6000, 4000}
+	postQsr := []uint32{3000, 7000}
+	setTokensTuple(t, z, g.User5.Address, tokensString, postZnn, postQsr, minAmounts)
+
+	info, err := liquidityAPI.GetLiquidityInfo()
+	common.FailIfErr(t, err)
+	if len(info.TokenTuples) != 2 {
+		t.Fatalf("expected 2 token tuples post-spork, got %d", len(info.TokenTuples))
+	}
+	if info.TokenTuples[0].ZnnPercentage != 6000 || info.TokenTuples[0].QsrPercentage != 3000 {
+		t.Fatalf("unexpected post-spork tuple[0]: znn=%d qsr=%d",
+			info.TokenTuples[0].ZnnPercentage, info.TokenTuples[0].QsrPercentage)
+	}
+	if info.TokenTuples[1].ZnnPercentage != 4000 || info.TokenTuples[1].QsrPercentage != 7000 {
+		t.Fatalf("unexpected post-spork tuple[1]: znn=%d qsr=%d",
+			info.TokenTuples[1].ZnnPercentage, info.TokenTuples[1].QsrPercentage)
+	}
+}
+
 func TestLiquidity_StakeLiquidity(t *testing.T) {
 	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
 	defer z.StopPanic()
