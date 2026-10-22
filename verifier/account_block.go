@@ -15,13 +15,30 @@ import (
 )
 
 var (
-	// ReceiverMismatchEnforcementHeight is the momentum height from which a
-	// receive-block whose address differs from the send-block's ToAddress is
-	// rejected with ErrABFromBlockReceiverMismatch. Below this height the
-	// mismatch is tolerated for backwards compatibility. The frontier
-	// momentum's true height is used for the comparison.
+	// ReceiverMismatchEnforcementHeight is the mainnet momentum height from
+	// which a receive block must name the account the referenced send was
+	// addressed to. Mainnet carries earlier blocks that do not, so the rule
+	// is relaxed below this height on mainnet only; every other chain
+	// enforces it from genesis. See receiverMismatchTolerated.
 	ReceiverMismatchEnforcementHeight uint64 = 10109240 // Targeting 2025-04-16 12:00:00 UTC
 )
+
+// mainnetChainIdentifier is the chain identifier of the embedded alphanet
+// genesis, the only chain whose history predates the receiver rule. The
+// relaxation below is keyed on this value alone, so a custom network must
+// not reuse identifier 1 in its genesis, or it inherits mainnet's historical
+// exception until its own frontier passes ReceiverMismatchEnforcementHeight.
+const mainnetChainIdentifier uint64 = 1
+
+// receiverMismatchTolerated reports whether a receive block whose address is
+// not the referenced send's recipient is accepted on the chain identified by
+// chainIdentifier when the momentum frontier is at frontierHeight. Only
+// mainnet below ReceiverMismatchEnforcementHeight tolerates it, so that its
+// history can be replayed; a chain with any other identifier rejects it from
+// its first momentum.
+func receiverMismatchTolerated(chainIdentifier, frontierHeight uint64) bool {
+	return chainIdentifier == mainnetChainIdentifier && frontierHeight < ReceiverMismatchEnforcementHeight
+}
 
 func isBatched(block *nom.AccountBlock) bool {
 	return block.IsSendBlock() && types.IsEmbeddedAddress(block.Address)
@@ -384,8 +401,9 @@ func (abv *accountBlockVerifier) fromHash() error {
 	}
 
 	if abv.block.Address != sendBlock.ToAddress {
-		// Use the momentum ledger's true frontier height when comparing
-		if abv.frontierStore.Identifier().Height >= ReceiverMismatchEnforcementHeight {
+		// Decided against the momentum ledger's true frontier and the chain
+		// it belongs to; see receiverMismatchTolerated.
+		if !receiverMismatchTolerated(abv.frontierStore.ChainIdentifier(), abv.frontierStore.Identifier().Height) {
 			return ErrABFromBlockReceiverMismatch
 		}
 	}
