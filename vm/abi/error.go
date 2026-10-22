@@ -23,7 +23,8 @@ var (
 	errInvalidlFixedBytesType      = errors.New("abi: invalid type in call to make fixed byte array")
 	errFixedBytesTooWide           = errors.New("abi: fixed byte array wider than one word")
 	errFixedBytesInputShort        = errors.New("abi: input shorter than the fixed byte array")
-	errInvalidlArrayType           = errors.New("abi: invalid type in array/slice unpacking stage")
+
+	errInvalidlArrayType = errors.New("abi: invalid type in array/slice unpacking stage")
 )
 
 // parse json errors
@@ -51,6 +52,9 @@ func errParsingVariableSize(err error) error {
 }
 func errUnsupportedArgType(t string) error {
 	return fmt.Errorf("abi: unsupported arg type: %s", t)
+}
+func errArraySizeOverflow(size, elemSize int) error {
+	return fmt.Errorf("abi: array size %d overflows with element size %d", size, elemSize)
 }
 func errUnknownType(t Type) error {
 	return fmt.Errorf("abi: unknown type %v", t.T)

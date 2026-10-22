@@ -2,6 +2,7 @@ package abi
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -93,6 +94,9 @@ func NewType(t string) (typ Type, err error) {
 			}
 			if size == 0 {
 				return Type{}, errInvalidZeroVariableSize
+			}
+			if elemSize := int(embeddedType.Type.Size()); elemSize > 0 && size > math.MaxInt/elemSize {
+				return Type{}, errArraySizeOverflow(size, elemSize)
 			}
 			// is a array
 			typ.T = ArrayTy
