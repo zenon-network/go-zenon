@@ -79,6 +79,18 @@ func NewNode(conf *Config) (*Node, error) {
 		return nil, err
 	}
 
+	// From this point on, partially-initialised resources must be
+	// released when an error aborts the build. Before makeGenesisConfig
+	// returned an error (instead of calling os.Exit) this was impossible
+	// to reach, but a library caller that receives an error from NewNode
+	// expects to be able to retry with a different config.
+	success := false
+	defer func() {
+		if !success {
+			node.cleanupOnError()
+		}
+	}()
+
 	// start wallet
 	if err = node.startWallet(); err != nil {
 		log.Error("failed to start wallet", "reason", err)
@@ -149,7 +161,25 @@ func NewNode(conf *Config) (*Node, error) {
 		// passed on this node's local chain) the swap fires.
 		Oracle: &sporkOracle{chain: node.z.Chain()},
 	}
+	success = true
 	return node, nil
+}
+
+// cleanupOnError releases resources acquired partway through NewNode when
+// an error aborts the build. It stops the wallet manager, stops the zenon
+// core if one was created, and releases the data-directory lock. Each step
+// is nil-guarded so it is safe to call from any failure point after
+// openDataDir has run.
+func (node *Node) cleanupOnError() {
+	if node.walletManager != nil {
+		node.walletManager.Stop()
+	}
+	if node.z != nil {
+		if err := node.z.Stop(); err != nil {
+			log.Error("cleanup: failed to stop zenon", "reason", err)
+		}
+	}
+	node.closeDataDir()
 }
 
 // sporkOracle is the node-side adapter implementing switcher.SporkOracle
