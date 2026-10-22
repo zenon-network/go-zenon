@@ -92,9 +92,61 @@ func TestSerializedPathIgnored(t *testing.T) {
 	}
 }
 
-// TestSerializedPathVariants verifies that missing, relative, stale
-// absolute and colliding serialized paths all resolve to the scanned
-// location.
+// writeKeyFileWithSerializedPathRaw creates a key file on disk at realPath
+// but whose serialized JSON "Path" field says serializedPath. Unlike
+// writeKeyFileWithSerializedPath it does not use the helper above; the
+// caller provides the KeyStore so distinct passwords (and therefore
+// distinct identities) can be used per file.
+func writeKeyFileWithSerializedPathRaw(t *testing.T, ks *KeyStore, password, realPath, serializedPath string) string {
+	t.Helper()
+	kf, err := ks.Encrypt(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kf.Path = serializedPath
+	data, err := json.MarshalIndent(kf, "", "    ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(realPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return realPath
+}
+
+// writeKeyFileOmittingPath creates a key file on disk at realPath whose
+// JSON has no "Path" key at all (not even an empty string), the shape
+// produced by generators that predate the field.
+func writeKeyFileOmittingPath(t *testing.T, ks *KeyStore, password, realPath string) string {
+	t.Helper()
+	kf, err := ks.Encrypt(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.MarshalIndent(kf, "", "    ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	delete(raw, "Path")
+	data, err = json.MarshalIndent(raw, "", "    ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(realPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return realPath
+}
+
+// TestSerializedPathVariants verifies that missing, relative and stale
+// absolute serialized paths all resolve to the scanned location. The
+// colliding case (two files sharing one serialized Path) has its own
+// test below; the omitted-Path case (no Path key at all) is a separate
+// sub-test here.
 func TestSerializedPathVariants(t *testing.T) {
 	dir := t.TempDir()
 	ks := testKeyStore(t)
@@ -106,7 +158,6 @@ func TestSerializedPathVariants(t *testing.T) {
 		{"missing", filepath.Join(dir, "nonexistent")},
 		{"relative", "some/relative/path"},
 		{"stale-absolute", "/tmp/stale/absolute/path"},
-		{"colliding", filepath.Join(dir, "other")},
 	}
 
 	for _, v := range variants {
@@ -135,6 +186,99 @@ func TestSerializedPathVariants(t *testing.T) {
 			m.Lock(realPath)
 		})
 	}
+
+	t.Run("omitted", func(t *testing.T) {
+		realPath := filepath.Join(dir, "real_omitted")
+		writeKeyFileOmittingPath(t, ks, testPassword, realPath)
+
+		m := New(&Config{WalletDir: dir})
+		if err := m.Start(); err != nil {
+			t.Fatal(err)
+		}
+
+		kf, err := m.GetKeyFile(realPath)
+		if err != nil {
+			t.Fatalf("GetKeyFile(%q): %v", realPath, err)
+		}
+		if kf.Path != realPath {
+			t.Fatalf("KeyFile.Path = %q, want %q", kf.Path, realPath)
+		}
+
+		if err := m.Unlock(realPath, testPassword); err != nil {
+			t.Fatalf("Unlock(%q): %v", realPath, err)
+		}
+		m.Lock(realPath)
+	})
+}
+
+// TestSerializedPathColliding verifies that two valid key files whose
+// JSON carries the same serialized Path are each found and unlocked
+// under their own scanned path. Distinct passwords and distinct
+// identities ensure an accidental substitution of one file for the
+// other would fail.
+func TestSerializedPathColliding(t *testing.T) {
+	dir := t.TempDir()
+
+	// Two genuinely different keystores (different entropy, different
+	// base addresses) whose key files carry the same serialized Path.
+	ks1 := testKeyStore(t)
+	entropy2 := make([]byte, 32)
+	for i := range entropy2 {
+		entropy2[i] = byte(i + 1)
+	}
+	ks2, err := keyStoreFromEntropy(entropy2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ks1.BaseAddress == ks2.BaseAddress {
+		t.Fatal("test setup: keystores must have distinct base addresses")
+	}
+
+	collidingPath := filepath.Join(dir, "colliding")
+
+	path1 := filepath.Join(dir, "file1")
+	path2 := filepath.Join(dir, "file2")
+	writeKeyFileWithSerializedPathRaw(t, ks1, "password-one", path1, collidingPath)
+	writeKeyFileWithSerializedPathRaw(t, ks2, "password-two", path2, collidingPath)
+
+	m := New(&Config{WalletDir: dir})
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both files are indexed under their scanned paths.
+	kf1, err := m.GetKeyFile(path1)
+	if err != nil {
+		t.Fatalf("GetKeyFile(%q): %v", path1, err)
+	}
+	if kf1.Path != path1 {
+		t.Fatalf("KeyFile.Path = %q, want scanned path %q", kf1.Path, path1)
+	}
+
+	kf2, err := m.GetKeyFile(path2)
+	if err != nil {
+		t.Fatalf("GetKeyFile(%q): %v", path2, err)
+	}
+	if kf2.Path != path2 {
+		t.Fatalf("KeyFile.Path = %q, want scanned path %q", kf2.Path, path2)
+	}
+
+	// Each file unlocks with its own password; a substitution would fail.
+	if err := m.Unlock(path1, "password-one"); err != nil {
+		t.Fatalf("Unlock(%q, password-one): %v", path1, err)
+	}
+	m.Lock(path1)
+
+	if err := m.Unlock(path2, "password-two"); err != nil {
+		t.Fatalf("Unlock(%q, password-two): %v", path2, err)
+	}
+	m.Lock(path2)
+
+	// Cross-unlock must fail: path1 was encrypted with password-one.
+	if err := m.Unlock(path1, "password-two"); err == nil {
+		t.Fatal("Unlock(path1, password-two) succeeded; files were substituted")
+	}
+	m.Lock(path1)
 }
 
 // TestRelativeWalletDirConsistency verifies that absolute and relative
