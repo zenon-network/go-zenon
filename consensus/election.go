@@ -192,7 +192,10 @@ func (em *electionManager) generateProducers(proofBlock *nom.Momentum) (*storage
 	delegations := types.ToPillarDelegation(delegationsDetailed)
 
 	context := NewAlgorithmContext(delegations, &hashH)
-	finalProducers := em.algo.SelectProducers(context)
+	finalProducers, err := em.algo.SelectProducers(context)
+	if err != nil {
+		return nil, err
+	}
 	producers := make([]types.Address, 0, len(finalProducers))
 	for _, v := range finalProducers {
 		producers = append(producers, v.Producing)

@@ -4,8 +4,16 @@ import (
 	"math/rand"
 	"sort"
 
+	"github.com/pkg/errors"
+
 	"github.com/zenon-network/go-zenon/common/types"
 )
+
+// ErrNoActivePillars is returned when producer selection is asked to
+// pick producers from an empty delegation set (no active pillars at the
+// proof momentum). Without this guard, filterRandom would loop forever
+// drawing permutations of an empty slice.
+var ErrNoActivePillars = errors.New("no active pillars to select producers from")
 
 // AlgorithmConfig is the input of one producer selection: the pillar
 // delegations computed at the election's proof momentum and that
@@ -28,8 +36,9 @@ func NewAlgorithmContext(delegations []*types.PillarDelegation, hashH *types.Has
 // SelectProducers picks NodeCount pillars from the delegations in the
 // context and returns them in slot order. The selection is a pure
 // function of its inputs, so every node computes the same schedule.
+// It returns ErrNoActivePillars when the delegation set is empty.
 type ElectionAlgorithm interface {
-	SelectProducers(context *AlgorithmConfig) []*types.PillarDelegation
+	SelectProducers(context *AlgorithmConfig) ([]*types.PillarDelegation, error)
 }
 
 type electionAlgorithm struct {
@@ -50,14 +59,18 @@ func (ea *electionAlgorithm) findSeed(context *AlgorithmConfig) int64 {
 	return int64(context.hashH.Height)
 }
 
-func (ea *electionAlgorithm) SelectProducers(context *AlgorithmConfig) []*types.PillarDelegation {
+func (ea *electionAlgorithm) SelectProducers(context *AlgorithmConfig) ([]*types.PillarDelegation, error) {
+	if len(context.delegations) == 0 {
+		return nil, ErrNoActivePillars
+	}
+
 	// Split into groups based on weight
 	groupA, groupB := ea.filterByWeight(context)
 
 	producers := ea.filterRandom(groupA, groupB, context)
 	producers = ea.shuffleOrder(producers, context)
 
-	return producers
+	return producers, nil
 }
 
 // Shuffles the order in which momentums are produced, based on seed
