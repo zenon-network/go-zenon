@@ -43,7 +43,17 @@ func Run() {
 // the process, making it suitable for library consumers (libznn) that
 // embed the node and must remain alive on startup failures. The
 // caller is responsible for calling Stop to shut the node down.
+//
+// Before the config is handed to the node it is initialised the same
+// way MakeConfig initialises it: paths are made absolute (so that a
+// DefaultNodeConfig with an empty WalletPath works) and logging is
+// configured from the config's LogLevel and DataPath.
 func RunWithConfig(cfg *node.Config) error {
+	if err := cfg.MakePathsAbsolute(); err != nil {
+		return err
+	}
+	common.InitLogging(cfg.DataPath, cfg.LogLevel)
+
 	var err error
 	nodeManager, err = NewNodeManagerFromConfig(cfg)
 	if err != nil {

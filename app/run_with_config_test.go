@@ -83,6 +83,34 @@ func TestRunWithConfig_ProcessArgsHaveNoEffect(t *testing.T) {
 	// code path is different from the CLI one.
 }
 
+// TestNewNodeManagerFromConfig_ResolvesEmptyWalletPath verifies that
+// NewNodeManagerFromConfig calls MakePathsAbsolute on the config so a
+// DefaultNodeConfig (whose WalletPath is empty) gets its WalletPath
+// resolved to <DataPath>/wallet instead of remaining empty.
+func TestNewNodeManagerFromConfig_ResolvesEmptyWalletPath(t *testing.T) {
+	dataPath := t.TempDir()
+
+	cfg := node.DefaultNodeConfig
+	cfg.DataPath = dataPath
+	cfg.GenesisFile = filepath.Join(dataPath, "nonexistent-genesis.json")
+	// Intentionally do NOT set cfg.WalletPath — DefaultNodeConfig leaves
+	// it empty, and without MakePathsAbsolute the node would see an
+	// empty wallet path.
+
+	_, err := NewNodeManagerFromConfig(&cfg)
+	if err == nil {
+		t.Fatal("expected an error for a nonexistent genesis file, got nil")
+	}
+
+	// The config must have been mutated in place: MakePathsAbsolute
+	// resolves WalletPath to <DataPath>/wallet before node.NewNode runs.
+	wantWallet := filepath.Join(dataPath, "wallet")
+	if cfg.WalletPath != wantWallet {
+		t.Errorf("WalletPath = %q, want %q (MakePathsAbsolute not called)",
+			cfg.WalletPath, wantWallet)
+	}
+}
+
 // TestNewNodeManager_CLIContextStillWorks verifies that the original
 // CLI-based NewNodeManager still works correctly after the refactor.
 func TestNewNodeManager_CLIContextStillWorks(t *testing.T) {

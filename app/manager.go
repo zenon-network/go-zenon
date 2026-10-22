@@ -10,6 +10,7 @@ import (
 
 	"github.com/urfave/cli/v2"
 
+	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/node"
 )
 
@@ -48,8 +49,15 @@ func NewNodeManager(ctx *cli.Context) (*Manager, error) {
 // NewNodeManagerFromConfig builds a Manager directly from an explicit
 // node.Config, bypassing the CLI flag-parsing path entirely. This is
 // the entry point for library consumers that need to pass configuration
-// programmatically rather than via os.Args.
+// programmatically rather than via os.Args. It performs the same
+// config initialisation as MakeConfig (absolute paths, logging) so that
+// a bare DefaultNodeConfig with an empty WalletPath works.
 func NewNodeManagerFromConfig(nodeConfig *node.Config) (*Manager, error) {
+	if err := nodeConfig.MakePathsAbsolute(); err != nil {
+		return nil, err
+	}
+	common.InitLogging(nodeConfig.DataPath, nodeConfig.LogLevel)
+
 	newNode, err := node.NewNode(nodeConfig)
 	if err != nil {
 		log.Error("failed to create the node", "reason", err)
