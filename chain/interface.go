@@ -124,8 +124,8 @@ type AccountPool interface {
 // address and spork activation, indexed by momentum height. UpdateCache
 // and RollbackCacheTo follow momentum insertion and rollback and require
 // the chain insert lock; GetCacheStore returns a read view at a committed
-// identifier (nil if above the cache frontier) and GetFrontierCacheStore
-// one at the cache frontier.
+// identifier (nil if above the cache frontier or the manager is stopped)
+// and GetFrontierCacheStore one at the cache frontier (nil if stopped).
 type ChainCache interface {
 	UpdateCache(insertLocker sync.Locker, detailed *nom.DetailedMomentum, changes db.Patch) error
 	RollbackCacheTo(insertLocker sync.Locker, identifier types.HashHeight) error

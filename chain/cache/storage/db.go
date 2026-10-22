@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/pkg/errors"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	"github.com/syndtr/goleveldb/leveldb/util"
@@ -28,6 +29,13 @@ const (
 var (
 	storageByte  = []byte{85}
 	rollbackByte = []byte{119}
+
+	// ErrCacheStopped is returned by cache operations that reach a
+	// stopped CacheManager. After Stop, DB returns nil and Add/Pop
+	// return leveldb.ErrClosed; callers that hold no other reference
+	// to the manager's lifetime check for this sentinel instead of
+	// dereferencing the nil DB.
+	ErrCacheStopped = errors.New("cache manager is stopped")
 )
 
 func getConsensusOpenFilesCacheCapacity() int {
