@@ -491,6 +491,12 @@ func TestDisconnectDuringBlockedWriteReclaimsSlot(t *testing.T) {
 		gate:    make(chan struct{}),
 		entered: make(chan struct{}),
 	}
+	// Cleanup runs in LIFO order: close clientEnd first (if not already
+	// closed), then release the gate so the delivery goroutine can exit,
+	// then close serverEnd. Every failure path is covered.
+	t.Cleanup(func() { serverEnd.Close() })
+	t.Cleanup(func() { close(conn.gate) })
+	t.Cleanup(func() { clientEnd.Close() })
 	go rpcServer.ServeCodec(rpc.NewCodec(conn), 0)
 	dec := json.NewDecoder(clientEnd)
 	rawSubscribe(t, clientEnd, dec, 1, `["momentums"]`)
@@ -502,9 +508,6 @@ func TestDisconnectDuringBlockedWriteReclaimsSlot(t *testing.T) {
 	select {
 	case <-conn.entered:
 	case <-time.After(5 * time.Second):
-		close(conn.gate)
-		serverEnd.Close()
-		clientEnd.Close()
 		t.Fatal("notification write never entered the gate")
 	}
 
@@ -513,9 +516,4 @@ func TestDisconnectDuringBlockedWriteReclaimsSlot(t *testing.T) {
 	// for the gated write.
 	clientEnd.Close()
 	waitLive(t, server, 0)
-
-	// Release the gate so the delivery goroutine can exit and ServeCodec
-	// can return; then close the server end.
-	close(conn.gate)
-	serverEnd.Close()
 }
