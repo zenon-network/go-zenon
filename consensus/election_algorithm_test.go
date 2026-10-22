@@ -80,7 +80,10 @@ func TestAlgo_fillPillars(t *testing.T) {
 		ag := NewElectionAlgorithm(smallCG)
 		merged := make(map[string]int)
 		for j := 0; j < numIterations; j++ {
-			tmp := ag.SelectProducers(NewAlgorithmContext(delegations, &types.HashHeight{Height: uint64(j)}))
+			tmp, err := ag.SelectProducers(NewAlgorithmContext(delegations, &types.HashHeight{Height: uint64(j)}))
+			if err != nil {
+				t.Fatalf("SelectProducers failed: %v", err)
+			}
 			mergeProducedNum(merged, tmp)
 		}
 
@@ -108,8 +111,14 @@ func TestAlgo_seed(t *testing.T) {
 	delegations := generateDelegationInfo(numPillars)
 	// Check seed for height
 	{
-		tmp_1 := ag.SelectProducers(NewAlgorithmContext(delegations, &types.HashHeight{Height: uint64(1)}))
-		tmp_2 := ag.SelectProducers(NewAlgorithmContext(delegations, &types.HashHeight{Height: uint64(2)}))
+		tmp_1, err := ag.SelectProducers(NewAlgorithmContext(delegations, &types.HashHeight{Height: uint64(1)}))
+		if err != nil {
+			t.Fatalf("SelectProducers failed: %v", err)
+		}
+		tmp_2, err := ag.SelectProducers(NewAlgorithmContext(delegations, &types.HashHeight{Height: uint64(2)}))
+		if err != nil {
+			t.Fatalf("SelectProducers failed: %v", err)
+		}
 		checkUnequalOrder(t, tmp_1, tmp_2)
 	}
 }
@@ -138,7 +147,10 @@ func TestAlgo_bigDistribution(t *testing.T) {
 		ag := NewElectionAlgorithm(cg)
 		merged := make(map[string]int)
 		for j := 0; j < numIterations; j++ {
-			tmp := ag.SelectProducers(NewAlgorithmContext(delegations, &types.HashHeight{Height: uint64(j)}))
+			tmp, err := ag.SelectProducers(NewAlgorithmContext(delegations, &types.HashHeight{Height: uint64(j)}))
+			if err != nil {
+				t.Fatalf("SelectProducers failed: %v", err)
+			}
 			mergeProducedNum(merged, tmp)
 		}
 
@@ -152,5 +164,35 @@ func TestAlgo_bigDistribution(t *testing.T) {
 			expected[pillarName(j)] = int(float64(numIterations) * rest)
 		}
 		checkExpectedResults(t, expected, merged, 0.9)
+	}
+}
+
+// TestAlgo_emptyDelegations verifies that SelectProducers returns
+// ErrNoActivePillars (instead of looping forever) when the delegation
+// set is empty. Before the fix, filterRandom would spin indefinitely
+// drawing permutations of an empty slice.
+func TestAlgo_emptyDelegations(t *testing.T) {
+	constants.ConsensusConfig = &constants.Consensus{
+		BlockTime:   1,
+		NodeCount:   5,
+		RandCount:   2,
+		CountingZTS: types.ZnnTokenStandard,
+	}
+	cg := NewConsensusContext(time.Unix(2000000000, 0))
+	ag := NewElectionAlgorithm(cg)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := ag.SelectProducers(NewAlgorithmContext(nil, &types.HashHeight{Height: 1}))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != ErrNoActivePillars {
+			t.Errorf("expected ErrNoActivePillars, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SelectProducers hung on empty delegations (infinite loop)")
 	}
 }
