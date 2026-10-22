@@ -61,7 +61,21 @@ func New(config *Config) *Manager {
 // Start ensures the wallet directory exists and loads every key file in
 // it into the encrypted set. It does not decrypt any store. It returns
 // an error if the directory cannot be created or listed.
+//
+// Start resolves WalletDir to an absolute path before scanning so that
+// every indexed path is absolute, regardless of how the directory was
+// configured. This keeps absolute-path lookups working when WalletDir
+// is relative: MakePathAbsolut leaves an absolute argument unchanged,
+// so the lookup key would not match a relatively-scanned index entry.
 func (m *Manager) Start() error {
+	// Resolve the wallet directory to an absolute path so that scanned
+	// paths and lookup keys are always consistent.
+	absDir, err := filepath.Abs(m.config.WalletDir)
+	if err != nil {
+		return err
+	}
+	m.config.WalletDir = absDir
+
 	// ensure WalletDir exists
 	if err := os.MkdirAll(m.config.WalletDir, 0700); err != nil {
 		return err

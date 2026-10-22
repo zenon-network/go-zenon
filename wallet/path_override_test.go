@@ -187,13 +187,14 @@ func TestRelativeWalletDirConsistency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("relative GetKeyFile: %v", err)
 	}
-	// The scanned paths differ (absolute vs relative WalletDir), but each
-	// KeyFile.Path matches what its manager scanned.
-	if absKf.Path != filepath.Join(absDir, "store1") {
-		t.Fatalf("absolute KeyFile.Path = %q, want %q", absKf.Path, filepath.Join(absDir, "store1"))
+	// Start resolves a relative WalletDir to absolute, so both managers
+	// index the key file under its absolute scanned path.
+	wantPath := filepath.Join(absDir, "store1")
+	if absKf.Path != wantPath {
+		t.Fatalf("absolute KeyFile.Path = %q, want %q", absKf.Path, wantPath)
 	}
-	if relKf.Path != filepath.Join("wallet", "store1") {
-		t.Fatalf("relative KeyFile.Path = %q, want %q", relKf.Path, filepath.Join("wallet", "store1"))
+	if relKf.Path != wantPath {
+		t.Fatalf("relative KeyFile.Path = %q, want %q", relKf.Path, wantPath)
 	}
 
 	// Both should unlock by the same relative name.
@@ -205,6 +206,20 @@ func TestRelativeWalletDirConsistency(t *testing.T) {
 	}
 	mAbs.Lock("store1")
 	mRel.Lock("store1")
+
+	// Absolute-path lookup and unlock must also work on the relative-dir
+	// manager: Start resolved the directory, so the index keys match.
+	absFilePath := filepath.Join(absDir, "store1")
+	if _, err := mRel.GetKeyFile(absFilePath); err != nil {
+		t.Fatalf("relative-dir GetKeyFile by absolute path: %v", err)
+	}
+	if err := mRel.Unlock(absFilePath, testPassword); err != nil {
+		t.Fatalf("relative-dir Unlock by absolute path: %v", err)
+	}
+	if unlocked, err := mRel.IsUnlocked(absFilePath); err != nil || !unlocked {
+		t.Fatalf("relative-dir IsUnlocked by absolute path = %v, %v; want true, nil", unlocked, err)
+	}
+	mRel.Lock(absFilePath)
 }
 
 // TestRenamedKeyFileLoads verifies that a normally generated key file
