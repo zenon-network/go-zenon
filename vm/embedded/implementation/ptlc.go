@@ -188,9 +188,20 @@ func verifyPtlcWitness(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, id
 	}
 
 	switch ptlcInfo.PointType {
-	case definition.PointTypeED25519:
+	case definition.PointTypeED25519, definition.PointTypeBIP340:
 		unlockMessage := definition.GetPtlcUnlockMessage(chainIdentifier, ptlcInfo.PointType, id, destination)
-		valid, err := wallet.VerifySignature(ed25519.PublicKey(ptlcInfo.PointLock), unlockMessage, witness)
+		return verifyPointSignature(ptlcInfo.PointType, ptlcInfo.PointLock, unlockMessage, witness)
+	case definition.PointTypeSecp256k1Point:
+		return verifyPointScalar(ptlcInfo.PointLock, witness)
+	}
+
+	return constants.ErrInvalidPointType
+}
+
+func verifyPointSignature(pointType uint8, pointLock, message, signature []byte) error {
+	switch pointType {
+	case definition.PointTypeED25519:
+		valid, err := wallet.VerifySignature(ed25519.PublicKey(pointLock), message, signature)
 		if err != nil {
 			return constants.ErrInvalidPointLock
 		}
@@ -199,13 +210,46 @@ func verifyPtlcWitness(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, id
 		}
 		return nil
 	case definition.PointTypeBIP340:
-		unlockMessage := definition.GetPtlcUnlockMessage(chainIdentifier, ptlcInfo.PointType, id, destination)
-		return verifyBIP340Signature(unlockMessage, ptlcInfo.PointLock, witness)
-	case definition.PointTypeSecp256k1Point:
-		return verifyPointScalar(ptlcInfo.PointLock, witness)
+		return verifyBIP340Signature(message, pointLock, signature)
 	}
-
 	return constants.ErrInvalidPointType
+}
+
+func isReclaimPointType(pointType uint8) bool {
+	return pointType == definition.PointTypeED25519 || pointType == definition.PointTypeBIP340
+}
+
+func checkReclaimLock(pointType uint8, pointLock []byte) error {
+	if !isReclaimPointType(pointType) {
+		return constants.ErrInvalidPointType
+	}
+	return checkPointLock(pointType, pointLock)
+}
+
+func verifyPtlcReclaimSignature(ptlcInfo *definition.PtlcInfo, reclaimLock *definition.PtlcReclaimLock, chainIdentifier uint64, signature []byte) error {
+	if err := checkReclaimLock(reclaimLock.PointType, reclaimLock.PointLock); err != nil {
+		return err
+	}
+	if len(signature) != int(definition.PointTypeWitnessSizes[reclaimLock.PointType]) {
+		return constants.ErrInvalidPointSignature
+	}
+	reclaimMessage := definition.GetPtlcReclaimMessage(chainIdentifier, reclaimLock.PointType, ptlcInfo.Id, ptlcInfo.TimeLocked)
+	return verifyPointSignature(reclaimLock.PointType, reclaimLock.PointLock, reclaimMessage, signature)
+}
+
+func getPtlcReclaimLock(context vm_context.AccountVmContext, id types.Hash) *definition.PtlcReclaimLock {
+	reclaimLock, err := definition.GetPtlcReclaimLock(context.Storage(), id)
+	if err == constants.ErrDataNonExistent {
+		return nil
+	}
+	common.DealWithErr(err)
+	return reclaimLock
+}
+
+func deletePtlcReclaimLock(context vm_context.AccountVmContext, id types.Hash) {
+	if reclaimLock := getPtlcReclaimLock(context, id); reclaimLock != nil {
+		common.DealWithErr(reclaimLock.Delete(context.Storage()))
+	}
 }
 
 func verifyPtlcSignature(ptlcInfo *definition.PtlcInfo, chainIdentifier uint64, id types.Hash, destination types.Address, signature []byte) error {
@@ -350,6 +394,11 @@ func (p *ReclaimPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 		return nil, constants.ErrPermissionDenied
 	}
 
+	if getPtlcReclaimLock(context, *id) != nil {
+		ptlcLog.Debug("invalid reclaim - entry has a reclaim lock", "id", ptlcInfo.Id, "address", sendBlock.Address)
+		return nil, constants.ErrReclaimSignatureRequired
+	}
+
 	momentum, err := context.GetFrontierMomentum()
 	common.DealWithErr(err)
 
@@ -410,6 +459,7 @@ func unlockPtlc(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock
 	}
 
 	common.DealWithErr(ptlcInfo.Delete(context.Storage()))
+	deletePtlcReclaimLock(context, id)
 	ptlcLog.Debug("unlocked", "ptlcInfo", ptlcInfo, "destination", destination, "witness-hash", signatureHashForLog(witness))
 
 	return []*nom.AccountBlock{
@@ -530,4 +580,180 @@ func (p *ProxyUnlockPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext
 	common.DealWithErr(err)
 
 	return unlockPtlc(context, sendBlock, param.Id, param.Destination, param.Signature)
+}
+
+type CreateWithReclaimLockPtlcMethod struct {
+	MethodName string
+}
+
+func (p *CreateWithReclaimLockPtlcMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+	return plasmaTable.EmbeddedSimple, nil
+}
+
+func (p *CreateWithReclaimLockPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
+	var err error
+
+	param := new(definition.CreateWithReclaimLockPtlcParam)
+
+	if err := definition.ABIPtlc.UnpackMethod(param, p.MethodName, block.Data); err != nil {
+		return constants.ErrUnpackError
+	}
+
+	if err = checkPtlc(definition.CreatePtlcParam{
+		ExpirationTime: param.ExpirationTime,
+		PointType:      param.PointType,
+		PointLock:      param.PointLock,
+		Destination:    param.Destination,
+	}); err != nil {
+		return err
+	}
+
+	if err = checkReclaimLock(param.ReclaimPointType, param.ReclaimPointLock); err != nil {
+		return err
+	}
+
+	if !isPositiveAmount(block.Amount) {
+		ptlcLog.Debug("invalid create - amount must be positive", "address", block.Address)
+		return constants.ErrInvalidTokenOrAmount
+	}
+
+	block.Data, err = definition.ABIPtlc.PackMethod(p.MethodName,
+		param.ExpirationTime,
+		param.PointType,
+		param.PointLock,
+		param.Destination,
+		param.ReclaimPointType,
+		param.ReclaimPointLock,
+	)
+	return err
+}
+
+func (p *CreateWithReclaimLockPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+	if err := p.ValidateSendBlock(sendBlock); err != nil {
+		ptlcLog.Debug("invalid create - syntactic validation failed", "address", sendBlock.Address, "reason", err)
+		return nil, err
+	}
+
+	param := new(definition.CreateWithReclaimLockPtlcParam)
+	err := definition.ABIPtlc.UnpackMethod(param, p.MethodName, sendBlock.Data)
+	common.DealWithErr(err)
+
+	momentum, err := context.GetFrontierMomentum()
+	common.DealWithErr(err)
+
+	if momentum.Timestamp.Unix() >= param.ExpirationTime {
+		ptlcLog.Debug("invalid create - cannot create already expired", "address", sendBlock.Address, "time", momentum.Timestamp.Unix(), "expiration-time", param.ExpirationTime)
+		return nil, constants.ErrInvalidExpirationTime
+	}
+
+	ptlcInfo := &definition.PtlcInfo{
+		Id:             sendBlock.Hash,
+		TimeLocked:     sendBlock.Address,
+		TokenStandard:  sendBlock.TokenStandard,
+		Amount:         sendBlock.Amount,
+		ExpirationTime: param.ExpirationTime,
+		PointType:      param.PointType,
+		PointLock:      param.PointLock,
+		Destination:    param.Destination,
+	}
+	reclaimLock := &definition.PtlcReclaimLock{
+		Id:        sendBlock.Hash,
+		PointType: param.ReclaimPointType,
+		PointLock: param.ReclaimPointLock,
+	}
+
+	common.DealWithErr(ptlcInfo.Save(context.Storage()))
+	common.DealWithErr(reclaimLock.Save(context.Storage()))
+	ptlcLog.Debug("created", "ptlcInfo", ptlcInfo, "reclaimLock", reclaimLock)
+	return nil, nil
+}
+
+type ReclaimWithSignaturePtlcMethod struct {
+	MethodName string
+}
+
+func (p *ReclaimWithSignaturePtlcMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
+	return plasmaTable.EmbeddedWWithdraw, nil
+}
+
+func (p *ReclaimWithSignaturePtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
+	var err error
+	param := new(definition.ReclaimWithSignaturePtlcParam)
+
+	if err := definition.ABIPtlc.UnpackMethod(param, p.MethodName, block.Data); err != nil {
+		return constants.ErrUnpackError
+	}
+
+	if !isZeroAmount(block.Amount) {
+		return constants.ErrInvalidTokenOrAmount
+	}
+
+	if len(param.Signature) != int(definition.PointTypeWitnessSizes[definition.PointTypeED25519]) {
+		return constants.ErrInvalidPointSignature
+	}
+
+	block.Data, err = definition.ABIPtlc.PackMethod(p.MethodName, param.Id, param.Signature)
+	return err
+}
+
+func (p *ReclaimWithSignaturePtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
+	if err := p.ValidateSendBlock(sendBlock); err != nil {
+		ptlcLog.Debug("invalid reclaim - syntactic validation failed", "address", sendBlock.Address, "reason", err)
+		return nil, err
+	}
+
+	param := new(definition.ReclaimWithSignaturePtlcParam)
+	err := definition.ABIPtlc.UnpackMethod(param, p.MethodName, sendBlock.Data)
+	common.DealWithErr(err)
+
+	ptlcInfo, err := definition.GetPtlcInfo(context.Storage(), param.Id)
+	if err == constants.ErrDataNonExistent {
+		ptlcLog.Debug("invalid reclaim - entry does not exist", "id", param.Id, "address", sendBlock.Address)
+		return nil, err
+	}
+	common.DealWithErr(err)
+
+	if err := checkReclaimablePtlcInfo(ptlcInfo); err != nil {
+		ptlcLog.Debug("invalid reclaim - corrupt entry", "id", ptlcInfo.Id, "address", sendBlock.Address, "reason", err)
+		return nil, err
+	}
+
+	if ptlcInfo.TimeLocked != sendBlock.Address {
+		ptlcLog.Debug("invalid reclaim - permission denied", "id", ptlcInfo.Id, "address", sendBlock.Address)
+		return nil, constants.ErrPermissionDenied
+	}
+
+	reclaimLock := getPtlcReclaimLock(context, param.Id)
+	if reclaimLock == nil {
+		ptlcLog.Debug("invalid reclaim - entry has no reclaim lock", "id", ptlcInfo.Id, "address", sendBlock.Address)
+		return nil, constants.ErrNoReclaimLock
+	}
+
+	momentum, err := context.GetFrontierMomentum()
+	common.DealWithErr(err)
+
+	if momentum.Timestamp.Unix() < ptlcInfo.ExpirationTime {
+		ptlcLog.Debug("invalid reclaim - entry not expired", "id", ptlcInfo.Id, "address", sendBlock.Address, "time", momentum.Timestamp.Unix(), "expiration-time", ptlcInfo.ExpirationTime)
+		return nil, constants.ReclaimNotDue
+	}
+
+	if err := verifyPtlcReclaimSignature(ptlcInfo, reclaimLock, momentum.ChainIdentifier, param.Signature); err != nil {
+		ptlcLog.Debug("invalid reclaim - invalid signature", "id", ptlcInfo.Id, "address", sendBlock.Address, "signature-hash", signatureHashForLog(param.Signature), "reason", err)
+		return nil, err
+	}
+
+	common.DealWithErr(ptlcInfo.Delete(context.Storage()))
+	common.DealWithErr(reclaimLock.Delete(context.Storage()))
+	ptlcLog.Debug("reclaimed", "ptlcInfo", ptlcInfo, "reclaimLock", reclaimLock, "signature-hash", signatureHashForLog(param.Signature))
+
+	return []*nom.AccountBlock{
+		{
+			Address:       types.PtlcContract,
+			ToAddress:     ptlcInfo.TimeLocked,
+			BlockType:     nom.BlockTypeContractSend,
+			Amount:        ptlcInfo.Amount,
+			TokenStandard: ptlcInfo.TokenStandard,
+			Data:          []byte{},
+		},
+	}, nil
 }

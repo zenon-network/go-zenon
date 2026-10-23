@@ -59,3 +59,18 @@ func (a *PtlcApi) GetById(id types.Hash) (*definition.PtlcInfo, error) {
 
 	return ptlcInfo, nil
 }
+
+func (a *PtlcApi) GetReclaimLockById(id types.Hash) (*definition.PtlcReclaimLock, error) {
+
+	_, context, err := api.GetFrontierContext(a.chain, types.PtlcContract)
+	if err != nil {
+		return nil, err
+	}
+
+	reclaimLock, err := definition.GetPtlcReclaimLock(context.Storage(), id)
+	if err != nil {
+		return nil, err
+	}
+
+	return reclaimLock, nil
+}

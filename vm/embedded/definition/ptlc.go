@@ -38,6 +38,18 @@ const (
 			{"name":"destination","type":"address"},
 			{"name":"signature","type":"bytes"}
 		]},
+		{"type":"function","name":"CreateWithReclaimLock", "inputs":[
+			{"name":"expirationTime","type":"int64"},
+			{"name":"pointType","type":"uint8"},
+			{"name":"pointLock","type":"bytes"},
+			{"name":"destination","type":"address"},
+			{"name":"reclaimPointType","type":"uint8"},
+			{"name":"reclaimPointLock","type":"bytes"}
+		]},
+		{"type":"function","name":"ReclaimWithSignature","inputs":[
+			{"name":"id","type":"hash"},
+			{"name":"signature","type":"bytes"}
+		]},
 		{"type":"variable","name":"ptlcInfo","inputs":[
 			{"name":"timeLocked","type":"address"},
 			{"name":"tokenStandard","type":"tokenStandard"},
@@ -46,6 +58,10 @@ const (
 			{"name":"pointType","type":"uint8"},
 			{"name":"pointLock","type":"bytes"},
 			{"name":"destination","type":"address"}
+		]},
+		{"type":"variable","name":"ptlcReclaimLock","inputs":[
+			{"name":"pointType","type":"uint8"},
+			{"name":"pointLock","type":"bytes"}
 		]}
 	]`
 
@@ -62,11 +78,18 @@ const (
 	// named destination against a witness bound to that destination.
 	ProxyUnlockPtlcMethodName = "ProxyUnlock"
 
+	CreateWithReclaimLockPtlcMethodName = "CreateWithReclaimLock"
+	ReclaimWithSignaturePtlcMethodName  = "ReclaimWithSignature"
+
 	variableNamePtlcInfo = "ptlcInfo"
+
+	variableNamePtlcReclaimLock = "ptlcReclaimLock"
 
 	// PtlcUnlockMessageDomain is the domain-separation prefix of the
 	// message an unlock signature covers (see GetPtlcUnlockMessage).
 	PtlcUnlockMessageDomain = "zenon-ptlc-unlock:v1"
+
+	PtlcReclaimMessageDomain = "zenon-ptlc-reclaim:v1"
 )
 
 const (
@@ -103,6 +126,8 @@ var (
 	ABIPtlc = abi.JSONToABIContract(strings.NewReader(jsonPtlc))
 
 	ptlcInfoKeyPrefix = []byte{1}
+
+	ptlcReclaimLockKeyPrefix = []byte{2}
 )
 
 // CreatePtlcParam is the argument of Create: the unix time after which
@@ -208,6 +233,77 @@ type ProxyUnlockPtlcParam struct {
 	Id          types.Hash
 	Destination types.Address
 	Signature   []byte
+}
+
+type CreateWithReclaimLockPtlcParam struct {
+	ExpirationTime   int64         `json:"expirationTime"`
+	PointType        uint8         `json:"pointType"`
+	PointLock        []byte        `json:"pointLock"`
+	Destination      types.Address `json:"destination"`
+	ReclaimPointType uint8         `json:"reclaimPointType"`
+	ReclaimPointLock []byte        `json:"reclaimPointLock"`
+}
+
+type ReclaimWithSignaturePtlcParam struct {
+	Id        types.Hash
+	Signature []byte
+}
+
+type PtlcReclaimLock struct {
+	Id        types.Hash `json:"id"`
+	PointType uint8      `json:"pointType"`
+	PointLock []byte     `json:"pointLock"`
+}
+
+func (l PtlcReclaimLock) String() string {
+	return fmt.Sprintf("Id:%s PointType:%d PointLock:%s ", l.Id, l.PointType, base64.StdEncoding.EncodeToString(l.PointLock))
+}
+
+func (l *PtlcReclaimLock) Save(context db.DB) error {
+	data, err := ABIPtlc.PackVariable(
+		variableNamePtlcReclaimLock,
+		l.PointType,
+		l.PointLock,
+	)
+	if err != nil {
+		return err
+	}
+	return context.Put(getPtlcReclaimLockKey(l.Id), data)
+}
+
+func (l *PtlcReclaimLock) Delete(context db.DB) error {
+	return context.Delete(getPtlcReclaimLockKey(l.Id))
+}
+
+func getPtlcReclaimLockKey(hash types.Hash) []byte {
+	return common.JoinBytes(ptlcReclaimLockKeyPrefix, hash.Bytes())
+}
+
+func GetPtlcReclaimLock(context db.DB, id types.Hash) (*PtlcReclaimLock, error) {
+	data, err := context.Get(getPtlcReclaimLockKey(id))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, constants.ErrDataNonExistent
+	}
+	lock := new(PtlcReclaimLock)
+	if err := ABIPtlc.UnpackVariable(lock, variableNamePtlcReclaimLock, data); err != nil {
+		return nil, err
+	}
+	lock.Id = id
+	return lock, nil
+}
+
+func GetPtlcReclaimMessage(chainIdentifier uint64, pointType uint8, id types.Hash, timeLocked types.Address) []byte {
+	return crypto.Hash(common.JoinBytes(
+		[]byte(PtlcReclaimMessageDomain),
+		common.Uint64ToBytes(chainIdentifier),
+		types.PtlcContract.Bytes(),
+		[]byte{pointType},
+		id.Bytes(),
+		timeLocked.Bytes(),
+	))
 }
 
 // Save stores the entry under its id.
