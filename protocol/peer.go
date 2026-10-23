@@ -45,6 +45,12 @@ type peer struct {
 
 	rw p2p.MsgReadWriter
 
+	// closed is the transport's peer-close signal when the message
+	// stream exposes one (both backends do). Waits that are not bound to
+	// the connection, such as downloader deliveries, select on it so
+	// they end with the peer; the transport joins this handler on exit.
+	closed <-chan struct{}
+
 	version int // Protocol version negotiated
 	network int // Network ID being on
 
@@ -66,9 +72,15 @@ func newPeer(version, network int, p p2p.Peer, rw p2p.MsgReadWriter) *peer {
 	knownBlocks, err := lru.New(maxKnownBlocks)
 	common.DealWithErr(err)
 
+	var closed <-chan struct{}
+	if c, ok := rw.(interface{ Closed() <-chan struct{} }); ok {
+		closed = c.Closed()
+	}
+
 	return &peer{
 		Peer:        p,
 		rw:          rw,
+		closed:      closed,
 		version:     version,
 		network:     network,
 		id:          fmt.Sprintf("%x", id[:]),

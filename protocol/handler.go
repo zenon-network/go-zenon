@@ -17,6 +17,7 @@
 package protocol
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -97,7 +98,9 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 			Length:  ProtocolLengths[i],
 			Run: func(p p2p.Peer, rw p2p.MsgReadWriter) error {
 				peer := manager.newPeer(int(version), int(networkId), p, rw)
-				manager.newPeerCh <- peer
+				if err := manager.announcePeer(peer); err != nil {
+					return err
+				}
 				return manager.handle(peer)
 			},
 		}
@@ -161,6 +164,22 @@ func (pm *ProtocolManager) Start() {
 	go func() {
 		pm.txsyncLoop()
 	}()
+}
+
+// errShuttingDown is returned to a protocol goroutine that connects after
+// Stop has quit the syncer.
+var errShuttingDown = errors.New("protocol manager shutting down")
+
+// announcePeer hands a freshly connected peer to the syncer. After Stop
+// nothing drains newPeerCh, and the transport's peer goroutine is joined
+// on exit, so the hand-off gives up on quitSync instead of blocking.
+func (pm *ProtocolManager) announcePeer(p *peer) error {
+	select {
+	case pm.newPeerCh <- p:
+		return nil
+	case <-pm.quitSync:
+		return errShuttingDown
+	}
 }
 
 // Stop terminates the sync loops and waits for in-flight download and
@@ -371,7 +390,7 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		}
 
 		// Deliver them all to the downloader for queuing
-		err := pm.downloader.DeliverHashes(p.id, hashes)
+		err := pm.downloader.DeliverHashes(p.id, hashes, p.closed)
 		if err != nil {
 			log.Debug("failed to deliver hashes", "reason", err)
 		}
@@ -414,7 +433,7 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 
 		// Filter out any explicitly requested blocks, deliver the rest to the downloader
 		if blocks := pm.fetcher.Filter(p.id, blocks); len(blocks) > 0 {
-			if err := pm.downloader.DeliverBlocks(p.id, blocks); err != nil {
+			if err := pm.downloader.DeliverBlocks(p.id, blocks, p.closed); err != nil {
 				log.Debug("failed to deliver blocks", "reason", err)
 			}
 		}
