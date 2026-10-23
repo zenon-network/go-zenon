@@ -444,7 +444,9 @@ func (s *Server) watch(subscription *Subscription, done chan<- struct{}, unsubsc
 // or Stop during a blocked write takes effect as soon as the current write
 // returns or times out; the notifier's own write deadline bounds how long a
 // single write can stall. Delivery and lifecycle run in separate goroutines
-// so a slow connection only delays its own events, never other subscribers
+// so a slow connection only delays its own events, never the shared
+// worker or subscribers on other connections (subscriptions on the same
+// connection still share its encoder lock)
 // and never slot reclamation.
 func (s *Server) deliver(subscription *Subscription, notifier *rpc.Notifier, done <-chan struct{}) {
 	defer s.wg.Done()

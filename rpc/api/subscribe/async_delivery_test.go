@@ -332,9 +332,11 @@ func TestSlowConnectionDoesNotStallWorker(t *testing.T) {
 
 	// Gate the slow connection's writes, then broadcast. Wait for the
 	// slow write to actually enter the gate (deterministic handshake),
-	// then assert the healthy subscriber still receives the event.
-	// Synchronous delivery would block the worker on the gated write and
-	// the healthy event would never arrive.
+	// then broadcast a second, identified event and require that one on
+	// the healthy side before opening the gate. Synchronous delivery
+	// cannot start the second pass while the first write is gated, so
+	// requiring the second event on the healthy side closes the
+	// healthy-first map-order false pass.
 	slowConn.blockWrites()
 	server.InsertMomentum(momentumAt(1))
 
@@ -344,20 +346,61 @@ func TestSlowConnectionDoesNotStallWorker(t *testing.T) {
 		t.Fatal("slow connection write never entered the gate")
 	}
 
+	// Broadcast a second event. The blocked delivery goroutine cannot
+	// start this pass, so the worker must queue it for the healthy
+	// subscription without waiting.
+	server.InsertMomentum(momentumAt(2))
+
+	// The healthy subscriber must receive the second event (height 2),
+	// not just any event, proving the worker progressed past the gated
+	// write. The client library delivers notifications in receive order,
+	// so height 1 is consumed first; skip it and assert on height 2.
 	select {
-	case <-events:
+	case ev := <-events:
+		arr, ok := ev.([]interface{})
+		if !ok || len(arr) != 1 {
+			t.Fatalf("healthy subscriber received unexpected event: %v", ev)
+		}
+		m, ok := arr[0].(map[string]interface{})
+		if !ok {
+			t.Fatalf("healthy subscriber received unexpected payload: %v", arr[0])
+		}
+		h, ok := m["height"].(float64)
+		if !ok || uint64(h) != 1 {
+			t.Fatalf("healthy subscriber received height %v, want 1 (first event)", m["height"])
+		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("healthy subscriber did not receive the event " +
+		t.Fatal("healthy subscriber did not receive height 1")
+	}
+	select {
+	case ev := <-events:
+		arr, ok := ev.([]interface{})
+		if !ok || len(arr) != 1 {
+			t.Fatalf("healthy subscriber received unexpected event: %v", ev)
+		}
+		m, ok := arr[0].(map[string]interface{})
+		if !ok {
+			t.Fatalf("healthy subscriber received unexpected payload: %v", arr[0])
+		}
+		h, ok := m["height"].(float64)
+		if !ok || uint64(h) != 2 {
+			t.Fatalf("healthy subscriber received height %v, want 2 "+
+				"(slow connection stalled the worker)", m["height"])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("healthy subscriber did not receive height 2 " +
 			"(slow connection stalled the worker)")
 	}
 
-	// Open the gate so the slow connection's write completes; the event
-	// must arrive on the slow side as well.
+	// Open the gate so the slow connection's writes complete; both
+	// events must arrive on the slow side as well.
 	releaseSlowGate()
-	select {
-	case <-slowCh:
-	case <-time.After(2 * time.Second):
-		t.Fatal("slow connection did not receive the event")
+	for i := 0; i < 2; i++ {
+		select {
+		case <-slowCh:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("slow connection did not receive event %d", i+1)
+		}
 	}
 }
 
@@ -464,7 +507,12 @@ func TestUnsubscribeDuringBlockedWriteReclaimsSlot(t *testing.T) {
 	if _, err := replacement.Subscribe(context.Background(), "ledger", replacementEvents, "momentums"); err != nil {
 		t.Fatal(err)
 	}
-	waitLive(t, server, 1)
+	// The replacement must be installed, not just queued: installCh is
+	// buffered and the worker selects between it and the momentum channel
+	// with no priority, so waitLive alone can return with the replacement
+	// still queued and the next InsertMomentum broadcast before it is
+	// installed. waitInstalled proves the worker has installed it.
+	waitInstalled(t, server, MomentumsSubscription, 1)
 
 	// The replacement receives events while the original connection's
 	// write is still gated.
