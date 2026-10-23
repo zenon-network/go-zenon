@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/urfave/cli/v2"
 
@@ -180,5 +181,75 @@ func TestRunWithConfig_FailedStart_LeavesNodeManagerNil(t *testing.T) {
 
 	if nodeManager != nil {
 		t.Fatal("nodeManager should be nil after a failed RunWithConfig")
+	}
+}
+
+// TestStop_ClearsNodeManager verifies that Stop sets the package-level
+// nodeManager to nil after a clean shutdown, so a subsequent
+// RunWithConfig can start a new node (edgepillar's lifecycle question).
+func TestStop_ClearsNodeManager(t *testing.T) {
+	original := nodeManager
+	nodeManager = &Manager{} // bare Manager; Stop's nil guard on node handles it
+	defer func() { nodeManager = original }()
+
+	Stop()
+
+	if nodeManager != nil {
+		t.Fatal("Stop did not clear nodeManager; a subsequent RunWithConfig would fail")
+	}
+}
+
+// TestRunWithConfig_StartDoesNotBlock verifies that RunWithConfig calls
+// startNode (non-blocking) rather than Start (blocking). We use a bad
+// genesis config so the call fails quickly; if RunWithConfig called the
+// blocking Start, the test would time out waiting for the signal handler
+// and Wait even though the node start itself failed.
+func TestRunWithConfig_StartDoesNotBlock(t *testing.T) {
+	original := nodeManager
+	nodeManager = nil
+	defer func() { nodeManager = original }()
+
+	cfg := node.DefaultNodeConfig
+	cfg.DataPath = t.TempDir()
+	cfg.GenesisFile = filepath.Join(cfg.DataPath, "nonexistent-genesis.json")
+
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWithConfig(&cfg)
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected an error for a nonexistent genesis file, got nil")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunWithConfig blocked for 5 seconds; it likely called the blocking Start instead of startNode")
+	}
+}
+
+// TestRunWithConfig_SecondStartPreservesFirstNode verifies that a
+// failed second RunWithConfig leaves the original manager intact — the
+// exact same pointer, not just non-nil (edgepillar's suggestion).
+func TestRunWithConfig_SecondStartPreservesFirstNode(t *testing.T) {
+	original := nodeManager
+	dummy := &Manager{}
+	nodeManager = dummy
+	defer func() { nodeManager = original }()
+
+	cfg := node.DefaultNodeConfig
+	cfg.DataPath = t.TempDir()
+
+	err := RunWithConfig(&cfg)
+	if err == nil {
+		t.Fatal("expected an error for a second RunWithConfig while node is running, got nil")
+	}
+	if err.Error() != "node is already running" {
+		t.Errorf("error = %q, want %q", err, "node is already running")
+	}
+
+	// The package-level nodeManager must still be the exact same manager.
+	if nodeManager != dummy {
+		t.Fatal("nodeManager was replaced by the failed second RunWithConfig; Stop would not target the first node")
 	}
 }

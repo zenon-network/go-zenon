@@ -203,9 +203,14 @@ func (s *sporkOracle) IsLibp2pActive() bool {
 // configured HTTP and WebSocket endpoints.
 //
 // If any step after startZenon fails, Start unwinds what was already
-// started so the caller can retry or shut down cleanly. A failed Start
-// does not leave goroutines, databases, the wallet or the data-dir lock
+// started — the p2p server, the RPC endpoints and the Zenon core — so
+// the caller can retry or shut down cleanly. A failed Start does not
+// leave goroutines, databases, the wallet or the data-dir lock
 // allocated.
+//
+// A failure inside startZenon itself (zenon Init or Start error) is not
+// unwound here: the partially-initialised zenon core is left as-is and
+// the caller should call Stop to release it.
 //
 // Before this change, chain.Init called os.Exit(2) on an unsupported
 // active spork and a DB open failure in zenon.NewZenon panicked via
@@ -224,6 +229,7 @@ func (node *Node) Start() error {
 		if !success {
 			node.server.Stop()
 			node.stopRPC()
+			node.stopZenon()
 		}
 	}()
 

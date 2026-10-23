@@ -209,4 +209,35 @@ func TestRejectedJSONOverlayLeavesDefaultsUnchanged(t *testing.T) {
 	}
 }
 
+// TestConfigClone_RejectedOverlayLeavesDefaultsUnchanged verifies that
+// when a syntactically valid JSON overlay with a type error in a later
+// field is rejected by encoding/json, the package-level defaults are not
+// mutated. The overlay writes into a mutable field (Seeders) before the
+// type error is hit, so without Clone the defaults' backing array would
+// be modified (edgepillar's review comment).
+func TestConfigClone_RejectedOverlayLeavesDefaultsUnchanged(t *testing.T) {
+	before := DefaultNodeConfig.Clone()
+
+	cfg := DefaultNodeConfig.Clone()
+	// Valid JSON syntax; Seeders is a valid mutable-field overlay, but
+	// HTTPPort has a type error (string instead of int). encoding/json
+	// processes fields in order, so Seeders is decoded before the error.
+	overlay := `{"Net": {"Seeders": [\"valid-seeder\"]}, "RPC": {"HTTPPort": "not-a-number"}}`
+	err := json.Unmarshal([]byte(overlay), cfg)
+	if err == nil {
+		t.Fatal("expected a type error for HTTPPort, got nil")
+	}
+
+	// The package-level defaults must be untouched even though the overlay
+	// was syntactically valid and wrote into a mutable field before failing.
+	if !reflect.DeepEqual(DefaultNodeConfig.Net.Seeders, before.Net.Seeders) {
+		t.Errorf("DefaultNodeConfig.Net.Seeders mutated by rejected overlay: %v, want %v",
+			DefaultNodeConfig.Net.Seeders, before.Net.Seeders)
+	}
+	if !reflect.DeepEqual(DefaultNodeConfig.RPC.HTTPPort, before.RPC.HTTPPort) {
+		t.Errorf("DefaultNodeConfig.RPC.HTTPPort mutated by rejected overlay: %v, want %v",
+			DefaultNodeConfig.RPC.HTTPPort, before.RPC.HTTPPort)
+	}
+}
+
 func strPtr(s string) *string { return &s }

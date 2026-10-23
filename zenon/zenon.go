@@ -63,6 +63,7 @@ func NewZenon(cfg *Config) (Zenon, error) {
 	// Open the cache database.
 	cacheManager, err := cache.NewCacheDBManager(cfg.DataDir)
 	if err != nil {
+		chainManager.Stop()
 		return nil, fmt.Errorf("open cache database: %w", err)
 	}
 
@@ -71,6 +72,9 @@ func NewZenon(cfg *Config) (Zenon, error) {
 	// Open the consensus election database.
 	db, levelDb, err := cfg.NewLevelDB("consensus")
 	if err != nil {
+		// Close the chain and cache databases opened above.
+		chainManager.Stop()
+		cacheManager.Stop()
 		return nil, fmt.Errorf("open consensus database: %w", err)
 	}
 	z.consensus = consensus.NewConsensus(db, z.chain, false)

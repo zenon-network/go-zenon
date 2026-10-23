@@ -64,7 +64,7 @@ func RunWithConfig(cfg *node.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := m.Start(); err != nil {
+	if err := m.startNode(); err != nil {
 		return err
 	}
 	nodeManager = m
@@ -83,6 +83,7 @@ func Stop() {
 	}
 	err := nodeManager.Stop()
 	common.DealWithErr(err)
+	nodeManager = nil
 	fmt.Println("znnd successfully stopped")
 }
 

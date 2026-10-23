@@ -68,8 +68,15 @@ func NewNodeManagerFromConfig(nodeConfig *node.Config) (*Manager, error) {
 // Start brings the node online and prints a short status to stdout: the
 // producer address if a pillar is configured and any RPC exposure
 // warnings. A start failure is returned as an error; the process is not
-// exited.
+// exited. In the libznn build Start does not install a signal handler
+// or block — the library caller drives the lifecycle via Stop.
 func (nodeManager *Manager) Start() error {
+	return nodeManager.startNode()
+}
+
+// startNode does the actual start work — node.Start, print status, RPC
+// warnings — and returns. It never blocks.
+func (nodeManager *Manager) startNode() error {
 	// Start up the node
 	log.Info("starting znnd")
 	if err := nodeManager.node.Start(); err != nil {
@@ -94,10 +101,15 @@ func (nodeManager *Manager) Start() error {
 }
 
 // Stop shuts the node down. A failure to stop is logged, not returned;
-// the method always returns nil. In the libznn build Stop also waits for the node to finish shutting down.
+// the method always returns nil. In the libznn build Stop also waits for
+// the node to finish shutting down. A Manager whose node was never
+// constructed (nil node) is a no-op.
 func (nodeManager *Manager) Stop() error {
 	log.Warn("Stopping znnd ...")
 
+	if nodeManager.node == nil {
+		return nil
+	}
 	if err := nodeManager.node.Stop(); err != nil {
 		log.Error("Failed to stop node", "reason", err)
 	}
