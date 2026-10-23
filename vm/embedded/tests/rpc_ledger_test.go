@@ -3,6 +3,7 @@ package tests
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"math/big"
 	"testing"
 	"time"
@@ -395,6 +396,12 @@ func ExpectGetAccountBlocksByPage(t *testing.T, z mock.MockZenon) {
 	"count": 11,
 	"list": []
 }`)
+	common.Json(ledgerApi.GetAccountBlocksByPage(g.User1.Address, math.MaxUint32, 8)).Equals(t, `
+{
+	"list": [],
+	"count": 11,
+	"more": false
+}`)
 }
 func ExpectGetAccountInfoByAddress(t *testing.T, z mock.MockZenon) {
 	ledgerApi := api.NewLedgerApi(z)
@@ -735,6 +742,11 @@ func TestRPCLedger_GetMomentumsByPage(t *testing.T) {
 {
 	"count": 10,
 	"list": []
+}`)
+	common.Json(ledgerApi.GetMomentumsByPage(math.MaxUint32, 7)).Equals(t, `
+{
+	"list": [],
+	"count": 10
 }`)
 }
 func TestRPCLedger_GetDetailedMomentumsByHeight(t *testing.T) {
