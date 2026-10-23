@@ -692,10 +692,6 @@ func TestRPCLedger_GetMomentumsByHeight(t *testing.T) {
 }`)
 }
 
-// heightReadCounter wraps a MockZenon so a test can see whether the
-// momentum store was asked for a range. An empty page past genesis and
-// an empty page past the frontier answer the same JSON; only the store
-// read tells them apart.
 type heightReadCounter struct {
 	mock.MockZenon
 	reads int
@@ -780,8 +776,6 @@ func TestRPCLedger_GetMomentumsByPage(t *testing.T) {
 	if z.reads == 0 {
 		t.Fatal("the counter saw no store read for pages 0 and 1")
 	}
-	// Before the fix pageIndex+1 wrapped to 0 and read heights 11..17,
-	// which returned the same empty list.
 	readsBefore := z.reads
 	common.Json(ledgerApi.GetMomentumsByPage(math.MaxUint32, 7)).Equals(t, `
 {
