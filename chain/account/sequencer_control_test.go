@@ -16,7 +16,10 @@ var controlAddress = types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw
 // closedLevelDB returns a db.DB wrapper around a LevelDB handle that has
 // already been closed, so every Get returns leveldb.ErrClosed.
 func closedLevelDB(t *testing.T) db.DB {
-	wrapper, raw := db.NewLevelDB(t.TempDir())
+	wrapper, raw, err := db.NewLevelDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("open leveldb: %v", err)
+	}
 	common.FailIfErr(t, raw.Close())
 	return wrapper
 }

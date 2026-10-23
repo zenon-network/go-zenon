@@ -207,11 +207,10 @@ func (s *sporkOracle) IsLibp2pActive() bool {
 // does not leave goroutines, databases, the wallet or the data-dir lock
 // allocated.
 //
-// Known remaining host-terminating paths (issue #196, item 4):
-// chain.Init calls os.Exit(2) on an unsupported active spork, and a DB
-// open failure in zenon.NewZenon goes through common.DealWithErr and
-// panics. Both are upstream of this method and are not yet converted
-// to error returns.
+// Before this change, chain.Init called os.Exit(2) on an unsupported
+// active spork and a DB open failure in zenon.NewZenon panicked via
+// common.DealWithErr. Both now return errors through the API (issue
+// #196, item 4).
 func (node *Node) Start() error {
 	node.lock.Lock()
 	defer node.lock.Unlock()

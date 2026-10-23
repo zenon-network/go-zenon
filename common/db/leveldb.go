@@ -3,12 +3,11 @@ package db
 import (
 	"runtime"
 
+	"github.com/pkg/errors"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	"github.com/syndtr/goleveldb/leveldb/util"
-
-	"github.com/zenon-network/go-zenon/common"
 )
 
 func getConsensusOpenFilesCacheCapacity() int {
@@ -133,12 +132,14 @@ func NewLevelDBWrapperWithFullDelete(db *leveldb.DB) DB {
 
 // NewLevelDB opens (or creates) the LevelDB database at dirname and
 // returns it both wrapped as a DB and as the raw goleveldb handle —
-// the caller is responsible for closing the latter. It panics if the
-// database cannot be opened. The consensus layer uses it for its
-// election cache.
-func NewLevelDB(dirname string) (DB, *leveldb.DB) {
+// the caller is responsible for closing the latter. It returns an
+// error if the database cannot be opened. The consensus layer uses it
+// for its election cache.
+func NewLevelDB(dirname string) (DB, *leveldb.DB, error) {
 	opts := &opt.Options{OpenFilesCacheCapacity: getConsensusOpenFilesCacheCapacity()}
 	db, err := leveldb.OpenFile(dirname, opts)
-	common.DealWithErr(err)
-	return NewLevelDBWrapper(db), db
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, "open leveldb at %s", dirname)
+	}
+	return NewLevelDBWrapper(db), db, nil
 }

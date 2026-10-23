@@ -442,7 +442,15 @@ func newMockZenon(t common.T, customEpochDuration time.Duration) MockZenon {
 	common.SupervisorLogger.SetHandler(log15.LvlFilterHandler(log15.LvlError, log15.StderrHandler))
 	consensus.EpochDuration = customEpochDuration
 
-	ch := chain.NewChain(db.NewLevelDBManager(t.TempDir()), cache.NewCacheDBManager(t.TempDir()), genesis.NewGenesis(g.EmbeddedGenesis))
+	chainManager, err := db.NewLevelDBManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("open chain database: %v", err)
+	}
+	cacheManager, err := cache.NewCacheDBManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("open cache database: %v", err)
+	}
+	ch := chain.NewChain(chainManager, cacheManager, genesis.NewGenesis(g.EmbeddedGenesis))
 	cs := consensus.NewConsensus(db.NewMemDB(), ch, true)
 	supervisor := vm.NewSupervisor(ch, cs)
 	zenon := &mockZenon{

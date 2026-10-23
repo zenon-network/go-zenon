@@ -74,17 +74,20 @@ type cacheManager struct {
 }
 
 // NewCacheDBManager opens (or creates) the cache database at
-// <dataDir>/cache. It panics if the database cannot be opened.
-func NewCacheDBManager(dataDir string) CacheManager {
+// <dataDir>/cache. It returns an error if the database cannot be
+// opened.
+func NewCacheDBManager(dataDir string) (CacheManager, error) {
 	opts := &opt.Options{OpenFilesCacheCapacity: getConsensusOpenFilesCacheCapacity()}
 	db, err := leveldb.OpenFile(path.Join(dataDir, "cache"), opts)
-	common.DealWithErr(err)
+	if err != nil {
+		return nil, errors.Wrapf(err, "open cache database at %s", path.Join(dataDir, "cache"))
+	}
 	return &cacheManager{
 		ldb: db,
 		write: func(batch *leveldb.Batch) error {
 			return db.Write(batch, nil)
 		},
-	}
+	}, nil
 }
 
 // GetRollbackCacheSize returns how many momentums' rollback patches the

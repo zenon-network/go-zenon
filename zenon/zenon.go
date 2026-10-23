@@ -15,6 +15,8 @@
 package zenon
 
 import (
+	"fmt"
+
 	"github.com/syndtr/goleveldb/leveldb"
 
 	"github.com/zenon-network/go-zenon/chain"
@@ -51,8 +53,26 @@ func NewZenon(cfg *Config) (Zenon, error) {
 	z := &zenon{
 		config: cfg,
 	}
-	z.chain = chain.NewChain(cfg.NewDBManager("nom"), cache.NewCacheDBManager(cfg.DataDir), cfg.GenesisConfig)
-	db, levelDb := cfg.NewLevelDB("consensus")
+
+	// Open the chain ledger database.
+	chainManager, err := cfg.NewDBManager("nom")
+	if err != nil {
+		return nil, fmt.Errorf("open chain database: %w", err)
+	}
+
+	// Open the cache database.
+	cacheManager, err := cache.NewCacheDBManager(cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("open cache database: %w", err)
+	}
+
+	z.chain = chain.NewChain(chainManager, cacheManager, cfg.GenesisConfig)
+
+	// Open the consensus election database.
+	db, levelDb, err := cfg.NewLevelDB("consensus")
+	if err != nil {
+		return nil, fmt.Errorf("open consensus database: %w", err)
+	}
 	z.consensus = consensus.NewConsensus(db, z.chain, false)
 	z.verifier = verifier.NewVerifier(z.chain, z.consensus, vm.CanonicalBasePlasma)
 	z.levelDb = levelDb
