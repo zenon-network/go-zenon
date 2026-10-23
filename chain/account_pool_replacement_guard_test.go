@@ -21,66 +21,87 @@ import (
 // forever while holding ap.changes. The guard must fail closed instead.
 func TestAccountPool_ReplacementWalkRejectsNonDescendingPrevious(t *testing.T) {
 	t.Run("equal heights", func(t *testing.T) {
-		assertReplacementWalkRejects(t, 2, 2)
+		assertReplacementWalkRejectsEqual(t)
 	})
 	t.Run("strictly greater previous height", func(t *testing.T) {
-		assertReplacementWalkRejects(t, 2, 3)
+		assertReplacementWalkRejectsGreater(t)
 	})
 }
 
-// assertReplacementWalkRejects builds a pool with a normal block at
-// height 1, a normal block at height 2, and a malformed batch head at
-// batchHeight whose descendant sits at batchHeight+1 with previous
-// pointing to the block at height 2. The batch head's Previous()
-// returns {block2.Hash, prevHeight}. When prevHeight >= batchHeight the
-// replacement walk would loop forever without the guard. Wrapping
-// manager.db with nilPatchManager after the fixture is built bounds the
-// failure path: a regression hits "missing later pending patch" at once
-// instead of spinning, and with the guard present no patch is read so
-// the positive path is unchanged.
-func assertReplacementWalkRejects(t *testing.T, batchHeight, prevHeight uint64) {
+// assertReplacementWalkRejectsEqual builds a pool with a normal block at
+// height 1, a normal block at height 2, and a malformed batch head also
+// at height 2 whose descendant sits at height 3 with previous pointing
+// to block2. The batch head's Previous() returns {block2.Hash, 2}, so
+// Previous().Height == batchHead.Height. The replacement walk would loop
+// forever without the guard.
+func assertReplacementWalkRejectsEqual(t *testing.T) {
 	t.Helper()
 	address := types.Address{0, 1}
 	ap := newAccountPool(fakeStable{})
 	manager := ap.getAccountManager(address)
 
-	// Block 1: a normal block at height 1.
-	block1 := &nom.AccountBlock{
+	block1 := addBlockAtHeight(t, manager, address, 1, types.ZeroHash)
+	block2 := addBlockAtHeight(t, manager, address, 2, block1.Hash)
+
+	// Malformed batch head at height 2 with descendant at height 3
+	// chaining onto block2. Previous().Height (2) == batchHead.Height (2).
+	addBatchHead(t, manager, address, 2, 3, block2.Hash)
+
+	assertReplacementFails(t, ap, manager, address, block1)
+}
+
+// assertReplacementWalkRejectsGreater builds a pool with normal blocks at
+// heights 1, 2 and 3, and a malformed batch head at height 2 whose
+// descendant sits at height 4 with previous pointing to block3. The batch
+// head's Previous() returns {block3.Hash, 3}, so Previous().Height (3) >
+// batchHead.Height (2). The replacement walk would loop forever without
+// the guard.
+func assertReplacementWalkRejectsGreater(t *testing.T) {
+	t.Helper()
+	address := types.Address{0, 1}
+	ap := newAccountPool(fakeStable{})
+	manager := ap.getAccountManager(address)
+
+	block1 := addBlockAtHeight(t, manager, address, 1, types.ZeroHash)
+	block2 := addBlockAtHeight(t, manager, address, 2, block1.Hash)
+	block3 := addBlockAtHeight(t, manager, address, 3, block2.Hash)
+
+	// Malformed batch head at height 2 with descendant at height 4
+	// chaining onto block3. Previous().Height (3) > batchHead.Height (2).
+	addBatchHead(t, manager, address, 2, 4, block3.Hash)
+
+	assertReplacementFails(t, ap, manager, address, block1)
+}
+
+// addBlockAtHeight creates and adds a simple user-send block at the given
+// height chaining onto previousHash.
+func addBlockAtHeight(t *testing.T, manager *accountManager, address types.Address, height uint64, previousHash types.Hash) *nom.AccountBlock {
+	t.Helper()
+	block := &nom.AccountBlock{
 		Address:      address,
 		BlockType:    nom.BlockTypeUserSend,
-		Height:       1,
-		PreviousHash: types.ZeroHash,
+		Height:       height,
+		PreviousHash: previousHash,
 	}
-	block1.Hash = block1.ComputeHash()
+	block.Hash = block.ComputeHash()
 	common.FailIfErr(t, manager.Add(&nom.AccountBlockTransaction{
-		Block:   block1,
+		Block:   block,
 		Changes: db.NewPatch(),
 	}))
+	return block
+}
 
-	// Block 2: a normal block at height 2 on top of block1.
-	block2 := &nom.AccountBlock{
-		Address:      address,
-		BlockType:    nom.BlockTypeUserSend,
-		Height:       2,
-		PreviousHash: block1.Hash,
-	}
-	block2.Hash = block2.ComputeHash()
-	common.FailIfErr(t, manager.Add(&nom.AccountBlockTransaction{
-		Block:   block2,
-		Changes: db.NewPatch(),
-	}))
-
-	// Malformed batch head whose descendant chains onto block2. The DB
-	// accepts this because it only checks the first commit's previous
-	// link against the frontier. The batch head's Previous() returns the
-	// descendant's previous: {block2.Hash, prevHeight}. Since
-	// prevHeight >= batchHeight, the replacement walk would loop forever
-	// without the guard.
+// addBatchHead creates and adds a malformed batch head at batchHeight
+// with a single descendant at descendantHeight chaining onto
+// descendantPrevHash. The batch head's Previous() returns the
+// descendant's previous: {descendantPrevHash, descendantHeight - 1}.
+func addBatchHead(t *testing.T, manager *accountManager, address types.Address, batchHeight, descendantHeight uint64, descendantPrevHash types.Hash) {
+	t.Helper()
 	descendant := &nom.AccountBlock{
 		Address:      address,
 		BlockType:    nom.BlockTypeUserSend,
-		Height:       batchHeight + 1,
-		PreviousHash: block2.Hash,
+		Height:       descendantHeight,
+		PreviousHash: descendantPrevHash,
 	}
 	descendant.Hash = descendant.ComputeHash()
 
@@ -88,7 +109,7 @@ func assertReplacementWalkRejects(t *testing.T, batchHeight, prevHeight uint64) 
 		Address:          address,
 		BlockType:        nom.BlockTypeUserSend,
 		Height:           batchHeight,
-		PreviousHash:     block2.Hash,
+		PreviousHash:     descendantPrevHash,
 		DescendantBlocks: []*nom.AccountBlock{descendant},
 	}
 	batchHead.Hash = batchHead.ComputeHash()
@@ -96,6 +117,14 @@ func assertReplacementWalkRejects(t *testing.T, batchHeight, prevHeight uint64) 
 		Block:   batchHead,
 		Changes: db.NewPatch(),
 	}))
+}
+
+// assertReplacementFails attempts a forced same-identifier replacement of
+// block1 and asserts the guard rejects it with
+// ErrFailedToAddAccountBlockTransaction wrapping "non-descending previous
+// height". It also asserts the pool is left untouched.
+func assertReplacementFails(t *testing.T, ap *accountPool, manager *accountManager, address types.Address, block1 *nom.AccountBlock) {
+	t.Helper()
 
 	// Bound the failure path: without the guard the walk spins, growing
 	// keep until the test binary exits. nilPatchManager makes a
@@ -111,13 +140,12 @@ func assertReplacementWalkRejects(t *testing.T, batchHeight, prevHeight uint64) 
 	stored2Before, err := frontierBefore.ByHeight(2)
 	common.FailIfErr(t, err)
 
-	// Now attempt a forced same-identifier replacement of block1.
-	// Same hash (all hashed fields identical), different bytes via
-	// BasePlasma (not covered by the hash). The walk starts at the
-	// frontier (the batch head), reads it, and the guard fires because
-	// head.Previous().Height (prevHeight) >= head.Height (batchHeight).
-	// Run in a goroutine with a timeout so a regression fails fast
-	// instead of hanging the test run.
+	// Attempt a forced same-identifier replacement of block1. Same hash
+	// (all hashed fields identical), different bytes via BasePlasma (not
+	// covered by the hash). The walk starts at the frontier (the batch
+	// head), reads it, and the guard fires because
+	// head.Previous().Height >= head.Height. Run in a goroutine with a
+	// timeout so a regression fails fast instead of hanging the test run.
 	replacement := &nom.AccountBlock{
 		Address:      address,
 		BlockType:    nom.BlockTypeUserSend,
