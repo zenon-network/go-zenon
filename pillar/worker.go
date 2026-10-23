@@ -52,7 +52,13 @@ func (w *worker) Start() error {
 	return nil
 }
 func (w *worker) Stop() error {
-	close(w.closed)
+	// Nil-guard: when NewNode fails before Start, the worker was
+	// constructed but never started, so w.closed is nil. Closing a nil
+	// channel panics. The cleanup-on-error path in node.NewNode calls
+	// Stop on sub-components that were never started.
+	if w.closed != nil {
+		close(w.closed)
+	}
 
 	w.log.Info("stop all task")
 	w.children.Wait()
