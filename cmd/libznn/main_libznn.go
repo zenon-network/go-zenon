@@ -34,12 +34,14 @@ func RunNodeWithConfig(configJSON *C.char) C.int {
 		return 1
 	}
 
-	cfg := node.DefaultNodeConfig
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+	// Clone so the JSON overlay writes into fresh slice backing arrays
+	// and can never mutate the package-level DefaultNodeConfig.
+	cfg := node.DefaultNodeConfig.Clone()
+	if err := json.Unmarshal([]byte(raw), cfg); err != nil {
 		return 1
 	}
 
-	if err := app.RunWithConfig(&cfg); err != nil {
+	if err := app.RunWithConfig(cfg); err != nil {
 		return 1
 	}
 	return 0

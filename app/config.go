@@ -15,12 +15,14 @@ import (
 var defaultNodeConfigFileName = "config.json"
 
 // MakeConfig builds the node configuration for the cli context. It starts
-// from node.DefaultNodeConfig, overlays the JSON config file (from --config
+// from a deep clone of node.DefaultNodeConfig (so that a rejected or
+// accepted JSON overlay can never mutate the package-level defaults'
+// slice backing arrays), overlays the JSON config file (from --config
 // or the data path), applies overriding command-line flags, resolves data
 // paths to absolute form, and initializes file logging before returning the
 // effective config.
 func MakeConfig(ctx *cli.Context) (*node.Config, error) {
-	cfg := node.DefaultNodeConfig
+	cfg := *node.DefaultNodeConfig.Clone()
 
 	// 1: Load config file.
 	err := readConfigFromFile(ctx, &cfg)

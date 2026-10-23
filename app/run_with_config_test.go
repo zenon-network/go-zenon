@@ -129,3 +129,56 @@ func TestNewNodeManager_CLIContextStillWorks(t *testing.T) {
 	_, err := NewNodeManager(ctx)
 	t.Logf("NewNodeManager returned: %v", err)
 }
+
+// TestRunWithConfig_AlreadyRunning_ReturnsError verifies that a second
+// RunWithConfig call while a node is already running returns an error
+// and does not nil out the package-level nodeManager, so Stop still
+// works on the first node.
+func TestRunWithConfig_AlreadyRunning_ReturnsError(t *testing.T) {
+	// Simulate a running node by assigning a non-nil manager.
+	// We use a bare &Manager{} — the test only checks the guard, it
+	// never dereferences the node field.
+	original := nodeManager
+	nodeManager = &Manager{}
+	defer func() { nodeManager = original }()
+
+	cfg := node.DefaultNodeConfig
+	cfg.DataPath = t.TempDir()
+
+	err := RunWithConfig(&cfg)
+	if err == nil {
+		t.Fatal("expected an error for a second RunWithConfig while node is running, got nil")
+	}
+	if err.Error() != "node is already running" {
+		t.Errorf("error = %q, want %q", err, "node is already running")
+	}
+
+	// The package-level nodeManager must still be the original (non-nil)
+	// value, not nilled out by the failed second call.
+	if nodeManager == nil {
+		t.Fatal("nodeManager was nilled out by the failed second RunWithConfig; Stop would be a no-op")
+	}
+}
+
+// TestRunWithConfig_FailedStart_LeavesNodeManagerNil verifies that when
+// NewNodeManagerFromConfig fails (e.g. bad genesis), the package-level
+// nodeManager is not assigned, so a subsequent Stop is a no-op and a
+// retry is possible.
+func TestRunWithConfig_FailedStart_LeavesNodeManagerNil(t *testing.T) {
+	original := nodeManager
+	nodeManager = nil
+	defer func() { nodeManager = original }()
+
+	cfg := node.DefaultNodeConfig
+	cfg.DataPath = t.TempDir()
+	cfg.GenesisFile = filepath.Join(cfg.DataPath, "nonexistent-genesis.json")
+
+	err := RunWithConfig(&cfg)
+	if err == nil {
+		t.Fatal("expected an error for a nonexistent genesis file, got nil")
+	}
+
+	if nodeManager != nil {
+		t.Fatal("nodeManager should be nil after a failed RunWithConfig")
+	}
+}

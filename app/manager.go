@@ -71,15 +71,15 @@ func NewNodeManagerFromConfig(nodeConfig *node.Config) (*Manager, error) {
 
 // Start brings the node online and prints a short status to stdout: the
 // producer address if a pillar is configured and any RPC exposure
-// warnings. A start failure is logged at Crit and exits the process with
-// status 1.
+// warnings. A start failure is returned as an error; the caller (the
+// CLI action) is responsible for exiting the process.
 func (nodeManager *Manager) Start() error {
 	// Start up the node
 	log.Info("starting znnd")
 	if err := nodeManager.node.Start(); err != nil {
 		fmt.Printf("failed to start node; reason:%v\n", err)
-		log.Crit("failed to start node", "reason", err)
-		os.Exit(1)
+		log.Error("failed to start node", "reason", err)
+		return fmt.Errorf("failed to start node: %w", err)
 	} else {
 		fmt.Println("znnd successfully started")
 		fmt.Println("*** Node status ***")

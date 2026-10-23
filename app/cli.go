@@ -48,18 +48,27 @@ func Run() {
 // way MakeConfig initialises it: paths are made absolute (so that a
 // DefaultNodeConfig with an empty WalletPath works) and logging is
 // configured from the config's LogLevel and DataPath.
+//
+// A second call while a node is already running returns an error and
+// leaves the first node's stop handle intact.
 func RunWithConfig(cfg *node.Config) error {
+	if nodeManager != nil {
+		return fmt.Errorf("node is already running")
+	}
 	if err := cfg.MakePathsAbsolute(); err != nil {
 		return err
 	}
 	common.InitLogging(cfg.DataPath, cfg.LogLevel)
 
-	var err error
-	nodeManager, err = NewNodeManagerFromConfig(cfg)
+	m, err := NewNodeManagerFromConfig(cfg)
 	if err != nil {
 		return err
 	}
-	return nodeManager.Start()
+	if err := m.Start(); err != nil {
+		return err
+	}
+	nodeManager = m
+	return nil
 }
 
 // Stop stops the running node Manager and reports a clean shutdown. It is
@@ -145,13 +154,17 @@ func action(ctx *cli.Context) error {
 	if args := ctx.Args(); args.Len() > 0 {
 		return fmt.Errorf("invalid command: %q", args.Get(0))
 	}
-	var err error
-	nodeManager, err = NewNodeManager(ctx)
+	m, err := NewNodeManager(ctx)
 	if err != nil {
 		return err
 	}
+	nodeManager = m
 
-	return nodeManager.Start()
+	if err := nodeManager.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	return nil
 }
 
 func afterAction(*cli.Context) error {

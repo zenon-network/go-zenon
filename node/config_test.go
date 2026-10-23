@@ -1,7 +1,9 @@
 package node
 
 import (
+	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/zenon-network/go-zenon/p2p"
@@ -50,3 +52,161 @@ func TestMakeNetConfig_PeerstoreDirResolution(t *testing.T) {
 		})
 	}
 }
+
+// TestConfigClone verifies that Clone returns a deep copy sharing no
+// mutable slice backing arrays or pointers with the original.
+func TestConfigClone(t *testing.T) {
+	original := &Config{
+		DataPath: "/data",
+		Name:     "test",
+		Producer: &ProducerConfig{
+			Address:     "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+			Index:       0,
+			KeyFilePath: "/key",
+			Password:    "pw",
+		},
+		RPC: RPCConfig{
+			Endpoints:        []string{"ledger", "stats"},
+			HTTPVirtualHosts: []string{"localhost"},
+			HTTPCors:         []string{"*"},
+			WSOrigins:        []string{"http://localhost"},
+		},
+		Net: NetConfig{
+			Seeders:        []string{"enode://a", "enode://b"},
+			BootstrapPeers: []string{"/ip4/1.2.3.4/tcp/4001"},
+			PeerstoreDir:   strPtr("/peerstore"),
+		},
+	}
+
+	clone := original.Clone()
+
+	// Mutate every slice and pointer in the clone.
+	clone.RPC.Endpoints[0] = "MUTATED"
+	clone.RPC.HTTPVirtualHosts[0] = "MUTATED"
+	clone.RPC.HTTPCors[0] = "MUTATED"
+	clone.RPC.WSOrigins[0] = "MUTATED"
+	clone.Net.Seeders[0] = "MUTATED"
+	clone.Net.BootstrapPeers[0] = "MUTATED"
+	*clone.Net.PeerstoreDir = "MUTATED"
+	clone.Producer.Address = "MUTATED"
+
+	// The original must be unchanged.
+	if original.RPC.Endpoints[0] == "MUTATED" {
+		t.Error("Clone: mutating clone.RPC.Endpoints affected original")
+	}
+	if original.RPC.HTTPVirtualHosts[0] == "MUTATED" {
+		t.Error("Clone: mutating clone.RPC.HTTPVirtualHosts affected original")
+	}
+	if original.RPC.HTTPCors[0] == "MUTATED" {
+		t.Error("Clone: mutating clone.RPC.HTTPCors affected original")
+	}
+	if original.RPC.WSOrigins[0] == "MUTATED" {
+		t.Error("Clone: mutating clone.RPC.WSOrigins affected original")
+	}
+	if original.Net.Seeders[0] == "MUTATED" {
+		t.Error("Clone: mutating clone.Net.Seeders affected original")
+	}
+	if original.Net.BootstrapPeers[0] == "MUTATED" {
+		t.Error("Clone: mutating clone.Net.BootstrapPeers affected original")
+	}
+	if *original.Net.PeerstoreDir == "MUTATED" {
+		t.Error("Clone: mutating clone.Net.PeerstoreDir affected original")
+	}
+	if original.Producer.Address == "MUTATED" {
+		t.Error("Clone: mutating clone.Producer.Address affected original")
+	}
+}
+
+// TestConfigClone_NilSlices verifies that Clone handles nil slices
+// without panicking.
+func TestConfigClone_NilSlices(t *testing.T) {
+	c := &Config{}
+	clone := c.Clone()
+	if clone.RPC.Endpoints != nil {
+		t.Error("Clone: nil Endpoints became non-nil")
+	}
+	if clone.Net.Seeders != nil {
+		t.Error("Clone: nil Seeders became non-nil")
+	}
+	if clone.Net.PeerstoreDir != nil {
+		t.Error("Clone: nil PeerstoreDir became non-nil")
+	}
+	if clone.Producer != nil {
+		t.Error("Clone: nil Producer became non-nil")
+	}
+}
+
+// TestJSONOverlayDoesNotMutateDefaults verifies that applying a JSON
+// overlay to a clone of DefaultNodeConfig leaves the package-level
+// defaults untouched. This is the regression test for the shared-slice
+// bug where json.Unmarshal wrote into DefaultNodeConfig's backing
+// arrays.
+func TestJSONOverlayDoesNotMutateDefaults(t *testing.T) {
+	// Snapshot the defaults before the overlay.
+	before := DefaultNodeConfig.Clone()
+
+	// Apply an overlay the way MakeConfig and RunNodeWithConfig do.
+	overlay := `{
+		"Name": "overlay-node",
+		"RPC": {"HTTPVirtualHosts": ["example.com"]},
+		"Net": {"Seeders": ["enode://1.2.3.4:35995"]}
+	}`
+	cfg := DefaultNodeConfig.Clone()
+	if err := json.Unmarshal([]byte(overlay), cfg); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	// The overlay must have been applied to the clone.
+	if cfg.Name != "overlay-node" {
+		t.Errorf("Name = %q, want %q", cfg.Name, "overlay-node")
+	}
+	if cfg.RPC.HTTPVirtualHosts[0] != "example.com" {
+		t.Errorf("HTTPVirtualHosts[0] = %q, want %q", cfg.RPC.HTTPVirtualHosts[0], "example.com")
+	}
+	if cfg.Net.Seeders[0] != "enode://1.2.3.4:35995" {
+		t.Errorf("Seeders[0] = %q, want %q", cfg.Net.Seeders[0], "enode://1.2.3.4:35995")
+	}
+
+	// The package-level defaults must be unchanged.
+	if !reflect.DeepEqual(DefaultNodeConfig.RPC.HTTPVirtualHosts, before.RPC.HTTPVirtualHosts) {
+		t.Errorf("DefaultNodeConfig.RPC.HTTPVirtualHosts mutated: %v, want %v",
+			DefaultNodeConfig.RPC.HTTPVirtualHosts, before.RPC.HTTPVirtualHosts)
+	}
+	if !reflect.DeepEqual(DefaultNodeConfig.Net.Seeders, before.Net.Seeders) {
+		t.Errorf("DefaultNodeConfig.Net.Seeders mutated: %v, want %v",
+			DefaultNodeConfig.Net.Seeders, before.Net.Seeders)
+	}
+	if DefaultNodeConfig.Name != before.Name {
+		t.Errorf("DefaultNodeConfig.Name mutated: %q, want %q", DefaultNodeConfig.Name, before.Name)
+	}
+}
+
+// TestRejectedJSONOverlayLeavesDefaultsUnchanged verifies that a
+// malformed JSON overlay returns an error and does not modify the
+// package-level defaults.
+func TestRejectedJSONOverlayLeavesDefaultsUnchanged(t *testing.T) {
+	before := DefaultNodeConfig.Clone()
+
+	cfg := DefaultNodeConfig.Clone()
+	err := json.Unmarshal([]byte(`{"Name":`), cfg)
+	if err == nil {
+		t.Fatal("expected an error for malformed JSON, got nil")
+	}
+
+	// Even the clone may be partially modified by a rejected Unmarshal,
+	// but the package-level defaults must be untouched.
+	if !reflect.DeepEqual(DefaultNodeConfig.RPC.HTTPVirtualHosts, before.RPC.HTTPVirtualHosts) {
+		t.Errorf("DefaultNodeConfig.RPC.HTTPVirtualHosts mutated by rejected overlay: %v, want %v",
+			DefaultNodeConfig.RPC.HTTPVirtualHosts, before.RPC.HTTPVirtualHosts)
+	}
+	if !reflect.DeepEqual(DefaultNodeConfig.Net.Seeders, before.Net.Seeders) {
+		t.Errorf("DefaultNodeConfig.Net.Seeders mutated by rejected overlay: %v, want %v",
+			DefaultNodeConfig.Net.Seeders, before.Net.Seeders)
+	}
+	if DefaultNodeConfig.Name != before.Name {
+		t.Errorf("DefaultNodeConfig.Name mutated by rejected overlay: %q, want %q",
+			DefaultNodeConfig.Name, before.Name)
+	}
+}
+
+func strPtr(s string) *string { return &s }

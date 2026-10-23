@@ -201,6 +201,17 @@ func (s *sporkOracle) IsLibp2pActive() bool {
 // Start brings the node online: it inits and starts the Zenon core,
 // starts the p2p server and serves the public RPC APIs over the
 // configured HTTP and WebSocket endpoints.
+//
+// If any step after startZenon fails, Start unwinds what was already
+// started so the caller can retry or shut down cleanly. A failed Start
+// does not leave goroutines, databases, the wallet or the data-dir lock
+// allocated.
+//
+// Known remaining host-terminating paths (issue #196, item 4):
+// chain.Init calls os.Exit(2) on an unsupported active spork, and a DB
+// open failure in zenon.NewZenon goes through common.DealWithErr and
+// panics. Both are upstream of this method and are not yet converted
+// to error returns.
 func (node *Node) Start() error {
 	node.lock.Lock()
 	defer node.lock.Unlock()
@@ -208,14 +219,30 @@ func (node *Node) Start() error {
 	if err := node.startZenon(); err != nil {
 		return err
 	}
+
+	started := false // p2p server started
+	rpcStarted := false
+	defer func() {
+		if started {
+			node.server.Stop()
+		}
+		if rpcStarted {
+			node.stopRPC()
+		}
+	}()
+
 	if err := node.server.Start(); err != nil {
 		return err
 	}
+	started = true
+
 	node.rpcAPIs = api.GetPublicApis(node.z, node.server)
 	if err := node.startRPC(); err != nil {
 		log.Error("failed to start rpc", "reason", err)
 		return err
 	}
+	rpcStarted = true
+
 	node.warnRPCExposure()
 
 	return nil

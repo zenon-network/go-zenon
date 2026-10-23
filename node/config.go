@@ -219,6 +219,40 @@ type Config struct {
 	Net      NetConfig
 }
 
+// Clone returns a deep copy of c that shares no mutable state with the
+// original. Slices (RPC endpoints, virtual hosts, CORS domains, WS
+// origins, net seeders and bootstrap peers) are copied so that mutating
+// the clone — e.g. a JSON overlay writing into the struct — never
+// modifies the package-level DefaultNodeConfig's backing arrays.
+func (c *Config) Clone() *Config {
+	out := *c
+	if c.Producer != nil {
+		producer := *c.Producer
+		out.Producer = &producer
+	}
+	out.RPC.Endpoints = cloneSlice(c.RPC.Endpoints)
+	out.RPC.HTTPVirtualHosts = cloneSlice(c.RPC.HTTPVirtualHosts)
+	out.RPC.HTTPCors = cloneSlice(c.RPC.HTTPCors)
+	out.RPC.WSOrigins = cloneSlice(c.RPC.WSOrigins)
+	out.Net.Seeders = cloneSlice(c.Net.Seeders)
+	out.Net.BootstrapPeers = cloneSlice(c.Net.BootstrapPeers)
+	if c.Net.PeerstoreDir != nil {
+		dir := *c.Net.PeerstoreDir
+		out.Net.PeerstoreDir = &dir
+	}
+	return &out
+}
+
+// cloneSlice returns a copy of s, or nil when s is nil.
+func cloneSlice(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
+}
+
 // MakePathsAbsolute resolves the data, wallet and genesis paths to
 // absolute form in place, defaulting the data path to DefaultDataDir
 // and the wallet path to the wallet subdirectory of the data path
