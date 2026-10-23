@@ -295,14 +295,19 @@ func GetPtlcReclaimLock(context db.DB, id types.Hash) (*PtlcReclaimLock, error) 
 	return lock, nil
 }
 
-func GetPtlcReclaimMessage(chainIdentifier uint64, pointType uint8, id types.Hash, timeLocked types.Address) []byte {
+func GetPtlcReclaimMessage(chainIdentifier uint64, reclaimPointType uint8, entry *PtlcInfo) []byte {
 	return crypto.Hash(common.JoinBytes(
 		[]byte(PtlcReclaimMessageDomain),
 		common.Uint64ToBytes(chainIdentifier),
 		types.PtlcContract.Bytes(),
-		[]byte{pointType},
-		id.Bytes(),
-		timeLocked.Bytes(),
+		[]byte{reclaimPointType},
+		entry.TimeLocked.Bytes(),
+		entry.Destination.Bytes(),
+		entry.TokenStandard.Bytes(),
+		common.BigIntToBytes(entry.Amount),
+		common.Uint64ToBytes(uint64(entry.ExpirationTime)),
+		[]byte{entry.PointType},
+		entry.PointLock,
 	))
 }
 

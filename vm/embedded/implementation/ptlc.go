@@ -233,7 +233,7 @@ func verifyPtlcReclaimSignature(ptlcInfo *definition.PtlcInfo, reclaimLock *defi
 	if len(signature) != int(definition.PointTypeWitnessSizes[reclaimLock.PointType]) {
 		return constants.ErrInvalidPointSignature
 	}
-	reclaimMessage := definition.GetPtlcReclaimMessage(chainIdentifier, reclaimLock.PointType, ptlcInfo.Id, ptlcInfo.TimeLocked)
+	reclaimMessage := definition.GetPtlcReclaimMessage(chainIdentifier, reclaimLock.PointType, ptlcInfo)
 	return verifyPointSignature(reclaimLock.PointType, reclaimLock.PointLock, reclaimMessage, signature)
 }
 

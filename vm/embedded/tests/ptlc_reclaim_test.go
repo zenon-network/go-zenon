@@ -143,29 +143,53 @@ func expectGoZenonAccepts(t *testing.T, public, message, signature []byte) {
 	}
 }
 
-func ptlcReclaimMessage(z mock.MockZenon, pointType uint8, id types.Hash, creator types.Address) []byte {
-	return definition.GetPtlcReclaimMessage(z.Chain().ChainIdentifier(), pointType, id, creator)
+func ptlcReclaimMessage(z mock.MockZenon, reclaimPointType uint8, entry *definition.PtlcInfo) []byte {
+	return definition.GetPtlcReclaimMessage(z.Chain().ChainIdentifier(), reclaimPointType, entry)
 }
 
-func createReclaimLockedPtlc(t *testing.T, z mock.MockZenon, creator *wallet.KeyPair, claimLock []byte, destination types.Address, reclaimPointType uint8, reclaimLock []byte, expirationTime int64, amount *big.Int) types.Hash {
+func reclaimTerms(creator types.Address, claimLock []byte, destination types.Address, expirationTime int64, amount *big.Int) *definition.PtlcInfo {
+	return &definition.PtlcInfo{
+		TimeLocked:     creator,
+		TokenStandard:  types.ZnnTokenStandard,
+		Amount:         amount,
+		ExpirationTime: expirationTime,
+		PointType:      definition.PointTypeED25519,
+		PointLock:      claimLock,
+		Destination:    destination,
+	}
+}
+
+func storedPtlc(t *testing.T, z mock.MockZenon, id types.Hash) *definition.PtlcInfo {
+	t.Helper()
+	entry, err := embedded.NewPtlcApi(z).GetById(id)
+	common.FailIfErr(t, err)
+	return entry
+}
+
+func createReclaimLockedPtlcWithTerms(t *testing.T, z mock.MockZenon, terms *definition.PtlcInfo, reclaimPointType uint8, reclaimLock []byte) types.Hash {
 	t.Helper()
 	block := z.InsertSendBlock(&nom.AccountBlock{
-		Address:   creator.Address,
+		Address:   terms.TimeLocked,
 		ToAddress: types.PtlcContract,
 		Data: definition.ABIPtlc.PackMethodPanic(definition.CreateWithReclaimLockPtlcMethodName,
-			expirationTime,
-			definition.PointTypeED25519,
-			claimLock,
-			destination,
+			terms.ExpirationTime,
+			terms.PointType,
+			terms.PointLock,
+			terms.Destination,
 			reclaimPointType,
 			reclaimLock,
 		),
-		TokenStandard: types.ZnnTokenStandard,
-		Amount:        amount,
+		TokenStandard: terms.TokenStandard,
+		Amount:        new(big.Int).Set(terms.Amount),
 	}, nil, mock.SkipVmChanges)
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
 	return block.Hash
+}
+
+func createReclaimLockedPtlc(t *testing.T, z mock.MockZenon, creator *wallet.KeyPair, claimLock []byte, destination types.Address, reclaimPointType uint8, reclaimLock []byte, expirationTime int64, amount *big.Int) types.Hash {
+	t.Helper()
+	return createReclaimLockedPtlcWithTerms(t, z, reclaimTerms(creator.Address, claimLock, destination, expirationTime, amount), reclaimPointType, reclaimLock)
 }
 
 func reclaimWithSignatureAs(t *testing.T, z mock.MockZenon, caller *wallet.KeyPair, id types.Hash, signature []byte, expected error) []byte {
@@ -212,12 +236,16 @@ func newMoneroSwap(t *testing.T, z mock.MockZenon, label string) *moneroSwap {
 		bobShare:   newEdKey(label + "/bob monero share s_b"),
 		expiry:     int64(genesisTimestamp + 600),
 	}
-	s.id = createReclaimLockedPtlc(t, z, s.bob, s.bobKey.public, s.alice.Address, definition.PointTypeED25519, s.aliceKey.public, s.expiry, big.NewInt(10*g.Zexp))
-
-	s.reclaimMsg = ptlcReclaimMessage(z, definition.PointTypeED25519, s.id, s.bob.Address)
+	terms := reclaimTerms(s.bob.Address, s.bobKey.public, s.alice.Address, s.expiry, big.NewInt(10*g.Zexp))
+	s.reclaimMsg = ptlcReclaimMessage(z, definition.PointTypeED25519, terms)
 	s.reclaimPresig = edAdaptorPreSign(s.aliceKey, s.reclaimMsg, s.bobShare)
 	if !edAdaptorVerify(s.aliceKey.public, s.reclaimMsg, s.bobShare.public, s.reclaimPresig) {
 		t.Fatal("Bob cannot verify Alice's reclaim pre-signature")
+	}
+
+	s.id = createReclaimLockedPtlcWithTerms(t, z, terms, definition.PointTypeED25519, s.aliceKey.public)
+	if !bytes.Equal(ptlcReclaimMessage(z, definition.PointTypeED25519, storedPtlc(t, z, s.id)), s.reclaimMsg) {
+		t.Fatal("the entry Bob created does not have the terms Alice pre-signed")
 	}
 
 	s.unlockMsg = ptlcUnlockMessage(z, definition.PointTypeED25519, s.id, s.alice.Address)
@@ -337,7 +365,7 @@ func TestPtlc_reclaimLock_termsAliceMustCheck(t *testing.T) {
 		}},
 		{"reclaim lock is bob's", g.User1.Address, bob.Public, func(t *testing.T, z mock.MockZenon, id types.Hash) {
 			z.InsertMomentumsTo(70)
-			reclaimWithSignatureAs(t, z, bob, id, bob.Sign(ptlcReclaimMessage(z, definition.PointTypeED25519, id, bob.Address)), nil)
+			reclaimWithSignatureAs(t, z, bob, id, bob.Sign(ptlcReclaimMessage(z, definition.PointTypeED25519, storedPtlc(t, z, id))), nil)
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -431,32 +459,47 @@ func TestPtlc_reclaimLock_unusablePresignatureLocksBobOut(t *testing.T) {
 	}
 }
 
-func TestPtlc_reclaimLock_signatureNotReplayable(t *testing.T) {
+func TestPtlc_reclaimLock_signatureBindsTheTerms(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
 	activatePtlc(t, z)
 
-	aliceKey := newEdKey("replay/alice")
-	bobKey := newEdKey("replay/bob")
-	share := newEdKey("replay/s_b")
+	aliceKey := newEdKey("terms/alice")
+	bobKey := newEdKey("terms/bob")
+	share := newEdKey("terms/s_b")
 	expiry := int64(genesisTimestamp + 600)
-	first := createReclaimLockedPtlc(t, z, g.User2, bobKey.public, g.User1.Address, definition.PointTypeED25519, aliceKey.public, expiry, big.NewInt(10*g.Zexp))
-	second := createReclaimLockedPtlc(t, z, g.User2, bobKey.public, g.User1.Address, definition.PointTypeED25519, aliceKey.public, expiry, big.NewInt(10*g.Zexp))
-	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 20*g.Zexp)
+	terms := reclaimTerms(g.User2.Address, bobKey.public, g.User1.Address, expiry, big.NewInt(10*g.Zexp))
+	signature := edAdaptorComplete(edAdaptorPreSign(aliceKey, ptlcReclaimMessage(z, definition.PointTypeED25519, terms), share), share.secret)
 
-	firstSignature := edAdaptorComplete(edAdaptorPreSign(aliceKey, ptlcReclaimMessage(z, definition.PointTypeED25519, first, g.User2.Address), share), share.secret)
+	freshKey := newEdKey("terms/alice next swap")
+
+	first := createReclaimLockedPtlcWithTerms(t, z, terms, definition.PointTypeED25519, aliceKey.public)
+	sameTerms := createReclaimLockedPtlcWithTerms(t, z, terms, definition.PointTypeED25519, aliceKey.public)
+	sameTermsFreshKey := createReclaimLockedPtlcWithTerms(t, z, terms, definition.PointTypeED25519, freshKey.public)
+	otherAmount := createReclaimLockedPtlcWithTerms(t, z, reclaimTerms(g.User2.Address, bobKey.public, g.User1.Address, expiry, big.NewInt(9*g.Zexp)), definition.PointTypeED25519, aliceKey.public)
+	otherCreator := createReclaimLockedPtlcWithTerms(t, z, reclaimTerms(g.User3.Address, bobKey.public, g.User1.Address, expiry, big.NewInt(10*g.Zexp)), definition.PointTypeED25519, aliceKey.public)
+	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 49*g.Zexp)
 	z.InsertMomentumsTo(70)
 
-	reclaimWithSignatureAs(t, z, g.User2, second, firstSignature, constants.ErrInvalidPointSignature)
-	reclaimWithSignatureAs(t, z, g.User2, first, firstSignature, nil)
-	reclaimWithSignatureAs(t, z, g.User2, second, firstSignature, constants.ErrInvalidPointSignature)
-	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 10*g.Zexp)
+	reclaimWithSignatureAs(t, z, g.User2, otherAmount, signature, constants.ErrInvalidPointSignature)
+	reclaimWithSignatureAs(t, z, g.User3, otherCreator, signature, constants.ErrInvalidPointSignature)
+	reclaimWithSignatureAs(t, z, g.User2, sameTermsFreshKey, signature, constants.ErrInvalidPointSignature)
+	unlockAsReclaim := edAdaptorComplete(edAdaptorPreSign(aliceKey, ptlcUnlockMessage(z, definition.PointTypeED25519, first, g.User2.Address), share), share.secret)
+	reclaimWithSignatureAs(t, z, g.User2, first, unlockAsReclaim, constants.ErrInvalidPointSignature)
+	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 49*g.Zexp)
 
-	unlockAsReclaim := edAdaptorComplete(edAdaptorPreSign(aliceKey, ptlcUnlockMessage(z, definition.PointTypeED25519, second, g.User2.Address), share), share.secret)
-	reclaimWithSignatureAs(t, z, g.User2, second, unlockAsReclaim, constants.ErrInvalidPointSignature)
+	reclaimWithSignatureAs(t, z, g.User2, first, signature, nil)
+	reclaimWithSignatureAs(t, z, g.User2, sameTerms, signature, nil)
+	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 29*g.Zexp)
 
-	secondSignature := edAdaptorComplete(edAdaptorPreSign(aliceKey, ptlcReclaimMessage(z, definition.PointTypeED25519, second, g.User2.Address), share), share.secret)
-	reclaimWithSignatureAs(t, z, g.User2, second, secondSignature, nil)
+	for _, entry := range []struct {
+		creator *wallet.KeyPair
+		key     *edKey
+		id      types.Hash
+	}{{g.User2, freshKey, sameTermsFreshKey}, {g.User2, aliceKey, otherAmount}, {g.User3, aliceKey, otherCreator}} {
+		own := edAdaptorComplete(edAdaptorPreSign(entry.key, ptlcReclaimMessage(z, definition.PointTypeED25519, storedPtlc(t, z, entry.id)), share), share.secret)
+		reclaimWithSignatureAs(t, z, entry.creator, entry.id, own, nil)
+	}
 	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 0)
 }
 
@@ -471,7 +514,7 @@ func TestPtlc_reclaimLock_legacyEntriesUnchanged(t *testing.T) {
 	common.ExpectError(t, err, constants.ErrDataNonExistent)
 
 	z.InsertMomentumsTo(70)
-	signature := g.User1.Sign(ptlcReclaimMessage(z, definition.PointTypeED25519, id, g.User1.Address))
+	signature := g.User1.Sign(ptlcReclaimMessage(z, definition.PointTypeED25519, storedPtlc(t, z, id)))
 	reclaimWithSignatureAs(t, z, g.User1, id, signature, constants.ErrNoReclaimLock)
 	reclaimPtlcAs(t, z, g.User2, id, constants.ErrPermissionDenied)
 	reclaimPtlcAs(t, z, g.User1, id, nil)
@@ -486,14 +529,15 @@ func TestPtlc_reclaimLock_bip340(t *testing.T) {
 	activatePtlc(t, z)
 
 	reclaimKey := keyWithParity(3003, true)
-	id := createReclaimLockedPtlc(t, z, g.User2, newEdKey("bip340/bob").public, g.User1.Address, definition.PointTypeBIP340, xOnlyKey(reclaimKey), int64(genesisTimestamp+600), big.NewInt(10*g.Zexp))
-	z.InsertMomentumsTo(70)
-
+	terms := reclaimTerms(g.User2.Address, newEdKey("bip340/bob").public, g.User1.Address, int64(genesisTimestamp+600), big.NewInt(10*g.Zexp))
 	var secret [32]byte
 	secret[31] = 77
-	message := ptlcReclaimMessage(z, definition.PointTypeBIP340, id, g.User2.Address)
+	message := ptlcReclaimMessage(z, definition.PointTypeBIP340, terms)
 	presig := adaptorPreSign(t, reclaimKey, message, pointFor(secret[:]), 91, true)
 	signature := adaptorComplete(presig, secret[:])
+
+	id := createReclaimLockedPtlcWithTerms(t, z, terms, definition.PointTypeBIP340, xOnlyKey(reclaimKey))
+	z.InsertMomentumsTo(70)
 	reclaimWithSignatureAs(t, z, g.User2, id, append(append([]byte{}, presig[1:33]...), presig[33:]...), constants.ErrInvalidPointSignature)
 	published := reclaimWithSignatureAs(t, z, g.User2, id, signature, nil)
 

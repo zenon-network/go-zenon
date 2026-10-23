@@ -3,6 +3,7 @@ package definition
 import (
 	"bytes"
 	"encoding/hex"
+	"math"
 	"math/big"
 	"strings"
 	"testing"
@@ -45,53 +46,85 @@ const jsonPtlcBeforeReclaimLock = `
 		]}
 	]`
 
-func TestPtlcReclaimMessageVectors(t *testing.T) {
-	const (
-		entry        = "1111111111111111111111111111111111111111111111111111111111111111"
-		rampEntry    = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-		creator      = "0022222222222222222222222222222222222222"
-		otherCreator = "0033333333333333333333333333333333333333"
-	)
+func syntheticBytes(t *testing.T, encoded string, size int) []byte {
+	t.Helper()
+	decoded, err := hex.DecodeString(encoded)
+	if err != nil || len(decoded) != size {
+		t.Fatalf("invalid synthetic field %s", encoded)
+	}
+	return decoded
+}
 
-	tests := []struct {
-		name      string
-		chain     uint64
-		pointType uint8
-		entry     string
-		creator   string
-		want      string
-	}{
-		{"chain-zero", 0, PointTypeED25519, entry, creator, "e708fe2634b991394f18ab443c75dcb218bc97782e10cd057e4026385452084f"},
-		{"chain-one", 1, PointTypeED25519, entry, creator, "905d7c8c513583767b8c5a519782deb330b03c071590b38d1ec484a5df239f05"},
-		{"chain-69", 69, PointTypeED25519, entry, creator, "ea9d13d3024b9a1873de80cd3ea13b8226facb1a54163652f6003aae94a54e71"},
-		{"chain-max-uint64", 18446744073709551615, PointTypeED25519, entry, creator, "731e459a4539b03642ad07488ce235f44a762693b6f5e3d85ae9ba7fc2014e47"},
-		{"chain-byte-order", 0x0102030405060708, PointTypeED25519, entry, creator, "70019a2d7b6f930f8c23d56f838de854bb367ad31e33e46c6863274d7ee77147"},
-		{"bip340", 69, PointTypeBIP340, entry, creator, "983daf2916e27c8010fd9fd4d25740f3bb12efdba4802e898c1ce7c17b4f373c"},
-		{"entry-identifier", 69, PointTypeED25519, rampEntry, creator, "eaf6a230fc5df8aa5946a18b6aee0a82b8daabf01e8fc8913b48b11dd7b83be7"},
-		{"creator", 69, PointTypeED25519, entry, otherCreator, "ea48557fcb9e91fa687c379dae86c168284c9768fb2be6fee5c9f1494ae74172"},
+func TestPtlcReclaimMessageVectors(t *testing.T) {
+	var creator, otherCreator, destination types.Address
+	copy(creator[:], syntheticBytes(t, "0022222222222222222222222222222222222222", types.AddressSize))
+	copy(otherCreator[:], syntheticBytes(t, "0033333333333333333333333333333333333333", types.AddressSize))
+	copy(destination[:], syntheticBytes(t, "0044444444444444444444444444444444444444", types.AddressSize))
+	var token, otherToken types.ZenonTokenStandard
+	copy(token[:], bytes.Repeat([]byte{0x55}, types.ZenonTokenStandardSize))
+	copy(otherToken[:], bytes.Repeat([]byte{0x66}, types.ZenonTokenStandardSize))
+	rampLock := syntheticBytes(t, "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", 32)
+
+	terms := func() *PtlcInfo {
+		return &PtlcInfo{
+			Id:             types.BytesToHashPanic(bytes.Repeat([]byte{0x11}, types.HashSize)),
+			TimeLocked:     creator,
+			TokenStandard:  token,
+			Amount:         big.NewInt(0x3b9aca00),
+			ExpirationTime: 1700000000,
+			PointType:      PointTypeED25519,
+			PointLock:      bytes.Repeat([]byte{0x11}, 32),
+			Destination:    destination,
+		}
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			idBytes, err := hex.DecodeString(test.entry)
-			if err != nil || len(idBytes) != types.HashSize {
-				t.Fatal("invalid synthetic entry ID")
-			}
-			creatorBytes, err := hex.DecodeString(test.creator)
-			if err != nil || len(creatorBytes) != types.AddressSize {
-				t.Fatal("invalid synthetic creator")
-			}
-			var id types.Hash
-			var timeLocked types.Address
-			copy(id[:], idBytes)
-			copy(timeLocked[:], creatorBytes)
+	tests := []struct {
+		name        string
+		chain       uint64
+		reclaimType uint8
+		edit        func(*PtlcInfo)
+		want        string
+	}{
+		{"base", 69, PointTypeED25519, func(*PtlcInfo) {}, "b6fd4d7c9f732211766f9e04cbcfc7ed0d57771cddf601645b71ed11fa7e692b"},
+		{"chain-zero", 0, PointTypeED25519, func(*PtlcInfo) {}, "056ef85081335a8a1507920693dbd6266adbe9ba354114a80326fb70501f5dd7"},
+		{"chain-max-uint64", math.MaxUint64, PointTypeED25519, func(*PtlcInfo) {}, "b4fa3ba079ea07710c03e82ce84521ddeb1f01d05fc5228bbfbe3ed4f99617bd"},
+		{"chain-byte-order", 0x0102030405060708, PointTypeED25519, func(*PtlcInfo) {}, "3f7b83457ddfabfb9ea4ddad347e18c7d91b8ffbd29c5d96ee8e0f9a7d979fd6"},
+		{"bip340-reclaim", 69, PointTypeBIP340, func(*PtlcInfo) {}, "1cf43f99a8331e729eb7c76ed5370ca466ecb593635ce75e8d491cda7475cadf"},
+		{"creator", 69, PointTypeED25519, func(e *PtlcInfo) { e.TimeLocked = otherCreator }, "70e4b33c933980d87ad8c6551f6c4033062bdb62817f3241b27e11db31b8da56"},
+		{"open-destination", 69, PointTypeED25519, func(e *PtlcInfo) { e.Destination = types.ZeroAddress }, "09f9fe595a23a31c62a140993bcce9990f06578e1d7b996792520f5798f2b96b"},
+		{"token", 69, PointTypeED25519, func(e *PtlcInfo) { e.TokenStandard = otherToken }, "78187a3e26b9373bb2bf72f4c22a5e2f26653d058983c767536d19326615b070"},
+		{"amount-one", 69, PointTypeED25519, func(e *PtlcInfo) { e.Amount = big.NewInt(1) }, "b51053faab6fac9c5fea266d01c9dfc497ce14dbe5230632c672ca496a3c2698"},
+		{"amount-max", 69, PointTypeED25519, func(e *PtlcInfo) { e.Amount = new(big.Int).SetBytes(bytes.Repeat([]byte{0xff}, 32)) }, "a05d1cda114918a1ffdce6f4e8294ab2156c1a16deebaae7e001548abf12f596"},
+		{"expiration-byte-order", 69, PointTypeED25519, func(e *PtlcInfo) { e.ExpirationTime = 0x0102030405060708 }, "ef413d368802d2c5c130cfa81214934e612a197558d0a036ffd2838f68e1ded2"},
+		{"secp256k1-point", 69, PointTypeED25519, func(e *PtlcInfo) {
+			e.PointType = PointTypeSecp256k1Point
+			e.PointLock = append([]byte{0x02}, bytes.Repeat([]byte{0x11}, 32)...)
+		}, "e9f7486805038bdff0696b86b4a169399f2353fe09ed9c4c0262ab8b4a650ac5"},
+		{"point-lock", 69, PointTypeED25519, func(e *PtlcInfo) { e.PointLock = rampLock }, "6ba40a6c48d53de71ae09c2b32638ec174c0d629c5f1c17eaa29e9b5eb0e84c7"},
+	}
 
-			got := hex.EncodeToString(GetPtlcReclaimMessage(test.chain, test.pointType, id, timeLocked))
-			if got != test.want {
+	seen := make(map[string]string)
+	for _, test := range tests {
+		if other, ok := seen[test.want]; ok {
+			t.Fatalf("%s repeats the vector of %s", test.name, other)
+		}
+		seen[test.want] = test.name
+
+		t.Run(test.name, func(t *testing.T) {
+			entry := terms()
+			test.edit(entry)
+
+			message := GetPtlcReclaimMessage(test.chain, test.reclaimType, entry)
+			if got := hex.EncodeToString(message); got != test.want {
 				t.Fatalf("reclaim message = %s, want %s", got, test.want)
 			}
-			if bytes.Equal(GetPtlcReclaimMessage(test.chain, test.pointType, id, timeLocked), GetPtlcUnlockMessage(test.chain, test.pointType, id, timeLocked)) {
-				t.Fatal("reclaim message equals the unlock message over the same fields")
+
+			entry.Id = types.NewHash([]byte("another entry with the same terms"))
+			if !bytes.Equal(GetPtlcReclaimMessage(test.chain, test.reclaimType, entry), message) {
+				t.Fatal("reclaim message depends on the entry id")
+			}
+			if bytes.Equal(message, GetPtlcUnlockMessage(test.chain, test.reclaimType, entry.Id, entry.TimeLocked)) || bytes.Equal(message, GetPtlcUnlockMessage(test.chain, entry.PointType, entry.Id, entry.Destination)) {
+				t.Fatal("reclaim message equals an unlock message")
 			}
 		})
 	}
