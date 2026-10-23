@@ -11,6 +11,7 @@ import (
 	"github.com/zenon-network/go-zenon/chain"
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/rpc/api"
@@ -690,8 +691,41 @@ func TestRPCLedger_GetMomentumsByHeight(t *testing.T) {
 	"list": []
 }`)
 }
+
+// heightReadCounter wraps a MockZenon so a test can see whether the
+// momentum store was asked for a range. An empty page past genesis and
+// an empty page past the frontier answer the same JSON; only the store
+// read tells them apart.
+type heightReadCounter struct {
+	mock.MockZenon
+	reads int
+}
+
+func (z *heightReadCounter) Chain() chain.Chain {
+	return &countingChain{Chain: z.MockZenon.Chain(), reads: &z.reads}
+}
+
+type countingChain struct {
+	chain.Chain
+	reads *int
+}
+
+func (c *countingChain) GetFrontierMomentumStore() store.Momentum {
+	return &countingMomentumStore{Momentum: c.Chain.GetFrontierMomentumStore(), reads: c.reads}
+}
+
+type countingMomentumStore struct {
+	store.Momentum
+	reads *int
+}
+
+func (s *countingMomentumStore) GetMomentumsByHeight(height uint64, higher bool, count uint64) ([]*nom.Momentum, error) {
+	*s.reads++
+	return s.Momentum.GetMomentumsByHeight(height, higher, count)
+}
+
 func TestRPCLedger_GetMomentumsByPage(t *testing.T) {
-	z := mock.NewMockZenon(t)
+	z := &heightReadCounter{MockZenon: mock.NewMockZenon(t)}
 	ledgerApi := api.NewLedgerApi(z)
 	defer z.StopPanic()
 	z.InsertMomentumsTo(10)
@@ -743,11 +777,20 @@ func TestRPCLedger_GetMomentumsByPage(t *testing.T) {
 	"count": 10,
 	"list": []
 }`)
+	if z.reads == 0 {
+		t.Fatal("the counter saw no store read for pages 0 and 1")
+	}
+	// Before the fix pageIndex+1 wrapped to 0 and read heights 11..17,
+	// which returned the same empty list.
+	readsBefore := z.reads
 	common.Json(ledgerApi.GetMomentumsByPage(math.MaxUint32, 7)).Equals(t, `
 {
 	"list": [],
 	"count": 10
 }`)
+	if z.reads != readsBefore {
+		t.Fatalf("pageIndex %d read the momentum store; want no read", uint32(math.MaxUint32))
+	}
 }
 func TestRPCLedger_GetDetailedMomentumsByHeight(t *testing.T) {
 	z := mock.NewMockZenon(t)
