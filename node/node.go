@@ -220,13 +220,10 @@ func (node *Node) Start() error {
 		return err
 	}
 
-	started := false // p2p server started
-	rpcStarted := false
+	success := false
 	defer func() {
-		if started {
+		if !success {
 			node.server.Stop()
-		}
-		if rpcStarted {
 			node.stopRPC()
 		}
 	}()
@@ -234,17 +231,16 @@ func (node *Node) Start() error {
 	if err := node.server.Start(); err != nil {
 		return err
 	}
-	started = true
 
 	node.rpcAPIs = api.GetPublicApis(node.z, node.server)
 	if err := node.startRPC(); err != nil {
 		log.Error("failed to start rpc", "reason", err)
 		return err
 	}
-	rpcStarted = true
 
 	node.warnRPCExposure()
 
+	success = true
 	return nil
 }
 
