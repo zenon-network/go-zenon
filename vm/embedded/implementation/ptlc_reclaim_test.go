@@ -12,6 +12,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/crypto"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
@@ -81,6 +82,17 @@ func plainReclaim(ctx *testPtlcContext, caller types.Address, id types.Hash) ([]
 
 func signReclaim(key *wallet.KeyPair, chain uint64, id types.Hash, creator types.Address) []byte {
 	return key.Sign(definition.GetPtlcReclaimMessage(chain, definition.PointTypeED25519, id, creator))
+}
+
+func ptlcReclaimMessageForContract(chainIdentifier uint64, contract types.Address, pointType uint8, id types.Hash, creator types.Address) []byte {
+	return crypto.Hash(common.JoinBytes(
+		[]byte(definition.PtlcReclaimMessageDomain),
+		common.Uint64ToBytes(chainIdentifier),
+		contract.Bytes(),
+		[]byte{pointType},
+		id.Bytes(),
+		creator.Bytes(),
+	))
 }
 
 func expectNoBlocks(t *testing.T, blocks []*nom.AccountBlock) {
@@ -306,6 +318,10 @@ func TestPtlc_ReclaimWithSignature(t *testing.T) {
 
 	setPtlcTime(ctx, reclaimTestExpiration)
 
+	if !bytes.Equal(ptlcReclaimMessageForContract(reclaimTestChain, types.PtlcContract, definition.PointTypeED25519, id, User1.Address), definition.GetPtlcReclaimMessage(reclaimTestChain, definition.PointTypeED25519, id, User1.Address)) {
+		t.Fatal("the test's reclaim message differs from the contract's in more than the contract address")
+	}
+
 	shifted := append([]byte{}, valid...)
 	carry := 0
 	for i := 0; i < 32; i++ {
@@ -327,7 +343,7 @@ func TestPtlc_ReclaimWithSignature(t *testing.T) {
 		"s + L":                    shifted,
 		"flipped bit in R":         append([]byte{valid[0] ^ 1}, valid[1:]...),
 		"flipped bit in s":         append(append([]byte{}, valid[:40]...), append([]byte{valid[40] ^ 1}, valid[41:]...)...),
-		"another contract address": reclaimKey.Sign(ptlcUnlockMessageForContract(reclaimTestChain, types.HtlcContract, definition.PointTypeED25519, id, User1.Address)),
+		"another contract address": reclaimKey.Sign(ptlcReclaimMessageForContract(reclaimTestChain, types.HtlcContract, definition.PointTypeED25519, id, User1.Address)),
 	}
 	for name, signature := range refused {
 		blocks, err := reclaimWithSignature(ctx, User1.Address, id, signature)
@@ -458,30 +474,45 @@ func TestPtlc_PlainReclaimRefusedForReclaimLock(t *testing.T) {
 }
 
 func TestPtlc_UnlockDeletesReclaimLock(t *testing.T) {
-	for _, proxy := range []bool{false, true} {
-		ctx := newTestPtlcContext(reclaimTestChain, reclaimTestCreateTime)
-		id := createReclaimLockedPtlc(t, ctx, "unlock-deletes-reclaim-lock", User1.Address, definition.PointTypeED25519, reclaimKey.Public)
+	for _, test := range []struct {
+		name   string
+		unlock func(ctx *testPtlcContext, id types.Hash, witness []byte) ([]*nom.AccountBlock, error)
+	}{
+		{"unlock", func(ctx *testPtlcContext, id types.Hash, witness []byte) ([]*nom.AccountBlock, error) {
+			return (&UnlockPtlcMethod{definition.UnlockPtlcMethodName}).ReceiveBlock(ctx, &nom.AccountBlock{
+				Address: reclaimCaller.Address,
+				Data:    definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName, id, witness),
+				Amount:  big.NewInt(0),
+			})
+		}},
+		{"proxy unlock", func(ctx *testPtlcContext, id types.Hash, witness []byte) ([]*nom.AccountBlock, error) {
+			return (&ProxyUnlockPtlcMethod{definition.ProxyUnlockPtlcMethodName}).ReceiveBlock(ctx, &nom.AccountBlock{
+				Address: otherReclaimKey.Address,
+				Data:    definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName, id, reclaimCaller.Address, witness),
+				Amount:  big.NewInt(0),
+			})
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := newTestPtlcContext(reclaimTestChain, reclaimTestCreateTime)
+			id := createReclaimLockedPtlc(t, ctx, "unlock-deletes-reclaim-lock", User1.Address, definition.PointTypeED25519, reclaimKey.Public)
+			setPtlcTime(ctx, reclaimTestExpiration-1)
 
-		setPtlcTime(ctx, reclaimTestExpiration-1)
-		signature := User1.Sign(definition.GetPtlcUnlockMessage(reclaimTestChain, definition.PointTypeED25519, id, reclaimCaller.Address))
-		caller := reclaimCaller.Address
-		if proxy {
-			caller = User1.Address
-		}
+			reclaimSignature := signReclaim(reclaimKey, reclaimTestChain, id, User1.Address)
+			blocks, err := test.unlock(ctx, id, reclaimSignature)
+			common.ExpectError(t, err, constants.ErrInvalidPointSignature)
+			expectNoBlocks(t, blocks)
 
-		reclaimSignature := signReclaim(reclaimKey, reclaimTestChain, id, User1.Address)
-		_, err := unlockPtlc(ctx, &nom.AccountBlock{Address: caller}, id, reclaimCaller.Address, reclaimSignature)
-		common.ExpectError(t, err, constants.ErrInvalidPointSignature)
+			blocks, err = test.unlock(ctx, id, User1.Sign(definition.GetPtlcUnlockMessage(reclaimTestChain, definition.PointTypeED25519, id, reclaimCaller.Address)))
+			common.FailIfErr(t, err)
+			expectPaid(t, blocks, reclaimCaller.Address, 7)
+			expectEntryGone(t, ctx, id)
 
-		blocks, err := unlockPtlc(ctx, &nom.AccountBlock{Address: caller}, id, reclaimCaller.Address, signature)
-		common.FailIfErr(t, err)
-		expectPaid(t, blocks, reclaimCaller.Address, 7)
-		expectEntryGone(t, ctx, id)
-
-		setPtlcTime(ctx, reclaimTestExpiration)
-		blocks, err = reclaimWithSignature(ctx, User1.Address, id, reclaimSignature)
-		common.ExpectError(t, err, constants.ErrDataNonExistent)
-		expectNoBlocks(t, blocks)
+			setPtlcTime(ctx, reclaimTestExpiration)
+			blocks, err = reclaimWithSignature(ctx, User1.Address, id, reclaimSignature)
+			common.ExpectError(t, err, constants.ErrDataNonExistent)
+			expectNoBlocks(t, blocks)
+		})
 	}
 }
 
@@ -524,6 +555,72 @@ func FuzzPtlcReclaimSignatureDomainMutationRejected(f *testing.F) {
 		lock := &definition.PtlcReclaimLock{Id: mutatedId, PointType: definition.PointTypeED25519, PointLock: reclaimKey.Public}
 		if err := verifyPtlcReclaimSignature(info, lock, chain, signature); err != constants.ErrInvalidPointSignature {
 			t.Fatalf("mutated reclaim domain: got %v, want %v", err, constants.ErrInvalidPointSignature)
+		}
+	})
+}
+
+func FuzzPtlcReclaimLockCheckAndVerify(f *testing.F) {
+	id := types.NewHash([]byte("reclaim-check-verify-fuzz"))
+	info := &definition.PtlcInfo{Id: id, TimeLocked: User1.Address}
+	bip340PrivateKey, bip340PublicKey := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{5}, 32))
+	bip340Signature, err := schnorr.Sign(bip340PrivateKey, definition.GetPtlcReclaimMessage(reclaimTestChain, definition.PointTypeBIP340, id, User1.Address))
+	if err != nil {
+		f.Fatalf("sign BIP340 seed: %v", err)
+	}
+
+	valid := []struct {
+		pointType uint8
+		pointLock []byte
+		signature []byte
+	}{
+		{definition.PointTypeED25519, reclaimKey.Public, signReclaim(reclaimKey, reclaimTestChain, id, User1.Address)},
+		{definition.PointTypeBIP340, schnorr.SerializePubKey(bip340PublicKey), bip340Signature.Serialize()},
+	}
+	for _, seed := range valid {
+		lock := &definition.PtlcReclaimLock{Id: id, PointType: seed.pointType, PointLock: seed.pointLock}
+		if err := verifyPtlcReclaimSignature(info, lock, reclaimTestChain, seed.signature); err != nil {
+			f.Fatalf("point type %d: the seed signature does not verify: %v", seed.pointType, err)
+		}
+		f.Add(seed.pointType, seed.pointLock, seed.signature)
+	}
+	f.Add(definition.PointTypeSecp256k1Point, pointOf(pointScalar(7)), pointScalar(7))
+	f.Add(definition.PointTypeED25519, []byte{}, []byte{})
+	f.Add(definition.PointTypeED25519, append([]byte{1}, make([]byte, 31)...), make([]byte, 64))
+	f.Add(definition.PointTypeBIP340, bytes.Repeat([]byte{0xff}, 32), bytes.Repeat([]byte{0xff}, 64))
+	f.Add(uint8(99), bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{1}, 64))
+
+	f.Fuzz(func(t *testing.T, pointType uint8, pointLock, signature []byte) {
+		checked := checkReclaimLock(pointType, pointLock)
+		switch checked {
+		case nil:
+			if !isReclaimPointType(pointType) || len(pointLock) != int(definition.PointTypePubKeySizes[pointType]) {
+				t.Fatalf("accepted a reclaim lock of type %d and %d bytes", pointType, len(pointLock))
+			}
+		case constants.ErrInvalidPointType:
+			if isReclaimPointType(pointType) {
+				t.Fatalf("refused reclaim point type %d as a type", pointType)
+			}
+		case constants.ErrInvalidPointLock:
+			if !isReclaimPointType(pointType) {
+				t.Fatalf("judged the lock of point type %d, which a reclaim lock cannot have", pointType)
+			}
+		default:
+			t.Fatalf("unexpected reclaim lock error: %v", checked)
+		}
+
+		lock := &definition.PtlcReclaimLock{Id: id, PointType: pointType, PointLock: append([]byte(nil), pointLock...)}
+		verified := verifyPtlcReclaimSignature(info, lock, reclaimTestChain, signature)
+		switch verified {
+		case nil, constants.ErrInvalidPointSignature:
+			if checked != nil {
+				t.Fatalf("judged a signature under a refused reclaim lock (%v): %v", checked, verified)
+			}
+		case constants.ErrInvalidPointType, constants.ErrInvalidPointLock:
+			if verified != checked {
+				t.Fatalf("verification answered %v for a reclaim lock checked as %v", verified, checked)
+			}
+		default:
+			t.Fatalf("unexpected reclaim signature error: %v", verified)
 		}
 	})
 }
