@@ -54,10 +54,15 @@ func edChallenge(r, public, message []byte) *edwards25519.Scalar {
 }
 
 func edAdaptorPreSign(key *edKey, message []byte, adaptor *edKey) []byte {
+	return edAdaptorPreSignWithNonceOffset(key, message, adaptor, edwards25519.NewIdentityPoint())
+}
+
+func edAdaptorPreSignWithNonceOffset(key *edKey, message []byte, adaptor *edKey, offset *edwards25519.Point) []byte {
 	nonce := sha512.New()
 	nonce.Write([]byte("adaptor-nonce"))
 	nonce.Write(key.secret.Bytes())
 	nonce.Write(adaptor.public)
+	nonce.Write(offset.Bytes())
 	nonce.Write(message)
 	r, err := edwards25519.NewScalar().SetUniformBytes(nonce.Sum(nil))
 	if err != nil {
@@ -67,13 +72,21 @@ func edAdaptorPreSign(key *edKey, message []byte, adaptor *edKey) []byte {
 	if err != nil {
 		panic(err)
 	}
-	R := new(edwards25519.Point).Add(new(edwards25519.Point).ScalarBaseMult(r), adaptorPoint).Bytes()
+	R := new(edwards25519.Point).Add(new(edwards25519.Point).Add(new(edwards25519.Point).ScalarBaseMult(r), adaptorPoint), offset).Bytes()
 	k := edChallenge(R, key.public, message)
 	s := edwards25519.NewScalar().MultiplyAdd(k, key.secret, r)
 	return append(R, s.Bytes()...)
 }
 
 func edAdaptorVerify(public, message, adaptorPublic, presig []byte) bool {
+	return edAdaptorCheck(public, message, adaptorPublic, presig, false)
+}
+
+func edAdaptorVerifyCofactored(public, message, adaptorPublic, presig []byte) bool {
+	return edAdaptorCheck(public, message, adaptorPublic, presig, true)
+}
+
+func edAdaptorCheck(public, message, adaptorPublic, presig []byte, cofactored bool) bool {
 	A, err := new(edwards25519.Point).SetBytes(public)
 	if err != nil {
 		return false
@@ -93,6 +106,10 @@ func edAdaptorVerify(public, message, adaptorPublic, presig []byte) bool {
 	k := edChallenge(presig[:32], public, message)
 	lhs := new(edwards25519.Point).ScalarBaseMult(s)
 	rhs := new(edwards25519.Point).Add(new(edwards25519.Point).Subtract(R, T), new(edwards25519.Point).ScalarMult(k, A))
+	if cofactored {
+		lhs.MultByCofactor(lhs)
+		rhs.MultByCofactor(rhs)
+	}
 	return lhs.Equal(rhs) == 1
 }
 
@@ -301,6 +318,119 @@ func aliceClaims(t *testing.T, proxy bool) {
 	reclaimPtlcAs(t, z, s.bob, s.id, constants.ErrDataNonExistent)
 }
 
+func TestPtlc_reclaimLock_termsAliceMustCheck(t *testing.T) {
+	bob := g.User2
+	aliceKey := newEdKey("terms/alice")
+	expiry := int64(genesisTimestamp + 600)
+
+	for _, test := range []struct {
+		name        string
+		destination types.Address
+		reclaimLock []byte
+		bobOut      func(t *testing.T, z mock.MockZenon, id types.Hash)
+	}{
+		{"open destination", types.ZeroAddress, aliceKey.public, func(t *testing.T, z mock.MockZenon, id types.Hash) {
+			unlockPtlcAs(t, z, bob, id, bob.Sign(ptlcUnlockMessage(z, definition.PointTypeED25519, id, bob.Address)), nil)
+		}},
+		{"destination is bob", bob.Address, aliceKey.public, func(t *testing.T, z mock.MockZenon, id types.Hash) {
+			unlockPtlcAs(t, z, bob, id, bob.Sign(ptlcUnlockMessage(z, definition.PointTypeED25519, id, bob.Address)), nil)
+		}},
+		{"reclaim lock is bob's", g.User1.Address, bob.Public, func(t *testing.T, z mock.MockZenon, id types.Hash) {
+			z.InsertMomentumsTo(70)
+			reclaimWithSignatureAs(t, z, bob, id, bob.Sign(ptlcReclaimMessage(z, definition.PointTypeED25519, id, bob.Address)), nil)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			z := mock.NewMockZenon(t)
+			defer z.StopPanic()
+			activatePtlc(t, z)
+
+			id := createReclaimLockedPtlc(t, z, bob, bob.Public, test.destination, definition.PointTypeED25519, test.reclaimLock, expiry, big.NewInt(10*g.Zexp))
+			test.bobOut(t, z, id)
+
+			autoreceive(t, z, bob.Address)
+			z.ExpectBalance(bob.Address, types.ZnnTokenStandard, 8000*g.Zexp)
+			z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 0)
+			_, err := embedded.NewPtlcApi(z).GetReclaimLockById(id)
+			common.ExpectError(t, err, constants.ErrDataNonExistent)
+		})
+	}
+}
+
+func TestPtlc_reclaimLock_earlyReclaimCostsBob(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	activatePtlc(t, z)
+	s := newMoneroSwap(t, z, "early")
+
+	completed := edAdaptorComplete(s.reclaimPresig, s.bobShare.secret)
+	published := reclaimWithSignatureAs(t, z, s.bob, s.id, completed, constants.ReclaimNotDue)
+	param := new(definition.ReclaimWithSignaturePtlcParam)
+	common.FailIfErr(t, definition.ABIPtlc.UnpackMethod(param, definition.ReclaimWithSignaturePtlcMethodName, published))
+	if !bytes.Equal(edAdaptorExtract(s.reclaimPresig, param.Signature), s.bobShare.secret.Bytes()) {
+		t.Fatal("the refused reclaim does not give Alice Bob's share")
+	}
+
+	unlockPtlcAs(t, z, s.alice, s.id, edAdaptorComplete(s.unlockPresig, s.aliceShare.secret), nil)
+	autoreceive(t, z, s.alice.Address)
+	z.ExpectBalance(s.alice.Address, types.ZnnTokenStandard, 12010*g.Zexp)
+
+	z.InsertMomentumsTo(70)
+	reclaimWithSignatureAs(t, z, s.bob, s.id, completed, constants.ErrDataNonExistent)
+	z.ExpectBalance(s.bob.Address, types.ZnnTokenStandard, 7990*g.Zexp)
+	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 0)
+}
+
+func TestPtlc_reclaimLock_unusablePresignatureLocksBobOut(t *testing.T) {
+	order2Encoding := append(bytes.Repeat([]byte{0xff}, 31), 0x7f)
+	order2Encoding[0] = 0xec
+	order2, err := new(edwards25519.Point).SetBytes(order2Encoding)
+	common.FailIfErr(t, err)
+
+	for _, test := range []struct {
+		name      string
+		signature func(t *testing.T, s *moneroSwap) []byte
+	}{
+		{"no pre-signature", func(t *testing.T, s *moneroSwap) []byte {
+			return edAdaptorComplete(edAdaptorPreSign(s.bobKey, s.reclaimMsg, s.bobShare), s.bobShare.secret)
+		}},
+		{"torsioned nonce", func(t *testing.T, s *moneroSwap) []byte {
+			presig := edAdaptorPreSignWithNonceOffset(s.aliceKey, s.reclaimMsg, s.bobShare, order2)
+			if !edAdaptorVerifyCofactored(s.aliceKey.public, s.reclaimMsg, s.bobShare.public, presig) {
+				t.Fatal("the torsioned pre-signature fails the cofactored check")
+			}
+			if edAdaptorVerify(s.aliceKey.public, s.reclaimMsg, s.bobShare.public, presig) {
+				t.Fatal("the torsioned pre-signature passes the check the contract makes")
+			}
+			return edAdaptorComplete(presig, s.bobShare.secret)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			z := mock.NewMockZenon(t)
+			defer z.StopPanic()
+			activatePtlc(t, z)
+			s := newMoneroSwap(t, z, "locked out/"+test.name)
+
+			signature := test.signature(t, s)
+			if ed25519.Verify(s.aliceKey.public, s.reclaimMsg, signature) {
+				t.Fatal("Bob holds a reclaim signature under Alice's key")
+			}
+
+			z.InsertMomentumsTo(70)
+			reclaimWithSignatureAs(t, z, s.bob, s.id, signature, constants.ErrInvalidPointSignature)
+			reclaimPtlcAs(t, z, s.bob, s.id, constants.ErrReclaimSignatureRequired)
+
+			z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 10*g.Zexp)
+			z.ExpectBalance(s.bob.Address, types.ZnnTokenStandard, 7990*g.Zexp)
+			ptlcApi := embedded.NewPtlcApi(z)
+			_, err := ptlcApi.GetById(s.id)
+			common.FailIfErr(t, err)
+			_, err = ptlcApi.GetReclaimLockById(s.id)
+			common.FailIfErr(t, err)
+		})
+	}
+}
+
 func TestPtlc_reclaimLock_signatureNotReplayable(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
@@ -372,6 +502,8 @@ func TestPtlc_reclaimLock_bip340(t *testing.T) {
 	if !bytes.Equal(adaptorExtract(presig, param.Signature), secret[:]) {
 		t.Fatal("the BIP-340 reclaim does not reveal the adaptor secret")
 	}
+	autoreceive(t, z, g.User2.Address)
+	z.ExpectBalance(g.User2.Address, types.ZnnTokenStandard, 8000*g.Zexp)
 	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 0)
 }
 
