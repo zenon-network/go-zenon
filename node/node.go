@@ -14,6 +14,7 @@
 package node
 
 import (
+	stderrors "errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,6 +54,7 @@ type Node struct {
 	// Channel to wait for termination notifications
 	stop        chan struct{}
 	lock        sync.RWMutex
+	stopped     bool
 	dataDirLock fileutil.Releaser // prevents concurrent use of instance directory
 }
 
@@ -78,6 +80,18 @@ func NewNode(conf *Config) (*Node, error) {
 	if err = node.openDataDir(); err != nil {
 		return nil, err
 	}
+
+	// From this point on, partially-initialised resources must be
+	// released when an error aborts the build. Before makeGenesisConfig
+	// returned an error (instead of calling os.Exit) this was impossible
+	// to reach, but a library caller that receives an error from NewNode
+	// expects to be able to retry with a different config.
+	success := false
+	defer func() {
+		if !success {
+			node.cleanupOnError()
+		}
+	}()
 
 	// start wallet
 	if err = node.startWallet(); err != nil {
@@ -149,7 +163,25 @@ func NewNode(conf *Config) (*Node, error) {
 		// passed on this node's local chain) the swap fires.
 		Oracle: &sporkOracle{chain: node.z.Chain()},
 	}
+	success = true
 	return node, nil
+}
+
+// cleanupOnError releases resources acquired partway through NewNode when
+// an error aborts the build. It stops the wallet manager, stops the zenon
+// core if one was created, and releases the data-directory lock. Each step
+// is nil-guarded so it is safe to call from any failure point after
+// openDataDir has run.
+func (node *Node) cleanupOnError() {
+	if node.walletManager != nil {
+		node.walletManager.Stop()
+	}
+	if node.z != nil {
+		if err := node.z.Stop(); err != nil {
+			log.Error("cleanup: failed to stop zenon", "reason", err)
+		}
+	}
+	node.closeDataDir()
 }
 
 // sporkOracle is the node-side adapter implementing switcher.SporkOracle
@@ -171,6 +203,21 @@ func (s *sporkOracle) IsLibp2pActive() bool {
 // Start brings the node online: it inits and starts the Zenon core,
 // starts the p2p server and serves the public RPC APIs over the
 // configured HTTP and WebSocket endpoints.
+//
+// If any step after startZenon fails, Start unwinds what was started —
+// the p2p server, RPC endpoints, Zenon core, wallet and data-dir lock —
+// so the caller can retry with corrected config or shut down cleanly.
+// The unwind calls the individual stop methods directly (not Stop) to
+// avoid re-acquiring the lock that Start already holds.
+//
+// A failure inside startZenon itself (zenon Init or Start error) is not
+// unwound here: the partially-initialised zenon core is left as-is and
+// the caller should call Stop to release it.
+//
+// Before this change, chain.Init called os.Exit(2) on an unsupported
+// active spork and a DB open failure in zenon.NewZenon panicked via
+// common.DealWithErr. Both now return errors through the API (issue
+// #196, item 4).
 func (node *Node) Start() error {
 	node.lock.Lock()
 	defer node.lock.Unlock()
@@ -178,44 +225,90 @@ func (node *Node) Start() error {
 	if err := node.startZenon(); err != nil {
 		return err
 	}
+
+	success := false
+	defer func() {
+		if !success {
+			node.unwindStart()
+		}
+	}()
+
 	if err := node.server.Start(); err != nil {
 		return err
 	}
+
 	node.rpcAPIs = api.GetPublicApis(node.z, node.server)
 	if err := node.startRPC(); err != nil {
 		log.Error("failed to start rpc", "reason", err)
 		return err
 	}
+
 	node.warnRPCExposure()
 
+	success = true
 	return nil
+}
+
+// unwindStart releases resources acquired by a failed Start. It is
+// called from Start's rollback defer while node.lock is held, so it
+// must not call Stop (which acquires the same lock). Each step is
+// guarded: a resource that was never started must not be stopped.
+func (node *Node) unwindStart() {
+	log.Info("unwinding failed start ...")
+	if node.server != nil {
+		node.server.Stop()
+	}
+	node.stopRPC()
+	if node.z != nil {
+		if err := node.stopZenon(); err != nil {
+			log.Error("unwind: failed to stop zenon", "reason", err)
+		}
+	}
+	if err := node.stopWallet(); err != nil {
+		log.Error("unwind: failed to stop wallet", "reason", err)
+	}
+	node.closeDataDir()
+	node.stopped = true
+	close(node.stop)
 }
 
 // Stop shuts the node down in reverse of Start: it stops the p2p
 // server, the wallet and the Zenon core, shuts down the RPC servers,
-// releases the data-directory lock and unblocks Wait.
+// releases the data-directory lock and unblocks Wait. Stop is
+// idempotent: a second call returns nil immediately.
+//
+// Every cleanup step runs even when an earlier one fails; the returned
+// error is the join of the wallet and core stop errors (stopRPC and
+// closeDataDir log their own), matching zenon.Stop.
 func (node *Node) Stop() error {
 	node.lock.Lock()
 	defer node.lock.Unlock()
+
+	if node.stopped {
+		return nil
+	}
+	node.stopped = true
 	defer close(node.stop)
+
+	var errs []error
 
 	log.Info("stopping p2p server ...")
 	node.server.Stop()
 
 	if err := node.stopWallet(); err != nil {
 		log.Error("failed to stop wallet", "reason", err)
-		return err
+		errs = append(errs, err)
 	}
 	if err := node.stopZenon(); err != nil {
 		log.Error("failed to stop zenon", "reason", err)
-		return err
+		errs = append(errs, err)
 	}
 	node.stopRPC()
 
 	// Release instance directory lock.
 	node.closeDataDir()
 
-	return nil
+	return stderrors.Join(errs...)
 }
 
 // Wait blocks until the node is stopped.

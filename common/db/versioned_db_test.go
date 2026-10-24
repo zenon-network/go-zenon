@@ -73,7 +73,7 @@ func newMockTransaction(seed int64, db DB) *mockTransaction {
 }
 
 func TestLevelDBManagerAddWriteFailureIsAtomic(t *testing.T) {
-	m := NewLevelDBManager(t.TempDir()).(*ldbManager)
+	m := mustNewLevelDBManager(t, t.TempDir()).(*ldbManager)
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	before := GetFrontierIdentifier(m.Frontier())
@@ -100,7 +100,7 @@ func TestLevelDBManagerAddWriteFailureIsAtomic(t *testing.T) {
 }
 
 func TestLevelDBManagerPopWriteFailureIsAtomic(t *testing.T) {
-	m := NewLevelDBManager(t.TempDir()).(*ldbManager)
+	m := mustNewLevelDBManager(t, t.TempDir()).(*ldbManager)
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	transaction := newMockTransaction(1, m.Frontier())
@@ -127,7 +127,7 @@ func TestLevelDBManagerPopWriteFailureIsAtomic(t *testing.T) {
 }
 
 func TestVersionedDBConcurrentUse(t *testing.T) {
-	m := NewLevelDBManager(t.TempDir())
+	m := mustNewLevelDBManager(t, t.TempDir())
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 	v0 := m.Frontier()
 	v01 := m.Frontier()
@@ -169,7 +169,7 @@ e871bc355914f2c3 - 48c39064a7c7e355`)
 
 func TestVersionedDBVersions(t *testing.T) {
 	dir := t.TempDir()
-	m := NewLevelDBManager(dir)
+	m := mustNewLevelDBManager(t, dir)
 	// The explicit Stop below releases dir for the reopen; the Cleanup
 	// covers the failure paths above it and is a no-op after that Stop.
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
@@ -301,7 +301,7 @@ dc2864602be7fb85 - d38967f931a50490
 f25f4b21eef64b43 - 9c0a8a2bfc0914df`)
 
 	common.FailIfErr(t, m.Stop())
-	m2 := NewLevelDBManager(dir)
+	m2 := mustNewLevelDBManager(t, dir)
 	t.Cleanup(func() { common.FailIfErr(t, m2.Stop()) })
 	db = m2.Frontier()
 	common.ExpectString(t, DebugDB(db), `
@@ -332,7 +332,7 @@ f25f4b21eef64b43 - 9c0a8a2bfc0914df`)
 // A transaction whose previous is a known-but-stale version must be rejected
 // instead of overwriting the frontier with stale state.
 func TestLevelDBManagerAddRejectsNonFrontierPrevious(t *testing.T) {
-	m := NewLevelDBManager(t.TempDir())
+	m := mustNewLevelDBManager(t, t.TempDir())
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	t1 := newMockTransaction(1, m.Frontier())
@@ -1741,7 +1741,7 @@ func expectMissing(t *testing.T, db DB, key string) {
 // records such a key as deleted; that record has to use the encoding the
 // delete-aware view understands, or the key reads as present and empty.
 func TestLevelDBManagerHistoricalViewHidesLaterKeys(t *testing.T) {
-	m := NewLevelDBManager(t.TempDir())
+	m := mustNewLevelDBManager(t, t.TempDir())
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "k1", "v1")))
@@ -1788,7 +1788,7 @@ func TestLevelDBManagerPopInvalidatesRollbackCaches(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := NewLevelDBManager(t.TempDir())
+			m := mustNewLevelDBManager(t, t.TempDir())
 			t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 			common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "shared", "at-1")))
@@ -1846,7 +1846,7 @@ func TestManagerStopIsIdempotent(t *testing.T) {
 	}{
 		{"leveldb", func(t *testing.T) (Manager, func()) {
 			dir := t.TempDir()
-			return NewLevelDBManager(dir), func() {
+			return mustNewLevelDBManager(t, dir), func() {
 				// The raw handle has no nil-on-repeat contract, so its
 				// single Close belongs to the cleanup that is registered
 				// as soon as the open succeeds.
@@ -1882,7 +1882,7 @@ func TestManagerStopIsIdempotent(t *testing.T) {
 // the handle is unusable after a failed Close and a retry of Stop has to be
 // the documented no-op rather than a second error.
 func TestLevelDBManagerStopAfterFailedClose(t *testing.T) {
-	m := NewLevelDBManager(t.TempDir()).(*ldbManager)
+	m := mustNewLevelDBManager(t, t.TempDir()).(*ldbManager)
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 	// The handle is closed underneath the manager, so the failure the first
 	// Stop sees is goleveldb's ErrClosed; an I/O failure of a first Close
@@ -2041,6 +2041,17 @@ func TestMemDBManagerAddRechecksFrontierAtCommit(t *testing.T) {
 	if m.Get(commit.Identifier()) != nil || m.GetPatch(commit.Identifier()) != nil {
 		t.Fatal("state published by an Add that lost the frontier race")
 	}
+}
+
+// mustNewLevelDBManager opens a LevelDB-backed Manager for a test,
+// failing the test if the database cannot be opened.
+func mustNewLevelDBManager(t *testing.T, dir string) Manager {
+	t.Helper()
+	m, err := NewLevelDBManager(dir)
+	if err != nil {
+		t.Fatalf("open leveldb manager: %v", err)
+	}
+	return m
 }
 
 func TestMemDBManagerStopConcurrentWithAdd(t *testing.T) {

@@ -12,18 +12,21 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/urfave/cli/v2"
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/metadata"
+	"github.com/zenon-network/go-zenon/node"
 )
 
 var (
-	log         = common.ZenonLogger.New()
-	app         = cli.NewApp()
-	nodeManager *Manager
+	log           = common.ZenonLogger.New()
+	app           = cli.NewApp()
+	nodeManager   *Manager
+	nodeManagerMu sync.Mutex
 )
 
 // Run parses os.Args and runs the znnd cli application. On error it
@@ -37,11 +40,54 @@ func Run() {
 	}
 }
 
+// RunWithConfig starts a node from an explicit node.Config, bypassing
+// CLI flag parsing entirely. It returns an error instead of exiting
+// the process, making it suitable for library consumers (libznn) that
+// embed the node and must remain alive on startup failures. The
+// caller is responsible for calling Stop to shut the node down.
+//
+// Before the config is handed to the node it is initialised the same
+// way MakeConfig initialises it: paths are made absolute (so that a
+// DefaultNodeConfig with an empty WalletPath works) and logging is
+// configured from the config's LogLevel and DataPath.
+//
+// A second call while a node is already running returns an error and
+// leaves the first node's stop handle intact.
+func RunWithConfig(cfg *node.Config) error {
+	nodeManagerMu.Lock()
+	defer nodeManagerMu.Unlock()
+
+	if nodeManager != nil {
+		return fmt.Errorf("node is already running")
+	}
+	if cfg == nil {
+		return fmt.Errorf("config must not be nil")
+	}
+	if err := cfg.MakePathsAbsolute(); err != nil {
+		return err
+	}
+	common.InitLogging(cfg.DataPath, cfg.LogLevel)
+
+	m, err := NewNodeManagerFromConfig(cfg)
+	if err != nil {
+		return err
+	}
+	if err := m.startNode(); err != nil {
+		m.Stop() // clean up partial start
+		return err
+	}
+	nodeManager = m
+	return nil
+}
+
 // Stop stops the running node Manager and reports a clean shutdown. It is
 // exported for libznn and is a no-op when called before Run has assigned
 // the manager. Manager.Stop logs a node shutdown error and returns nil, so
 // the DealWithErr call here does not panic today.
 func Stop() {
+	nodeManagerMu.Lock()
+	defer nodeManagerMu.Unlock()
+
 	// exported for libznn; a consumer may call Stop before Run assigned the
 	// manager, which would otherwise nil-deref inside Manager.Stop
 	if nodeManager == nil {
@@ -49,6 +95,7 @@ func Stop() {
 	}
 	err := nodeManager.Stop()
 	common.DealWithErr(err)
+	nodeManager = nil
 	fmt.Println("znnd successfully stopped")
 }
 
@@ -120,13 +167,19 @@ func action(ctx *cli.Context) error {
 	if args := ctx.Args(); args.Len() > 0 {
 		return fmt.Errorf("invalid command: %q", args.Get(0))
 	}
-	var err error
-	nodeManager, err = NewNodeManager(ctx)
+	m, err := NewNodeManager(ctx)
 	if err != nil {
 		return err
 	}
+	nodeManagerMu.Lock()
+	nodeManager = m
+	nodeManagerMu.Unlock()
 
-	return nodeManager.Start()
+	if err := m.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	return nil
 }
 
 func afterAction(*cli.Context) error {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -220,6 +219,40 @@ type Config struct {
 	Net      NetConfig
 }
 
+// Clone returns a deep copy of c that shares no mutable state with the
+// original. Slices (RPC endpoints, virtual hosts, CORS domains, WS
+// origins, net seeders and bootstrap peers) are copied so that mutating
+// the clone — e.g. a JSON overlay writing into the struct — never
+// modifies the package-level DefaultNodeConfig's backing arrays.
+func (c *Config) Clone() *Config {
+	out := *c
+	if c.Producer != nil {
+		producer := *c.Producer
+		out.Producer = &producer
+	}
+	out.RPC.Endpoints = cloneSlice(c.RPC.Endpoints)
+	out.RPC.HTTPVirtualHosts = cloneSlice(c.RPC.HTTPVirtualHosts)
+	out.RPC.HTTPCors = cloneSlice(c.RPC.HTTPCors)
+	out.RPC.WSOrigins = cloneSlice(c.RPC.WSOrigins)
+	out.Net.Seeders = cloneSlice(c.Net.Seeders)
+	out.Net.BootstrapPeers = cloneSlice(c.Net.BootstrapPeers)
+	if c.Net.PeerstoreDir != nil {
+		dir := *c.Net.PeerstoreDir
+		out.Net.PeerstoreDir = &dir
+	}
+	return &out
+}
+
+// cloneSlice returns a copy of s, or nil when s is nil.
+func cloneSlice(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
+}
+
 // MakePathsAbsolute resolves the data, wallet and genesis paths to
 // absolute form in place, defaulting the data path to DefaultDataDir
 // and the wallet path to the wallet subdirectory of the data path
@@ -266,43 +299,47 @@ func (c *Config) makeZenonConfig(walletManager *wallet.Manager) (*zenon.Config, 
 		return nil, err
 	}
 
+	genesisConfig, err := c.makeGenesisConfig()
+	if err != nil {
+		return nil, err
+	}
+
 	return &zenon.Config{
 		MinPeers:          c.Net.MinPeers,
 		MinConnectedPeers: c.Net.MinConnectedPeers,
 		ProducingKeyPair:  pillarCoinbase,
-		GenesisConfig:     c.makeGenesisConfig(),
+		GenesisConfig:     genesisConfig,
 		DataDir:           c.DataPath,
 		MaxSubscriptions:  c.RPC.MaxSubscriptions,
 	}, nil
 }
-func (c *Config) makeGenesisConfig() (genesisConfig store.Genesis) {
+func (c *Config) makeGenesisConfig() (store.Genesis, error) {
 	var err error
 	var path string
 
 	if c.GenesisFile != "" {
 		path = c.GenesisFile
-		genesisConfig, err = genesis.ReadGenesisConfigFromFile(c.GenesisFile)
-	} else {
-		genesisConfig, err = genesis.MakeEmbeddedGenesisConfig()
-		if err == genesis.ErrNoEmbeddedGenesis {
-			log.Crit("no embedded genesis found and no genesis was specified")
-			os.Exit(1)
-		} else {
-			log.Info("using embedded genesis")
-			return
+		genesisConfig, err := genesis.ReadGenesisConfigFromFile(c.GenesisFile)
+		if err != nil {
+			log.Error("no valid genesis file", "reason", err)
+			fmt.Printf("no valid genesis file. Reason: '%v'. Stopping ...\n", err)
+			return nil, fmt.Errorf("invalid genesis file %q: %w", path, err)
 		}
-	}
-
-	if err == nil {
 		fmt.Printf("Loaded a valid genesis config from path '%v'\n", path)
 		log.Info("loaded a valid genesis config")
-		return
-	} else {
-		log.Crit("no valid genesis file. Stopping ...", "reason", err)
-		fmt.Printf("no valid genesis file. Reason: '%v'. Stopping ...\n", err)
-		os.Exit(1)
-		return
+		return genesisConfig, nil
 	}
+
+	genesisConfig, err := genesis.MakeEmbeddedGenesisConfig()
+	if err == genesis.ErrNoEmbeddedGenesis {
+		log.Error("no embedded genesis found and no genesis was specified")
+		return nil, fmt.Errorf("no embedded genesis and no genesis file specified")
+	}
+	if err != nil {
+		return nil, err
+	}
+	log.Info("using embedded genesis")
+	return genesisConfig, nil
 }
 func (c *Config) parseProducer(walletManager *wallet.Manager) (*wallet.KeyPair, error) {
 	if c.Producer == nil {

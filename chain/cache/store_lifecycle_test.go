@@ -29,7 +29,10 @@ func (m *stopsAfterAcquire) Stop() error                               { return 
 // was acquired. It must report the stopped manager as a nil store, the same
 // answer a pre-acquisition Stop gives, instead of panicking.
 func TestNewCacheStore_StoppedAfterAcquisition(t *testing.T) {
-	inner := storage.NewCacheDBManager(t.TempDir())
+	inner, err := storage.NewCacheDBManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer inner.Stop()
 	s := NewCacheStore(types.ZeroHashHeight, &stopsAfterAcquire{inner: inner})
 	if s != nil {

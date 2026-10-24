@@ -70,10 +70,13 @@ func TestSequencerSizeNormal(t *testing.T) {
 // TestSequencerSizeReadError verifies that SequencerSize returns a
 // diagnostic error (not a panic) when the underlying store fails.
 func TestSequencerSizeReadError(t *testing.T) {
-	wrapper, raw := db.NewLevelDB(t.TempDir())
+	wrapper, raw, err := db.NewLevelDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("open leveldb: %v", err)
+	}
 	common.FailIfErr(t, raw.Close())
 	m := NewAccountMailbox(types.PillarContract, wrapper)
-	_, err := m.SequencerSize()
+	_, err = m.SequencerSize()
 	if err == nil {
 		t.Fatal("expected error for closed DB, got nil")
 	}

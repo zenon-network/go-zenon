@@ -14,7 +14,9 @@ import (
 // the frontier through it must report the stopped manager as an error, not
 // panic, so a caller that lost the race with Stop can return the sentinel.
 func TestReadFrontierIdentifierClosedHandle(t *testing.T) {
-	m := NewCacheDBManager(t.TempDir()).(*cacheManager)
+	mgr, err := NewCacheDBManager(t.TempDir())
+	common.FailIfErr(t, err)
+	m := mgr.(*cacheManager)
 	handle := db.NewLevelDBWrapper(m.ldb).Subset(storageByte)
 	common.FailIfErr(t, m.Stop())
 

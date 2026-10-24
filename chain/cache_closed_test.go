@@ -39,7 +39,10 @@ func stopsAfterFirstAcquire(inner storage.CacheManager) *stopsOnAcquire {
 }
 
 func TestGetFrontierCacheStore_StoppedAfterAcquisition(t *testing.T) {
-	inner := storage.NewCacheDBManager(t.TempDir())
+	inner, err := storage.NewCacheDBManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer inner.Stop()
 	c := NewChainCache(stopsAfterFirstAcquire(inner))
 	if s := c.GetFrontierCacheStore(); s != nil {
@@ -48,7 +51,10 @@ func TestGetFrontierCacheStore_StoppedAfterAcquisition(t *testing.T) {
 }
 
 func TestGetCacheStore_StoppedAfterAcquisition(t *testing.T) {
-	inner := storage.NewCacheDBManager(t.TempDir())
+	inner, err := storage.NewCacheDBManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer inner.Stop()
 	c := NewChainCache(stopsAfterFirstAcquire(inner))
 	if s := c.GetCacheStore(types.ZeroHashHeight); s != nil {
@@ -57,11 +63,14 @@ func TestGetCacheStore_StoppedAfterAcquisition(t *testing.T) {
 }
 
 func TestRollbackCacheTo_StoppedAfterAcquisition(t *testing.T) {
-	inner := storage.NewCacheDBManager(t.TempDir())
+	inner, err := storage.NewCacheDBManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer inner.Stop()
 	c := NewChainCache(stopsAfterFirstAcquire(inner))
 	var l sync.Mutex
-	err := c.RollbackCacheTo(&l, types.ZeroHashHeight)
+	err = c.RollbackCacheTo(&l, types.ZeroHashHeight)
 	if !errors.Is(err, storage.ErrCacheStopped) {
 		t.Fatalf("want ErrCacheStopped, got %v", err)
 	}
@@ -70,10 +79,13 @@ func TestRollbackCacheTo_StoppedAfterAcquisition(t *testing.T) {
 // Init's frontier read is the first use of the acquired handle; a Stop that
 // lands in between must surface as ErrCacheStopped, not a panic.
 func TestInit_StoppedAfterAcquisition(t *testing.T) {
-	inner := storage.NewCacheDBManager(t.TempDir())
+	inner, err := storage.NewCacheDBManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer inner.Stop()
 	c := NewChainCache(stopsAfterFirstAcquire(inner))
-	err := c.Init(db.NewMemDBManager(db.NewMemDB()), nil)
+	err = c.Init(db.NewMemDBManager(db.NewMemDB()), nil)
 	if !errors.Is(err, storage.ErrCacheStopped) {
 		t.Fatalf("want ErrCacheStopped, got %v", err)
 	}
@@ -83,7 +95,10 @@ func TestInit_StoppedAfterAcquisition(t *testing.T) {
 // acquires again for the store; a Stop between the two closes the second
 // handle before its frontier read.
 func TestGetFrontierCacheStore_StoppedOnSecondAcquisition(t *testing.T) {
-	inner := storage.NewCacheDBManager(t.TempDir())
+	inner, err := storage.NewCacheDBManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer inner.Stop()
 	c := NewChainCache(&stopsOnAcquire{inner: inner, n: 2})
 	if s := c.GetFrontierCacheStore(); s != nil {
@@ -94,11 +109,14 @@ func TestGetFrontierCacheStore_StoppedOnSecondAcquisition(t *testing.T) {
 // UpdateCache reports a stopped manager as its existing nil-frontier error
 // instead of panicking in the frontier read.
 func TestUpdateCache_StoppedAfterAcquisition(t *testing.T) {
-	inner := storage.NewCacheDBManager(t.TempDir())
+	inner, err := storage.NewCacheDBManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer inner.Stop()
 	c := NewChainCache(stopsAfterFirstAcquire(inner))
 	var l sync.Mutex
-	err := c.UpdateCache(&l, &nom.DetailedMomentum{Momentum: &nom.Momentum{}}, db.NewPatch())
+	err = c.UpdateCache(&l, &nom.DetailedMomentum{Momentum: &nom.Momentum{}}, db.NewPatch())
 	if err == nil || !strings.Contains(err.Error(), "cache frontier store is nil") {
 		t.Fatalf("want the nil-frontier error, got %v", err)
 	}
@@ -108,7 +126,10 @@ func TestUpdateCache_StoppedAfterAcquisition(t *testing.T) {
 // the first iteration (then Pop), and the fifth opens the second iteration;
 // closing there must end the rollback with the sentinel, not a panic.
 func TestRollbackCacheTo_StoppedInLaterIteration(t *testing.T) {
-	inner := storage.NewCacheDBManager(t.TempDir())
+	inner, err := storage.NewCacheDBManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer inner.Stop()
 	for h := uint64(1); h <= 2; h++ {
 		if err := inner.Add(types.HashHeight{Height: h, Hash: types.Hash{byte(h)}}, db.NewPatch()); err != nil {
@@ -117,7 +138,7 @@ func TestRollbackCacheTo_StoppedInLaterIteration(t *testing.T) {
 	}
 	c := NewChainCache(&stopsOnAcquire{inner: inner, n: 5})
 	var l sync.Mutex
-	err := c.RollbackCacheTo(&l, types.ZeroHashHeight)
+	err = c.RollbackCacheTo(&l, types.ZeroHashHeight)
 	if !errors.Is(err, storage.ErrCacheStopped) {
 		t.Fatalf("want ErrCacheStopped, got %v", err)
 	}
