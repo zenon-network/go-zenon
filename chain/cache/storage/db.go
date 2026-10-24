@@ -93,24 +93,42 @@ func GetRollbackCacheSize() int {
 	return rollbackCacheSize
 }
 
-// GetFrontierIdentifier returns the identifier of the momentum the
+// ReadFrontierIdentifier returns the identifier of the momentum the
 // cache in db is current at, or types.ZeroHashHeight for an empty
-// cache. Storage errors other than not-found panic.
-func GetFrontierIdentifier(db db.DB) types.HashHeight {
+// cache. When the handle's LevelDB was closed before the read starts
+// (the manager was stopped after the handle was acquired) it returns
+// ErrCacheStopped with the closed-database cause in the message; the
+// sentinel, not leveldb.ErrClosed, is what errors.Is matches. A close
+// that overlaps a read already in flight is not covered: goleveldb
+// may then report other release errors, which are returned as they
+// are. Any other storage or decoding error is logged and returned.
+func ReadFrontierIdentifier(db db.DB) (types.HashHeight, error) {
 	data, err := db.Get(frontierIdentifierKey)
 	if err == leveldb.ErrNotFound {
-		return types.ZeroHashHeight
+		return types.ZeroHashHeight, nil
+	}
+	if err == leveldb.ErrClosed {
+		return types.ZeroHashHeight, errors.Wrap(ErrCacheStopped, err.Error())
 	}
 	if err != nil {
 		common.ChainLogger.Error("failed to read frontier identifier", "store", "cache/storage", "key", frontierIdentifierKey, "err", err)
-		common.DealWithErr(err)
+		return types.ZeroHashHeight, err
 	}
 	hh, err := types.DeserializeHashHeight(data)
 	if err != nil {
 		common.ChainLogger.Error("failed to deserialize frontier identifier", "store", "cache/storage", "key", frontierIdentifierKey, "err", err)
-		common.DealWithErr(err)
+		return types.ZeroHashHeight, err
 	}
-	return *hh
+	return *hh, nil
+}
+
+// GetFrontierIdentifier is ReadFrontierIdentifier for callers that hold
+// the manager's lifetime and treat every error as fatal: it panics on
+// any error, including a closed handle.
+func GetFrontierIdentifier(db db.DB) types.HashHeight {
+	hh, err := ReadFrontierIdentifier(db)
+	common.DealWithErr(err)
+	return hh
 }
 
 func (m *cacheManager) DB() db.DB {
