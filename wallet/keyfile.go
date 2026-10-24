@@ -18,11 +18,9 @@ const (
 // KeyFile is the on-disk, password-protected form of a KeyStore. It
 // records the base address in the clear for identification and stores
 // the BIP-39 entropy encrypted under Crypto. Path is the file path it
-// was read from or will be written to, as given (not made absolute);
-// it is serialized along with the other fields under the JSON key
-// "Path", and a "Path" present in the file takes precedence over the
-// path the file was read from (the devnet key generator relies on
-// this).
+// was read from or will be written to, as given (not made absolute).
+// It is serialized under the JSON key "Path" for informational
+// purposes only; ReadKeyFile always sets it to the scanned path.
 type KeyFile struct {
 	Path string
 
@@ -47,25 +45,26 @@ type argon2Params struct {
 }
 
 // ReadKeyFile reads and JSON-decodes the key file at path, recording
-// the path on the returned KeyFile unless the file itself carries a
-// "Path" value, which wins. It rejects files whose version,
-// cipher, KDF, or nonce length do not match what this build supports,
-// returning ErrKeyFileInvalidVersion, ErrKeyFileInvalidCipher,
-// ErrKeyFileInvalidKDF, or ErrKeyFileInvalidNonce respectively. It does
-// not decrypt the contents.
+// path on the returned KeyFile. A "Path" value inside the file is
+// ignored: the caller-selected path is authoritative for lookup, unlock,
+// lock and write-back. It rejects files whose version, cipher, KDF, or
+// nonce length do not match what this build supports, returning
+// ErrKeyFileInvalidVersion, ErrKeyFileInvalidCipher, ErrKeyFileInvalidKDF,
+// or ErrKeyFileInvalidNonce respectively. It does not decrypt the
+// contents.
 func ReadKeyFile(path string) (*KeyFile, error) {
 	keyFileJson, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	k := &KeyFile{
-		Path: path,
-	}
+	k := &KeyFile{}
 	// parse and check entropyJSON params
 	if err := json.Unmarshal(keyFileJson, k); err != nil {
 		return nil, err
 	}
+	// The scanned path always wins over any serialized value.
+	k.Path = path
 	if k.Version != cryptoStoreVersion {
 		return nil, ErrKeyFileInvalidVersion
 	}

@@ -465,6 +465,12 @@ func (rw *protoRW) WriteMsg(msg p2p.Msg) (err error) {
 	return err
 }
 
+// Closed returns a channel that is closed when the peer shuts down.
+// Protocol handlers hand it to waits that are not bound to the
+// connection, such as downloader deliveries, so that those waits end
+// with the peer rather than with whatever they were waiting on.
+func (rw *protoRW) Closed() <-chan struct{} { return rw.closed }
+
 func (rw *protoRW) ReadMsg() (p2p.Msg, error) {
 	select {
 	case msg := <-rw.in:

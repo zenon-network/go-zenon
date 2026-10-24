@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"github.com/pkg/errors"
+
 	"github.com/zenon-network/go-zenon/chain/cache/storage"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/chain/store"
@@ -19,7 +21,9 @@ type cacheStore struct {
 // identifier over manager's database, with its own in-memory change
 // set for writes made through ApplyMomentum. It returns nil when
 // identifier is above the cache frontier or when the manager is
-// stopped (DB returns nil), and panics on a nil manager.
+// stopped, whether DB returns nil or the handle it returned was closed
+// before the frontier could be read; it panics on a nil manager and,
+// like GetFrontierIdentifier, on any other frontier read error.
 func NewCacheStore(identifier types.HashHeight, manager storage.CacheManager) store.Cache {
 	if manager == nil {
 		panic("cache store can't operate with nil db manager")
@@ -28,7 +32,11 @@ func NewCacheStore(identifier types.HashHeight, manager storage.CacheManager) st
 	if storeDB == nil {
 		return nil
 	}
-	frontier := storage.GetFrontierIdentifier(storeDB)
+	frontier, err := storage.ReadFrontierIdentifier(storeDB)
+	if errors.Is(err, storage.ErrCacheStopped) {
+		return nil
+	}
+	common.DealWithErr(err)
 	if identifier.Height > frontier.Height {
 		return nil
 	}

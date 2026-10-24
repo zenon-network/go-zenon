@@ -26,11 +26,9 @@ type Config struct {
 // Manager owns the wallet directory and the set of key stores known to
 // the node. It tracks every key file found on disk (encrypted) and the
 // subset currently unlocked in memory (decrypted). The maps are keyed
-// by each KeyFile's Path: for files found by Start that is the scanned
-// path (absolute when WalletDir is) unless the file's own "Path" value
-// overrides it, while lookups resolve their argument with
-// MakePathAbsolut. With an absolute WalletDir, a file whose stored Path
-// is relative is therefore indexed under a key lookups do not produce.
+// by the scanned path (the path passed to ReadKeyFile during Start),
+// which is the path lookups resolve to through MakePathAbsolut. With an
+// absolute WalletDir, a relative stored Path in the JSON is ignored.
 // Manager is not safe for concurrent use.
 type Manager struct {
 	config *Config
@@ -63,7 +61,23 @@ func New(config *Config) *Manager {
 // Start ensures the wallet directory exists and loads every key file in
 // it into the encrypted set. It does not decrypt any store. It returns
 // an error if the directory cannot be created or listed.
+//
+// Start resolves WalletDir to an absolute path before scanning so that
+// every indexed path is absolute, regardless of how the directory was
+// configured. This keeps absolute-path lookups working when WalletDir
+// is relative: MakePathAbsolut leaves an absolute argument unchanged,
+// so the lookup key would not match a relatively-scanned index entry.
+// The resolved directory is written back into Config.WalletDir; an empty
+// WalletDir means the current working directory.
 func (m *Manager) Start() error {
+	// Resolve the wallet directory to an absolute path so that scanned
+	// paths and lookup keys are always consistent.
+	absDir, err := filepath.Abs(m.config.WalletDir)
+	if err != nil {
+		return err
+	}
+	m.config.WalletDir = absDir
+
 	// ensure WalletDir exists
 	if err := os.MkdirAll(m.config.WalletDir, 0700); err != nil {
 		return err
@@ -174,7 +188,7 @@ func (m *Manager) ListEntropyFilesInStandardDir() ([]*KeyFile, error) {
 
 // Unlock also adds keyFile to encrypted if not present
 func (m *Manager) Unlock(path, password string) error {
-	path = m.MakePathAbsolut(path)
+	absPath := m.MakePathAbsolut(path)
 	kf, err := m.GetKeyFile(path)
 	if err != nil {
 		return err
@@ -184,8 +198,8 @@ func (m *Manager) Unlock(path, password string) error {
 		return err
 	}
 
-	m.encrypted[path] = kf
-	m.decrypted[path] = ks
+	m.encrypted[absPath] = kf
+	m.decrypted[absPath] = ks
 	return nil
 }
 

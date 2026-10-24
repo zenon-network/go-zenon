@@ -70,6 +70,9 @@ func applyPtlcDiffs(contracts map[types.Address]*embeddedImplementation) {
 			cabi.ReclaimPtlcMethodName:     &implementation.ReclaimPtlcMethod{MethodName: cabi.ReclaimPtlcMethodName},
 			cabi.UnlockPtlcMethodName:      &implementation.UnlockPtlcMethod{MethodName: cabi.UnlockPtlcMethodName},
 			cabi.ProxyUnlockPtlcMethodName: &implementation.ProxyUnlockPtlcMethod{MethodName: cabi.ProxyUnlockPtlcMethodName},
+
+			cabi.CreateWithReclaimLockPtlcMethodName: &implementation.CreateWithReclaimLockPtlcMethod{MethodName: cabi.CreateWithReclaimLockPtlcMethodName},
+			cabi.ReclaimWithSignaturePtlcMethodName:  &implementation.ReclaimWithSignaturePtlcMethod{MethodName: cabi.ReclaimWithSignaturePtlcMethodName},
 		},
 		cabi.ABIPtlc,
 	}

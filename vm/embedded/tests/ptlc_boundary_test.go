@@ -74,6 +74,29 @@ func TestPtlc_enforcementHeightBoundary(t *testing.T) {
 				Data:      definition.ABIPtlc.PackMethodPanic(definition.ReclaimPtlcMethodName, unknown),
 			}
 		},
+		definition.CreateWithReclaimLockPtlcMethodName: func() *nom.AccountBlock {
+			return &nom.AccountBlock{
+				Address:   g.User1.Address,
+				ToAddress: types.PtlcContract,
+				Data: definition.ABIPtlc.PackMethodPanic(definition.CreateWithReclaimLockPtlcMethodName,
+					int64(genesisTimestamp+1000),
+					definition.PointTypeED25519,
+					g.User2.Public,
+					types.ZeroAddress,
+					definition.PointTypeED25519,
+					g.User1.Public,
+				),
+				TokenStandard: types.ZnnTokenStandard,
+				Amount:        big.NewInt(10 * g.Zexp),
+			}
+		},
+		definition.ReclaimWithSignaturePtlcMethodName: func() *nom.AccountBlock {
+			return &nom.AccountBlock{
+				Address:   g.User4.Address,
+				ToAddress: types.PtlcContract,
+				Data:      definition.ABIPtlc.PackMethodPanic(definition.ReclaimWithSignaturePtlcMethodName, unknown, witness),
+			}
+		},
 	}
 	if len(calls) != len(definition.ABIPtlc.Methods) {
 		t.Fatalf("%d calls for %d methods", len(calls), len(definition.ABIPtlc.Methods))
@@ -101,7 +124,7 @@ func TestPtlc_enforcementHeightBoundary(t *testing.T) {
 	}
 	z.InsertNewMomentum()
 	z.InsertNewMomentum()
-	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 10*g.Zexp)
+	z.ExpectBalance(types.PtlcContract, types.ZnnTokenStandard, 20*g.Zexp)
 }
 
 func TestPtlc_createExpiresBeforeConfirmation(t *testing.T) {

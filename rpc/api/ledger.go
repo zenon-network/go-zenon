@@ -268,7 +268,7 @@ func (l *LedgerApi) GetAccountBlocksByPage(address types.Address, pageIndex, pag
 		}, nil
 	}
 
-	startHeight := int64(frontier.Height) - int64(pageIndex+1)*int64(pageSize) + 1
+	startHeight := int64(frontier.Height) - (int64(pageIndex)+1)*int64(pageSize) + 1
 	count := int64(pageSize)
 	tooMuch := 1 - startHeight
 	if tooMuch > 0 {
@@ -520,7 +520,7 @@ func (l *LedgerApi) GetMomentumsByPage(pageIndex, pageSize uint32) (*MomentumLis
 		return nil, err
 	}
 
-	startHeight := int64(frontier.Height) - int64(pageIndex+1)*int64(pageSize) + 1
+	startHeight := int64(frontier.Height) - (int64(pageIndex)+1)*int64(pageSize) + 1
 	count := int64(pageSize)
 	tooMuch := 1 - startHeight
 	if tooMuch > 0 {

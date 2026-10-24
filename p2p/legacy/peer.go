@@ -212,9 +212,15 @@ loop:
 
 	p.rw.close(reason)
 	close(p.closed)
-	common.P2PLogger.Debug("wg.Wait() peer.run()")
-	// p.wg.Wait()
-	common.P2PLogger.Debug("wg.Wait() peer.run() finished")
+	// Join the read loop, the ping loop and every protocol goroutine
+	// before returning: the server removes the peer as soon as run
+	// returns, and a protocol handler still inside Run would otherwise
+	// keep its registration past the removal, which a reconnect with the
+	// same identity then trips over. All of them unblock on the closed
+	// transport or p.closed, and their final sends on protoErr, readErr
+	// and writeErr have buffer space, so the join is bounded by the
+	// handler's own exit.
+	p.wg.Wait()
 	if requested {
 		reason = p2p.DiscRequested
 	}
@@ -398,6 +404,12 @@ func (rw *protoRW) WriteMsg(msg p2p.Msg) (err error) {
 	}
 	return err
 }
+
+// Closed returns a channel that is closed when the peer shuts down.
+// Protocol handlers hand it to waits that are not bound to the
+// connection, such as downloader deliveries, so that those waits end
+// with the peer: the transport joins the handler on peer exit.
+func (rw *protoRW) Closed() <-chan struct{} { return rw.closed }
 
 func (rw *protoRW) ReadMsg() (p2p.Msg, error) {
 	select {

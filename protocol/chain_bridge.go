@@ -272,6 +272,15 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		if err != nil {
 			return 0, errors.Errorf("unable to capture branch above %v for rollback. Reason:%v", target.Identifier(), err)
 		}
+		// Rollback can discard pending state even for accounts outside the
+		// replacement's content (for example, a recent acknowledged momentum).
+		// Keep every pending account, not only the side-chain's addresses.
+		pending := c.chain.GetAllUncommittedAccountBlocks()
+		pendingAddresses := make([]types.Address, 0, len(pending))
+		for _, block := range pending {
+			pendingAddresses = append(pendingAddresses, block.Address)
+		}
+		pendingSnapshot := c.chain.SnapshotUncommitted(insert, pendingAddresses)
 
 		if err := c.rollbackSideChain(insert, target.Identifier()); err != nil {
 			var uncertain *chain.ErrCanonicalStateUncertain
@@ -300,6 +309,11 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 				log.Crit("chain state uncertain after failed side-chain restore, can't continue", "reason", restoreErr, "cause", err, "target", target.Identifier())
 				os.Exit(2)
 			}
+			// The snapshot is valid only on the original canonical/cache branch.
+			// Never reinstate it when a longer replacement prefix is retained.
+			if restoreErr := c.chain.RestoreUncommitted(insert, pendingSnapshot); restoreErr != nil {
+				log.Error("error while restoring account-pool after rejected side-chain", "reason", restoreErr, "cause", err, "target", target.Identifier())
+			}
 			return failed + start, err
 		}
 		return 0, nil
@@ -317,9 +331,9 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 //
 // What it restores is the canonical chain and the cache. It does not undo the
 // delete events listeners already saw (they see insert events for the same
-// momentums instead), and the account pool stays as the rollback left it. The
-// captured branch lives only in memory: if the process dies part-way through,
-// the node comes back at the fork point plus whatever was committed, which is
+// momentums instead). The caller restores the pre-rollback account pool only
+// after this succeeds. The captured branch lives only in memory: if the process
+// dies part-way through, the node comes back at the fork point plus whatever was committed, which is
 // a valid prefix it resynchronises from, not the restored branch.
 func (c chainBridge) restoreBranch(insert sync.Locker, target types.HashHeight, removed []*chain.RemovedMomentum) error {
 	if err := c.rollbackSideChain(insert, target); err != nil {

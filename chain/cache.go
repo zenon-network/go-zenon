@@ -21,12 +21,21 @@ type chainCache struct {
 	changes sync.Mutex
 }
 
+// getFrontierStore returns the store at the cache frontier, or nil when
+// the manager is stopped, whether DB returned nil or the handle it
+// returned was closed before the frontier could be read. Other frontier
+// read errors are fatal, as in GetFrontierIdentifier.
 func (c *chainCache) getFrontierStore() store.Cache {
 	db := c.manager.DB()
 	if db == nil {
 		return nil
 	}
-	return cache.NewCacheStore(storage.GetFrontierIdentifier(db), c.manager)
+	frontier, err := storage.ReadFrontierIdentifier(db)
+	if errors.Is(err, storage.ErrCacheStopped) {
+		return nil
+	}
+	common.DealWithErr(err)
+	return cache.NewCacheStore(frontier, c.manager)
 }
 
 func (c *chainCache) GetFrontierCacheStore() store.Cache {
@@ -130,7 +139,10 @@ func (c *chainCache) Init(chainManager db.Manager, momentumStore store.Momentum)
 	if managerDB == nil {
 		return storage.ErrCacheStopped
 	}
-	cacheFrontier := storage.GetFrontierIdentifier(managerDB)
+	cacheFrontier, err := storage.ReadFrontierIdentifier(managerDB)
+	if err != nil {
+		return err
+	}
 
 	if cacheFrontier.Height == chainFrontier.Height {
 		if cacheFrontier.Hash != chainFrontier.Hash {

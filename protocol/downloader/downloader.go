@@ -308,6 +308,14 @@ func (d *Downloader) synchronise(id string, hash types.Hash, td uint64) error {
 	d.cancelLock.Lock()
 	d.cancelCh = make(chan struct{})
 	d.cancelLock.Unlock()
+	// Close it again when the session is over, whichever way it ends. A
+	// delivery that arrived after its fetcher returned is still blocked on
+	// the one-slot channel and selects only on this; without the close it
+	// stays there, and the peer's protocol handler, which the transport
+	// now joins on removal, never returns. Unlike cancel this leaves the
+	// queue alone, so blocks still importing after a successful session
+	// are not dropped.
+	defer d.endSession()
 
 	// Retrieve the origin peer and initiate the downloading process
 	p := d.peers.Peer(id)
@@ -382,6 +390,21 @@ func (d *Downloader) cancel() {
 
 	// Reset the queue
 	d.queue.Reset()
+}
+
+// endSession closes the current session's cancel channel without resetting
+// the queue, releasing any delivery still blocked on hashCh or blockCh.
+func (d *Downloader) endSession() {
+	d.cancelLock.Lock()
+	defer d.cancelLock.Unlock()
+	if d.cancelCh == nil {
+		return
+	}
+	select {
+	case <-d.cancelCh:
+	default:
+		close(d.cancelCh)
+	}
 }
 
 // Terminate interrupts the downloader, canceling all pending operations.
@@ -832,17 +855,32 @@ func (d *Downloader) process() {
 	}
 }
 
+// errPeerClosed is returned to a delivery whose peer shut down while it
+// was waiting for the session to take the batch.
+var errPeerClosed = errors.New("peer closed")
+
 // DeliverBlocks injects a new batch of blocks received from a remote node.
 // This is usually invoked through the BlocksMsg by the protocol handler.
-func (d *Downloader) DeliverBlocks(id string, blocks []*nom.DetailedMomentum) error {
+// abort is the delivering peer's close signal: a session that never takes
+// the batch (it has moved past that stage, or stalled) must not hold the
+// peer's handler, which the transport joins on peer exit, so the wait
+// ends when the peer does. A nil abort never fires.
+func (d *Downloader) DeliverBlocks(id string, blocks []*nom.DetailedMomentum, abort <-chan struct{}) error {
 	// Make sure the downloader is active
 	if atomic.LoadInt32(&d.synchronising) == 0 {
 		return errNoSyncActive
 	}
-	// Deliver or abort if the sync is canceled while queuing
+	// Deliver or abort if the sync is canceled while queuing. A delivery
+	// that passed the check above before the first session installed its
+	// channel captures nil; selecting on nil never fires, so with the
+	// slot full it would wait forever and hold its peer's handler. There
+	// is no session to deliver to yet, so report that instead.
 	d.cancelLock.RLock()
 	cancel := d.cancelCh
 	d.cancelLock.RUnlock()
+	if cancel == nil {
+		return errNoSyncActive
+	}
 
 	select {
 	case d.blockCh <- blockPack{id, blocks}:
@@ -850,21 +888,29 @@ func (d *Downloader) DeliverBlocks(id string, blocks []*nom.DetailedMomentum) er
 
 	case <-cancel:
 		return errNoSyncActive
+	case <-abort:
+		return errPeerClosed
 	}
 }
 
 // DeliverHashes injects a new batch of hashes received from a remote node into
 // the download schedule. This is usually invoked through the BlockHashesMsg by
-// the protocol handler.
-func (d *Downloader) DeliverHashes(id string, hashes []types.Hash) error {
+// the protocol handler. abort is the delivering peer's close signal; see
+// DeliverBlocks.
+func (d *Downloader) DeliverHashes(id string, hashes []types.Hash, abort <-chan struct{}) error {
 	// Make sure the downloader is active
 	if atomic.LoadInt32(&d.synchronising) == 0 {
 		return errNoSyncActive
 	}
-	// Deliver or abort if the sync is canceled while queuing
+	// Deliver or abort if the sync is canceled while queuing; a nil
+	// channel means the first session has not installed one yet (see
+	// DeliverBlocks).
 	d.cancelLock.RLock()
 	cancel := d.cancelCh
 	d.cancelLock.RUnlock()
+	if cancel == nil {
+		return errNoSyncActive
+	}
 
 	select {
 	case d.hashCh <- hashPack{id, hashes}:
@@ -872,5 +918,7 @@ func (d *Downloader) DeliverHashes(id string, hashes []types.Hash) error {
 
 	case <-cancel:
 		return errNoSyncActive
+	case <-abort:
+		return errPeerClosed
 	}
 }

@@ -247,8 +247,14 @@ func (t *discoverTask) String() (s string) {
 	return s
 }
 
-func (t waitExpireTask) Do(*Server) {
-	time.Sleep(t.Duration)
+// Do waits for the dial history to expire. The task is counted in
+// loopWG and Stop waits on it, so it gives up on quit instead of
+// sleeping out the full duration.
+func (t waitExpireTask) Do(srv *Server) {
+	select {
+	case <-time.After(t.Duration):
+	case <-srv.quit:
+	}
 }
 func (t waitExpireTask) String() string {
 	return fmt.Sprintf("wait for dial hist expire (%v)", t.Duration)

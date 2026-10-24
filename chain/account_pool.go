@@ -361,6 +361,17 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 				log.Info("failed to insert account-block-transaction", "reason", "can't read later pending block", "height", height, "err", err)
 				return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "can't read later pending block", frontierIdentifier, identifier)
 			}
+			// The walk terminates only when each block's previous sits
+			// strictly below the block itself. The VM guarantees this for
+			// well-formed batches, but the loop itself must not rely on
+			// that invariant: a block whose previous is at or above its
+			// own height would spin here forever while holding ap.changes.
+			// Check before any allocation so a violated invariant fails
+			// fast, matching the neighbouring error shape.
+			if later.Previous().Height >= later.Height {
+				log.Info("failed to insert account-block-transaction", "reason", "non-descending previous height", "height", later.Previous().Height, "block-height", later.Height)
+				return fmt.Errorf(`%w reason:%v; frontier-identifier:%v; identifier:%v`, ErrFailedToAddAccountBlockTransaction, "non-descending previous height", frontierIdentifier, identifier)
+			}
 			// A block without its patch cannot go back with its state
 			// changes, so the replacement fails here, before the rollback.
 			stored := manager.db.GetPatch(later.Identifier())
