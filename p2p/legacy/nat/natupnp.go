@@ -134,8 +134,17 @@ func discoverUPnP() Interface {
 }
 
 func discover(out chan<- *upnp, target string, matcher func(*goupnp.RootDevice, goupnp.ServiceClient) *upnp) {
-	devs, err := goupnp.DiscoverDevices(target)
+	discoverWith(out, target, matcher, goupnp.DiscoverDevices)
+}
+
+// discoverWith is discover with the device search injectable. It sends
+// exactly one result on out, nil included: discoverUPnP waits for one per
+// worker, so a worker that returned nothing on a search error left it,
+// and every AddMapping behind it, waiting forever.
+func discoverWith(out chan<- *upnp, target string, matcher func(*goupnp.RootDevice, goupnp.ServiceClient) *upnp, discoverDevices func(string) ([]goupnp.MaybeRootDevice, error)) {
+	devs, err := discoverDevices(target)
 	if err != nil {
+		out <- nil
 		return
 	}
 	found := false

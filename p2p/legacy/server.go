@@ -296,22 +296,27 @@ func (srv *Server) Self() *discover.Node {
 	return srv.ntab.Self()
 }
 
-// Stop terminates the server and all active peer connections.
-// It blocks until all active connections have been closed.
+// Stop terminates the server and all active peer connections. It returns
+// once the run loop has disconnected every peer and finished, the listen
+// loop has exited and the dial, handshake and peer goroutines the loop
+// counts have returned, so a caller that replaces the transport or tears
+// the node down afterwards does not race the old server's cleanup. The
+// wait happens after srv.lock is released: the handshake checks in the
+// run loop call Self, which takes the same lock, so waiting under it
+// would deadlock. Repeated and concurrent calls are safe; every call
+// returns only after the shutdown is complete.
 func (srv *Server) Stop() {
 	srv.lock.Lock()
-	defer srv.lock.Unlock()
-
-	if !srv.running.Load() {
-		return
+	if srv.running.Load() {
+		srv.running.Store(false)
+		if srv.listener != nil {
+			// this unblocks listener Accept
+			srv.listener.Close()
+		}
+		close(srv.quit)
 	}
-
-	srv.running.Store(false)
-	if srv.listener != nil {
-		// this unblocks listener Accept
-		srv.listener.Close()
-	}
-	close(srv.quit)
+	srv.lock.Unlock()
+	srv.loopWG.Wait()
 }
 
 // Start starts running the server.
@@ -526,7 +531,12 @@ running:
 			}
 			common.P2PLogger.Debug("<-posthandshake:", c)
 			// TODO: track in-progress inbound node IDs (pre-Peer) to avoid dialing them.
-			c.cont <- srv.encHandshakeChecks(peers, c)
+			// The waiting side of the checkpoint leaves on quit, so the
+			// reply must not block the loop's own exit.
+			select {
+			case c.cont <- srv.encHandshakeChecks(peers, c):
+			case <-srv.quit:
+			}
 		case c := <-srv.addpeer:
 			// At this point the connection is past the protocol handshake.
 			// Its capabilities are known and the remote identity is verified.
@@ -547,8 +557,12 @@ running:
 			}
 			// The dialer logic relies on the assumption that
 			// dial tasks complete after the peer has been added or
-			// discarded. Unblock the task last.
-			c.cont <- err
+			// discarded. Unblock the task last. As above, the task may
+			// already have left on quit.
+			select {
+			case c.cont <- err:
+			case <-srv.quit:
+			}
 		case p := <-srv.delpeer:
 			// A peer disconnected.
 			common.P2PLogger.Debug("<-delpeer:", "peer", p)
