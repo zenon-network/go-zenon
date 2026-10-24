@@ -3,6 +3,7 @@ package tests
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"math/big"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/zenon-network/go-zenon/chain"
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/rpc/api"
@@ -395,6 +397,12 @@ func ExpectGetAccountBlocksByPage(t *testing.T, z mock.MockZenon) {
 	"count": 11,
 	"list": []
 }`)
+	common.Json(ledgerApi.GetAccountBlocksByPage(g.User1.Address, math.MaxUint32, 8)).Equals(t, `
+{
+	"list": [],
+	"count": 11,
+	"more": false
+}`)
 }
 func ExpectGetAccountInfoByAddress(t *testing.T, z mock.MockZenon) {
 	ledgerApi := api.NewLedgerApi(z)
@@ -683,8 +691,37 @@ func TestRPCLedger_GetMomentumsByHeight(t *testing.T) {
 	"list": []
 }`)
 }
+
+type heightReadCounter struct {
+	mock.MockZenon
+	reads int
+}
+
+func (z *heightReadCounter) Chain() chain.Chain {
+	return &countingChain{Chain: z.MockZenon.Chain(), reads: &z.reads}
+}
+
+type countingChain struct {
+	chain.Chain
+	reads *int
+}
+
+func (c *countingChain) GetFrontierMomentumStore() store.Momentum {
+	return &countingMomentumStore{Momentum: c.Chain.GetFrontierMomentumStore(), reads: c.reads}
+}
+
+type countingMomentumStore struct {
+	store.Momentum
+	reads *int
+}
+
+func (s *countingMomentumStore) GetMomentumsByHeight(height uint64, higher bool, count uint64) ([]*nom.Momentum, error) {
+	*s.reads++
+	return s.Momentum.GetMomentumsByHeight(height, higher, count)
+}
+
 func TestRPCLedger_GetMomentumsByPage(t *testing.T) {
-	z := mock.NewMockZenon(t)
+	z := &heightReadCounter{MockZenon: mock.NewMockZenon(t)}
 	ledgerApi := api.NewLedgerApi(z)
 	defer z.StopPanic()
 	z.InsertMomentumsTo(10)
@@ -736,6 +773,18 @@ func TestRPCLedger_GetMomentumsByPage(t *testing.T) {
 	"count": 10,
 	"list": []
 }`)
+	if z.reads == 0 {
+		t.Fatal("the counter saw no store read for pages 0 and 1")
+	}
+	readsBefore := z.reads
+	common.Json(ledgerApi.GetMomentumsByPage(math.MaxUint32, 7)).Equals(t, `
+{
+	"list": [],
+	"count": 10
+}`)
+	if z.reads != readsBefore {
+		t.Fatalf("pageIndex %d read the momentum store; want no read", uint32(math.MaxUint32))
+	}
 }
 func TestRPCLedger_GetDetailedMomentumsByHeight(t *testing.T) {
 	z := mock.NewMockZenon(t)
