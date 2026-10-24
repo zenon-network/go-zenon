@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -142,8 +143,12 @@ func TestConfigClone_NilSlices(t *testing.T) {
 // bug where json.Unmarshal wrote into DefaultNodeConfig's backing
 // arrays.
 func TestJSONOverlayDoesNotMutateDefaults(t *testing.T) {
-	// Snapshot the defaults before the overlay.
-	before := DefaultNodeConfig.Clone()
+	// Snapshot the defaults before the overlay. Copy independently —
+	// using Clone for the snapshot would alias the defaults under a
+	// shallow Clone and mask the mutation being tested.
+	beforeSeeders := append([]string(nil), DefaultNodeConfig.Net.Seeders...)
+	beforeHosts := append([]string(nil), DefaultNodeConfig.RPC.HTTPVirtualHosts...)
+	beforeName := DefaultNodeConfig.Name
 
 	// Apply an overlay the way MakeConfig and RunNodeWithConfig do.
 	overlay := `{
@@ -168,16 +173,16 @@ func TestJSONOverlayDoesNotMutateDefaults(t *testing.T) {
 	}
 
 	// The package-level defaults must be unchanged.
-	if !reflect.DeepEqual(DefaultNodeConfig.RPC.HTTPVirtualHosts, before.RPC.HTTPVirtualHosts) {
+	if !reflect.DeepEqual(DefaultNodeConfig.RPC.HTTPVirtualHosts, beforeHosts) {
 		t.Errorf("DefaultNodeConfig.RPC.HTTPVirtualHosts mutated: %v, want %v",
-			DefaultNodeConfig.RPC.HTTPVirtualHosts, before.RPC.HTTPVirtualHosts)
+			DefaultNodeConfig.RPC.HTTPVirtualHosts, beforeHosts)
 	}
-	if !reflect.DeepEqual(DefaultNodeConfig.Net.Seeders, before.Net.Seeders) {
+	if !reflect.DeepEqual(DefaultNodeConfig.Net.Seeders, beforeSeeders) {
 		t.Errorf("DefaultNodeConfig.Net.Seeders mutated: %v, want %v",
-			DefaultNodeConfig.Net.Seeders, before.Net.Seeders)
+			DefaultNodeConfig.Net.Seeders, beforeSeeders)
 	}
-	if DefaultNodeConfig.Name != before.Name {
-		t.Errorf("DefaultNodeConfig.Name mutated: %q, want %q", DefaultNodeConfig.Name, before.Name)
+	if DefaultNodeConfig.Name != beforeName {
+		t.Errorf("DefaultNodeConfig.Name mutated: %q, want %q", DefaultNodeConfig.Name, beforeName)
 	}
 }
 
@@ -185,7 +190,9 @@ func TestJSONOverlayDoesNotMutateDefaults(t *testing.T) {
 // malformed JSON overlay returns an error and does not modify the
 // package-level defaults.
 func TestRejectedJSONOverlayLeavesDefaultsUnchanged(t *testing.T) {
-	before := DefaultNodeConfig.Clone()
+	beforeSeeders := append([]string(nil), DefaultNodeConfig.Net.Seeders...)
+	beforeHosts := append([]string(nil), DefaultNodeConfig.RPC.HTTPVirtualHosts...)
+	beforeName := DefaultNodeConfig.Name
 
 	cfg := DefaultNodeConfig.Clone()
 	err := json.Unmarshal([]byte(`{"Name":`), cfg)
@@ -195,17 +202,17 @@ func TestRejectedJSONOverlayLeavesDefaultsUnchanged(t *testing.T) {
 
 	// Even the clone may be partially modified by a rejected Unmarshal,
 	// but the package-level defaults must be untouched.
-	if !reflect.DeepEqual(DefaultNodeConfig.RPC.HTTPVirtualHosts, before.RPC.HTTPVirtualHosts) {
+	if !reflect.DeepEqual(DefaultNodeConfig.RPC.HTTPVirtualHosts, beforeHosts) {
 		t.Errorf("DefaultNodeConfig.RPC.HTTPVirtualHosts mutated by rejected overlay: %v, want %v",
-			DefaultNodeConfig.RPC.HTTPVirtualHosts, before.RPC.HTTPVirtualHosts)
+			DefaultNodeConfig.RPC.HTTPVirtualHosts, beforeHosts)
 	}
-	if !reflect.DeepEqual(DefaultNodeConfig.Net.Seeders, before.Net.Seeders) {
+	if !reflect.DeepEqual(DefaultNodeConfig.Net.Seeders, beforeSeeders) {
 		t.Errorf("DefaultNodeConfig.Net.Seeders mutated by rejected overlay: %v, want %v",
-			DefaultNodeConfig.Net.Seeders, before.Net.Seeders)
+			DefaultNodeConfig.Net.Seeders, beforeSeeders)
 	}
-	if DefaultNodeConfig.Name != before.Name {
+	if DefaultNodeConfig.Name != beforeName {
 		t.Errorf("DefaultNodeConfig.Name mutated by rejected overlay: %q, want %q",
-			DefaultNodeConfig.Name, before.Name)
+			DefaultNodeConfig.Name, beforeName)
 	}
 }
 
@@ -216,27 +223,38 @@ func TestRejectedJSONOverlayLeavesDefaultsUnchanged(t *testing.T) {
 // type error is hit, so without Clone the defaults' backing array would
 // be modified (edgepillar's review comment).
 func TestConfigClone_RejectedOverlayLeavesDefaultsUnchanged(t *testing.T) {
-	before := DefaultNodeConfig.Clone()
+	beforeSeeders := append([]string(nil), DefaultNodeConfig.Net.Seeders...)
+	beforeHTTPPort := DefaultNodeConfig.RPC.HTTPPort
 
 	cfg := DefaultNodeConfig.Clone()
 	// Valid JSON syntax; Seeders is a valid mutable-field overlay, but
 	// HTTPPort has a type error (string instead of int). encoding/json
 	// processes fields in order, so Seeders is decoded before the error.
-	overlay := `{"Net": {"Seeders": [\"valid-seeder\"]}, "RPC": {"HTTPPort": "not-a-number"}}`
+	overlay := `{"Net": {"Seeders": ["valid-seeder"]}, "RPC": {"HTTPPort": "not-a-number"}}`
 	err := json.Unmarshal([]byte(overlay), cfg)
 	if err == nil {
 		t.Fatal("expected a type error for HTTPPort, got nil")
 	}
+	var typeErr *json.UnmarshalTypeError
+	if !errors.As(err, &typeErr) {
+		t.Errorf("expected *json.UnmarshalTypeError, got %T: %v", err, err)
+	}
+	// Seeders was decoded before the type error, so the clone's slice
+	// must have the overlay value — proving the overlay was applied to
+	// the clone, not rejected outright.
+	if len(cfg.Net.Seeders) == 0 || cfg.Net.Seeders[0] != "valid-seeder" {
+		t.Errorf("cfg.Net.Seeders = %v, want [valid-seeder] (overlay applied before type error)", cfg.Net.Seeders)
+	}
 
 	// The package-level defaults must be untouched even though the overlay
 	// was syntactically valid and wrote into a mutable field before failing.
-	if !reflect.DeepEqual(DefaultNodeConfig.Net.Seeders, before.Net.Seeders) {
+	if !reflect.DeepEqual(DefaultNodeConfig.Net.Seeders, beforeSeeders) {
 		t.Errorf("DefaultNodeConfig.Net.Seeders mutated by rejected overlay: %v, want %v",
-			DefaultNodeConfig.Net.Seeders, before.Net.Seeders)
+			DefaultNodeConfig.Net.Seeders, beforeSeeders)
 	}
-	if !reflect.DeepEqual(DefaultNodeConfig.RPC.HTTPPort, before.RPC.HTTPPort) {
+	if DefaultNodeConfig.RPC.HTTPPort != beforeHTTPPort {
 		t.Errorf("DefaultNodeConfig.RPC.HTTPPort mutated by rejected overlay: %v, want %v",
-			DefaultNodeConfig.RPC.HTTPPort, before.RPC.HTTPPort)
+			DefaultNodeConfig.RPC.HTTPPort, beforeHTTPPort)
 	}
 }
 

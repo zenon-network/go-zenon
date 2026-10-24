@@ -2,7 +2,6 @@ package chain
 
 import (
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/inconshreveable/log15"
@@ -95,7 +94,10 @@ func (c *momentumPool) AddMomentumTransaction(insertLocker sync.Locker, transact
 		fmt.Printf("\n")
 		fmt.Printf("Please upgrade your znnd binary\n")
 		fmt.Printf("znnd is terminating\n")
-		os.Exit(2)
+		return c.rollbackFailedInsert(
+			fmt.Errorf("can't insert momentum %v height %v: detected unimplemented spork(s): %v", momentum.Hash, momentum.Height, unimplemented),
+			momentum.Identifier(),
+		)
 	}
 
 	// All post-insert validation succeeded: listeners can now be notified.

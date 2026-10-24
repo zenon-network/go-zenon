@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/urfave/cli/v2"
@@ -22,9 +23,10 @@ import (
 )
 
 var (
-	log         = common.ZenonLogger.New()
-	app         = cli.NewApp()
-	nodeManager *Manager
+	log           = common.ZenonLogger.New()
+	app           = cli.NewApp()
+	nodeManager   *Manager
+	nodeManagerMu sync.Mutex
 )
 
 // Run parses os.Args and runs the znnd cli application. On error it
@@ -52,8 +54,14 @@ func Run() {
 // A second call while a node is already running returns an error and
 // leaves the first node's stop handle intact.
 func RunWithConfig(cfg *node.Config) error {
+	nodeManagerMu.Lock()
+	defer nodeManagerMu.Unlock()
+
 	if nodeManager != nil {
 		return fmt.Errorf("node is already running")
+	}
+	if cfg == nil {
+		return fmt.Errorf("config must not be nil")
 	}
 	if err := cfg.MakePathsAbsolute(); err != nil {
 		return err
@@ -65,6 +73,7 @@ func RunWithConfig(cfg *node.Config) error {
 		return err
 	}
 	if err := m.startNode(); err != nil {
+		m.Stop() // clean up partial start
 		return err
 	}
 	nodeManager = m
@@ -76,6 +85,9 @@ func RunWithConfig(cfg *node.Config) error {
 // the manager. Manager.Stop logs a node shutdown error and returns nil, so
 // the DealWithErr call here does not panic today.
 func Stop() {
+	nodeManagerMu.Lock()
+	defer nodeManagerMu.Unlock()
+
 	// exported for libznn; a consumer may call Stop before Run assigned the
 	// manager, which would otherwise nil-deref inside Manager.Stop
 	if nodeManager == nil {
@@ -159,7 +171,9 @@ func action(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	nodeManagerMu.Lock()
 	nodeManager = m
+	nodeManagerMu.Unlock()
 
 	if err := nodeManager.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

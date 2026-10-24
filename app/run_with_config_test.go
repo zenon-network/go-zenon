@@ -200,10 +200,11 @@ func TestStop_ClearsNodeManager(t *testing.T) {
 }
 
 // TestRunWithConfig_StartDoesNotBlock verifies that RunWithConfig calls
-// startNode (non-blocking) rather than Start (blocking). We use a bad
-// genesis config so the call fails quickly; if RunWithConfig called the
-// blocking Start, the test would time out waiting for the signal handler
-// and Wait even though the node start itself failed.
+// startNode (non-blocking) rather than Start (blocking). The config is
+// valid enough to construct and start a real node: embedded genesis, no
+// RPC endpoints (avoiding port conflicts), no pillar producer. If
+// RunWithConfig called the blocking Start, the test would time out
+// because Start installs a signal handler and blocks in Wait.
 func TestRunWithConfig_StartDoesNotBlock(t *testing.T) {
 	original := nodeManager
 	nodeManager = nil
@@ -211,21 +212,34 @@ func TestRunWithConfig_StartDoesNotBlock(t *testing.T) {
 
 	cfg := node.DefaultNodeConfig
 	cfg.DataPath = t.TempDir()
-	cfg.GenesisFile = filepath.Join(cfg.DataPath, "nonexistent-genesis.json")
+	cfg.GenesisFile = "" // use embedded genesis
+	cfg.Producer = nil   // no pillar
+	cfg.RPC.EnableHTTP = false
+	cfg.RPC.EnableWS = false
+	cfg.Net.ListenPort = 0 // let the OS pick a free port
 
 	done := make(chan error, 1)
 	go func() {
 		done <- RunWithConfig(&cfg)
 	}()
 
+	var err error
+	timedOut := false
 	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("expected an error for a nonexistent genesis file, got nil")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("RunWithConfig blocked for 5 seconds; it likely called the blocking Start instead of startNode")
+	case err = <-done:
+	case <-time.After(30 * time.Second):
+		timedOut = true
 	}
+
+	if timedOut {
+		t.Fatal("RunWithConfig blocked for 30 seconds; it likely called the blocking Start instead of startNode")
+	}
+	// Always clean up: either Stop the started node, or ensure the
+	// goroutine has finished before the next test runs.
+	if err != nil {
+		t.Fatalf("RunWithConfig returned unexpected error: %v", err)
+	}
+	Stop()
 }
 
 // TestRunWithConfig_SecondStartPreservesFirstNode verifies that a

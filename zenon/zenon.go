@@ -15,6 +15,7 @@
 package zenon
 
 import (
+	stderrors "errors"
 	"fmt"
 
 	"github.com/syndtr/goleveldb/leveldb"
@@ -139,26 +140,27 @@ func (z *zenon) Start() error {
 }
 func (z *zenon) Stop() error {
 	z.protocol.Stop()
+	var errs []error
 	if err := z.pillar.Stop(); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 	if err := z.subscribe.Stop(); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 	if err := z.evPrinter.Stop(); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 	if err := z.consensus.Stop(); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 	if err := z.chain.Stop(); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 	if err := z.levelDb.Close(); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 
-	return nil
+	return stderrors.Join(errs...)
 }
 
 func (z *zenon) Chain() chain.Chain {

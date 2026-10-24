@@ -53,6 +53,11 @@ type nodeDB struct {
 	lvl    *leveldb.DB       // Interface to the database itself
 	seeder iterator.Iterator // Iterator for fetching possible seed nodes
 
+	// seederMu orders querySeeds against close: querySeeds holds it for
+	// the duration of one batch, close holds it exclusively while releasing
+	// the iterator and closing the store.
+	seederMu sync.Mutex
+
 	self NodeID // Own node id to prevent adding it into the database
 
 	// mu orders the expiration sweep against writers: a writer holds it
@@ -404,6 +409,9 @@ func (db *nodeDB) updateFindFails(id NodeID, fails int) error {
 // If the database runs out of potential seeds, we restart the startup counter
 // and start iterating over the peers again.
 func (db *nodeDB) querySeeds(n int) []*Node {
+	db.seederMu.Lock()
+	defer db.seederMu.Unlock()
+
 	// Create a new seed iterator if none exists
 	if db.seeder == nil {
 		db.seeder = db.lvl.NewIterator(nil, nil)
@@ -438,9 +446,12 @@ func (db *nodeDB) querySeeds(n int) []*Node {
 // to stop and joined first: it holds iterators, and the store must not be
 // closed under them.
 func (db *nodeDB) close() {
+	db.seederMu.Lock()
 	if db.seeder != nil {
 		db.seeder.Release()
+		db.seeder = nil
 	}
+	db.seederMu.Unlock()
 	close(db.quit)
 	db.wg.Wait()
 	db.lvl.Close()

@@ -70,6 +70,8 @@ type ProtocolManager struct {
 	// and processing
 	wg   sync.WaitGroup
 	quit bool
+
+	stopOnce sync.Once
 }
 
 // NewProtocolManager returns a new ethereum sub protocol manager. The Ethereum sub protocol manages peers capable
@@ -165,21 +167,23 @@ func (pm *ProtocolManager) Start() {
 
 // Stop terminates the sync loops and waits for in-flight download and
 // processing work to drain; with a download in progress this can take
-// several seconds.
+// several seconds. Stop is idempotent: a second call returns immediately.
 func (pm *ProtocolManager) Stop() {
-	// Showing a log message. During download / process this could actually
-	// take between 5 to 10 seconds and therefor feedback is required.
-	log.Info("Stopping protocol handler...")
+	pm.stopOnce.Do(func() {
+		// Showing a log message. During download / process this could actually
+		// take between 5 to 10 seconds and therefor feedback is required.
+		log.Info("Stopping protocol handler...")
 
-	pm.quit = true
-	//pm.txSub.Unsubscribe()         // quits txBroadcastLoop
-	//pm.minedBlockSub.Unsubscribe() // quits blockBroadcastLoop
-	close(pm.quitSync) // quits syncer, fetcher, txsyncLoop
+		pm.quit = true
+		//pm.txSub.Unsubscribe()         // quits txBroadcastLoop
+		//pm.minedBlockSub.Unsubscribe() // quits blockBroadcastLoop
+		close(pm.quitSync) // quits syncer, fetcher, txsyncLoop
 
-	// Wait for any process action
-	pm.wg.Wait()
+		// Wait for any process action
+		pm.wg.Wait()
 
-	log.Info("Protocol handler stopped")
+		log.Info("Protocol handler stopped")
+	})
 }
 
 func (pm *ProtocolManager) newPeer(pv, nv int, p p2p.Peer, rw p2p.MsgReadWriter) *peer {
