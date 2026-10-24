@@ -167,8 +167,12 @@ var (
 	// address, or a secp256k1-point PTLC created without one.
 	ErrInvalidDestination = errors.New("invalid destination")
 
+	// ErrReclaimSignatureRequired rejects a plain PTLC Reclaim of an entry
+	// with a reclaim lock, which only ReclaimWithSignature can reclaim.
 	ErrReclaimSignatureRequired = errors.New("reclaim signature required")
-	ErrNoReclaimLock            = errors.New("no reclaim lock")
+	// ErrNoReclaimLock rejects a PTLC ReclaimWithSignature of an entry
+	// created without a reclaim lock, which plain Reclaim reclaims.
+	ErrNoReclaimLock = errors.New("no reclaim lock")
 
 	// ErrUnknownNetwork rejects a bridge call naming a network
 	// class/chain id pair that has not been registered.

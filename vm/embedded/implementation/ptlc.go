@@ -215,10 +215,14 @@ func verifyPointSignature(pointType uint8, pointLock, message, signature []byte)
 	return constants.ErrInvalidPointType
 }
 
+// isReclaimPointType reports whether a point type can be a reclaim lock:
+// the signature types only, since a reclaim must carry a signature.
 func isReclaimPointType(pointType uint8) bool {
 	return pointType == definition.PointTypeED25519 || pointType == definition.PointTypeBIP340
 }
 
+// checkReclaimLock checks a reclaim lock is a signature point type and a
+// valid point of that type.
 func checkReclaimLock(pointType uint8, pointLock []byte) error {
 	if !isReclaimPointType(pointType) {
 		return constants.ErrInvalidPointType
@@ -226,6 +230,8 @@ func checkReclaimLock(pointType uint8, pointLock []byte) error {
 	return checkPointLock(pointType, pointLock)
 }
 
+// verifyPtlcReclaimSignature checks a reclaim signature against the
+// entry's reclaim lock, re-validating the lock first.
 func verifyPtlcReclaimSignature(ptlcInfo *definition.PtlcInfo, reclaimLock *definition.PtlcReclaimLock, chainIdentifier uint64, signature []byte) error {
 	if err := checkReclaimLock(reclaimLock.PointType, reclaimLock.PointLock); err != nil {
 		return err
@@ -237,6 +243,8 @@ func verifyPtlcReclaimSignature(ptlcInfo *definition.PtlcInfo, reclaimLock *defi
 	return verifyPointSignature(reclaimLock.PointType, reclaimLock.PointLock, reclaimMessage, signature)
 }
 
+// getPtlcReclaimLock returns the entry's reclaim lock, or nil if it has
+// none.
 func getPtlcReclaimLock(context vm_context.AccountVmContext, id types.Hash) *definition.PtlcReclaimLock {
 	reclaimLock, err := definition.GetPtlcReclaimLock(context.Storage(), id)
 	if err == constants.ErrDataNonExistent {
@@ -246,6 +254,7 @@ func getPtlcReclaimLock(context vm_context.AccountVmContext, id types.Hash) *def
 	return reclaimLock
 }
 
+// deletePtlcReclaimLock removes the entry's reclaim lock if it has one.
 func deletePtlcReclaimLock(context vm_context.AccountVmContext, id types.Hash) {
 	if reclaimLock := getPtlcReclaimLock(context, id); reclaimLock != nil {
 		common.DealWithErr(reclaimLock.Delete(context.Storage()))
@@ -582,14 +591,21 @@ func (p *ProxyUnlockPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext
 	return unlockPtlc(context, sendBlock, param.Id, param.Destination, param.Signature)
 }
 
+// CreateWithReclaimLockPtlcMethod implements CreateWithReclaimLock: it
+// locks the tokens like Create, and stores a reclaim lock beside the
+// entry, so that the creator can reclaim only with a signature under it.
 type CreateWithReclaimLockPtlcMethod struct {
 	MethodName string
 }
 
+// GetPlasma prices the call as a simple embedded call, like Create.
 func (p *CreateWithReclaimLockPtlcMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedSimple, nil
 }
 
+// ValidateSendBlock checks the entry as Create does, checks the reclaim
+// lock is an Ed25519 or BIP-340 key, and repacks the data in canonical
+// form.
 func (p *CreateWithReclaimLockPtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 
@@ -628,6 +644,9 @@ func (p *CreateWithReclaimLockPtlcMethod) ValidateSendBlock(block *nom.AccountBl
 	return err
 }
 
+// ReceiveBlock re-validates the send, requires the expiration time to be
+// in the future of the confirming momentum, and stores the entry and its
+// reclaim lock.
 func (p *CreateWithReclaimLockPtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		ptlcLog.Debug("invalid create - syntactic validation failed", "address", sendBlock.Address, "reason", err)
@@ -668,14 +687,21 @@ func (p *CreateWithReclaimLockPtlcMethod) ReceiveBlock(context vm_context.Accoun
 	return nil, nil
 }
 
+// ReclaimWithSignaturePtlcMethod implements ReclaimWithSignature: the
+// creator takes the locked tokens of an entry with a reclaim lock back once
+// it has expired, publishing a signature under that lock over the entry's
+// reclaim message.
 type ReclaimWithSignaturePtlcMethod struct {
 	MethodName string
 }
 
+// GetPlasma prices the call as an embedded withdrawal, like Reclaim.
 func (p *ReclaimWithSignaturePtlcMethod) GetPlasma(plasmaTable *constants.PlasmaTable) (uint64, error) {
 	return plasmaTable.EmbeddedWWithdraw, nil
 }
 
+// ValidateSendBlock checks no tokens are attached and the signature has the
+// reclaim signature size, and repacks the data in canonical form.
 func (p *ReclaimWithSignaturePtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.ReclaimWithSignaturePtlcParam)
@@ -688,7 +714,7 @@ func (p *ReclaimWithSignaturePtlcMethod) ValidateSendBlock(block *nom.AccountBlo
 		return constants.ErrInvalidTokenOrAmount
 	}
 
-	if len(param.Signature) != int(definition.PointTypeWitnessSizes[definition.PointTypeED25519]) {
+	if len(param.Signature) != definition.PtlcReclaimSignatureSize {
 		return constants.ErrInvalidPointSignature
 	}
 
@@ -696,6 +722,10 @@ func (p *ReclaimWithSignaturePtlcMethod) ValidateSendBlock(block *nom.AccountBlo
 	return err
 }
 
+// ReceiveBlock re-validates the send and pays the tokens back to the
+// creator when the entry exists, is sane, was created by the caller, has a
+// reclaim lock and has expired at the confirming momentum, and the
+// signature verifies; the entry and its lock are deleted first.
 func (p *ReclaimWithSignaturePtlcMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		ptlcLog.Debug("invalid reclaim - syntactic validation failed", "address", sendBlock.Address, "reason", err)

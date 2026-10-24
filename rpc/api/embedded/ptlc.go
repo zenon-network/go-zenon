@@ -60,6 +60,12 @@ func (a *PtlcApi) GetById(id types.Hash) (*definition.PtlcInfo, error) {
 	return ptlcInfo, nil
 }
 
+// GetReclaimLockById returns the reclaim lock of the PTLC entry with the
+// given id (the hash of the CreateWithReclaimLock send block) at the
+// account-pool frontier, or an error if there is none: the entry was made
+// with Create, or has been unlocked or reclaimed.
+//
+// JSON-RPC: embedded.ptlc.getReclaimLockById
 func (a *PtlcApi) GetReclaimLockById(id types.Hash) (*definition.PtlcReclaimLock, error) {
 
 	_, context, err := api.GetFrontierContext(a.chain, types.PtlcContract)

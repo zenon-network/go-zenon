@@ -78,8 +78,14 @@ const (
 	// named destination against a witness bound to that destination.
 	ProxyUnlockPtlcMethodName = "ProxyUnlock"
 
+	// CreateWithReclaimLockPtlcMethodName names the method that locks the
+	// sent tokens behind a point, like Create, and also fixes a reclaim
+	// lock under which the creator's reclaim must be signed.
 	CreateWithReclaimLockPtlcMethodName = "CreateWithReclaimLock"
-	ReclaimWithSignaturePtlcMethodName  = "ReclaimWithSignature"
+	// ReclaimWithSignaturePtlcMethodName names the method by which the
+	// creator takes the tokens of an entry with a reclaim lock back after
+	// expiry, against a signature under that lock.
+	ReclaimWithSignaturePtlcMethodName = "ReclaimWithSignature"
 
 	variableNamePtlcInfo = "ptlcInfo"
 
@@ -89,7 +95,17 @@ const (
 	// message an unlock signature covers (see GetPtlcUnlockMessage).
 	PtlcUnlockMessageDomain = "zenon-ptlc-unlock:v1"
 
+	// PtlcReclaimMessageDomain is the domain-separation prefix of the
+	// message a reclaim signature covers (see GetPtlcReclaimMessage). It
+	// differs from PtlcUnlockMessageDomain, so a reclaim signature is never
+	// an unlock witness and an unlock signature never a reclaim.
 	PtlcReclaimMessageDomain = "zenon-ptlc-reclaim:v1"
+
+	// PtlcReclaimSignatureSize is the byte length of a reclaim signature.
+	// Every reclaim lock type (Ed25519 and BIP-340) signs with 64 bytes, so
+	// the send block is checked against this size before the entry's lock
+	// is known; the receive checks it again against the lock's own type.
+	PtlcReclaimSignatureSize = 64
 )
 
 const (
@@ -235,6 +251,12 @@ type ProxyUnlockPtlcParam struct {
 	Signature   []byte
 }
 
+// CreateWithReclaimLockPtlcParam is the argument of CreateWithReclaimLock:
+// the fields of CreatePtlcParam, plus the reclaim lock, an Ed25519 or
+// BIP-340 public key under which the creator's reclaim must be signed.
+// There is no fallback: plain Reclaim refuses such an entry, so a creator
+// who holds no valid signature under the lock before sending the create
+// can only see the tokens unlocked, never take them back.
 type CreateWithReclaimLockPtlcParam struct {
 	ExpirationTime   int64         `json:"expirationTime"`
 	PointType        uint8         `json:"pointType"`
@@ -244,21 +266,31 @@ type CreateWithReclaimLockPtlcParam struct {
 	ReclaimPointLock []byte        `json:"reclaimPointLock"`
 }
 
+// ReclaimWithSignaturePtlcParam is the argument of ReclaimWithSignature:
+// the entry id and a signature over the entry's reclaim message under its
+// reclaim lock.
 type ReclaimWithSignaturePtlcParam struct {
 	Id        types.Hash
 	Signature []byte
 }
 
+// PtlcReclaimLock is the reclaim lock of one entry, stored apart from its
+// PtlcInfo under its own key prefix so that entries without one keep the
+// encoding they had. Id is the entry's id and is recovered from the
+// storage key.
 type PtlcReclaimLock struct {
 	Id        types.Hash `json:"id"`
 	PointType uint8      `json:"pointType"`
 	PointLock []byte     `json:"pointLock"`
 }
 
+// String renders the lock on one line for logs, with the point lock in
+// base64.
 func (l PtlcReclaimLock) String() string {
 	return fmt.Sprintf("Id:%s PointType:%d PointLock:%s ", l.Id, l.PointType, base64.StdEncoding.EncodeToString(l.PointLock))
 }
 
+// Save stores the lock under its entry's id.
 func (l *PtlcReclaimLock) Save(context db.DB) error {
 	data, err := ABIPtlc.PackVariable(
 		variableNamePtlcReclaimLock,
@@ -271,6 +303,7 @@ func (l *PtlcReclaimLock) Save(context db.DB) error {
 	return context.Put(getPtlcReclaimLockKey(l.Id), data)
 }
 
+// Delete removes the lock once its entry has been unlocked or reclaimed.
 func (l *PtlcReclaimLock) Delete(context db.DB) error {
 	return context.Delete(getPtlcReclaimLockKey(l.Id))
 }
@@ -279,6 +312,9 @@ func getPtlcReclaimLockKey(hash types.Hash) []byte {
 	return common.JoinBytes(ptlcReclaimLockKeyPrefix, hash.Bytes())
 }
 
+// GetPtlcReclaimLock returns the reclaim lock of the entry with the given
+// id, or constants.ErrDataNonExistent if the entry has none (it was made
+// with Create, or no longer exists).
 func GetPtlcReclaimLock(context db.DB, id types.Hash) (*PtlcReclaimLock, error) {
 	data, err := context.Get(getPtlcReclaimLockKey(id))
 	if err != nil {
@@ -295,6 +331,27 @@ func GetPtlcReclaimLock(context db.DB, id types.Hash) (*PtlcReclaimLock, error) 
 	return lock, nil
 }
 
+// GetPtlcReclaimMessage returns the 32-byte message a reclaim signature
+// must sign: the SHA3-256 hash of
+//
+//	PtlcReclaimMessageDomain
+//	|| uint64be(chainIdentifier) || PTLC contract address
+//	|| reclaimPointType
+//	|| creator || destination || token standard
+//	|| uint256be(amount) || int64be(expirationTime)
+//	|| pointType || pointLock
+//
+// Every field is fixed-width except the point lock, which comes last and
+// whose length the point type before it fixes, so the encoding is
+// unambiguous.
+//
+// The message binds the entry's terms, not its id. The counterparty signs
+// it (in a swap, as an adaptor signature the creator completes) before the
+// tokens are locked, and the id is the hash of the create block, which a
+// wallet that signs and publishes in one call does not show beforehand.
+// One signature is therefore valid for every entry with the same terms
+// under the same reclaim lock, so a reclaim key must be fresh for each
+// swap.
 func GetPtlcReclaimMessage(chainIdentifier uint64, reclaimPointType uint8, entry *PtlcInfo) []byte {
 	return crypto.Hash(common.JoinBytes(
 		[]byte(PtlcReclaimMessageDomain),
