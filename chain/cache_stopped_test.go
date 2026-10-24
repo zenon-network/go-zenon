@@ -68,7 +68,10 @@ func (m *stopsAfter) Stop() error                               { return m.inner
 // One acquisition succeeds, the next returns nil: the store handed out must
 // still be backed by the handle that was acquired.
 func TestGetCacheStore_SingleAcquisition(t *testing.T) {
-	inner := storage.NewCacheDBManager(t.TempDir())
+	inner, err := storage.NewCacheDBManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("open cache database: %v", err)
+	}
 	defer inner.Stop()
 	c := NewChainCache(&stopsAfter{inner: inner, limit: 1})
 	s := c.GetCacheStore(types.ZeroHashHeight)
@@ -84,7 +87,10 @@ func TestGetCacheStore_SingleAcquisition(t *testing.T) {
 // calls; the loop's first read sees a stopped manager and must return the
 // sentinel instead of dereferencing a nil store.
 func TestRollbackCacheTo_StopInsideLoop(t *testing.T) {
-	inner := storage.NewCacheDBManager(t.TempDir())
+	inner, err := storage.NewCacheDBManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("open cache database: %v", err)
+	}
 	defer inner.Stop()
 	for h := uint64(1); h <= 2; h++ {
 		if err := inner.Add(types.HashHeight{Height: h, Hash: types.Hash{byte(h)}}, db.NewPatch()); err != nil {
@@ -93,7 +99,7 @@ func TestRollbackCacheTo_StopInsideLoop(t *testing.T) {
 	}
 	c := NewChainCache(&stopsAfter{inner: inner, limit: 2})
 	var l sync.Mutex
-	err := c.RollbackCacheTo(&l, types.ZeroHashHeight)
+	err = c.RollbackCacheTo(&l, types.ZeroHashHeight)
 	if !errors.Is(err, storage.ErrCacheStopped) {
 		t.Fatalf("want ErrCacheStopped, got %v", err)
 	}

@@ -27,8 +27,19 @@ func getMockIdentifier(height uint64) types.HashHeight {
 	}
 }
 
+// mustNewCacheDBManager opens a cache database for a test, failing
+// the test if the database cannot be opened.
+func mustNewCacheDBManager(t *testing.T, dataDir string) CacheManager {
+	t.Helper()
+	m, err := NewCacheDBManager(dataDir)
+	if err != nil {
+		t.Fatalf("open cache database: %v", err)
+	}
+	return m
+}
+
 func TestAddWriteFailureIsAtomic(t *testing.T) {
-	m := NewCacheDBManager(t.TempDir()).(*cacheManager)
+	m := mustNewCacheDBManager(t, t.TempDir()).(*cacheManager)
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	common.FailIfErr(t, m.Add(getMockIdentifier(1), getMockPatch([]byte{1})))
@@ -51,7 +62,7 @@ func TestAddWriteFailureIsAtomic(t *testing.T) {
 }
 
 func TestPopWriteFailureIsAtomic(t *testing.T) {
-	m := NewCacheDBManager(t.TempDir()).(*cacheManager)
+	m := mustNewCacheDBManager(t, t.TempDir()).(*cacheManager)
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	common.FailIfErr(t, m.Add(getMockIdentifier(1), getMockPatch([]byte{1})))
@@ -76,7 +87,7 @@ func TestPopWriteFailureIsAtomic(t *testing.T) {
 
 func TestPop(t *testing.T) {
 	dir := t.TempDir()
-	m := NewCacheDBManager(dir)
+	m := mustNewCacheDBManager(t, dir)
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 
 	for i := 1; i <= 10; i++ {
@@ -120,7 +131,7 @@ func TestPop(t *testing.T) {
 // so callers such as chain.Stop and test cleanups may call it unconditionally.
 func TestCacheDBManagerStopIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	m := NewCacheDBManager(dir)
+	m := mustNewCacheDBManager(t, dir)
 	// Registered before any assertion; a repeated Stop is the contract
 	// under test, so the explicit calls below stay.
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
@@ -141,7 +152,7 @@ func TestCacheDBManagerStopIsIdempotent(t *testing.T) {
 // stopped even when closing the handle fails, since goleveldb treats the
 // handle as closed from the first Close call regardless of its result.
 func TestCacheDBManagerStopAfterFailedClose(t *testing.T) {
-	m := NewCacheDBManager(t.TempDir()).(*cacheManager)
+	m := mustNewCacheDBManager(t, t.TempDir()).(*cacheManager)
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
 	// The handle is closed underneath the manager, so the failure the first
 	// Stop sees is goleveldb's ErrClosed; an I/O failure of a first Close
@@ -181,7 +192,7 @@ func TestGetFrontierIdentifierCorrupted(t *testing.T) {
 func TestGetFrontierIdentifierReadError(t *testing.T) {
 	// Use a closed LevelDB to trigger a read error (not ErrNotFound).
 	dir := t.TempDir()
-	m := NewCacheDBManager(dir).(*cacheManager)
+	m := mustNewCacheDBManager(t, dir).(*cacheManager)
 	common.FailIfErr(t, m.ldb.Close())
 	// Bypass the stopped flag by calling GetFrontierIdentifier directly on a
 	// wrapper around the closed handle.

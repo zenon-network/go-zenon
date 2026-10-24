@@ -501,17 +501,25 @@ type ldbManager struct {
 }
 
 // NewLevelDBManager opens (or creates) the versioned database in dir
-// and returns the persistent Manager backed by it. It panics if the
-// database cannot be opened. This is the production manager for both
-// the momentum ledger and the stable account ledgers.
-func NewLevelDBManager(dir string) Manager {
+// and returns the persistent Manager backed by it. It returns an error
+// if the database cannot be opened. This is the production manager for
+// both the momentum ledger and the stable account ledgers.
+func NewLevelDBManager(dir string) (Manager, error) {
 	opts := &opt.Options{OpenFilesCacheCapacity: getOpenFilesCacheCapacity()}
 	ldb, err := leveldb.OpenFile(dir, opts)
-	common.DealWithErr(err)
+	if err != nil {
+		return nil, errors.Wrapf(err, "open leveldb at %s", dir)
+	}
 	l1Cache, err := lru.New(l1CacheSize)
-	common.DealWithErr(err)
+	if err != nil {
+		ldb.Close()
+		return nil, errors.Wrap(err, "create l1 cache")
+	}
 	l2Cache, err := lru.New(l2CacheSize)
-	common.DealWithErr(err)
+	if err != nil {
+		ldb.Close()
+		return nil, errors.Wrap(err, "create l2 cache")
+	}
 	return &ldbManager{
 		location: dir,
 		l1Cache:  l1Cache,
@@ -520,7 +528,7 @@ func NewLevelDBManager(dir string) Manager {
 		write: func(batch *leveldb.Batch) error {
 			return ldb.Write(batch, nil)
 		},
-	}
+	}, nil
 }
 
 func (m *ldbManager) Frontier() DB {

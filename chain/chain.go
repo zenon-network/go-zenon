@@ -25,7 +25,7 @@ package chain
 import (
 	stderrors "errors"
 	"fmt"
-	"os"
+	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -112,16 +112,13 @@ func (c *chain) Init() error {
 		c.log.Crit("can't start node because don't have all sporks implemented",
 			"hash", frontier.Hash, "height", frontier.Height, "unimplemented", unimplemented)
 
-		fmt.Printf("===== Error =====\n")
-		fmt.Printf("Can't start node. %v height %v\n", frontier.Hash, frontier.Height)
-		fmt.Printf("Detected an unimplemented spork.\n")
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "can't start node: unimplemented spork(s) active at height %d hash %s:\n", frontier.Height, frontier.Hash)
 		for _, spork := range unimplemented {
-			fmt.Printf("  Spork name `%v` id:`%v`\n", spork.Name, spork.Id)
+			fmt.Fprintf(&sb, "  Spork name `%v` id:`%v`\n", spork.Name, spork.Id)
 		}
-		fmt.Printf("\n")
-		fmt.Printf("Please upgrade your znnd binary\n")
-		fmt.Printf("znnd is terminating\n")
-		os.Exit(2)
+		fmt.Fprintf(&sb, "Please upgrade your znnd binary")
+		return fmt.Errorf("%s", sb.String())
 	}
 
 	return nil
