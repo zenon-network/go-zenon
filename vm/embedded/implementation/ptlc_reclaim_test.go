@@ -2,6 +2,7 @@ package implementation
 
 import (
 	"bytes"
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -761,5 +762,144 @@ func TestPtlc_UnlockWithoutReclaimLockWritesNothingElse(t *testing.T) {
 	common.FailIfErr(t, err)
 	if bytes.Equal(probed.Dump(), expected.Dump()) {
 		t.Fatal("deleting a missing reclaim lock no longer shows in the patch; this test cannot see an unconditional delete")
+	}
+}
+
+func reclaimTestUnlock(ctx *testPtlcContext, id types.Hash, witness []byte) ([]*nom.AccountBlock, error) {
+	return (&UnlockPtlcMethod{definition.UnlockPtlcMethodName}).ReceiveBlock(ctx, &nom.AccountBlock{
+		Address: reclaimCaller.Address,
+		Data:    definition.ABIPtlc.PackMethodPanic(definition.UnlockPtlcMethodName, id, witness),
+		Amount:  big.NewInt(0),
+	})
+}
+
+func reclaimTestProxyUnlock(ctx *testPtlcContext, id types.Hash, witness []byte) ([]*nom.AccountBlock, error) {
+	return (&ProxyUnlockPtlcMethod{definition.ProxyUnlockPtlcMethodName}).ReceiveBlock(ctx, &nom.AccountBlock{
+		Address: otherReclaimKey.Address,
+		Data:    definition.ABIPtlc.PackMethodPanic(definition.ProxyUnlockPtlcMethodName, id, reclaimCaller.Address, witness),
+		Amount:  big.NewInt(0),
+	})
+}
+
+func TestPtlc_ReclaimSignatureSizeFitsEveryReclaimType(t *testing.T) {
+	count := 0
+	for pointType := 0; pointType <= 255; pointType++ {
+		if !isReclaimPointType(uint8(pointType)) {
+			continue
+		}
+		count++
+		if size := int(definition.PointTypeWitnessSizes[uint8(pointType)]); size != definition.PtlcReclaimSignatureSize {
+			t.Errorf("point type %d signs with %d bytes, but a reclaim send block is checked for %d", pointType, size, definition.PtlcReclaimSignatureSize)
+		}
+	}
+	if count != 2 {
+		t.Fatalf("found %d reclaim lock types, want Ed25519 and BIP-340", count)
+	}
+}
+
+func TestPtlc_ReclaimAndUnlockInOneMomentum(t *testing.T) {
+	for _, unlock := range []struct {
+		name string
+		call func(ctx *testPtlcContext, id types.Hash, witness []byte) ([]*nom.AccountBlock, error)
+	}{
+		{"unlock", reclaimTestUnlock},
+		{"proxy unlock", reclaimTestProxyUnlock},
+	} {
+		for _, now := range []int64{reclaimTestExpiration - 1, reclaimTestExpiration} {
+			for _, reclaimFirst := range []bool{true, false} {
+				name := fmt.Sprintf("%s, time %d, reclaim first %v", unlock.name, now, reclaimFirst)
+				t.Run(name, func(t *testing.T) {
+					ctx := newTestPtlcContext(reclaimTestChain, reclaimTestCreateTime)
+					entry := createReclaimLockedPtlcWithTerms(t, ctx, name, reclaimTestTerms(User1.Address), definition.PointTypeED25519, reclaimKey.Public)
+					setPtlcTime(ctx, now)
+
+					reclaim := func() ([]*nom.AccountBlock, error) {
+						return reclaimWithSignature(ctx, User1.Address, entry.Id, signReclaim(reclaimKey, reclaimTestChain, entry))
+					}
+					claim := func() ([]*nom.AccountBlock, error) {
+						return unlock.call(ctx, entry.Id, User1.Sign(definition.GetPtlcUnlockMessage(reclaimTestChain, definition.PointTypeED25519, entry.Id, reclaimCaller.Address)))
+					}
+					calls := []func() ([]*nom.AccountBlock, error){claim, reclaim}
+					if reclaimFirst {
+						calls = []func() ([]*nom.AccountBlock, error){reclaim, claim}
+					}
+
+					var paid []*nom.AccountBlock
+					for _, call := range calls {
+						blocks, err := call()
+						if err == nil {
+							paid = append(paid, blocks...)
+						} else {
+							expectNoBlocks(t, blocks)
+						}
+					}
+
+					if now < reclaimTestExpiration {
+						expectPaid(t, paid, reclaimCaller.Address, 7)
+					} else {
+						expectPaid(t, paid, User1.Address, 7)
+					}
+					expectEntryGone(t, ctx, entry.Id)
+				})
+			}
+		}
+	}
+}
+
+func TestPtlc_SameKeyLocksClaimAndReclaim(t *testing.T) {
+	bip340Private, bip340Public := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{7}, 32))
+	for _, test := range []struct {
+		name      string
+		pointType uint8
+		public    []byte
+		sign      func(t *testing.T, message []byte) []byte
+	}{
+		{"ed25519", definition.PointTypeED25519, reclaimKey.Public, func(t *testing.T, message []byte) []byte {
+			return reclaimKey.Sign(message)
+		}},
+		{"bip340", definition.PointTypeBIP340, schnorr.SerializePubKey(bip340Public), func(t *testing.T, message []byte) []byte {
+			signature, err := schnorr.Sign(bip340Private, message)
+			common.FailIfErr(t, err)
+			return signature.Serialize()
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := newTestPtlcContext(reclaimTestChain, reclaimTestCreateTime)
+			terms := withReclaimTerms(reclaimTestTerms(User1.Address), func(e *definition.PtlcInfo) {
+				e.PointType = test.pointType
+				e.PointLock = test.public
+			})
+			entry := createReclaimLockedPtlcWithTerms(t, ctx, "same-key-"+test.name, terms, test.pointType, test.public)
+			claimed := createReclaimLockedPtlcWithTerms(t, ctx, "same-key-claimed-"+test.name, terms, test.pointType, test.public)
+			reclaimSignature := test.sign(t, definition.GetPtlcReclaimMessage(reclaimTestChain, test.pointType, entry))
+
+			setPtlcTime(ctx, reclaimTestExpiration-1)
+			for name, call := range map[string]func(ctx *testPtlcContext, id types.Hash, witness []byte) ([]*nom.AccountBlock, error){
+				"unlock":       reclaimTestUnlock,
+				"proxy unlock": reclaimTestProxyUnlock,
+			} {
+				blocks, err := call(ctx, entry.Id, reclaimSignature)
+				if err != constants.ErrInvalidPointSignature {
+					t.Errorf("a reclaim signature as the %s witness: got %v, want %v", name, err, constants.ErrInvalidPointSignature)
+				}
+				expectNoBlocks(t, blocks)
+			}
+			blocks, err := reclaimTestUnlock(ctx, claimed.Id, test.sign(t, definition.GetPtlcUnlockMessage(reclaimTestChain, test.pointType, claimed.Id, reclaimCaller.Address)))
+			common.FailIfErr(t, err)
+			expectPaid(t, blocks, reclaimCaller.Address, 7)
+
+			setPtlcTime(ctx, reclaimTestExpiration)
+			for _, destination := range []types.Address{User1.Address, reclaimCaller.Address} {
+				unlockSignature := test.sign(t, definition.GetPtlcUnlockMessage(reclaimTestChain, test.pointType, entry.Id, destination))
+				blocks, err := reclaimWithSignature(ctx, User1.Address, entry.Id, unlockSignature)
+				common.ExpectError(t, err, constants.ErrInvalidPointSignature)
+				expectNoBlocks(t, blocks)
+			}
+
+			blocks, err = reclaimWithSignature(ctx, User1.Address, entry.Id, reclaimSignature)
+			common.FailIfErr(t, err)
+			expectPaid(t, blocks, User1.Address, 7)
+			expectEntryGone(t, ctx, entry.Id)
+		})
 	}
 }
