@@ -278,7 +278,8 @@ func (node *Node) unwindStart() {
 // idempotent: a second call returns nil immediately.
 //
 // Every cleanup step runs even when an earlier one fails; the returned
-// error is the join of all failures, matching zenon.Stop.
+// error is the join of the wallet and core stop errors (stopRPC and
+// closeDataDir log their own), matching zenon.Stop.
 func (node *Node) Stop() error {
 	node.lock.Lock()
 	defer node.lock.Unlock()
