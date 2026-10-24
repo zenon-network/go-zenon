@@ -92,8 +92,8 @@ func (c *momentumPool) AddMomentumTransaction(insertLocker sync.Locker, transact
 			fmt.Printf("  Spork name `%v`\n", spork.Name)
 		}
 		fmt.Printf("\n")
-		fmt.Printf("Please upgrade your znnd binary\n")
-		fmt.Printf("znnd is terminating\n")
+		fmt.Printf("The node will skip this momentum and continue running.\n")
+		fmt.Printf("Please upgrade your znnd binary as soon as possible.\n")
 		return c.rollbackFailedInsert(
 			fmt.Errorf("can't insert momentum %v height %v: detected unimplemented spork(s): %v", momentum.Hash, momentum.Height, unimplemented),
 			momentum.Identifier(),

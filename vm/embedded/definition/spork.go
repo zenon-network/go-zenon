@@ -144,6 +144,9 @@ func GetSporkInfoById(context db.DB, id types.Hash) *Spork {
 
 // GetAllSporks returns every registered spork, in storage-key (id
 // byte) order; database errors panic via common.DealWithErr.
+// Entries whose value is empty (tombstone deletion markers left by a
+// genesis rollback) are skipped, matching GetSporkInfoById's treatment
+// of empty values as absent.
 func GetAllSporks(context db.DB) []*Spork {
 	iterator := context.NewIterator([]byte{sporkInfoPrefix})
 	defer iterator.Release()
@@ -154,8 +157,9 @@ func GetAllSporks(context db.DB) []*Spork {
 			common.DealWithErr(iterator.Error())
 			break
 		}
-		spork := ParseSporkInfo(iterator.Value())
-		sporks = append(sporks, spork)
+		if data := iterator.Value(); len(data) > 0 {
+			sporks = append(sporks, ParseSporkInfo(data))
+		}
 	}
 	return sporks
 }

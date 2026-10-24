@@ -14,6 +14,7 @@
 package node
 
 import (
+	stderrors "errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -275,6 +276,9 @@ func (node *Node) unwindStart() {
 // server, the wallet and the Zenon core, shuts down the RPC servers,
 // releases the data-directory lock and unblocks Wait. Stop is
 // idempotent: a second call returns nil immediately.
+//
+// Every cleanup step runs even when an earlier one fails; the returned
+// error is the join of all failures, matching zenon.Stop.
 func (node *Node) Stop() error {
 	node.lock.Lock()
 	defer node.lock.Unlock()
@@ -285,23 +289,25 @@ func (node *Node) Stop() error {
 	node.stopped = true
 	defer close(node.stop)
 
+	var errs []error
+
 	log.Info("stopping p2p server ...")
 	node.server.Stop()
 
 	if err := node.stopWallet(); err != nil {
 		log.Error("failed to stop wallet", "reason", err)
-		return err
+		errs = append(errs, err)
 	}
 	if err := node.stopZenon(); err != nil {
 		log.Error("failed to stop zenon", "reason", err)
-		return err
+		errs = append(errs, err)
 	}
 	node.stopRPC()
 
 	// Release instance directory lock.
 	node.closeDataDir()
 
-	return nil
+	return stderrors.Join(errs...)
 }
 
 // Wait blocks until the node is stopped.
