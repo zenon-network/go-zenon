@@ -175,7 +175,7 @@ func action(ctx *cli.Context) error {
 	nodeManager = m
 	nodeManagerMu.Unlock()
 
-	if err := nodeManager.Start(); err != nil {
+	if err := m.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
