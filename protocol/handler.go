@@ -256,10 +256,20 @@ func (pm *ProtocolManager) handle(p *peer) error {
 // above their own cap (10 MiB in libp2p; 10 MiB plus a frame header on legacy
 // RLPx).
 func gatherBlocksForReply(msgStream *rlp.Stream, getBlock func(types.Hash) *nom.DetailedMomentum) (blocks []*nom.DetailedMomentum, hashCount int, err error) {
+	blocks, hashCount, _, err = gatherBlocksForReplyBudgeted(msgStream, getBlock, nil)
+	return blocks, hashCount, err
+}
+
+// gatherBlocksForReplyBudgeted is gatherBlocksForReply charging the peer's
+// request budget (see RequestLookupRate): one lookup unit per hash before
+// it is looked up, and the miss remainder after a lookup finds nothing, so
+// a peer that has run dry never reaches the store. It also returns the
+// encoded size of the collected blocks, which the caller charges as reply
+// bytes before sending. A nil budget charges nothing.
+func gatherBlocksForReplyBudgeted(msgStream *rlp.Stream, getBlock func(types.Hash) *nom.DetailedMomentum, budget *requestBudget) (blocks []*nom.DetailedMomentum, hashCount int, replySize int, err error) {
 	var (
-		hash      types.Hash
-		seen      = make(map[types.Hash]struct{})
-		replySize int
+		hash types.Hash
+		seen = make(map[types.Hash]struct{})
 	)
 	for {
 		// Every requested hash costs a store lookup whether or not the
@@ -275,7 +285,7 @@ func gatherBlocksForReply(msgStream *rlp.Stream, getBlock func(types.Hash) *nom.
 		if derr == rlp.EOL {
 			break
 		} else if derr != nil {
-			return nil, hashCount, errResp(ErrDecode, "getBlocks: %v", derr)
+			return nil, hashCount, 0, errResp(ErrDecode, "getBlocks: %v", derr)
 		}
 		hashCount++
 
@@ -287,26 +297,39 @@ func gatherBlocksForReply(msgStream *rlp.Stream, getBlock func(types.Hash) *nom.
 		}
 		seen[hash] = struct{}{}
 
-		// Retrieve the requested block, stopping if enough was found
-		if block := getBlock(hash); block != nil {
-			encoded, encErr := rlp.EncodeToBytes(block)
-			if encErr != nil {
-				continue
-			}
-			// Include the block, then stop if the reply has grown past
-			// the soft limit. Appending before checking ensures at least
-			// one block is always returned, matching go-ethereum.
-			replySize += len(encoded)
-			blocks = append(blocks, block)
-			if replySize > SoftResponseLimit {
-				break
-			}
-			if len(blocks) >= downloader.MaxBlockFetch {
-				break
+		// Retrieve the requested block, stopping if enough was found. The
+		// lookup is admitted against the peer's budget first.
+		if budget != nil {
+			if err := budget.admitLookups(1); err != nil {
+				return nil, hashCount, 0, err
 			}
 		}
+		block := getBlock(hash)
+		if block == nil {
+			if budget != nil {
+				if err := budget.chargeMiss(); err != nil {
+					return nil, hashCount, 0, err
+				}
+			}
+			continue
+		}
+		encoded, encErr := rlp.EncodeToBytes(block)
+		if encErr != nil {
+			continue
+		}
+		// Include the block, then stop if the reply has grown past
+		// the soft limit. Appending before checking ensures at least
+		// one block is always returned, matching go-ethereum.
+		replySize += len(encoded)
+		blocks = append(blocks, block)
+		if replySize > SoftResponseLimit {
+			break
+		}
+		if len(blocks) >= downloader.MaxBlockFetch {
+			break
+		}
 	}
-	return blocks, hashCount, nil
+	return blocks, hashCount, replySize, nil
 }
 
 // handleMsg is invoked whenever an inbound message is received from a remote
@@ -337,6 +360,12 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		if request.Amount > uint64(downloader.MaxHashFetch) {
 			request.Amount = uint64(downloader.MaxHashFetch)
 		}
+		// One unit for the request plus one per hash the walk may visit,
+		// admitted before the chain is touched.
+		budget := p.requestBudget()
+		if err := budget.admitLookups(1 + float64(request.Amount)); err != nil {
+			return err
+		}
 		// Retrieve the hashes from the block chain and return them
 		hashes, err := pm.chainman.GetBlockHashesFromHash(request.Hash, request.Amount)
 		if err != nil {
@@ -344,6 +373,11 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		}
 		if len(hashes) == 0 {
 			log.Info("invalid block hash", "hash", request.Hash.Bytes()[:4])
+		}
+		// Approximate encoded size: one RLP string header per hash, the
+		// list header ignored.
+		if err := budget.admitReplyBytes(len(hashes) * (types.HashSize + 1)); err != nil {
+			return err
 		}
 		return p.SendBlockHashes(hashes)
 
@@ -357,17 +391,31 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		if request.Amount > uint64(downloader.MaxHashFetch) {
 			request.Amount = uint64(downloader.MaxHashFetch)
 		}
+		// One unit for the request and one for the height lookup; the walk
+		// is charged once its length is known, before it runs.
+		budget := p.requestBudget()
+		if err := budget.admitLookups(2); err != nil {
+			return err
+		}
 		// Calculate the last block that should be retrieved, and short circuit if unavailable
 		last, err := pm.chainman.GetBlockByNumber(request.Number + request.Amount - 1)
 		if err != nil {
 			return err
 		}
 		if last == nil {
+			// The frontier read is a lookup too.
+			if err := budget.admitLookups(1); err != nil {
+				return err
+			}
 			last = pm.chainman.CurrentBlock()
 			request.Amount = last.Height - request.Number + 1
 		}
 		if last.Height < request.Number {
 			return p.SendBlockHashes(nil)
+		}
+		// One unit per hash the walk visits, admitted before it runs.
+		if err := budget.admitLookups(float64(request.Amount)); err != nil {
+			return err
 		}
 		// Retrieve the hashes from the last block backwards, reverse and return
 		hashes, err := pm.chainman.GetBlockHashesFromHash(last.Hash, request.Amount)
@@ -377,6 +425,11 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 
 		for i := 0; i < len(hashes)/2; i++ {
 			hashes[i], hashes[len(hashes)-1-i] = hashes[len(hashes)-1-i], hashes[i]
+		}
+		// Approximate encoded size: one RLP string header per hash, the
+		// list header ignored.
+		if err := budget.admitReplyBytes(len(hashes) * (types.HashSize + 1)); err != nil {
+			return err
 		}
 		return p.SendBlockHashes(hashes)
 
@@ -401,12 +454,22 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		if _, err := msgStream.List(); err != nil {
 			return err
 		}
-		blocks, hashCount, err := gatherBlocksForReply(msgStream, pm.chainman.GetBlock)
+		// One unit for the request; the hashes are charged as they are
+		// looked up, the reply by its approximate encoded size (the sum of
+		// the encoded blocks, the list header ignored) before it is sent.
+		budget := p.requestBudget()
+		if err := budget.admitLookups(1); err != nil {
+			return err
+		}
+		blocks, hashCount, replySize, err := gatherBlocksForReplyBudgeted(msgStream, pm.chainman.GetBlock, budget)
 		if err != nil {
 			return err
 		}
 		if len(blocks) == 0 && hashCount > 0 {
 			log.Debug("no blocks found for requested hashes", "peer-id", p.id, "count", hashCount)
+		}
+		if err := budget.admitReplyBytes(replySize); err != nil {
+			return err
 		}
 		return p.SendBlocks(blocks)
 
