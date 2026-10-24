@@ -62,6 +62,11 @@ type peer struct {
 
 	knownTxs    *lru.Cache // Set of transaction hashes known to be known by this peer
 	knownBlocks *lru.Cache // Set of block hashes known to be known by this peer
+
+	// budget paces the requests this connection may have served over
+	// time; see RequestLookupRate. newPeer sets the default; a peer built
+	// without one gets it on first use (requestBudget).
+	budget *requestBudget
 }
 
 func newPeer(version, network int, p p2p.Peer, rw p2p.MsgReadWriter) *peer {
@@ -81,6 +86,7 @@ func newPeer(version, network int, p p2p.Peer, rw p2p.MsgReadWriter) *peer {
 		Peer:        p,
 		rw:          rw,
 		closed:      closed,
+		budget:      newDefaultRequestBudget(fmt.Sprintf("%x", id[:]), closed),
 		version:     version,
 		network:     network,
 		id:          fmt.Sprintf("%x", id[:]),
@@ -270,6 +276,15 @@ func (p *peer) String() string {
 	return fmt.Sprintf("Peer %s [%s]", p.id,
 		fmt.Sprintf("eth/%2d", p.version),
 	)
+}
+
+// requestBudget returns the peer's request budget, creating the default
+// one on first use for a peer built without one.
+func (p *peer) requestBudget() *requestBudget {
+	if p.budget == nil {
+		p.budget = newDefaultRequestBudget(p.id, p.closed)
+	}
+	return p.budget
 }
 
 // peerSet represents the collection of active peers currently participating in

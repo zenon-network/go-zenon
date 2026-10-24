@@ -88,8 +88,9 @@ type errCode int
 // Protocol error codes, reported when a peer is disconnected for
 // misbehaving: oversized or undecodable messages, handshake
 // mismatches (protocol version, network id or genesis hash), or a
-// missing, repeated or out-of-order status message. ErrSuspendedPeer
-// is declared and named but currently raised nowhere.
+// missing, repeated or out-of-order status message, or a request budget
+// charge that could never be covered (see RequestLookupBurst). ErrSuspendedPeer is declared and
+// named but currently raised nowhere.
 const (
 	ErrMsgTooLarge = iota
 	ErrDecode
@@ -100,6 +101,7 @@ const (
 	ErrNoStatusMsg
 	ErrExtraStatusMsg
 	ErrSuspendedPeer
+	ErrRequestBudgetExceeded
 )
 
 func (e errCode) String() string {
@@ -117,6 +119,7 @@ var errorToString = map[int]string{
 	ErrNoStatusMsg:             "No status message",
 	ErrExtraStatusMsg:          "Extra status message",
 	ErrSuspendedPeer:           "Suspended peer",
+	ErrRequestBudgetExceeded:   "Request budget exceeded",
 }
 
 // statusData is the network packet for the status message.
