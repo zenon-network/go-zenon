@@ -3,6 +3,8 @@ package consensus
 import (
 	"math/big"
 
+	"github.com/pkg/errors"
+
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
@@ -185,6 +187,22 @@ func (compound *compoundPoints) GetPoint(tick uint64) (*storage.Point, error) {
 
 	return point, nil
 }
+
+// generatePointFromLower builds the point of tick by left-appending the
+// lower points of its range, [start, end), from the last tick to the
+// first. Lower ticks that read as not started (nil) are skipped, which
+// is how the still-empty tail of a tick in progress is handled.
+//
+// The walk is bounded by the range: it stops at start whether or not
+// that tick holds a point. The frontier is read anew by every lower
+// GetPoint, so a frontier that moves backwards while the walk is in
+// flight (a rollback racing an epoch read) can make ticks read as not
+// started that a stable frontier would have served. Both shapes are
+// errors rather than a point: a nil tick below one already merged (the
+// range would be reported with its first ticks missing), and a range
+// with no tick present at all (the weights are averaged over the ticks
+// present, so this would also divide by zero). Neither can occur on a
+// stable frontier: a started tick's lower ticks have all started.
 func (compound *compoundPoints) generatePointFromLower(tick uint64, endBlock *nom.Momentum) (*storage.Point, error) {
 	result := storage.NewEmptyPoint(endBlock.Hash)
 	start := tick * compound.lowerMultiplier
@@ -196,21 +214,31 @@ func (compound *compoundPoints) generatePointFromLower(tick uint64, endBlock *no
 		if err != nil {
 			return nil, err
 		}
-		// Future point
+		// A nil point is a tick that reads as not started: the empty
+		// tail of a range in progress, or, once a later tick has been
+		// merged, a frontier that moved below it during the walk.
 		if p == nil {
-			continue
+			if numPresent > 0 {
+				return nil, errors.Errorf("lower tick %v of tick %v reads as not started after tick %v was merged: the frontier moved during the walk", i, tick, i+1)
+			}
+		} else {
+			numPresent += 1
+			if err := result.LeftAppend(p); err != nil {
+				return nil, err
+			}
 		}
-
-		numPresent += 1
-		if err := result.LeftAppend(p); err != nil {
-			return nil, err
-		}
+		// The range start ends the walk even when its tick holds no
+		// point; start can be 0, so this must come before i wraps.
 		if i == start {
 			break
 		}
 	}
 
-	// Divide weight by lowerMultiplier
+	if numPresent == 0 {
+		return nil, errors.Errorf("no lower points for tick %v (range %v to %v): the frontier is below the range", tick, start, end-1)
+	}
+
+	// Divide weight by the number of lower points merged
 	result.TotalWeight.Set(big.NewInt(0))
 	bigRate := big.NewInt(numPresent)
 	for _, p := range result.Pillars {
