@@ -65,6 +65,10 @@ blockValue = FusedPlasma * workPrice + DifficultyToPlasma(Difficulty) * fusionPr
 
 Blocks are ranked by `blockValue / BasePlasma` (higher is better). The content selector (`pillar/content_selector.go`) sorts blocks by this ratio and fills the momentum up to `maxBasePlasmaInMomentum`.
 
+### Embedded Call Argument Pricing
+
+Before the spork a send to an embedded contract pays its method tier alone, whatever the size of the ABI-encoded arguments in `Data`, and no size bound applies to that `Data`. Once the spork is enforced `vm.EmbeddedSendBasePlasma` prices the argument bytes past the 4-byte selector at `ABByteDataPlasma` (68) each, on top of the tier, and rejects `Data` longer than `MaxDataLength` (16 KiB) with the same error a user send gets. A zero-argument call is unchanged; a `Fuse(address)` call pays 32 × 68 more than its tier. Two methods whose arguments have a known useful maximum also reject longer values when the send is applied: the HTLC `Unlock` preimage (`HtlcPreimageMaxLength`, 255) and the bridge `UpdateWrapRequest` / `UnwrapToken` signature strings (`ECDSASignatureStringMaxLength`, 88). The plasma quote RPC (`embedded.plasma.getRequiredPoWForAccountBlock`) reports the priced figure.
+
 ### Minimum Block Price
 
 A block must meet a minimum price to be included:
