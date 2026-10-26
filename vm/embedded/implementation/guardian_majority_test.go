@@ -428,3 +428,103 @@ func TestGuardian_ProposeAdministrator_RepeatVoteCountsOnce(t *testing.T) {
 		t.Fatalf("repeat votes by single guardian incorrectly triggered election!")
 	}
 }
+
+// TestGuardian_ProposeAdministrator_UnanimousRecovery fills every guardian
+// vote except the last, then submits the final vote through ReceiveBlock.
+// The administrator must be set and all votes must be cleared.
+func TestGuardian_ProposeAdministrator_UnanimousRecovery(t *testing.T) {
+	newAdmin := makeGuardianAddress(9999)
+
+	for _, size := range []int{510, 511} {
+		guardians := make([]types.Address, size)
+		for i := 0; i < size; i++ {
+			guardians[i] = makeGuardianAddress(i + 1)
+		}
+		last := size - 1
+
+		t.Run(fmt.Sprintf("Bridge_Unanimous_%d", size), func(t *testing.T) {
+			ctx := newTestContractContext(types.BridgeContract, true)
+			setupEmergencyBridge(t, ctx, guardians)
+
+			secInfo, err := definition.GetSecurityInfoVariable(ctx.Storage())
+			if err != nil {
+				t.Fatalf("failed to load security info: %v", err)
+			}
+			for i := 0; i < last; i++ {
+				secInfo.GuardiansVotes[i] = newAdmin
+			}
+			if err := secInfo.Save(ctx.Storage()); err != nil {
+				t.Fatalf("failed to save security info: %v", err)
+			}
+
+			method := &ProposeAdministratorMethod{definition.ProposeAdministratorMethodName}
+			sendFinal := &nom.AccountBlock{
+				Address:   guardians[last],
+				ToAddress: types.BridgeContract,
+				Data:      definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName, newAdmin),
+				Amount:    big.NewInt(0),
+			}
+			if _, err := method.ReceiveBlock(ctx, sendFinal); err != nil {
+				t.Fatalf("size %d: final unanimous vote failed: %v", size, err)
+			}
+
+			bInfo, _ := definition.GetBridgeInfoVariable(ctx.Storage())
+			if bInfo.Administrator.String() != newAdmin.String() {
+				t.Fatalf("size %d: expected admin %v, got %v", size, newAdmin, bInfo.Administrator)
+			}
+
+			secInfo, err = definition.GetSecurityInfoVariable(ctx.Storage())
+			if err != nil {
+				t.Fatalf("failed to reload security info: %v", err)
+			}
+			for idx, vote := range secInfo.GuardiansVotes {
+				if !vote.IsZero() {
+					t.Fatalf("size %d: vote %d not cleared after election", size, idx)
+				}
+			}
+		})
+
+		t.Run(fmt.Sprintf("Liquidity_Unanimous_%d", size), func(t *testing.T) {
+			ctx := newTestContractContext(types.LiquidityContract, true)
+			setupEmergencyLiquidity(t, ctx, guardians)
+
+			secInfo, err := definition.GetSecurityInfoVariable(ctx.Storage())
+			if err != nil {
+				t.Fatalf("failed to load security info: %v", err)
+			}
+			for i := 0; i < last; i++ {
+				secInfo.GuardiansVotes[i] = newAdmin
+			}
+			if err := secInfo.Save(ctx.Storage()); err != nil {
+				t.Fatalf("failed to save security info: %v", err)
+			}
+
+			method := &ProposeAdministratorLiquidity{definition.ProposeAdministratorMethodName}
+			sendFinal := &nom.AccountBlock{
+				Address:   guardians[last],
+				ToAddress: types.LiquidityContract,
+				Data:      definition.ABILiquidity.PackMethodPanic(definition.ProposeAdministratorMethodName, newAdmin),
+				Amount:    big.NewInt(0),
+			}
+			if _, err := method.ReceiveBlock(ctx, sendFinal); err != nil {
+				t.Fatalf("size %d: final unanimous vote failed: %v", size, err)
+			}
+
+			lInfo, _ := definition.GetLiquidityInfo(ctx.Storage())
+			if lInfo.Administrator.String() != newAdmin.String() {
+				t.Fatalf("size %d: expected admin %v, got %v", size, newAdmin, lInfo.Administrator)
+			}
+
+			secInfo, err = definition.GetSecurityInfoVariable(ctx.Storage())
+			if err != nil {
+				t.Fatalf("failed to reload security info: %v", err)
+			}
+			for idx, vote := range secInfo.GuardiansVotes {
+				if !vote.IsZero() {
+					t.Fatalf("size %d: vote %d not cleared after election", size, idx)
+				}
+			}
+		})
+	}
+}
+
