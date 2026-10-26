@@ -303,6 +303,12 @@ func (d *Downloader) synchronise(id string, hash types.Hash, td uint64) error {
 	d.queue.Reset()
 	d.peers.Reset()
 	d.checks = make(map[types.Hash]*crossCheck)
+	// A continuation flag the previous run's block fetcher never read
+	// would otherwise be the first thing this run's block fetcher sees.
+	select {
+	case <-d.processCh:
+	default:
+	}
 
 	// Create cancel channel for aborting mid-flight
 	d.cancelLock.Lock()
@@ -587,6 +593,16 @@ func (d *Downloader) fetchHashes(p *peer, td uint64, from uint64) error {
 			}
 			timeout.Stop()
 
+			// Keep at most the window we asked for. A serving node whose
+			// frontier grows between its two reads can answer with a hash
+			// or two past the window. Replies are newest first, so the
+			// requested heights are the tail of the reply: keep that and
+			// drop the rest rather than queue it; the next request then
+			// starts right after the kept window.
+			if len(hashPack.hashes) > MaxHashFetch {
+				log.Info("oversized hash set, truncating", "peer", p, "num-hashes", len(hashPack.hashes))
+				hashPack.hashes = hashPack.hashes[len(hashPack.hashes)-MaxHashFetch:]
+			}
 			// If no more hashes are inbound, notify the block fetcher and return
 			if len(hashPack.hashes) == 0 {
 				log.Info("no available hashes", "peer", p)
@@ -606,14 +622,20 @@ func (d *Downloader) fetchHashes(p *peer, td uint64, from uint64) error {
 				log.Info("stale hashes", "peer", p)
 				return errBadPeer
 			}
-			// Notify the block fetcher of new hashes, but stop if queue is full
-			cont := d.queue.Pending() < maxQueuedHashes
-			select {
-			case d.processCh <- cont:
-			default:
-			}
-			if !cont {
+			// Notify the block fetcher of new hashes, but stop if queue is full.
+			// A dropped "more coming" costs nothing, the block fetcher polls;
+			// the stop flag is the only way it learns the hash fetch is over,
+			// so that one waits for the slot like the empty-reply path above.
+			if d.queue.Pending() >= maxQueuedHashes {
+				select {
+				case d.processCh <- false:
+				case <-d.cancelCh:
+				}
 				return nil
+			}
+			select {
+			case d.processCh <- true:
+			default:
 			}
 			// Queue not yet full, fetch the next batch
 			from += uint64(len(hashPack.hashes))
