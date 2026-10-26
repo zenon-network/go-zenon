@@ -1,6 +1,7 @@
 package implementation
 
 import (
+	"math"
 	"math/big"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
@@ -288,7 +289,16 @@ func updateStakeRewards(context vm_context.AccountVmContext) error {
 		return err
 	}
 
-	for {
+	// The Dynamic Plasma spork gates the per-call epoch bound. Before the
+	// spork the loop is unbounded for consensus compatibility with
+	// historical state; after the spork at most MaxRewardEpochsPerCall
+	// epochs settle per receive.
+	maxEpochs := math.MaxInt32
+	if context.IsDynamicPlasmaSporkEnforced() {
+		maxEpochs = constants.MaxRewardEpochsPerCall
+	}
+
+	for epochsSettled := 0; epochsSettled < maxEpochs; epochsSettled++ {
 		if err := checkAndPerformUpdateEpoch(context, lastEpoch); err == constants.ErrEpochUpdateTooRecent {
 			stakeLog.Debug("invalid update - rewards not due yet", "epoch", lastEpoch.LastEpoch+1)
 			return nil
@@ -300,4 +310,8 @@ func updateStakeRewards(context vm_context.AccountVmContext) error {
 			return err
 		}
 	}
+	if maxEpochs != math.MaxInt32 {
+		stakeLog.Debug("reward update capped by MaxRewardEpochsPerCall", "lastSettled", lastEpoch.LastEpoch)
+	}
+	return nil
 }

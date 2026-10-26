@@ -47,11 +47,23 @@ var (
 	// UpdateMinNumMomentums is the number momentums between 2 UpdateEmbedded* calls which will execute, used for all applicable contracts
 	UpdateMinNumMomentums = uint64(MomentumsPerHour * 5 / 6)
 	// MaxEpochsPerUpdate caps the descendant blocks one legacy liquidity
-	// update call issues (two per rewarded epoch, so 20 pays ten epochs);
-	// it is not used by the other contracts. The epoch marker advances
-	// before the cap is checked, so an epoch cut off by the cap is not
-	// revisited by the next call.
+	// update call issues (two per rewarded epoch, so 20 pays ten epochs).
+	// The epoch marker advances before the cap is checked, so an epoch cut
+	// off by the cap is not revisited by the next call. This constant is
+	// also used as the per-call epoch bound for the stake, sentinel and
+	// pillar reward updaters, where the cap is checked before the marker
+	// advances to avoid the skip defect described above.
 	MaxEpochsPerUpdate = 20
+
+	// MaxRewardEpochsPerCall bounds the number of due epochs the stake,
+	// sentinel and pillar reward updaters settle in one contract receive.
+	// Without a bound, a chain halt that makes many epochs due at once
+	// would settle the entire backlog in one call, proportional to
+	// due-epochs times stored-entries. The cap is checked before the epoch
+	// marker advances, so a capped call never skips an epoch. Normal
+	// operation keeps the backlog at one epoch, so the cap is not expected
+	// to trip in practice.
+	MaxRewardEpochsPerCall = 50
 
 	// === Accelerator ===
 
