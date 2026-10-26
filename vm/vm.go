@@ -199,18 +199,10 @@ func (vm *VM) applySend(block *nom.AccountBlock) error {
 			return err
 		}
 
-		// reject per-token percentages above the denominator (issue #198)
+		// method-specific rules that need spork context
 		if vm.context.IsDynamicPlasmaSporkEnforced() {
-			if _, ok := method.(*implementation.SetTokenTupleMethod); ok {
-				param := new(definition.TokenTuplesParam)
-				if err := definition.ABILiquidity.UnpackMethod(param, definition.SetTokenTupleMethodName, block.Data); err != nil {
-					// ValidateSendBlock already unpacked and repacked this
-					// data; a failure here is an invariant violation.
-					return constants.ErrUnpackError
-				}
-				if err := implementation.CheckTokenTuplePercentages(param); err != nil {
-					return err
-				}
+			if err := checkSporkGatedSendRules(method, block); err != nil {
+				return err
 			}
 		}
 	}
@@ -222,6 +214,49 @@ func (vm *VM) applySend(block *nom.AccountBlock) error {
 
 	vm.context.SubBalance(&block.TokenStandard, block.Amount)
 
+	return nil
+}
+
+// checkSporkGatedSendRules applies the per-method send rules that are
+// enforced once the Dynamic Plasma spork is active. ValidateSendBlock
+// has no spork context, so these rules live here, after it has
+// unpacked and canonically re-packed block.Data; a failure to unpack
+// again is therefore an invariant violation (constants.ErrUnpackError).
+//
+//   - SetTokenTuple: per-token percentages above their denominator are
+//     rejected (issue #198).
+//   - HTLC Unlock: a preimage longer than any entry can accept is
+//     rejected (implementation.CheckUnlockPreimageLength).
+//   - Bridge UpdateWrapRequest and UnwrapToken: a signature string
+//     longer than the base64 form of a signature is rejected, a length
+//     policy only (implementation.CheckSignatureStringLength).
+func checkSporkGatedSendRules(method embedded.Method, block *nom.AccountBlock) error {
+	switch method.(type) {
+	case *implementation.SetTokenTupleMethod:
+		param := new(definition.TokenTuplesParam)
+		if err := definition.ABILiquidity.UnpackMethod(param, definition.SetTokenTupleMethodName, block.Data); err != nil {
+			return constants.ErrUnpackError
+		}
+		return implementation.CheckTokenTuplePercentages(param)
+	case *implementation.UnlockHtlcMethod:
+		param := new(definition.UnlockHtlcParam)
+		if err := definition.ABIHtlc.UnpackMethod(param, definition.UnlockHtlcMethodName, block.Data); err != nil {
+			return constants.ErrUnpackError
+		}
+		return implementation.CheckUnlockPreimageLength(param)
+	case *implementation.UpdateWrapRequestMethod:
+		param := new(definition.UpdateWrapRequestParam)
+		if err := definition.ABIBridge.UnpackMethod(param, definition.UpdateWrapRequestMethodName, block.Data); err != nil {
+			return constants.ErrUnpackError
+		}
+		return implementation.CheckSignatureStringLength(param.Signature)
+	case *implementation.UnwrapTokenMethod:
+		param := new(definition.UnwrapTokenParam)
+		if err := definition.ABIBridge.UnpackMethod(param, definition.UnwrapTokenMethodName, block.Data); err != nil {
+			return constants.ErrUnpackError
+		}
+		return implementation.CheckSignatureStringLength(param.Signature)
+	}
 	return nil
 }
 func (vm *VM) applyReceive(block *nom.AccountBlock) error {

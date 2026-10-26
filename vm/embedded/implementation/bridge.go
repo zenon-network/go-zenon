@@ -64,6 +64,23 @@ func CheckECDSASignature(message []byte, pubKeyStr, signatureStr string) (bool, 
 	return true, nil
 }
 
+// CheckSignatureStringLength is the Dynamic-Plasma-spork rule applied
+// to the UpdateWrapRequest and UnwrapToken sends before they are
+// accepted: a signature string longer than
+// constants.ECDSASignatureStringMaxLength (the padded base64 length of
+// a signature) is rejected with constants.ErrInvalidECDSASignature
+// instead of being stored. This is a length policy, not a decoding
+// check: a longer string decodes to a signature only when it carries
+// line breaks, which the decoder skips, and such strings are no longer
+// accepted. The VM applies it next to the other spork-gated send rules;
+// ValidateSendBlock has no spork context.
+func CheckSignatureStringLength(signature string) error {
+	if len(signature) > constants.ECDSASignatureStringMaxLength {
+		return constants.ErrInvalidECDSASignature
+	}
+	return nil
+}
+
 // CanPerformAction is the combined gate in front of every
 // token-moving bridge call (WrapToken, UpdateWrapRequest, UnwrapToken
 // and Redeem): the bridge must be initialized

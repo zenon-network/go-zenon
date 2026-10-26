@@ -16,6 +16,7 @@ import (
 	"github.com/zenon-network/go-zenon/vm"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
+	"github.com/zenon-network/go-zenon/vm/vm_context"
 	"github.com/zenon-network/go-zenon/zenon"
 )
 
@@ -347,28 +348,41 @@ type GetRequiredResult struct {
 // need on top of the address's available fused plasma. The base plasma
 // is the block's minimum requirement (a flat base for receive blocks; a
 // base plus a per-byte data charge for sends to user addresses; the
-// called method's fixed cost for sends to embedded contracts). When
-// available plasma covers it the required difficulty is 0; otherwise
-// the difficulty is proportional to the missing plasma (1500 per unit),
-// and a shortfall beyond what proof of work may cover for one block is
-// rejected with an error. A user-send block without a destination
-// address is rejected. Once Dynamic Plasma is enforced and the
-// frontier momentum is a version-2 momentum (the first momentum after
-// enforcement still carries no prices), the fused and work requirements
-// are scaled by that momentum's NextFusionPrice and NextWorkPrice (see
-// package dp), and the result's RequiredFusedPlasma is the
+// called method's fixed cost for sends to embedded contracts, plus the
+// same per-byte charge on the argument bytes once Dynamic Plasma is
+// enforced, see vm.EmbeddedSendBasePlasma). When available plasma
+// covers it the required difficulty is 0; otherwise the difficulty is
+// proportional to the missing plasma (1500 per unit), and a shortfall
+// beyond what proof of work may cover for one block is rejected with an
+// error. A user-send block without a destination address is rejected.
+//
+// The quote prices the block against the frontier momentum and reads
+// spork state from the cache at that same momentum, so the figure is
+// the one the VM computes for a block acknowledging it. Once Dynamic
+// Plasma is enforced the capacity rules follow the spork (available
+// plasma from AvailablePlasmaV2, the proof-of-work cap from package dp),
+// and once the frontier momentum is also a version-2 momentum (the first
+// momentum after enforcement still carries no prices) the fused and
+// work requirements are scaled by that momentum's NextFusionPrice and
+// NextWorkPrice, and the result's RequiredFusedPlasma is the
 // price-scaled fused-only target.
 //
 // JSON-RPC: embedded.plasma.getRequiredPoWForAccountBlock
 func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetRequiredResult, error) {
-	_, context, err := api.GetFrontierContext(a.chain, param.SelfAddr)
+	momentumStore := a.chain.GetFrontierMomentumStore()
+	frontierMomentum, err := momentumStore.GetFrontierMomentum()
 	if err != nil {
 		return nil, err
 	}
-	frontierMomentum, err := context.GetFrontierMomentum()
-	if err != nil {
-		return nil, err
+	// The cache is read at the captured frontier, not at the cache
+	// frontier: an insert in flight commits the cache before the
+	// momentum, and the price depends on the spork state of the
+	// momentum the quoted block will acknowledge.
+	cacheStore := a.chain.GetCacheStore(frontierMomentum.Identifier())
+	if cacheStore == nil {
+		return nil, errors.Errorf("can't find cache store for frontier %v", frontierMomentum.Identifier())
 	}
+	context := vm_context.NewAccountContext(momentumStore, a.chain.GetFrontierAccountStore(param.SelfAddr), cacheStore, nil)
 
 	// get required plasma
 	block := &nom.AccountBlock{
@@ -392,16 +406,25 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 	var availablePlasma uint64
 	var requiredFusedPlasma uint64
 
-	// NextFusionPrice/NextWorkPrice are only meaningful once the frontier
-	// momentum itself was produced under dynamic plasma; the spork can be
-	// enforced for one momentum before the first v2 momentum lands.
-	dynamicPlasmaActive := context.IsDynamicPlasmaSporkEnforced() && frontierMomentum.Version >= nom.DynamicPlasmaMomentumVersion
+	// Capacity rules (available plasma, proof-of-work cap) follow the
+	// spork, as the VM's enoughPlasma does. NextFusionPrice/NextWorkPrice
+	// are only meaningful once the frontier momentum itself was produced
+	// under dynamic plasma; the spork can be enforced for one momentum
+	// before the first v2 momentum lands, so price scaling also needs
+	// the momentum version.
+	sporkEnforced := context.IsDynamicPlasmaSporkEnforced()
+	dynamicPlasmaActive := sporkEnforced && frontierMomentum.Version >= nom.DynamicPlasmaMomentumVersion
+
+	if sporkEnforced {
+		availablePlasma, err = vm.AvailablePlasmaV2(context.CacheStore(), context)
+	} else {
+		availablePlasma, err = vm.AvailablePlasma(context.CacheStore(), context)
+	}
+	if err != nil {
+		return nil, err
+	}
 
 	if dynamicPlasmaActive {
-		availablePlasma, err = vm.AvailablePlasmaV2(context.CacheStore(), context)
-		if err != nil {
-			return nil, err
-		}
 		// Round up so the recommended payment always meets the ValidPrice threshold. Uses
 		// big.Int since basePlasma*NextFusionPrice can overflow uint64 at high dynamic prices.
 		requiredFusedPlasmaBig := new(big.Int).Mul(new(big.Int).SetUint64(basePlasma), new(big.Int).SetUint64(frontierMomentum.NextFusionPrice))
@@ -412,10 +435,6 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 		}
 		requiredFusedPlasma = requiredFusedPlasmaBig.Uint64()
 	} else {
-		availablePlasma, err = vm.AvailablePlasma(context.CacheStore(), context)
-		if err != nil {
-			return nil, err
-		}
 		requiredFusedPlasma = basePlasma
 	}
 
@@ -444,6 +463,11 @@ func (a *PlasmaApi) GetRequiredPoWForAccountBlock(param GetRequiredParam) (*GetR
 			}
 
 			requiredDifficulty, err = dp.GetDifficultyForPlasma(priceScaledWorkPlasma.Uint64())
+			if err != nil {
+				return nil, err
+			}
+		} else if sporkEnforced {
+			requiredDifficulty, err = dp.GetDifficultyForPlasma(basePlasma - availablePlasma)
 			if err != nil {
 				return nil, err
 			}

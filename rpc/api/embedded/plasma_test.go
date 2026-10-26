@@ -21,13 +21,30 @@ type requiredPoWQuoteChain struct {
 	momentum store.Momentum
 	account  store.Account
 	cache    store.Cache
+	// cacheAtFrontier is what the cache frontier shows; the quote fixtures
+	// make it disagree with cache so a handler reading the wrong one is
+	// caught (an insert in flight commits the cache before the momentum).
+	cacheAtFrontier store.Cache
 }
 
 func (c *requiredPoWQuoteChain) GetFrontierMomentumStore() store.Momentum { return c.momentum }
 func (c *requiredPoWQuoteChain) GetFrontierAccountStore(types.Address) store.Account {
 	return c.account
 }
-func (c *requiredPoWQuoteChain) GetFrontierCacheStore() store.Cache { return c.cache }
+
+func (c *requiredPoWQuoteChain) GetFrontierCacheStore() store.Cache { return c.cacheAtFrontier }
+
+// GetCacheStore serves the cache only for the captured frontier momentum:
+// the handler must pin its price to the momentum it quotes against, not to
+// whatever the cache frontier is when it looks (an insert in flight commits
+// the cache before the momentum). Any other identifier yields nil, which the
+// handler reports as an error.
+func (c *requiredPoWQuoteChain) GetCacheStore(identifier types.HashHeight) store.Cache {
+	if identifier != c.momentum.(*requiredPoWQuoteMomentum).frontier.Identifier() {
+		return nil
+	}
+	return c.cache
+}
 
 type requiredPoWQuoteMomentum struct {
 	store.Momentum
@@ -77,6 +94,8 @@ func requiredPoWQuote(t *testing.T, active bool, version, fusionPrice, workPrice
 		momentum: &requiredPoWQuoteMomentum{frontier: frontier},
 		account:  &requiredPoWQuoteAccount{address: self},
 		cache:    &requiredPoWQuoteCache{active: active, fused: fused},
+		// the cache frontier disagrees on both spork state and fusion
+		cacheAtFrontier: &requiredPoWQuoteCache{active: !active, fused: new(big.Int)},
 	}}
 	result, err := a.GetRequiredPoWForAccountBlock(GetRequiredParam{
 		SelfAddr: self, ToAddr: &recipient, BlockType: nom.BlockTypeUserSend, Data: data,
@@ -130,6 +149,13 @@ func TestGetRequiredPoWFusedPlasmaTarget(t *testing.T) {
 		{"dynamic-no-fusion", true, 2, 1050, 1100, 0, nil, 0, 21000, 34650000, 22050},
 		{"before-first-v2", true, 1, 0, 0, 12, nil, 25200, 21000, 0, 21000},
 		{"before-first-v2-partial", true, 1, 0, 0, 9, nil, 18900, 21000, 3150000, 21000},
+		// Enforced but before the first v2 momentum: the proof-of-work cap is
+		// already the Dynamic Plasma one, so a shortfall above the legacy cap
+		// (94,500) is quoted rather than rejected.
+		{"before-first-v2-above-legacy-pow-cap", true, 1, 0, 0, 0, make([]byte, 1100), 0, 95800, 143700000, 95800},
+		// Enforced but before the first v2 momentum: available plasma follows
+		// the Dynamic Plasma fusion cap (legacy would cap 6000 units at 5000).
+		{"before-first-v2-above-legacy-fusion-cap", true, 1, 0, 0, 6000, nil, 12600000, 21000, 0, 21000},
 		{"before-enforcement", false, 1, 0, 0, 12, nil, 25200, 21000, 0, 21000},
 		{"before-enforcement-partial", false, 1, 0, 0, 9, nil, 18900, 21000, 3150000, 21000},
 	} {
@@ -212,5 +238,22 @@ func TestFusionEntryListUnmarshalFreshReceiver(t *testing.T) {
 	}
 	if string(reencoded) != string(data) {
 		t.Fatalf("round-trip mismatch:\n got  %s\n want %s", reencoded, data)
+	}
+}
+
+// The quote reads the cache at the frontier momentum it captured; when the
+// chain has no cache for that identifier the quote fails instead of pricing
+// against some other state.
+func TestGetRequiredPoWMissingCapturedFrontierCache(t *testing.T) {
+	self, recipient := types.Address{0, 0x71}, types.Address{0, 0x72}
+	a := &PlasmaApi{chain: &requiredPoWQuoteChain{
+		momentum:        &requiredPoWQuoteMomentum{frontier: &nom.Momentum{Version: 2, Height: 100}},
+		account:         &requiredPoWQuoteAccount{address: self},
+		cache:           nil, // GetCacheStore returns nil for the captured identifier
+		cacheAtFrontier: &requiredPoWQuoteCache{active: true, fused: new(big.Int)},
+	}}
+	result, err := a.GetRequiredPoWForAccountBlock(GetRequiredParam{SelfAddr: self, ToAddr: &recipient, BlockType: nom.BlockTypeUserSend})
+	if err == nil || result != nil {
+		t.Fatalf("quote without a cache for the captured frontier = %+v, %v; want an error", result, err)
 	}
 }

@@ -260,6 +260,20 @@ func (p *UnlockHtlcMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	return err
 }
 
+// CheckUnlockPreimageLength is the Dynamic-Plasma-spork rule applied
+// to an Unlock send before it is accepted: a preimage longer than
+// constants.HtlcPreimageMaxLength can satisfy no entry, so the send is
+// rejected with constants.ErrInvalidPreimage instead of being stored
+// and failing at receive time. The VM applies it next to the other
+// spork-gated send rules; it is not part of ValidateSendBlock, which
+// has no spork context.
+func CheckUnlockPreimageLength(param *definition.UnlockHtlcParam) error {
+	if len(param.Preimage) > constants.HtlcPreimageMaxLength {
+		return constants.ErrInvalidPreimage
+	}
+	return nil
+}
+
 // ReceiveBlock deletes the entry and returns one descendant send
 // paying its amount to the HashLocked address. The entry must exist
 // (constants.ErrDataNonExistent); when the HashLocked address has

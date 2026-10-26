@@ -232,6 +232,15 @@ var (
 	// CompressedECDSAPubKeyLength is the byte length of a compressed
 	// secp256k1 public key (parity prefix plus X).
 	CompressedECDSAPubKeyLength = 33
+	// ECDSASignatureStringMaxLength is the length of the canonical
+	// standard, padded base64 encoding of an ECDSASignatureLength-byte
+	// signature (88 characters). Once the Dynamic Plasma spork is
+	// enforced, the bridge rejects a longer signature string when the
+	// send is applied, before the data reaches the chain. This is an
+	// encoding policy: the decoder ignores line breaks, so a longer
+	// string could decode to 65 bytes only by carrying them, and such
+	// strings are no longer accepted.
+	ECDSASignatureStringMaxLength = (ECDSASignatureLength + 2) / 3 * 4
 	// ECDSASignatureLength is the byte length of a recoverable
 	// secp256k1 signature (r, s and the recovery id).
 	ECDSASignatureLength = 65
@@ -369,3 +378,12 @@ func StakeQsrRewardPerEpoch(epoch uint64) *big.Int {
 	qsr := (NetworkQsrRewardPerEpoch(epoch) * StakingQsrRewardPercentage) / 100
 	return big.NewInt(qsr)
 }
+
+const (
+	// HtlcPreimageMaxLength is the longest preimage an HTLC entry can
+	// accept: KeyMaxSize is stored as a uint8, so no entry admits more
+	// than 255 bytes. Once the Dynamic Plasma spork is enforced, an
+	// Unlock send carrying a longer preimage is rejected when the send
+	// is applied, before the data reaches the chain.
+	HtlcPreimageMaxLength = 255
+)

@@ -165,7 +165,36 @@ func GetBasePlasmaForAccountBlock(context vm_context.AccountVmContext, block *no
 		} else if err != nil {
 			return 0, err
 		} else {
-			return method.GetPlasma(&constants.AlphanetPlasmaTable)
+			tier, err := method.GetPlasma(&constants.AlphanetPlasmaTable)
+			if err != nil {
+				return 0, err
+			}
+			if context.IsDynamicPlasmaSporkEnforced() {
+				return EmbeddedSendBasePlasma(tier, len(block.Data))
+			}
+			return tier, nil
 		}
 	}
+}
+
+// embeddedSelectorLength is the ABI method selector that prefixes the
+// Data of every embedded-contract send; it is part of the method tier,
+// not of the argument data.
+const embeddedSelectorLength = 4
+
+// EmbeddedSendBasePlasma is the base plasma of a send to an embedded
+// contract once the Dynamic Plasma spork is enforced: the method's
+// tier plus constants.ABByteDataPlasma for every argument byte past
+// the 4-byte selector, the same per-byte price a send to a user
+// address pays. Data longer than constants.MaxDataLength is rejected
+// with verifier.ErrABDataTooBig, again as for a user send. Below the
+// spork the tier alone is charged, whatever the argument size.
+func EmbeddedSendBasePlasma(tier uint64, dataLength int) (uint64, error) {
+	if dataLength > constants.MaxDataLength {
+		return 0, verifier.ErrABDataTooBig
+	}
+	if dataLength <= embeddedSelectorLength {
+		return tier, nil
+	}
+	return tier + uint64(dataLength-embeddedSelectorLength)*constants.ABByteDataPlasma, nil
 }
