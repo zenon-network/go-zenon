@@ -46,6 +46,7 @@ func savePlasmaDefaults(t *testing.T) {
 func saveBridgeConstants(t *testing.T) {
 	savedAdmin := constants.InitialBridgeAdministrator
 	savedMinGuardians := constants.MinGuardians
+	savedMaxGuardians := constants.MaxGuardians
 	savedAdminDelay := constants.MinAdministratorDelay
 	savedSoftDelay := constants.MinSoftDelay
 	savedUnhalt := constants.MinUnhaltDurationInMomentums
@@ -53,6 +54,7 @@ func saveBridgeConstants(t *testing.T) {
 	t.Cleanup(func() {
 		constants.InitialBridgeAdministrator = savedAdmin
 		constants.MinGuardians = savedMinGuardians
+		constants.MaxGuardians = savedMaxGuardians
 		constants.MinAdministratorDelay = savedAdminDelay
 		constants.MinSoftDelay = savedSoftDelay
 		constants.MinUnhaltDurationInMomentums = savedUnhalt

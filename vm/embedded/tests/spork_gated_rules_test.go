@@ -318,3 +318,64 @@ func TestSporkGated_ExternalSignedReceiveEmptyDataAcceptedAfterSpork(t *testing.
 		t.Fatalf("external signed receive with empty Data rejected: %v", err)
 	}
 }
+
+// TestSporkGated_NominateGuardiansSendRejectedAfterSpork verifies that an
+// embedded send to NominateGuardians (Bridge and Liquidity) with duplicate
+// or oversized guardian sets is rejected once DynamicPlasmaSpork is active.
+func TestSporkGated_NominateGuardiansSendRejectedAfterSpork(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	saveSporkState(t)
+
+	activateBridge(t, z)
+	activateDynamicPlasmaPastHeight(t, z)
+
+	guardiansDup := []types.Address{
+		g.User1.Address, g.User2.Address, g.User3.Address, g.User4.Address, g.User1.Address,
+	}
+
+	// Bridge duplicate send rejected post-spork
+	sendDupBridge := &nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data:          definition.ABIBridge.PackMethodPanic(definition.NominateGuardiansMethodName, guardiansDup),
+	}
+	z.InsertSendBlock(sendDupBridge, constants.ErrInvalidGuardians, mock.SkipVmChanges)
+
+	// Liquidity duplicate send rejected post-spork
+	sendDupLiq := &nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.LiquidityContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data:          definition.ABILiquidity.PackMethodPanic(definition.NominateGuardiansMethodName, guardiansDup),
+	}
+	z.InsertSendBlock(sendDupLiq, constants.ErrInvalidGuardians, mock.SkipVmChanges)
+}
+
+// TestSporkGated_NominateGuardiansSendAcceptedBeforeSpork verifies that an
+// embedded send to NominateGuardians with duplicate guardians is admitted
+// before the Dynamic Plasma spork is active.
+func TestSporkGated_NominateGuardiansSendAcceptedBeforeSpork(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	saveSporkState(t)
+
+	activateBridge(t, z)
+	z.InsertMomentumsTo(10)
+
+	guardiansDup := []types.Address{
+		g.User1.Address, g.User2.Address, g.User3.Address, g.User4.Address, g.User1.Address,
+	}
+
+	sendDupBridge := &nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data:          definition.ABIBridge.PackMethodPanic(definition.NominateGuardiansMethodName, guardiansDup),
+	}
+	z.InsertSendBlock(sendDupBridge, nil, mock.SkipVmChanges)
+}

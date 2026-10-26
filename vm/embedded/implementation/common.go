@@ -623,3 +623,21 @@ func CheckSecurityInitialized(context vm_context.AccountVmContext) (*definition.
 
 	return securityInfo, nil
 }
+
+// CheckNominatedGuardians is the stricter NominateGuardians validation
+// gated on DynamicPlasmaSpork (issue #229). It rejects a guardian set
+// that exceeds constants.MaxGuardians or contains any duplicate address.
+// Callers must gate on the spork: the check changes which sends are admitted.
+func CheckNominatedGuardians(guardians []types.Address) error {
+	if len(guardians) < constants.MinGuardians || len(guardians) > constants.MaxGuardians {
+		return constants.ErrInvalidGuardians
+	}
+	seen := make(map[types.Address]struct{}, len(guardians))
+	for _, g := range guardians {
+		if _, exists := seen[g]; exists {
+			return constants.ErrInvalidGuardians
+		}
+		seen[g] = struct{}{}
+	}
+	return nil
+}

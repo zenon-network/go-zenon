@@ -2173,6 +2173,12 @@ func (p *NominateGuardiansMethod) ReceiveBlock(context vm_context.AccountVmConte
 		return nil, err
 	}
 
+	if context.IsDynamicPlasmaSporkEnforced() {
+		if err := CheckNominatedGuardians(*guardians); err != nil {
+			return nil, err
+		}
+	}
+
 	bridgeInfo, err := definition.GetBridgeInfoVariable(context.Storage())
 	if err != nil {
 		return nil, err
@@ -2307,28 +2313,54 @@ func (p *ProposeAdministratorMethod) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, constants.ErrNotGuardian
 	}
 
-	votes := make(map[string]uint8)
-
-	threshold := uint8(len(securityInfo.Guardians) / 2)
-	for _, vote := range securityInfo.GuardiansVotes {
-		if !vote.IsZero() {
-			votes[vote.String()] += 1
-			// we got a majority, so we change the administrator pub key
-			if votes[vote.String()] > threshold {
-				votedAddress, errParse := types.ParseAddress(vote.String())
-				if errParse != nil {
-					return nil, errParse
-				} else if votedAddress.IsZero() {
-					return nil, constants.ErrForbiddenParam
+	if context.IsDynamicPlasmaSporkEnforced() {
+		votes := make(map[string]int)
+		threshold := len(securityInfo.Guardians) / 2
+		for _, vote := range securityInfo.GuardiansVotes {
+			if !vote.IsZero() {
+				votes[vote.String()] += 1
+				// we got a majority, so we change the administrator pub key
+				if votes[vote.String()] > threshold {
+					votedAddress, errParse := types.ParseAddress(vote.String())
+					if errParse != nil {
+						return nil, errParse
+					} else if votedAddress.IsZero() {
+						return nil, constants.ErrForbiddenParam
+					}
+					if errSet := bridgeInfo.Administrator.SetBytes(votedAddress.Bytes()); errSet != nil {
+						return nil, errSet
+					}
+					common.DealWithErr(bridgeInfo.Save(context.Storage()))
+					for idx := range securityInfo.GuardiansVotes {
+						securityInfo.GuardiansVotes[idx] = types.Address{}
+					}
+					break
 				}
-				if errSet := bridgeInfo.Administrator.SetBytes(votedAddress.Bytes()); errSet != nil {
-					return nil, errSet
+			}
+		}
+	} else {
+		votes := make(map[string]uint8)
+		threshold := uint8(len(securityInfo.Guardians) / 2)
+		for _, vote := range securityInfo.GuardiansVotes {
+			if !vote.IsZero() {
+				votes[vote.String()] += 1
+				// we got a majority, so we change the administrator pub key
+				if votes[vote.String()] > threshold {
+					votedAddress, errParse := types.ParseAddress(vote.String())
+					if errParse != nil {
+						return nil, errParse
+					} else if votedAddress.IsZero() {
+						return nil, constants.ErrForbiddenParam
+					}
+					if errSet := bridgeInfo.Administrator.SetBytes(votedAddress.Bytes()); errSet != nil {
+						return nil, errSet
+					}
+					common.DealWithErr(bridgeInfo.Save(context.Storage()))
+					for idx := range securityInfo.GuardiansVotes {
+						securityInfo.GuardiansVotes[idx] = types.Address{}
+					}
+					break
 				}
-				common.DealWithErr(bridgeInfo.Save(context.Storage()))
-				for idx, _ := range securityInfo.GuardiansVotes {
-					securityInfo.GuardiansVotes[idx] = types.Address{}
-				}
-				break
 			}
 		}
 	}

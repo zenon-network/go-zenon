@@ -255,8 +255,8 @@ var (
 	// is not in emergency mode.
 	ErrNotEmergency = errors.New("bridge not in emergency")
 	// ErrInvalidGuardians rejects a guardian set that is too small
-	// (fewer than MinGuardians). Duplicate addresses are not checked
-	// and are stored as given.
+	// (fewer than MinGuardians), exceeds MaxGuardians, or contains
+	// duplicate addresses once the Dynamic Plasma spork is active.
 	ErrInvalidGuardians = errors.New("invalid guardians")
 	// ErrSecurityNotInitialized rejects security-dependent calls
 	// before the contract's security info (guardians, delays) has
