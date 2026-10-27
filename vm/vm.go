@@ -230,6 +230,8 @@ func (vm *VM) applySend(block *nom.AccountBlock) error {
 //   - Bridge UpdateWrapRequest and UnwrapToken: a signature string
 //     longer than the base64 form of a signature is rejected, a length
 //     policy only (implementation.CheckSignatureStringLength).
+//   - Bridge and Liquidity NominateGuardians: guardian sets exceeding
+//     MaxGuardians or containing duplicate addresses are rejected (issue #229).
 func checkSporkGatedSendRules(method embedded.Method, block *nom.AccountBlock) error {
 	switch method.(type) {
 	case *implementation.SetTokenTupleMethod:
@@ -256,6 +258,18 @@ func checkSporkGatedSendRules(method embedded.Method, block *nom.AccountBlock) e
 			return constants.ErrUnpackError
 		}
 		return implementation.CheckSignatureStringLength(param.Signature)
+	case *implementation.NominateGuardiansMethod:
+		guardians := new([]types.Address)
+		if err := definition.ABIBridge.UnpackMethod(guardians, definition.NominateGuardiansMethodName, block.Data); err != nil {
+			return constants.ErrUnpackError
+		}
+		return implementation.CheckNominatedGuardians(*guardians)
+	case *implementation.NominateGuardiansLiquidity:
+		guardians := new([]types.Address)
+		if err := definition.ABILiquidity.UnpackMethod(guardians, definition.NominateGuardiansMethodName, block.Data); err != nil {
+			return constants.ErrUnpackError
+		}
+		return implementation.CheckNominatedGuardians(*guardians)
 	}
 	return nil
 }

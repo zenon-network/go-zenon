@@ -225,6 +225,10 @@ var (
 	// MinGuardians is the minimum number of guardians that must be
 	// nominated for the bridge and liquidity contracts.
 	MinGuardians = 5 // main net
+	// MaxGuardians is the maximum number of guardians that may be
+	// nominated for the bridge and liquidity contracts once the
+	// Dynamic Plasma spork is active.
+	MaxGuardians = 30 // main net
 
 	// DecompressedECDSAPubKeyLength is the byte length of an
 	// uncompressed secp256k1 public key (0x04 prefix plus X and Y).

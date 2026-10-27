@@ -8,6 +8,7 @@ import (
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/rpc/api/embedded"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
@@ -316,5 +317,305 @@ func TestSporkGated_ExternalSignedReceiveEmptyDataAcceptedAfterSpork(t *testing.
 	v := newTestVerifier(z)
 	if err := v.AccountBlock(receiveBlock); err != nil {
 		t.Fatalf("external signed receive with empty Data rejected: %v", err)
+	}
+}
+
+// makeTestGuardianSet returns n distinct valid user addresses for guardian tests.
+func makeTestGuardianSet(n int) []types.Address {
+	out := make([]types.Address, n)
+	for i := 0; i < n; i++ {
+		var b [types.AddressSize]byte
+		b[0] = types.UserAddrByte
+		b[types.AddressSize-2] = byte(((i + 1) >> 8) & 0xff)
+		b[types.AddressSize-1] = byte((i + 1) & 0xff)
+		out[i] = b
+	}
+	return out
+}
+
+// TestSporkGated_NominateGuardiansSendRejectedAfterSpork verifies that an
+// embedded send to NominateGuardians (Bridge and Liquidity) with duplicate
+// or oversized guardian sets is rejected once DynamicPlasmaSpork is active.
+func TestSporkGated_NominateGuardiansSendRejectedAfterSpork(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	saveSporkState(t)
+
+	activateBridge(t, z)
+	activateDynamicPlasmaPastHeight(t, z)
+
+	guardiansDup := []types.Address{
+		g.User1.Address, g.User2.Address, g.User3.Address, g.User4.Address, g.User1.Address,
+	}
+	guardiansOversized := makeTestGuardianSet(constants.MaxGuardians + 1)
+
+	// Bridge duplicate send rejected post-spork
+	sendDupBridge := &nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data:          definition.ABIBridge.PackMethodPanic(definition.NominateGuardiansMethodName, guardiansDup),
+	}
+	z.InsertSendBlock(sendDupBridge, constants.ErrInvalidGuardians, mock.SkipVmChanges)
+
+	// Bridge oversized send rejected post-spork
+	sendOverBridge := &nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data:          definition.ABIBridge.PackMethodPanic(definition.NominateGuardiansMethodName, guardiansOversized),
+	}
+	z.InsertSendBlock(sendOverBridge, constants.ErrInvalidGuardians, mock.SkipVmChanges)
+
+	// Liquidity duplicate send rejected post-spork
+	sendDupLiq := &nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.LiquidityContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data:          definition.ABILiquidity.PackMethodPanic(definition.NominateGuardiansMethodName, guardiansDup),
+	}
+	z.InsertSendBlock(sendDupLiq, constants.ErrInvalidGuardians, mock.SkipVmChanges)
+
+	// Liquidity oversized send rejected post-spork
+	sendOverLiq := &nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.LiquidityContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data:          definition.ABILiquidity.PackMethodPanic(definition.NominateGuardiansMethodName, guardiansOversized),
+	}
+	z.InsertSendBlock(sendOverLiq, constants.ErrInvalidGuardians, mock.SkipVmChanges)
+}
+
+// TestSporkGated_NominateGuardiansSendAcceptedBeforeSpork verifies that an
+// embedded send to NominateGuardians (Bridge and Liquidity) with duplicate or
+// oversized guardians is admitted before the Dynamic Plasma spork is active.
+func TestSporkGated_NominateGuardiansSendAcceptedBeforeSpork(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	saveSporkState(t)
+
+	activateBridge(t, z)
+	z.InsertMomentumsTo(10)
+
+	guardiansDup := []types.Address{
+		g.User1.Address, g.User2.Address, g.User3.Address, g.User4.Address, g.User1.Address,
+	}
+	guardiansOversized := makeTestGuardianSet(constants.MaxGuardians + 1)
+
+	sendDupBridge := &nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data:          definition.ABIBridge.PackMethodPanic(definition.NominateGuardiansMethodName, guardiansDup),
+	}
+	z.InsertSendBlock(sendDupBridge, nil, mock.SkipVmChanges)
+
+	sendOverBridge := &nom.AccountBlock{
+		Address:       g.User2.Address,
+		ToAddress:     types.BridgeContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data:          definition.ABIBridge.PackMethodPanic(definition.NominateGuardiansMethodName, guardiansOversized),
+	}
+	z.InsertSendBlock(sendOverBridge, nil, mock.SkipVmChanges)
+
+	sendDupLiq := &nom.AccountBlock{
+		Address:       g.User3.Address,
+		ToAddress:     types.LiquidityContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data:          definition.ABILiquidity.PackMethodPanic(definition.NominateGuardiansMethodName, guardiansDup),
+	}
+	z.InsertSendBlock(sendDupLiq, nil, mock.SkipVmChanges)
+
+	sendOverLiq := &nom.AccountBlock{
+		Address:       g.User4.Address,
+		ToAddress:     types.LiquidityContract,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(0),
+		Data:          definition.ABILiquidity.PackMethodPanic(definition.NominateGuardiansMethodName, guardiansOversized),
+	}
+	z.InsertSendBlock(sendOverLiq, nil, mock.SkipVmChanges)
+}
+
+// TestSporkGated_NominateGuardiansValidSetAcceptedAfterSpork verifies that a
+// valid guardian set (MinGuardians <= len <= MaxGuardians, no duplicates) can
+// be nominated and installed on both Bridge and Liquidity after
+// DynamicPlasmaSpork activation.
+func TestSporkGated_NominateGuardiansValidSetAcceptedAfterSpork(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	saveSporkState(t)
+	saveBridgeConstants(t)
+
+	constants.InitialBridgeAdministrator = g.User5.Address
+	constants.MinGuardians = 5
+	constants.MinAdministratorDelay = 5
+	constants.MinSoftDelay = 5
+	constants.MinUnhaltDurationInMomentums = 5
+
+	activateBridge(t, z)
+	z.InsertMomentumsTo(10)
+	activateDynamicPlasmaPastHeight(t, z)
+
+	validGuardians := []types.Address{
+		g.User1.Address, g.User2.Address, g.User3.Address, g.User4.Address, g.User5.Address,
+	}
+
+	bridgeAPI := embedded.NewBridgeApi(z)
+	liquidityAPI := embedded.NewLiquidityApi(z)
+
+	bridgeSec, err := bridgeAPI.GetSecurityInfo()
+	common.FailIfErr(t, err)
+	nominateGuardians(t, z, g.User5.Address, validGuardians, bridgeSec.AdministratorDelay)
+
+	liqSec, err := liquidityAPI.GetSecurityInfo()
+	common.FailIfErr(t, err)
+	nominateGuardiansLiq(t, z, g.User5.Address, validGuardians, liqSec.AdministratorDelay)
+
+	bridgeSecAfter, err := bridgeAPI.GetSecurityInfo()
+	common.FailIfErr(t, err)
+	common.Expect(t, len(validGuardians), len(bridgeSecAfter.Guardians))
+
+	liqSecAfter, err := liquidityAPI.GetSecurityInfo()
+	common.FailIfErr(t, err)
+	common.Expect(t, len(validGuardians), len(liqSecAfter.Guardians))
+}
+
+// TestSporkGated_PreSporkNominateGuardiansReceivedAfterSpork verifies that a
+// NominateGuardians send with a duplicate or oversized guardian set admitted
+// before DynamicPlasmaSpork enforcement is auto-received after activation and
+// fails at the receive, leaving the installed guardian set on both Bridge and
+// Liquidity untouched.
+func TestSporkGated_PreSporkNominateGuardiansReceivedAfterSpork(t *testing.T) {
+	cases := []struct {
+		name      string
+		guardians []types.Address
+	}{
+		{
+			name: "Duplicate",
+			guardians: []types.Address{
+				g.User1.Address, g.User2.Address, g.User3.Address, g.User4.Address, g.User1.Address,
+			},
+		},
+		{
+			name:      "Oversized",
+			guardians: makeTestGuardianSet(constants.MaxGuardians + 1),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			z := mock.NewMockZenon(t)
+			defer z.StopPanic()
+			saveSporkState(t)
+			saveBridgeConstants(t)
+
+			constants.InitialBridgeAdministrator = g.User5.Address
+			constants.MinGuardians = 5
+			constants.MinAdministratorDelay = 5
+			constants.MinSoftDelay = 5
+			constants.MinUnhaltDurationInMomentums = 5
+
+			activateBridge(t, z)
+			z.InsertMomentumsTo(10)
+
+			initialGuardians := []types.Address{
+				g.User1.Address, g.User2.Address, g.User3.Address, g.User4.Address, g.User5.Address,
+			}
+			bridgeAPI := embedded.NewBridgeApi(z)
+			liquidityAPI := embedded.NewLiquidityApi(z)
+
+			nominateGuardians(t, z, g.User5.Address, initialGuardians, 5)
+			nominateGuardiansLiq(t, z, g.User5.Address, initialGuardians, 5)
+
+			// Prime the TimeChallenge for tc.guardians pre-spork and advance past
+			// AdministratorDelay so that a second receive would immediately install
+			// tc.guardians if not rejected on the receive path.
+			defer z.CallContract(nominateGuardiansStep(g.User5.Address, tc.guardians)).Error(t, nil)
+			defer z.CallContract(nominateGuardiansLiqStep(g.User5.Address, tc.guardians)).Error(t, nil)
+			insertMomentums(z, 2)
+			frMom, err := z.Chain().GetFrontierMomentumStore().GetFrontierMomentum()
+			common.FailIfErr(t, err)
+			z.InsertMomentumsTo(frMom.Height + 5 + 2)
+
+			bridgeSecBefore, err := bridgeAPI.GetSecurityInfo()
+			common.FailIfErr(t, err)
+			liqSecBefore, err := liquidityAPI.GetSecurityInfo()
+			common.FailIfErr(t, err)
+			common.Expect(t, len(initialGuardians), len(bridgeSecBefore.Guardians))
+			common.Expect(t, len(initialGuardians), len(liqSecBefore.Guardians))
+
+			// Schedule DynamicPlasmaSpork and advance to enforcementHeight - 1
+			// (the last pre-spork momentum height).
+			createSend := z.InsertSendBlock(&nom.AccountBlock{
+				Address:   g.Spork.Address,
+				ToAddress: types.SporkContract,
+				Data: definition.ABISpork.PackMethodPanic(definition.SporkCreateMethodName,
+					"dynamic-plasma",
+					"Activates Dynamic Plasma",
+				),
+			}, nil, mock.SkipVmChanges)
+			z.InsertNewMomentum()
+			id := createSend.Hash
+
+			z.InsertSendBlock(&nom.AccountBlock{
+				Address:   g.Spork.Address,
+				ToAddress: types.SporkContract,
+				Data: definition.ABISpork.PackMethodPanic(definition.SporkActivateMethodName,
+					id,
+				),
+			}, nil, mock.SkipVmChanges)
+			z.InsertNewMomentum()
+			types.DynamicPlasmaSpork.SporkId = id
+			types.ImplementedSporksMap[id] = true
+
+			sporkAPI := embedded.NewSporkApi(z)
+			sporkList, err := sporkAPI.GetAll(0, 10)
+			common.FailIfErr(t, err)
+			var enforcementHeight uint64
+			for _, s := range sporkList.List {
+				if s.Id == id {
+					enforcementHeight = s.EnforcementHeight
+					break
+				}
+			}
+			if enforcementHeight == 0 {
+				t.Fatal("dynamic plasma spork not found in spork list")
+			}
+
+			z.InsertMomentumsTo(enforcementHeight - 1)
+			activeBefore, err := z.Chain().GetFrontierMomentumStore().IsSporkActive(types.DynamicPlasmaSpork)
+			common.FailIfErr(t, err)
+			common.Expect(t, false, activeBefore)
+
+			// Admit the confirming NominateGuardians sends pre-spork (at enforcementHeight - 1);
+			// they will be cemented at enforcementHeight and auto-received post-spork.
+			defer z.CallContract(nominateGuardiansStep(g.User5.Address, tc.guardians)).Error(t, constants.ErrInvalidGuardians)
+			defer z.CallContract(nominateGuardiansLiqStep(g.User5.Address, tc.guardians)).Error(t, constants.ErrInvalidGuardians)
+
+			z.InsertMomentumsTo(enforcementHeight + 1)
+
+			activeAfter, err := z.Chain().GetFrontierMomentumStore().IsSporkActive(types.DynamicPlasmaSpork)
+			common.FailIfErr(t, err)
+			common.Expect(t, true, activeAfter)
+
+			// Verify the installed guardian sets on both contracts remain untouched.
+			bridgeSecAfter, err := bridgeAPI.GetSecurityInfo()
+			common.FailIfErr(t, err)
+			liqSecAfter, err := liquidityAPI.GetSecurityInfo()
+			common.FailIfErr(t, err)
+			common.Expect(t, len(initialGuardians), len(bridgeSecAfter.Guardians))
+			common.Expect(t, len(initialGuardians), len(liqSecAfter.Guardians))
+			for i := range initialGuardians {
+				common.Expect(t, bridgeSecBefore.Guardians[i], bridgeSecAfter.Guardians[i])
+				common.Expect(t, liqSecBefore.Guardians[i], liqSecAfter.Guardians[i])
+			}
+		})
 	}
 }
