@@ -49,10 +49,7 @@ var (
 	// MaxEpochsPerUpdate caps the descendant blocks one legacy liquidity
 	// update call issues (two per rewarded epoch, so 20 pays ten epochs).
 	// The epoch marker advances before the cap is checked, so an epoch cut
-	// off by the cap is not revisited by the next call. This constant is
-	// also used as the per-call epoch bound for the stake, sentinel and
-	// pillar reward updaters, where the cap is checked before the marker
-	// advances to avoid the skip defect described above.
+	// off by the cap is not revisited by the next call.
 	MaxEpochsPerUpdate = 20
 
 	// MaxRewardEpochsPerCall bounds the number of due epochs the stake,
