@@ -309,7 +309,9 @@ func (w *WrapTokenRequest) UnmarshalJSON(data []byte) error {
 		*definition.WrapTokenRequestMarshal
 		TokenInfo               *api.TokenMarshal `json:"token"`
 		ConfirmationsToFinality uint64            `json:"confirmationsToFinality"`
-	}{}
+	}{
+		WrapTokenRequestMarshal: &definition.WrapTokenRequestMarshal{},
+	}
 	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
@@ -700,7 +702,9 @@ func (u *UnwrapTokenRequest) UnmarshalJSON(data []byte) error {
 		*definition.UnwrapTokenRequestMarshal
 		TokenInfo    *api.TokenMarshal `json:"token"`
 		RedeemableIn uint64            `json:"redeemableIn"`
-	}{}
+	}{
+		UnwrapTokenRequestMarshal: &definition.UnwrapTokenRequestMarshal{},
+	}
 	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
