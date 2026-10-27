@@ -281,6 +281,55 @@ func TestUpdateSentinelRewardsCappedAtMaxRewardEpochsPerCall(t *testing.T) {
 		t.Fatalf("expected %d total epochs settled after second call, got %d",
 			expected, updated2.LastEpoch)
 	}
+
+	// Every epoch must have a per-epoch reward deposit history entry with
+	// both ZNN and QSR credits. If the cap advanced the marker without
+	// computing rewards, the skipped epochs would have zero or missing
+	// history entries.
+	addr := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	for epoch := int64(1); epoch <= int64(epochsToMakeDue); epoch++ {
+		hisDeposit, err := definition.GetRewardDepositHistory(ctx.Storage(), uint64(epoch), &addr)
+		common.FailIfErr(t, err)
+		if hisDeposit == nil {
+			t.Fatalf("no reward deposit history for epoch %d", epoch)
+		}
+		if hisDeposit.Znn.Sign() <= 0 {
+			t.Fatalf("epoch %d has no ZNN reward in history", epoch)
+		}
+		if hisDeposit.Qsr.Sign() <= 0 {
+			t.Fatalf("epoch %d has no QSR reward in history", epoch)
+		}
+	}
+
+	// Third call: no more due epochs, should be a no-op. Capture the
+	// current history so we can verify no duplicate credits appear.
+	historyBefore := make(map[int64]*definition.RewardDepositHistory)
+	for epoch := int64(1); epoch <= int64(epochsToMakeDue); epoch++ {
+		h, err := definition.GetRewardDepositHistory(ctx.Storage(), uint64(epoch), &addr)
+		common.FailIfErr(t, err)
+		historyBefore[epoch] = h
+	}
+
+	err = updateSentinelRewards(ctx)
+	common.FailIfErr(t, err)
+
+	updated3, err := definition.GetLastEpochUpdate(ctx.Storage())
+	common.FailIfErr(t, err)
+	if updated3.LastEpoch != expected {
+		t.Fatalf("expected no change on third call, got %d", updated3.LastEpoch)
+	}
+	for epoch := int64(1); epoch <= int64(epochsToMakeDue); epoch++ {
+		h, err := definition.GetRewardDepositHistory(ctx.Storage(), uint64(epoch), &addr)
+		common.FailIfErr(t, err)
+		if h.Znn.Cmp(historyBefore[epoch].Znn) != 0 {
+			t.Fatalf("epoch %d ZNN changed on no-op call: before %s, after %s",
+				epoch, historyBefore[epoch].Znn, h.Znn)
+		}
+		if h.Qsr.Cmp(historyBefore[epoch].Qsr) != 0 {
+			t.Fatalf("epoch %d QSR changed on no-op call: before %s, after %s",
+				epoch, historyBefore[epoch].Qsr, h.Qsr)
+		}
+	}
 }
 
 // TestUpdateSentinelRewardsUncappedBeforeSpork verifies that the sentinel
@@ -389,6 +438,55 @@ func TestUpdatePillarRewardsCappedAtMaxRewardEpochsPerCall(t *testing.T) {
 	if updated2.LastEpoch != expected {
 		t.Fatalf("expected %d total epochs settled after second call, got %d",
 			expected, updated2.LastEpoch)
+	}
+
+	// Every epoch must have a per-epoch reward deposit history entry with
+	// ZNN credits. Pillar rewards are ZNN-only (QSR is always zero).
+	// If the cap advanced the marker without computing rewards, the
+	// skipped epochs would have zero or missing history entries.
+	addr := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	for epoch := int64(1); epoch <= int64(epochsToMakeDue); epoch++ {
+		hisDeposit, err := definition.GetRewardDepositHistory(ctx.Storage(), uint64(epoch), &addr)
+		common.FailIfErr(t, err)
+		if hisDeposit == nil {
+			t.Fatalf("no reward deposit history for epoch %d", epoch)
+		}
+		if hisDeposit.Znn.Sign() <= 0 {
+			t.Fatalf("epoch %d has no ZNN reward in history", epoch)
+		}
+		if hisDeposit.Qsr.Sign() != 0 {
+			t.Fatalf("epoch %d has unexpected QSR reward in history: %s", epoch, hisDeposit.Qsr)
+		}
+	}
+
+	// Third call: no more due epochs, should be a no-op. Capture the
+	// current history so we can verify no duplicate credits appear.
+	historyBefore := make(map[int64]*definition.RewardDepositHistory)
+	for epoch := int64(1); epoch <= int64(epochsToMakeDue); epoch++ {
+		h, err := definition.GetRewardDepositHistory(ctx.Storage(), uint64(epoch), &addr)
+		common.FailIfErr(t, err)
+		historyBefore[epoch] = h
+	}
+
+	err = updatePillarRewards(ctx)
+	common.FailIfErr(t, err)
+
+	updated3, err := definition.GetLastEpochUpdate(ctx.Storage())
+	common.FailIfErr(t, err)
+	if updated3.LastEpoch != expected {
+		t.Fatalf("expected no change on third call, got %d", updated3.LastEpoch)
+	}
+	for epoch := int64(1); epoch <= int64(epochsToMakeDue); epoch++ {
+		h, err := definition.GetRewardDepositHistory(ctx.Storage(), uint64(epoch), &addr)
+		common.FailIfErr(t, err)
+		if h.Znn.Cmp(historyBefore[epoch].Znn) != 0 {
+			t.Fatalf("epoch %d ZNN changed on no-op call: before %s, after %s",
+				epoch, historyBefore[epoch].Znn, h.Znn)
+		}
+		if h.Qsr.Cmp(historyBefore[epoch].Qsr) != 0 {
+			t.Fatalf("epoch %d QSR changed on no-op call: before %s, after %s",
+				epoch, historyBefore[epoch].Qsr, h.Qsr)
+		}
 	}
 }
 
