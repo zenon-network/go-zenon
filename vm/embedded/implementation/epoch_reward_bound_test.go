@@ -17,11 +17,15 @@ import (
 )
 
 // testEpochBoundContext is a minimal AccountVmContext for exercising the
-// MaxRewardEpochsPerCall bound on stake reward updates. The frontier
-// momentum timestamp is set far in the future so many epochs are due.
+// MaxRewardEpochsPerCall bound on stake, sentinel and pillar reward
+// updates. The frontier momentum timestamp is set far in the future so
+// many epochs are due.
 type testEpochBoundContext struct {
 	store.Account
-	momentum *nom.Momentum
+	momentum           *nom.Momentum
+	dynPlasmaEnforced  bool
+	epochStats         map[uint64]*api.EpochStats
+	pillarDelegations  map[uint64]map[string]*types.PillarDelegationDetail
 }
 
 func newTestEpochBoundContext(t *testing.T, frontierTime time.Time) *testEpochBoundContext {
@@ -33,6 +37,7 @@ func newTestEpochBoundContext(t *testing.T, frontierTime time.Time) *testEpochBo
 			Timestamp:       &frontierTime,
 			Height:          10,
 		},
+		dynPlasmaEnforced: true,
 	}
 }
 
@@ -54,7 +59,7 @@ func (ctx *testEpochBoundContext) SubBalance(ts *types.ZenonTokenStandard, amoun
 func (ctx *testEpochBoundContext) IsAcceleratorSporkEnforced() bool        { return true }
 func (ctx *testEpochBoundContext) IsHtlcSporkEnforced() bool               { return true }
 func (ctx *testEpochBoundContext) IsBridgeAndLiquiditySporkEnforced() bool { return true }
-func (ctx *testEpochBoundContext) IsDynamicPlasmaSporkEnforced() bool      { return true }
+func (ctx *testEpochBoundContext) IsDynamicPlasmaSporkEnforced() bool      { return ctx.dynPlasmaEnforced }
 func (ctx *testEpochBoundContext) IsPtlcSporkEnforced() bool               { return false }
 
 func (ctx *testEpochBoundContext) GetPillarWeights() (map[string]*big.Int, error) {
@@ -64,9 +69,24 @@ func (ctx *testEpochBoundContext) EpochTicker() common.Ticker {
 	return common.NewTicker(time.Unix(0, 0), time.Second)
 }
 func (ctx *testEpochBoundContext) EpochStats(epoch uint64) (*api.EpochStats, error) {
-	return nil, nil
+	if ctx.epochStats != nil {
+		if stats, ok := ctx.epochStats[epoch]; ok {
+			return stats, nil
+		}
+	}
+	return &api.EpochStats{
+		Epoch:       epoch,
+		Pillars:     map[string]*api.EpochPillarStats{},
+		TotalWeight: big.NewInt(0),
+		TotalBlocks: 0,
+	}, nil
 }
 func (ctx *testEpochBoundContext) GetPillarDelegationsByEpoch(epoch uint64) (map[string]*types.PillarDelegationDetail, error) {
+	if ctx.pillarDelegations != nil {
+		if delegations, ok := ctx.pillarDelegations[epoch]; ok {
+			return delegations, nil
+		}
+	}
 	return nil, nil
 }
 
@@ -165,18 +185,260 @@ func TestUpdateStakeRewardsCapDoesNotSkipEpoch(t *testing.T) {
 		t.Fatalf("expected %d epochs settled, got %d", epochsToMakeDue, updated.LastEpoch)
 	}
 
-	// Every epoch must have a reward deposit for the staker. If the cap
-	// advanced the marker without computing rewards, the last epoch would
-	// have no deposit.
+	// Every epoch must have a per-epoch reward deposit history entry.
+	// If the cap advanced the marker without computing rewards (the
+	// legacy liquidity pattern), the skipped epoch would have no history.
 	addr := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
 	for epoch := int64(1); epoch <= int64(epochsToMakeDue); epoch++ {
-		deposit, err := definition.GetRewardDeposit(ctx.Storage(), &addr)
+		hisDeposit, err := definition.GetRewardDepositHistory(ctx.Storage(), uint64(epoch), &addr)
 		common.FailIfErr(t, err)
-		if deposit == nil {
-			t.Fatalf("no reward deposit found for epoch %d", epoch)
+		if hisDeposit == nil {
+			t.Fatalf("no reward deposit history for epoch %d", epoch)
 		}
-		if deposit.Qsr.Sign() <= 0 {
-			t.Fatalf("epoch %d has no QSR reward", epoch)
+		if hisDeposit.Qsr.Sign() <= 0 {
+			t.Fatalf("epoch %d has no QSR reward in history", epoch)
 		}
+	}
+}
+
+// TestUpdateStakeRewardsUncappedBeforeSpork verifies that when the
+// Dynamic Plasma spork is NOT enforced, the stake reward updater settles
+// every due epoch in one call, preserving consensus compatibility with
+// historical state.
+func TestUpdateStakeRewardsUncappedBeforeSpork(t *testing.T) {
+	// Make more than MaxRewardEpochsPerCall epochs due.
+	epochsToMakeDue := constants.MaxRewardEpochsPerCall + 20
+	frontierTime := time.Unix(int64(epochsToMakeDue)+1+3600, 0)
+	ctx := newTestEpochBoundContext(t, frontierTime)
+	ctx.dynPlasmaEnforced = false // pre-spork
+
+	lastEpoch := &definition.LastEpochUpdate{LastEpoch: 0}
+	common.FailIfErr(t, lastEpoch.Save(ctx.Storage()))
+	seedStakeEntry(t, ctx, 0)
+
+	// Pre-spork: all due epochs settle in one call, no cap.
+	err := updateStakeRewards(ctx)
+	common.FailIfErr(t, err)
+
+	updated, err := definition.GetLastEpochUpdate(ctx.Storage())
+	common.FailIfErr(t, err)
+	if updated.LastEpoch != int64(epochsToMakeDue) {
+		t.Fatalf("pre-spork: expected all %d epochs settled in one call, got %d",
+			epochsToMakeDue, updated.LastEpoch)
+	}
+}
+
+// seedSentinelEntry stores a single sentinel entry registered at the
+// given time so computeSentinelRewardsForEpoch has something to iterate.
+func seedSentinelEntry(t *testing.T, ctx *testEpochBoundContext, registrationTime int64) {
+	t.Helper()
+	addr := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	entry := &definition.SentinelInfo{
+		SentinelInfoKey: definition.SentinelInfoKey{
+			Owner: addr,
+		},
+		RegistrationTimestamp: registrationTime,
+		RevokeTimestamp:       0,
+		ZnnAmount:             big.NewInt(100),
+		QsrAmount:             big.NewInt(100),
+	}
+	entry.Save(ctx.Storage())
+}
+
+// TestUpdateSentinelRewardsCappedAtMaxRewardEpochsPerCall verifies that
+// the sentinel reward updater respects the same per-call epoch bound as
+// the stake updater.
+func TestUpdateSentinelRewardsCappedAtMaxRewardEpochsPerCall(t *testing.T) {
+	epochsToMakeDue := constants.MaxRewardEpochsPerCall + 5
+	frontierTime := time.Unix(int64(epochsToMakeDue)+1+3600, 0)
+	ctx := newTestEpochBoundContext(t, frontierTime)
+
+	lastEpoch := &definition.LastEpochUpdate{LastEpoch: 0}
+	common.FailIfErr(t, lastEpoch.Save(ctx.Storage()))
+
+	// Register sentinel at time 0 so it is active for all epochs.
+	seedSentinelEntry(t, ctx, 0)
+
+	// First call: should settle exactly MaxRewardEpochsPerCall epochs.
+	err := updateSentinelRewards(ctx)
+	common.FailIfErr(t, err)
+
+	updated, err := definition.GetLastEpochUpdate(ctx.Storage())
+	common.FailIfErr(t, err)
+	if updated.LastEpoch != int64(constants.MaxRewardEpochsPerCall) {
+		t.Fatalf("expected %d epochs settled, got %d",
+			constants.MaxRewardEpochsPerCall, updated.LastEpoch)
+	}
+
+	// Second call: settle the remaining 5.
+	err = updateSentinelRewards(ctx)
+	common.FailIfErr(t, err)
+
+	updated2, err := definition.GetLastEpochUpdate(ctx.Storage())
+	common.FailIfErr(t, err)
+	expected := int64(epochsToMakeDue)
+	if updated2.LastEpoch != expected {
+		t.Fatalf("expected %d total epochs settled after second call, got %d",
+			expected, updated2.LastEpoch)
+	}
+}
+
+// TestUpdateSentinelRewardsUncappedBeforeSpork verifies that the sentinel
+// reward updater is unbounded when the Dynamic Plasma spork is not
+// enforced.
+func TestUpdateSentinelRewardsUncappedBeforeSpork(t *testing.T) {
+	epochsToMakeDue := constants.MaxRewardEpochsPerCall + 20
+	frontierTime := time.Unix(int64(epochsToMakeDue)+1+3600, 0)
+	ctx := newTestEpochBoundContext(t, frontierTime)
+	ctx.dynPlasmaEnforced = false
+
+	lastEpoch := &definition.LastEpochUpdate{LastEpoch: 0}
+	common.FailIfErr(t, lastEpoch.Save(ctx.Storage()))
+	seedSentinelEntry(t, ctx, 0)
+
+	err := updateSentinelRewards(ctx)
+	common.FailIfErr(t, err)
+
+	updated, err := definition.GetLastEpochUpdate(ctx.Storage())
+	common.FailIfErr(t, err)
+	if updated.LastEpoch != int64(epochsToMakeDue) {
+		t.Fatalf("pre-spork: expected all %d epochs settled in one call, got %d",
+			epochsToMakeDue, updated.LastEpoch)
+	}
+}
+
+// seedPillarEntry stores a single pillar entry so
+// computeDetailedPillarReward has something to iterate.
+func seedPillarEntry(t *testing.T, ctx *testEpochBoundContext, name string, registrationTime int64) {
+	t.Helper()
+	addr := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	pillar := &definition.PillarInfo{
+		Name:                         name,
+		BlockProducingAddress:        addr,
+		RewardWithdrawAddress:        addr,
+		StakeAddress:                 addr,
+		Amount:                       big.NewInt(100),
+		RegistrationTime:             registrationTime,
+		RevokeTime:                   0,
+		GiveBlockRewardPercentage:    0,
+		GiveDelegateRewardPercentage: 0,
+		PillarType:                   definition.AnyPillarType,
+	}
+	common.FailIfErr(t, pillar.Save(ctx.Storage()))
+}
+
+// TestUpdatePillarRewardsCappedAtMaxRewardEpochsPerCall verifies that
+// the pillar reward updater respects the same per-call epoch bound.
+func TestUpdatePillarRewardsCappedAtMaxRewardEpochsPerCall(t *testing.T) {
+	epochsToMakeDue := constants.MaxRewardEpochsPerCall + 5
+	frontierTime := time.Unix(int64(epochsToMakeDue)+1+3600, 0)
+	ctx := newTestEpochBoundContext(t, frontierTime)
+
+	lastEpoch := &definition.LastEpochUpdate{LastEpoch: 0}
+	common.FailIfErr(t, lastEpoch.Save(ctx.Storage()))
+
+	// Register a pillar and provide epoch stats + delegations so
+	// computeDetailedPillarReward can run.
+	seedPillarEntry(t, ctx, "testpillar", 0)
+
+	pillarStats := &api.EpochPillarStats{
+		Epoch:            0,
+		BlockNum:         1,
+		ExpectedBlockNum: 1,
+		Weight:           big.NewInt(100),
+		Name:             "testpillar",
+	}
+	ctx.epochStats = make(map[uint64]*api.EpochStats)
+	ctx.pillarDelegations = make(map[uint64]map[string]*types.PillarDelegationDetail)
+	for e := uint64(1); e <= uint64(epochsToMakeDue); e++ {
+		ctx.epochStats[e] = &api.EpochStats{
+			Epoch:   e,
+			Pillars: map[string]*api.EpochPillarStats{"testpillar": pillarStats},
+			TotalWeight: big.NewInt(100),
+			TotalBlocks: 1,
+		}
+		ctx.pillarDelegations[e] = map[string]*types.PillarDelegationDetail{
+			"testpillar": {
+				PillarDelegation: types.PillarDelegation{
+					Name:   "testpillar",
+					Weight: big.NewInt(100),
+				},
+				Backers: map[types.Address]*big.Int{},
+			},
+		}
+	}
+
+	// First call: should settle exactly MaxRewardEpochsPerCall epochs.
+	err := updatePillarRewards(ctx)
+	common.FailIfErr(t, err)
+
+	updated, err := definition.GetLastEpochUpdate(ctx.Storage())
+	common.FailIfErr(t, err)
+	if updated.LastEpoch != int64(constants.MaxRewardEpochsPerCall) {
+		t.Fatalf("expected %d epochs settled, got %d",
+			constants.MaxRewardEpochsPerCall, updated.LastEpoch)
+	}
+
+	// Second call: settle the remaining 5.
+	err = updatePillarRewards(ctx)
+	common.FailIfErr(t, err)
+
+	updated2, err := definition.GetLastEpochUpdate(ctx.Storage())
+	common.FailIfErr(t, err)
+	expected := int64(epochsToMakeDue)
+	if updated2.LastEpoch != expected {
+		t.Fatalf("expected %d total epochs settled after second call, got %d",
+			expected, updated2.LastEpoch)
+	}
+}
+
+// TestUpdatePillarRewardsUncappedBeforeSpork verifies that the pillar
+// reward updater is unbounded when the Dynamic Plasma spork is not
+// enforced.
+func TestUpdatePillarRewardsUncappedBeforeSpork(t *testing.T) {
+	epochsToMakeDue := constants.MaxRewardEpochsPerCall + 20
+	frontierTime := time.Unix(int64(epochsToMakeDue)+1+3600, 0)
+	ctx := newTestEpochBoundContext(t, frontierTime)
+	ctx.dynPlasmaEnforced = false
+
+	lastEpoch := &definition.LastEpochUpdate{LastEpoch: 0}
+	common.FailIfErr(t, lastEpoch.Save(ctx.Storage()))
+	seedPillarEntry(t, ctx, "testpillar", 0)
+
+	pillarStats := &api.EpochPillarStats{
+		Epoch:            0,
+		BlockNum:         1,
+		ExpectedBlockNum: 1,
+		Weight:           big.NewInt(100),
+		Name:             "testpillar",
+	}
+	ctx.epochStats = make(map[uint64]*api.EpochStats)
+	ctx.pillarDelegations = make(map[uint64]map[string]*types.PillarDelegationDetail)
+	for e := uint64(1); e <= uint64(epochsToMakeDue); e++ {
+		ctx.epochStats[e] = &api.EpochStats{
+			Epoch:   e,
+			Pillars: map[string]*api.EpochPillarStats{"testpillar": pillarStats},
+			TotalWeight: big.NewInt(100),
+			TotalBlocks: 1,
+		}
+		ctx.pillarDelegations[e] = map[string]*types.PillarDelegationDetail{
+			"testpillar": {
+				PillarDelegation: types.PillarDelegation{
+					Name:   "testpillar",
+					Weight: big.NewInt(100),
+				},
+				Backers: map[types.Address]*big.Int{},
+			},
+		}
+	}
+
+	err := updatePillarRewards(ctx)
+	common.FailIfErr(t, err)
+
+	updated, err := definition.GetLastEpochUpdate(ctx.Storage())
+	common.FailIfErr(t, err)
+	if updated.LastEpoch != int64(epochsToMakeDue) {
+		t.Fatalf("pre-spork: expected all %d epochs settled in one call, got %d",
+			epochsToMakeDue, updated.LastEpoch)
 	}
 }
