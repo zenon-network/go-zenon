@@ -22,10 +22,10 @@ import (
 // many epochs are due.
 type testEpochBoundContext struct {
 	store.Account
-	momentum           *nom.Momentum
-	dynPlasmaEnforced  bool
-	epochStats         map[uint64]*api.EpochStats
-	pillarDelegations  map[uint64]map[string]*types.PillarDelegationDetail
+	momentum          *nom.Momentum
+	dynPlasmaEnforced bool
+	epochStats        map[uint64]*api.EpochStats
+	pillarDelegations map[uint64]map[string]*types.PillarDelegationDetail
 }
 
 func newTestEpochBoundContext(t *testing.T, frontierTime time.Time) *testEpochBoundContext {
@@ -332,6 +332,49 @@ func TestUpdateSentinelRewardsCappedAtMaxRewardEpochsPerCall(t *testing.T) {
 	}
 }
 
+// TestUpdateSentinelRewardsCapDoesNotSkipEpoch verifies that the cap
+// check happens before the epoch marker advances, so a capped call
+// never skips an epoch. Exactly MaxRewardEpochsPerCall epochs are due;
+// every one must have its rewards credited.
+func TestUpdateSentinelRewardsCapDoesNotSkipEpoch(t *testing.T) {
+	epochsToMakeDue := constants.MaxRewardEpochsPerCall
+	frontierTime := time.Unix(int64(epochsToMakeDue)+1+3600, 0)
+	ctx := newTestEpochBoundContext(t, frontierTime)
+
+	lastEpoch := &definition.LastEpochUpdate{LastEpoch: 0}
+	common.FailIfErr(t, lastEpoch.Save(ctx.Storage()))
+	seedSentinelEntry(t, ctx, 0)
+
+	// Settle all due epochs.
+	err := updateSentinelRewards(ctx)
+	common.FailIfErr(t, err)
+
+	updated, err := definition.GetLastEpochUpdate(ctx.Storage())
+	common.FailIfErr(t, err)
+	if updated.LastEpoch != int64(epochsToMakeDue) {
+		t.Fatalf("expected %d epochs settled, got %d", epochsToMakeDue, updated.LastEpoch)
+	}
+
+	// Every epoch must have a per-epoch reward deposit history entry
+	// with both ZNN and QSR credits. If the cap advanced the marker
+	// without computing rewards (the legacy liquidity pattern), the
+	// skipped epoch would have no history.
+	addr := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	for epoch := int64(1); epoch <= int64(epochsToMakeDue); epoch++ {
+		hisDeposit, err := definition.GetRewardDepositHistory(ctx.Storage(), uint64(epoch), &addr)
+		common.FailIfErr(t, err)
+		if hisDeposit == nil {
+			t.Fatalf("no reward deposit history for epoch %d", epoch)
+		}
+		if hisDeposit.Znn.Sign() <= 0 {
+			t.Fatalf("epoch %d has no ZNN reward in history", epoch)
+		}
+		if hisDeposit.Qsr.Sign() <= 0 {
+			t.Fatalf("epoch %d has no QSR reward in history", epoch)
+		}
+	}
+}
+
 // TestUpdateSentinelRewardsUncappedBeforeSpork verifies that the sentinel
 // reward updater is unbounded when the Dynamic Plasma spork is not
 // enforced.
@@ -401,8 +444,8 @@ func TestUpdatePillarRewardsCappedAtMaxRewardEpochsPerCall(t *testing.T) {
 	ctx.pillarDelegations = make(map[uint64]map[string]*types.PillarDelegationDetail)
 	for e := uint64(1); e <= uint64(epochsToMakeDue); e++ {
 		ctx.epochStats[e] = &api.EpochStats{
-			Epoch:   e,
-			Pillars: map[string]*api.EpochPillarStats{"testpillar": pillarStats},
+			Epoch:       e,
+			Pillars:     map[string]*api.EpochPillarStats{"testpillar": pillarStats},
 			TotalWeight: big.NewInt(100),
 			TotalBlocks: 1,
 		}
@@ -490,6 +533,76 @@ func TestUpdatePillarRewardsCappedAtMaxRewardEpochsPerCall(t *testing.T) {
 	}
 }
 
+// TestUpdatePillarRewardsCapDoesNotSkipEpoch verifies that the cap
+// check happens before the epoch marker advances, so a capped call
+// never skips an epoch. Exactly MaxRewardEpochsPerCall epochs are due;
+// every one must have its rewards credited.
+func TestUpdatePillarRewardsCapDoesNotSkipEpoch(t *testing.T) {
+	epochsToMakeDue := constants.MaxRewardEpochsPerCall
+	frontierTime := time.Unix(int64(epochsToMakeDue)+1+3600, 0)
+	ctx := newTestEpochBoundContext(t, frontierTime)
+
+	lastEpoch := &definition.LastEpochUpdate{LastEpoch: 0}
+	common.FailIfErr(t, lastEpoch.Save(ctx.Storage()))
+	seedPillarEntry(t, ctx, "testpillar", 0)
+
+	pillarStats := &api.EpochPillarStats{
+		Epoch:            0,
+		BlockNum:         1,
+		ExpectedBlockNum: 1,
+		Weight:           big.NewInt(100),
+		Name:             "testpillar",
+	}
+	ctx.epochStats = make(map[uint64]*api.EpochStats)
+	ctx.pillarDelegations = make(map[uint64]map[string]*types.PillarDelegationDetail)
+	for e := uint64(1); e <= uint64(epochsToMakeDue); e++ {
+		ctx.epochStats[e] = &api.EpochStats{
+			Epoch:       e,
+			Pillars:     map[string]*api.EpochPillarStats{"testpillar": pillarStats},
+			TotalWeight: big.NewInt(100),
+			TotalBlocks: 1,
+		}
+		ctx.pillarDelegations[e] = map[string]*types.PillarDelegationDetail{
+			"testpillar": {
+				PillarDelegation: types.PillarDelegation{
+					Name:   "testpillar",
+					Weight: big.NewInt(100),
+				},
+				Backers: map[types.Address]*big.Int{},
+			},
+		}
+	}
+
+	// Settle all due epochs.
+	err := updatePillarRewards(ctx)
+	common.FailIfErr(t, err)
+
+	updated, err := definition.GetLastEpochUpdate(ctx.Storage())
+	common.FailIfErr(t, err)
+	if updated.LastEpoch != int64(epochsToMakeDue) {
+		t.Fatalf("expected %d epochs settled, got %d", epochsToMakeDue, updated.LastEpoch)
+	}
+
+	// Every epoch must have a per-epoch reward deposit history entry
+	// with ZNN credits. Pillar rewards are ZNN-only (QSR is always
+	// zero). If the cap advanced the marker without computing rewards,
+	// the skipped epoch would have no history.
+	addr := types.ParseAddressPanic("z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz")
+	for epoch := int64(1); epoch <= int64(epochsToMakeDue); epoch++ {
+		hisDeposit, err := definition.GetRewardDepositHistory(ctx.Storage(), uint64(epoch), &addr)
+		common.FailIfErr(t, err)
+		if hisDeposit == nil {
+			t.Fatalf("no reward deposit history for epoch %d", epoch)
+		}
+		if hisDeposit.Znn.Sign() <= 0 {
+			t.Fatalf("epoch %d has no ZNN reward in history", epoch)
+		}
+		if hisDeposit.Qsr.Sign() != 0 {
+			t.Fatalf("epoch %d has unexpected QSR reward in history: %s", epoch, hisDeposit.Qsr)
+		}
+	}
+}
+
 // TestUpdatePillarRewardsUncappedBeforeSpork verifies that the pillar
 // reward updater is unbounded when the Dynamic Plasma spork is not
 // enforced.
@@ -514,8 +627,8 @@ func TestUpdatePillarRewardsUncappedBeforeSpork(t *testing.T) {
 	ctx.pillarDelegations = make(map[uint64]map[string]*types.PillarDelegationDetail)
 	for e := uint64(1); e <= uint64(epochsToMakeDue); e++ {
 		ctx.epochStats[e] = &api.EpochStats{
-			Epoch:   e,
-			Pillars: map[string]*api.EpochPillarStats{"testpillar": pillarStats},
+			Epoch:       e,
+			Pillars:     map[string]*api.EpochPillarStats{"testpillar": pillarStats},
 			TotalWeight: big.NewInt(100),
 			TotalBlocks: 1,
 		}

@@ -893,6 +893,8 @@ func (p *UpdateEmbeddedPillarMethod) ValidateSendBlock(block *nom.AccountBlock) 
 // when called again too soon) and then distributes the pillar
 // rewards of every epoch that has become due (updatePillarRewards),
 // crediting RewardDeposit entries collectable via CollectReward.
+// After the Dynamic Plasma spork, at most MaxRewardEpochsPerCall
+// epochs settle per call; remaining epochs drain in subsequent calls.
 func (p *UpdateEmbeddedPillarMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err

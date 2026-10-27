@@ -221,7 +221,9 @@ func (method *UpdateEmbeddedSentinelMethod) ValidateSendBlock(block *nom.Account
 // ReceiveBlock runs the update throttle (constants.ErrUpdateTooRecent
 // when called again too soon) and then credits the sentinel rewards
 // of every epoch that has become due (updateSentinelRewards),
-// collectable via CollectReward.
+// collectable via CollectReward. After the Dynamic Plasma spork, at
+// most MaxRewardEpochsPerCall epochs settle per call; remaining
+// epochs drain in subsequent calls.
 func (method *UpdateEmbeddedSentinelMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := method.ValidateSendBlock(sendBlock); err != nil {
 		sentinelLog.Debug("invalid update - syntactic validation failed", "address", sendBlock.Address, "reason", err)

@@ -207,7 +207,9 @@ func (p *UpdateEmbeddedStakeMethod) ValidateSendBlock(block *nom.AccountBlock) e
 // ReceiveBlock runs the update throttle (constants.ErrUpdateTooRecent
 // when called again too soon) and then distributes the stake rewards
 // of every epoch that has become due (updateStakeRewards), crediting
-// RewardDeposit entries collectable via CollectReward.
+// RewardDeposit entries collectable via CollectReward. After the
+// Dynamic Plasma spork, at most MaxRewardEpochsPerCall epochs settle
+// per call; remaining epochs drain in subsequent calls.
 func (p *UpdateEmbeddedStakeMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
