@@ -126,7 +126,7 @@ func TestGuardian_CheckNominatedGuardians(t *testing.T) {
 	}
 }
 
-// TestNominateGuardians_ReceiveBlock_SporkGating verifies that
+// TestGuardian_NominateGuardians_ReceiveBlock_SporkGating verifies that
 // NominateGuardians ReceiveBlock enforces CheckNominatedGuardians post-spork
 // for both bridge and liquidity, while preserving pre-spork nomination behavior.
 func TestGuardian_NominateGuardians_ReceiveBlock_SporkGating(t *testing.T) {
@@ -148,7 +148,7 @@ func TestGuardian_NominateGuardians_ReceiveBlock_SporkGating(t *testing.T) {
 
 	admin := makeGuardianAddress(999)
 
-	// --- Bridge Pre-Spork (Legacy acceptance into TimeChallenge) ---
+	// --- Bridge Pre-Spork (Legacy completion of duplicate and oversized sets) ---
 	ctxBridgePre := newTestContractContext(types.BridgeContract, false)
 	setupActiveBridge(t, ctxBridgePre, admin, initialGuardians)
 	methodBridge := &NominateGuardiansMethod{definition.NominateGuardiansMethodName}
@@ -160,7 +160,18 @@ func TestGuardian_NominateGuardians_ReceiveBlock_SporkGating(t *testing.T) {
 		Amount:    big.NewInt(0),
 	}
 	if _, err := methodBridge.ReceiveBlock(ctxBridgePre, sendDupBridge); err != nil {
-		t.Fatalf("expected pre-spork duplicate bridge nomination to be accepted into time challenge, got %v", err)
+		t.Fatalf("expected pre-spork duplicate bridge nomination to start time challenge, got %v", err)
+	}
+	ctxBridgePre.momentum.Height += 11
+	if _, err := methodBridge.ReceiveBlock(ctxBridgePre, sendDupBridge); err != nil {
+		t.Fatalf("expected pre-spork duplicate bridge nomination to complete after delay, got %v", err)
+	}
+	secBridgePre, err := definition.GetSecurityInfoVariable(ctxBridgePre.Storage())
+	if err != nil {
+		t.Fatalf("failed to load bridge security info: %v", err)
+	}
+	if len(secBridgePre.Guardians) != len(guardiansDup) {
+		t.Fatalf("expected pre-spork bridge guardians len %d, got %d", len(guardiansDup), len(secBridgePre.Guardians))
 	}
 
 	sendOverBridge := &nom.AccountBlock{
@@ -170,10 +181,21 @@ func TestGuardian_NominateGuardians_ReceiveBlock_SporkGating(t *testing.T) {
 		Amount:    big.NewInt(0),
 	}
 	if _, err := methodBridge.ReceiveBlock(ctxBridgePre, sendOverBridge); err != nil {
-		t.Fatalf("expected pre-spork oversized bridge nomination to be accepted into time challenge, got %v", err)
+		t.Fatalf("expected pre-spork oversized bridge nomination to start time challenge, got %v", err)
+	}
+	ctxBridgePre.momentum.Height += 11
+	if _, err := methodBridge.ReceiveBlock(ctxBridgePre, sendOverBridge); err != nil {
+		t.Fatalf("expected pre-spork oversized bridge nomination to complete after delay, got %v", err)
+	}
+	secBridgePre, err = definition.GetSecurityInfoVariable(ctxBridgePre.Storage())
+	if err != nil {
+		t.Fatalf("failed to load bridge security info: %v", err)
+	}
+	if len(secBridgePre.Guardians) != len(guardiansOversized) {
+		t.Fatalf("expected pre-spork bridge guardians len %d, got %d", len(guardiansOversized), len(secBridgePre.Guardians))
 	}
 
-	// --- Bridge Post-Spork (Enforced rejection, preserving configuration) ---
+	// --- Bridge Post-Spork (Enforced rejection, preserving guardians and time challenge) ---
 	ctxBridgePost := newTestContractContext(types.BridgeContract, true)
 	setupActiveBridge(t, ctxBridgePost, admin, initialGuardians)
 
@@ -181,19 +203,39 @@ func TestGuardian_NominateGuardians_ReceiveBlock_SporkGating(t *testing.T) {
 		t.Fatalf("expected ErrInvalidGuardians for duplicate bridge guardians post-spork, got %v", err)
 	}
 	secBridge, err := definition.GetSecurityInfoVariable(ctxBridgePost.Storage())
-	if err != nil || len(secBridge.Guardians) != len(initialGuardians) {
-		t.Fatalf("expected bridge guardians to remain unchanged post-spork rejection, got %v (err: %v)", secBridge.Guardians, err)
+	if err != nil {
+		t.Fatalf("failed to load bridge security info: %v", err)
+	}
+	if len(secBridge.Guardians) != len(initialGuardians) {
+		t.Fatalf("expected bridge guardians to remain unchanged post-spork rejection, got %v", secBridge.Guardians)
+	}
+	tcBridge, err := definition.GetTimeChallengeInfoVariable(ctxBridgePost.Storage(), definition.NominateGuardiansMethodName)
+	if err != nil {
+		t.Fatalf("failed to load bridge time challenge info: %v", err)
+	}
+	if tcBridge != nil {
+		t.Fatalf("expected bridge time challenge to remain nil after post-spork rejection, got %+v", tcBridge)
 	}
 
 	if _, err := methodBridge.ReceiveBlock(ctxBridgePost, sendOverBridge); err != constants.ErrInvalidGuardians {
 		t.Fatalf("expected ErrInvalidGuardians for oversized bridge guardians post-spork, got %v", err)
 	}
 	secBridge2, err := definition.GetSecurityInfoVariable(ctxBridgePost.Storage())
-	if err != nil || len(secBridge2.Guardians) != len(initialGuardians) {
-		t.Fatalf("expected bridge guardians to remain unchanged post-spork rejection, got %v (err: %v)", secBridge2.Guardians, err)
+	if err != nil {
+		t.Fatalf("failed to load bridge security info: %v", err)
+	}
+	if len(secBridge2.Guardians) != len(initialGuardians) {
+		t.Fatalf("expected bridge guardians to remain unchanged post-spork rejection, got %v", secBridge2.Guardians)
+	}
+	tcBridge2, err := definition.GetTimeChallengeInfoVariable(ctxBridgePost.Storage(), definition.NominateGuardiansMethodName)
+	if err != nil {
+		t.Fatalf("failed to load bridge time challenge info: %v", err)
+	}
+	if tcBridge2 != nil {
+		t.Fatalf("expected bridge time challenge to remain nil after post-spork rejection, got %+v", tcBridge2)
 	}
 
-	// --- Liquidity Pre-Spork (Legacy acceptance into TimeChallenge) ---
+	// --- Liquidity Pre-Spork (Legacy completion of duplicate and oversized sets) ---
 	ctxLiqPre := newTestContractContext(types.LiquidityContract, false)
 	setupActiveLiquidity(t, ctxLiqPre, admin, initialGuardians)
 	methodLiq := &NominateGuardiansLiquidity{definition.NominateGuardiansMethodName}
@@ -205,7 +247,18 @@ func TestGuardian_NominateGuardians_ReceiveBlock_SporkGating(t *testing.T) {
 		Amount:    big.NewInt(0),
 	}
 	if _, err := methodLiq.ReceiveBlock(ctxLiqPre, sendDupLiq); err != nil {
-		t.Fatalf("expected pre-spork duplicate liquidity nomination to be accepted into time challenge, got %v", err)
+		t.Fatalf("expected pre-spork duplicate liquidity nomination to start time challenge, got %v", err)
+	}
+	ctxLiqPre.momentum.Height += 11
+	if _, err := methodLiq.ReceiveBlock(ctxLiqPre, sendDupLiq); err != nil {
+		t.Fatalf("expected pre-spork duplicate liquidity nomination to complete after delay, got %v", err)
+	}
+	secLiqPre, err := definition.GetSecurityInfoVariable(ctxLiqPre.Storage())
+	if err != nil {
+		t.Fatalf("failed to load liquidity security info: %v", err)
+	}
+	if len(secLiqPre.Guardians) != len(guardiansDup) {
+		t.Fatalf("expected pre-spork liquidity guardians len %d, got %d", len(guardiansDup), len(secLiqPre.Guardians))
 	}
 
 	sendOverLiq := &nom.AccountBlock{
@@ -215,10 +268,21 @@ func TestGuardian_NominateGuardians_ReceiveBlock_SporkGating(t *testing.T) {
 		Amount:    big.NewInt(0),
 	}
 	if _, err := methodLiq.ReceiveBlock(ctxLiqPre, sendOverLiq); err != nil {
-		t.Fatalf("expected pre-spork oversized liquidity nomination to be accepted into time challenge, got %v", err)
+		t.Fatalf("expected pre-spork oversized liquidity nomination to start time challenge, got %v", err)
+	}
+	ctxLiqPre.momentum.Height += 11
+	if _, err := methodLiq.ReceiveBlock(ctxLiqPre, sendOverLiq); err != nil {
+		t.Fatalf("expected pre-spork oversized liquidity nomination to complete after delay, got %v", err)
+	}
+	secLiqPre, err = definition.GetSecurityInfoVariable(ctxLiqPre.Storage())
+	if err != nil {
+		t.Fatalf("failed to load liquidity security info: %v", err)
+	}
+	if len(secLiqPre.Guardians) != len(guardiansOversized) {
+		t.Fatalf("expected pre-spork liquidity guardians len %d, got %d", len(guardiansOversized), len(secLiqPre.Guardians))
 	}
 
-	// --- Liquidity Post-Spork (Enforced rejection, preserving configuration) ---
+	// --- Liquidity Post-Spork (Enforced rejection, preserving guardians and time challenge) ---
 	ctxLiqPost := newTestContractContext(types.LiquidityContract, true)
 	setupActiveLiquidity(t, ctxLiqPost, admin, initialGuardians)
 
@@ -226,16 +290,36 @@ func TestGuardian_NominateGuardians_ReceiveBlock_SporkGating(t *testing.T) {
 		t.Fatalf("expected ErrInvalidGuardians for duplicate liquidity guardians post-spork, got %v", err)
 	}
 	secLiq, err := definition.GetSecurityInfoVariable(ctxLiqPost.Storage())
-	if err != nil || len(secLiq.Guardians) != len(initialGuardians) {
-		t.Fatalf("expected liquidity guardians to remain unchanged post-spork rejection, got %v (err: %v)", secLiq.Guardians, err)
+	if err != nil {
+		t.Fatalf("failed to load liquidity security info: %v", err)
+	}
+	if len(secLiq.Guardians) != len(initialGuardians) {
+		t.Fatalf("expected liquidity guardians to remain unchanged post-spork rejection, got %v", secLiq.Guardians)
+	}
+	tcLiq, err := definition.GetTimeChallengeInfoVariable(ctxLiqPost.Storage(), definition.NominateGuardiansMethodName)
+	if err != nil {
+		t.Fatalf("failed to load liquidity time challenge info: %v", err)
+	}
+	if tcLiq != nil {
+		t.Fatalf("expected liquidity time challenge to remain nil after post-spork rejection, got %+v", tcLiq)
 	}
 
 	if _, err := methodLiq.ReceiveBlock(ctxLiqPost, sendOverLiq); err != constants.ErrInvalidGuardians {
 		t.Fatalf("expected ErrInvalidGuardians for oversized liquidity guardians post-spork, got %v", err)
 	}
 	secLiq2, err := definition.GetSecurityInfoVariable(ctxLiqPost.Storage())
-	if err != nil || len(secLiq2.Guardians) != len(initialGuardians) {
-		t.Fatalf("expected liquidity guardians to remain unchanged post-spork rejection, got %v (err: %v)", secLiq2.Guardians, err)
+	if err != nil {
+		t.Fatalf("failed to load liquidity security info: %v", err)
+	}
+	if len(secLiq2.Guardians) != len(initialGuardians) {
+		t.Fatalf("expected liquidity guardians to remain unchanged post-spork rejection, got %v", secLiq2.Guardians)
+	}
+	tcLiq2, err := definition.GetTimeChallengeInfoVariable(ctxLiqPost.Storage(), definition.NominateGuardiansMethodName)
+	if err != nil {
+		t.Fatalf("failed to load liquidity time challenge info: %v", err)
+	}
+	if tcLiq2 != nil {
+		t.Fatalf("expected liquidity time challenge to remain nil after post-spork rejection, got %+v", tcLiq2)
 	}
 }
 
@@ -333,13 +417,12 @@ func setupEmergencyLiquidity(t *testing.T, ctx *testContractContext, guardians [
 	}
 }
 
-// TestProposeAdministrator_ThresholdsPostSpork exercises the threshold
+// TestGuardian_ProposeAdministrator_ThresholdsPostSpork exercises the threshold
 // arithmetic and election for sizes 5, 255, 256, 510, 511, 512, 513, and 1000.
 // Verifies that:
 // - threshold is len/2 exactly
 // - election requires strictly more than len/2 votes (len/2 does not elect; len/2 + 1 elects)
 // - counter above 255 does not wrap
-// - unanimous vote on 510 and 511 succeeds
 func TestGuardian_ProposeAdministrator_ThresholdsPostSpork(t *testing.T) {
 	testSizes := []int{5, 255, 256, 510, 511, 512, 513, 1000}
 	newAdmin := makeGuardianAddress(9999)
@@ -370,7 +453,10 @@ func TestGuardian_ProposeAdministrator_ThresholdsPostSpork(t *testing.T) {
 			}
 
 			// Verify not elected yet
-			bInfo, _ := definition.GetBridgeInfoVariable(ctx.Storage())
+			bInfo, err := definition.GetBridgeInfoVariable(ctx.Storage())
+			if err != nil {
+				t.Fatalf("failed to load bridge info: %v", err)
+			}
 			if !bInfo.Administrator.IsZero() {
 				t.Fatalf("size %d: administrator elected at threshold (%d votes)", size, threshold)
 			}
@@ -387,7 +473,10 @@ func TestGuardian_ProposeAdministrator_ThresholdsPostSpork(t *testing.T) {
 			}
 
 			// Verify elected
-			bInfo, _ = definition.GetBridgeInfoVariable(ctx.Storage())
+			bInfo, err = definition.GetBridgeInfoVariable(ctx.Storage())
+			if err != nil {
+				t.Fatalf("failed to reload bridge info: %v", err)
+			}
 			if bInfo.Administrator.String() != newAdmin.String() {
 				t.Fatalf("size %d: expected new admin %v, got %v", size, newAdmin, bInfo.Administrator)
 			}
@@ -418,7 +507,10 @@ func TestGuardian_ProposeAdministrator_ThresholdsPostSpork(t *testing.T) {
 			}
 
 			// Verify not elected yet
-			lInfo, _ := definition.GetLiquidityInfo(ctx.Storage())
+			lInfo, err := definition.GetLiquidityInfo(ctx.Storage())
+			if err != nil {
+				t.Fatalf("failed to load liquidity info: %v", err)
+			}
 			if !lInfo.Administrator.IsZero() {
 				t.Fatalf("size %d: administrator elected at threshold (%d votes)", size, threshold)
 			}
@@ -435,7 +527,10 @@ func TestGuardian_ProposeAdministrator_ThresholdsPostSpork(t *testing.T) {
 			}
 
 			// Verify elected
-			lInfo, _ = definition.GetLiquidityInfo(ctx.Storage())
+			lInfo, err = definition.GetLiquidityInfo(ctx.Storage())
+			if err != nil {
+				t.Fatalf("failed to reload liquidity info: %v", err)
+			}
 			if lInfo.Administrator.String() != newAdmin.String() {
 				t.Fatalf("size %d: expected new admin %v, got %v", size, newAdmin, lInfo.Administrator)
 			}
@@ -443,9 +538,9 @@ func TestGuardian_ProposeAdministrator_ThresholdsPostSpork(t *testing.T) {
 	}
 }
 
-// TestProposeAdministrator_PreSporkTruncation verifies that before the spork,
-// 512 guardians truncates threshold to uint8(256) = 0 and elects on 1 vote,
-// whereas post-spork it requires strictly > 256 votes.
+// TestGuardian_ProposeAdministrator_PreSporkTruncation verifies that before the spork,
+// 512 guardians truncates threshold to uint8(256) = 0 and elects on 1 vote for both
+// Bridge and Liquidity, whereas post-spork it requires strictly > 256 votes.
 func TestGuardian_ProposeAdministrator_PreSporkTruncation(t *testing.T) {
 	newAdmin := makeGuardianAddress(9999)
 	size := 512
@@ -454,87 +549,166 @@ func TestGuardian_ProposeAdministrator_PreSporkTruncation(t *testing.T) {
 		guardians[i] = makeGuardianAddress(i + 1)
 	}
 
-	// 1. Pre-spork: 1 vote elects because threshold = uint8(256) = 0, votes[1] > 0
-	ctxPre := newTestContractContext(types.BridgeContract, false)
-	setupEmergencyBridge(t, ctxPre, guardians)
-	method := &ProposeAdministratorMethod{definition.ProposeAdministratorMethodName}
+	t.Run("Bridge", func(t *testing.T) {
+		ctxPre := newTestContractContext(types.BridgeContract, false)
+		setupEmergencyBridge(t, ctxPre, guardians)
+		method := &ProposeAdministratorMethod{definition.ProposeAdministratorMethodName}
 
-	send1 := &nom.AccountBlock{
-		Address:   guardians[0],
-		ToAddress: types.BridgeContract,
-		Data:      definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName, newAdmin),
-		Amount:    big.NewInt(0),
-	}
-	if _, err := method.ReceiveBlock(ctxPre, send1); err != nil {
-		t.Fatalf("pre-spork vote failed: %v", err)
-	}
+		send1 := &nom.AccountBlock{
+			Address:   guardians[0],
+			ToAddress: types.BridgeContract,
+			Data:      definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName, newAdmin),
+			Amount:    big.NewInt(0),
+		}
+		if _, err := method.ReceiveBlock(ctxPre, send1); err != nil {
+			t.Fatalf("pre-spork vote failed: %v", err)
+		}
 
-	bInfoPre, _ := definition.GetBridgeInfoVariable(ctxPre.Storage())
-	if bInfoPre.Administrator.String() != newAdmin.String() {
-		t.Fatalf("pre-spork: expected truncation bug to elect admin on 1 vote")
-	}
+		bInfoPre, err := definition.GetBridgeInfoVariable(ctxPre.Storage())
+		if err != nil {
+			t.Fatalf("failed to load bridge info: %v", err)
+		}
+		if bInfoPre.Administrator.String() != newAdmin.String() {
+			t.Fatalf("pre-spork: expected truncation bug to elect bridge admin on 1 vote")
+		}
 
-	// 2. Post-spork: 1 vote does NOT elect because threshold = 256 in int
-	ctxPost := newTestContractContext(types.BridgeContract, true)
-	setupEmergencyBridge(t, ctxPost, guardians)
+		ctxPost := newTestContractContext(types.BridgeContract, true)
+		setupEmergencyBridge(t, ctxPost, guardians)
 
-	if _, err := method.ReceiveBlock(ctxPost, send1); err != nil {
-		t.Fatalf("post-spork vote failed: %v", err)
-	}
-	bInfoPost, _ := definition.GetBridgeInfoVariable(ctxPost.Storage())
-	if !bInfoPost.Administrator.IsZero() {
-		t.Fatalf("post-spork: 1 vote should not elect admin for 512 guardians!")
-	}
+		if _, err := method.ReceiveBlock(ctxPost, send1); err != nil {
+			t.Fatalf("post-spork vote failed: %v", err)
+		}
+		bInfoPost, err := definition.GetBridgeInfoVariable(ctxPost.Storage())
+		if err != nil {
+			t.Fatalf("failed to load bridge info: %v", err)
+		}
+		if !bInfoPost.Administrator.IsZero() {
+			t.Fatalf("post-spork: 1 vote should not elect bridge admin for 512 guardians")
+		}
+	})
+
+	t.Run("Liquidity", func(t *testing.T) {
+		ctxPre := newTestContractContext(types.LiquidityContract, false)
+		setupEmergencyLiquidity(t, ctxPre, guardians)
+		method := &ProposeAdministratorLiquidity{definition.ProposeAdministratorMethodName}
+
+		send1 := &nom.AccountBlock{
+			Address:   guardians[0],
+			ToAddress: types.LiquidityContract,
+			Data:      definition.ABILiquidity.PackMethodPanic(definition.ProposeAdministratorMethodName, newAdmin),
+			Amount:    big.NewInt(0),
+		}
+		if _, err := method.ReceiveBlock(ctxPre, send1); err != nil {
+			t.Fatalf("pre-spork vote failed: %v", err)
+		}
+
+		lInfoPre, err := definition.GetLiquidityInfo(ctxPre.Storage())
+		if err != nil {
+			t.Fatalf("failed to load liquidity info: %v", err)
+		}
+		if lInfoPre.Administrator.String() != newAdmin.String() {
+			t.Fatalf("pre-spork: expected truncation bug to elect liquidity admin on 1 vote")
+		}
+
+		ctxPost := newTestContractContext(types.LiquidityContract, true)
+		setupEmergencyLiquidity(t, ctxPost, guardians)
+
+		if _, err := method.ReceiveBlock(ctxPost, send1); err != nil {
+			t.Fatalf("post-spork vote failed: %v", err)
+		}
+		lInfoPost, err := definition.GetLiquidityInfo(ctxPost.Storage())
+		if err != nil {
+			t.Fatalf("failed to load liquidity info: %v", err)
+		}
+		if !lInfoPost.Administrator.IsZero() {
+			t.Fatalf("post-spork: 1 vote should not elect liquidity admin for 512 guardians")
+		}
+	})
 }
 
-// TestProposeAdministrator_RepeatVoteCountsOnce verifies that repeated votes
-// from the same guardian update that guardian's vote without increasing the count.
+// TestGuardian_ProposeAdministrator_RepeatVoteCountsOnce verifies that repeated votes
+// from the same guardian update that guardian's vote without increasing the count
+// for both Bridge and Liquidity.
 func TestGuardian_ProposeAdministrator_RepeatVoteCountsOnce(t *testing.T) {
-	ctx := newTestContractContext(types.BridgeContract, true)
 	guardians := make([]types.Address, 5) // threshold = 2, requires 3 votes
 	for i := 0; i < 5; i++ {
 		guardians[i] = makeGuardianAddress(i + 1)
 	}
-	setupEmergencyBridge(t, ctx, guardians)
-
 	candidate := makeGuardianAddress(888)
-	method := &ProposeAdministratorMethod{definition.ProposeAdministratorMethodName}
 
-	sendBlock := &nom.AccountBlock{
-		Address:   guardians[0],
-		ToAddress: types.BridgeContract,
-		Data:      definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName, candidate),
-		Amount:    big.NewInt(0),
-	}
+	t.Run("Bridge", func(t *testing.T) {
+		ctx := newTestContractContext(types.BridgeContract, true)
+		setupEmergencyBridge(t, ctx, guardians)
+		method := &ProposeAdministratorMethod{definition.ProposeAdministratorMethodName}
 
-	// Guardian 0 votes 10 times for the same candidate
-	for i := 0; i < 10; i++ {
-		if _, err := method.ReceiveBlock(ctx, sendBlock); err != nil {
-			t.Fatalf("repeat vote %d failed: %v", i, err)
+		sendBlock := &nom.AccountBlock{
+			Address:   guardians[0],
+			ToAddress: types.BridgeContract,
+			Data:      definition.ABIBridge.PackMethodPanic(definition.ProposeAdministratorMethodName, candidate),
+			Amount:    big.NewInt(0),
 		}
-	}
 
-	// Must NOT elect: guardian 0's vote counts once (1 < threshold 2)
-	bInfo, _ := definition.GetBridgeInfoVariable(ctx.Storage())
-	if !bInfo.Administrator.IsZero() {
-		t.Fatalf("repeat votes by single guardian incorrectly triggered election!")
-	}
+		for i := 0; i < 10; i++ {
+			if _, err := method.ReceiveBlock(ctx, sendBlock); err != nil {
+				t.Fatalf("repeat vote %d failed: %v", i, err)
+			}
+		}
+
+		bInfo, err := definition.GetBridgeInfoVariable(ctx.Storage())
+		if err != nil {
+			t.Fatalf("failed to load bridge info: %v", err)
+		}
+		if !bInfo.Administrator.IsZero() {
+			t.Fatalf("repeat votes by single guardian incorrectly triggered bridge election")
+		}
+	})
+
+	t.Run("Liquidity", func(t *testing.T) {
+		ctx := newTestContractContext(types.LiquidityContract, true)
+		setupEmergencyLiquidity(t, ctx, guardians)
+		method := &ProposeAdministratorLiquidity{definition.ProposeAdministratorMethodName}
+
+		sendBlock := &nom.AccountBlock{
+			Address:   guardians[0],
+			ToAddress: types.LiquidityContract,
+			Data:      definition.ABILiquidity.PackMethodPanic(definition.ProposeAdministratorMethodName, candidate),
+			Amount:    big.NewInt(0),
+		}
+
+		for i := 0; i < 10; i++ {
+			if _, err := method.ReceiveBlock(ctx, sendBlock); err != nil {
+				t.Fatalf("repeat vote %d failed: %v", i, err)
+			}
+		}
+
+		lInfo, err := definition.GetLiquidityInfo(ctx.Storage())
+		if err != nil {
+			t.Fatalf("failed to load liquidity info: %v", err)
+		}
+		if !lInfo.Administrator.IsZero() {
+			t.Fatalf("repeat votes by single guardian incorrectly triggered liquidity election")
+		}
+	})
 }
 
-// TestGuardian_ProposeAdministrator_UnanimousRecovery fills every guardian
-// vote except the last, then submits the final vote through ReceiveBlock.
-// The administrator must be set and all votes must be cleared.
-func TestGuardian_ProposeAdministrator_UnanimousRecovery(t *testing.T) {
+// TestGuardian_ProposeAdministrator_FinalVoteDecisive seeds exactly len/2
+// votes for newAdmin (and non-electing votes in the remaining pre-final slots),
+// then submits the final guardian's vote through ReceiveBlock so that the last
+// slot is the decisive (len/2 + 1)-th vote. Verifies that the administrator is
+// elected and all votes are cleared.
+func TestGuardian_ProposeAdministrator_FinalVoteDecisive(t *testing.T) {
 	newAdmin := makeGuardianAddress(9999)
+	otherCandidate := makeGuardianAddress(8888)
 
 	for _, size := range []int{510, 511} {
 		guardians := make([]types.Address, size)
 		for i := 0; i < size; i++ {
 			guardians[i] = makeGuardianAddress(i + 1)
 		}
+		threshold := size / 2
 		last := size - 1
 
-		t.Run(fmt.Sprintf("Bridge_Unanimous_%d", size), func(t *testing.T) {
+		t.Run(fmt.Sprintf("Bridge_FinalVoteDecisive_%d", size), func(t *testing.T) {
 			ctx := newTestContractContext(types.BridgeContract, true)
 			setupEmergencyBridge(t, ctx, guardians)
 
@@ -542,8 +716,11 @@ func TestGuardian_ProposeAdministrator_UnanimousRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to load security info: %v", err)
 			}
-			for i := 0; i < last; i++ {
+			for i := 0; i < threshold; i++ {
 				secInfo.GuardiansVotes[i] = newAdmin
+			}
+			for i := threshold; i < last; i++ {
+				secInfo.GuardiansVotes[i] = otherCandidate
 			}
 			if err := secInfo.Save(ctx.Storage()); err != nil {
 				t.Fatalf("failed to save security info: %v", err)
@@ -557,10 +734,13 @@ func TestGuardian_ProposeAdministrator_UnanimousRecovery(t *testing.T) {
 				Amount:    big.NewInt(0),
 			}
 			if _, err := method.ReceiveBlock(ctx, sendFinal); err != nil {
-				t.Fatalf("size %d: final unanimous vote failed: %v", size, err)
+				t.Fatalf("size %d: final decisive vote failed: %v", size, err)
 			}
 
-			bInfo, _ := definition.GetBridgeInfoVariable(ctx.Storage())
+			bInfo, err := definition.GetBridgeInfoVariable(ctx.Storage())
+			if err != nil {
+				t.Fatalf("failed to load bridge info: %v", err)
+			}
 			if bInfo.Administrator.String() != newAdmin.String() {
 				t.Fatalf("size %d: expected admin %v, got %v", size, newAdmin, bInfo.Administrator)
 			}
@@ -576,7 +756,7 @@ func TestGuardian_ProposeAdministrator_UnanimousRecovery(t *testing.T) {
 			}
 		})
 
-		t.Run(fmt.Sprintf("Liquidity_Unanimous_%d", size), func(t *testing.T) {
+		t.Run(fmt.Sprintf("Liquidity_FinalVoteDecisive_%d", size), func(t *testing.T) {
 			ctx := newTestContractContext(types.LiquidityContract, true)
 			setupEmergencyLiquidity(t, ctx, guardians)
 
@@ -584,8 +764,11 @@ func TestGuardian_ProposeAdministrator_UnanimousRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to load security info: %v", err)
 			}
-			for i := 0; i < last; i++ {
+			for i := 0; i < threshold; i++ {
 				secInfo.GuardiansVotes[i] = newAdmin
+			}
+			for i := threshold; i < last; i++ {
+				secInfo.GuardiansVotes[i] = otherCandidate
 			}
 			if err := secInfo.Save(ctx.Storage()); err != nil {
 				t.Fatalf("failed to save security info: %v", err)
@@ -599,10 +782,13 @@ func TestGuardian_ProposeAdministrator_UnanimousRecovery(t *testing.T) {
 				Amount:    big.NewInt(0),
 			}
 			if _, err := method.ReceiveBlock(ctx, sendFinal); err != nil {
-				t.Fatalf("size %d: final unanimous vote failed: %v", size, err)
+				t.Fatalf("size %d: final decisive vote failed: %v", size, err)
 			}
 
-			lInfo, _ := definition.GetLiquidityInfo(ctx.Storage())
+			lInfo, err := definition.GetLiquidityInfo(ctx.Storage())
+			if err != nil {
+				t.Fatalf("failed to load liquidity info: %v", err)
+			}
 			if lInfo.Administrator.String() != newAdmin.String() {
 				t.Fatalf("size %d: expected admin %v, got %v", size, newAdmin, lInfo.Administrator)
 			}
@@ -619,4 +805,3 @@ func TestGuardian_ProposeAdministrator_UnanimousRecovery(t *testing.T) {
 		})
 	}
 }
-
