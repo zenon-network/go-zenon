@@ -6,6 +6,7 @@ import (
 
 	"github.com/pkg/errors"
 
+	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/abi"
@@ -171,26 +172,35 @@ func IterateStakeEntries(context db.DB, f func(*StakeInfo) error) error {
 
 // GetStakeListByAddress returns the active (RevokeTime zero) stake
 // entries of address in storage-key (id byte) order, together with
-// their summed Amount and summed WeightedAmount. It scans every
-// address's entries and filters in memory.
+// their summed Amount and summed WeightedAmount. It iterates only the
+// sub-range for address, since the storage key is prefix || address ||
+// id.
 func GetStakeListByAddress(context db.DB, address types.Address) ([]*StakeInfo, *big.Int, *big.Int, error) {
 	total := big.NewInt(0)
 	weighted := big.NewInt(0)
 	list := make([]*StakeInfo, 0)
 
-	err := IterateStakeEntries(context, func(stakeInfo *StakeInfo) error {
-		if stakeInfo.RevokeTime == 0 && stakeInfo.StakeAddress == address {
-			list = append(list, stakeInfo)
-			total.Add(total, stakeInfo.Amount)
-			weighted.Add(weighted, stakeInfo.WeightedAmount)
+	iterator := context.NewIterator(common.JoinBytes(stakeInfoPrefix, address.Bytes()))
+	defer iterator.Release()
+	for {
+		if !iterator.Next() {
+			if iterator.Error() != nil {
+				return nil, nil, nil, iterator.Error()
+			}
+			break
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, nil, nil, err
-	} else {
-		return list, total, weighted, nil
+		if stakeInfo, err := parseStakeInfo(iterator.Key(), iterator.Value()); err == nil {
+			if stakeInfo.RevokeTime == 0 {
+				list = append(list, stakeInfo)
+				total.Add(total, stakeInfo.Amount)
+				weighted.Add(weighted, stakeInfo.WeightedAmount)
+			}
+		} else if err == constants.ErrDataNonExistent {
+		} else {
+			return nil, nil, nil, err
+		}
 	}
+	return list, total, weighted, nil
 }
 
 // StakeByExpirationTime sorts stake entries by ascending expiration
