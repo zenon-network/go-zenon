@@ -369,6 +369,58 @@ func TestGetStakeListByAddressSharedPrefix(t *testing.T) {
 	}
 }
 
+// TestGetLiquidityStakeListByAddressSharedPrefix verifies that two
+// addresses sharing leading bytes do not leak into each other's
+// sub-range on the liquidity stake table.
+func TestGetLiquidityStakeListByAddressSharedPrefix(t *testing.T) {
+	context := db.NewMemDB()
+
+	// Both addresses share their first 19 bytes and differ only in the last.
+	shared := make([]byte, 20)
+	for i := 0; i < 19; i++ {
+		shared[i] = 0x42
+	}
+	shared[19] = 1
+	addr1, err := types.BytesToAddress(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared[19] = 2
+	addr2, err := types.BytesToAddress(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, addr := range []types.Address{addr1, addr2} {
+		entry := &LiquidityStakeEntry{
+			Amount:         big.NewInt(int64(100 + i)),
+			WeightedAmount: big.NewInt(int64(200 + i)),
+			StartTime:      int64(i),
+			ExpirationTime: int64(i + 1000),
+			StakeAddress:   addr,
+			Id:             makeHash(byte(i+1)),
+		}
+		if err := entry.Save(context); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	wrapped := &countingDB{DB: context}
+	list, _, _, err := GetLiquidityStakeListByAddress(wrapped, addr1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(list))
+	}
+	if list[0].StakeAddress != addr1 {
+		t.Fatalf("expected addr1's entry, got %v", list[0].StakeAddress)
+	}
+	if wrapped.count != 1 {
+		t.Fatalf("iterator visited %d rows, want 1 (shared-prefix isolation)", wrapped.count)
+	}
+}
+
 // TestGetLiquidityStakeListByAddressEmptyEntity verifies that querying
 // an address with no stored rows returns empty results and zero totals.
 func TestGetLiquidityStakeListByAddressEmptyEntity(t *testing.T) {
@@ -419,13 +471,20 @@ func TestGetAllPillarVotesEmptyEntity(t *testing.T) {
 func TestGetAllPillarVotesSharedPrefix(t *testing.T) {
 	context := db.NewMemDB()
 
-	// Both ids start with 0x42 but differ in the last byte.
+	// Both ids share their first 31 bytes and differ only in the last.
+	// BytesToHashPanic copies the bytes verbatim (unlike NewHash which
+	// hashes its input), so the shared prefix is real.
 	shared := make([]byte, 32)
-	shared[0] = 0x42
+	for i := 0; i < 31; i++ {
+		shared[i] = 0x42
+	}
 	shared[31] = 1
-	id1 := types.NewHash(shared)
+	id1 := types.BytesToHashPanic(shared)
 	shared[31] = 2
-	id2 := types.NewHash(shared)
+	id2 := types.BytesToHashPanic(shared)
+	if id1[0] != id2[0] || id1[30] != id2[30] {
+		t.Fatalf("fixture ids do not share their first 31 bytes")
+	}
 
 	setupVotes(context, id1, 2)
 	setupVotes(context, id2, 5)
