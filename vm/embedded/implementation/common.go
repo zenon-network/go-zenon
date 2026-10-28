@@ -384,6 +384,27 @@ func (p *DonateMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 	return nil, nil
 }
 
+// rejectExpiredProjectVote returns constants.ErrDataNonExistent when
+// id belongs to a project whose voting window
+// (constants.AcceleratorProjectVotingPeriod) has elapsed. Ids that
+// are not projects — phase ids, pillar epoch vote ids — are not
+// affected. Callers must gate on the Dynamic Plasma spork.
+func rejectExpiredProjectVote(context vm_context.AccountVmContext, id types.Hash) error {
+	project, err := definition.GetProjectEntry(context.Storage(), id)
+	if err != nil {
+		// Not a project id; nothing to check.
+		return nil
+	}
+	frontierMomentum, err := context.GetFrontierMomentum()
+	if err != nil {
+		return err
+	}
+	if project.CreationTimestamp+constants.AcceleratorProjectVotingPeriod < frontierMomentum.Timestamp.Unix() {
+		return constants.ErrDataNonExistent
+	}
+	return nil
+}
+
 // VoteByNameMethod (VoteByName) records a pillar's vote on a votable
 // hash, the pillar being identified by name; the sender must be the
 // pillar's stake address. Registered on the accelerator contract,
@@ -432,7 +453,9 @@ func (p *VoteByNameMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 // pillar cast on the same id. The id must be open for voting
 // (constants.ErrDataNonExistent otherwise) and the sender must be
 // the stake address of the named pillar in the momentum store's
-// active-pillar list, else constants.ErrForbiddenParam.
+// active-pillar list, else constants.ErrForbiddenParam. Post-spork,
+// voting on a project whose voting window has elapsed fails with
+// constants.ErrDataNonExistent.
 func (p *VoteByNameMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -447,6 +470,12 @@ func (p *VoteByNameMethod) ReceiveBlock(context vm_context.AccountVmContext, sen
 		return nil, err
 	} else {
 		common.DealWithErr(err)
+	}
+
+	if context.IsDynamicPlasmaSporkEnforced() {
+		if err := rejectExpiredProjectVote(context, param.Id); err != nil {
+			return nil, err
+		}
 	}
 
 	pillarList, err := context.MomentumStore().GetActivePillars()
@@ -519,7 +548,9 @@ func (p *VoteByProdAddressMethod) ValidateSendBlock(block *nom.AccountBlock) err
 // constants.ErrForbiddenParam when there is none — and saves the
 // vote under that pillar's name, overwriting any earlier vote on the
 // same id. The id must be open for voting
-// (constants.ErrDataNonExistent otherwise).
+// (constants.ErrDataNonExistent otherwise). Post-spork, voting on a
+// project whose voting window has elapsed fails with
+// constants.ErrDataNonExistent.
 func (p *VoteByProdAddressMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -534,6 +565,12 @@ func (p *VoteByProdAddressMethod) ReceiveBlock(context vm_context.AccountVmConte
 		return nil, err
 	} else {
 		common.DealWithErr(err)
+	}
+
+	if context.IsDynamicPlasmaSporkEnforced() {
+		if err := rejectExpiredProjectVote(context, param.Id); err != nil {
+			return nil, err
+		}
 	}
 
 	pillarList, err := context.MomentumStore().GetActivePillars()
