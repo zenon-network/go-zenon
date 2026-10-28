@@ -398,7 +398,7 @@ func TestGetLiquidityStakeListByAddressSharedPrefix(t *testing.T) {
 			StartTime:      int64(i),
 			ExpirationTime: int64(i + 1000),
 			StakeAddress:   addr,
-			Id:             makeHash(byte(i+1)),
+			Id:             makeHash(byte(i + 1)),
 		}
 		if err := entry.Save(context); err != nil {
 			t.Fatal(err)
