@@ -648,11 +648,11 @@ func parsePillarVote(data []byte) (*PillarVote, error) {
 	}
 }
 
-// GetAllPillarVotes returns every recorded vote for id. It scans the
-// whole pillarVote prefix and filters by id in memory; database
-// errors panic via common.DealWithErr.
+// GetAllPillarVotes returns every recorded vote for id. It iterates
+// only the sub-range for id, since the storage key is prefix || id ||
+// nameHash; database errors panic via common.DealWithErr.
 func GetAllPillarVotes(context db.DB, id types.Hash) []*PillarVote {
-	iterator := context.NewIterator(pillarVoteKeyPrefix)
+	iterator := context.NewIterator(common.JoinBytes(pillarVoteKeyPrefix, id.Bytes()))
 	defer iterator.Release()
 
 	pillarVoteList := make([]*PillarVote, 0)
@@ -665,9 +665,7 @@ func GetAllPillarVotes(context db.DB, id types.Hash) []*PillarVote {
 		if err != nil {
 			continue
 		}
-		if pillarVote.Id == id {
-			pillarVoteList = append(pillarVoteList, pillarVote)
-		}
+		pillarVoteList = append(pillarVoteList, pillarVote)
 	}
 	return pillarVoteList
 }

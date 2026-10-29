@@ -569,25 +569,35 @@ func (stake *LiquidityStakeEntry) UnmarshalJSON(data []byte) error {
 
 // GetLiquidityStakeListByAddress returns the active (not revoked)
 // stake entries of address in storage-key order, together with their
-// total staked and total weighted amounts.
+// total staked and total weighted amounts. It iterates only the
+// sub-range for address, since the storage key is prefix || address ||
+// id.
 func GetLiquidityStakeListByAddress(context db.DB, address types.Address) ([]*LiquidityStakeEntry, *big.Int, *big.Int, error) {
 	total := big.NewInt(0)
 	weighted := big.NewInt(0)
 	list := make([]*LiquidityStakeEntry, 0)
 
-	err := IterateLiquidityStakeEntries(context, func(stakeEntry *LiquidityStakeEntry) error {
-		if stakeEntry.RevokeTime == 0 && stakeEntry.StakeAddress == address {
-			list = append(list, stakeEntry)
-			total.Add(total, stakeEntry.Amount)
-			weighted.Add(weighted, stakeEntry.WeightedAmount)
+	iterator := context.NewIterator(common.JoinBytes(LiquidityStakeEntryKeyPrefix, address.Bytes()))
+	defer iterator.Release()
+	for {
+		if !iterator.Next() {
+			if iterator.Error() != nil {
+				return nil, nil, nil, iterator.Error()
+			}
+			break
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, nil, nil, err
-	} else {
-		return list, total, weighted, nil
+		if stakeEntry, err := parseLiquidityStakeEntry(iterator.Key(), iterator.Value()); err == nil {
+			if stakeEntry.RevokeTime == 0 {
+				list = append(list, stakeEntry)
+				total.Add(total, stakeEntry.Amount)
+				weighted.Add(weighted, stakeEntry.WeightedAmount)
+			}
+		} else if err == constants.ErrDataNonExistent {
+		} else {
+			return nil, nil, nil, err
+		}
 	}
+	return list, total, weighted, nil
 }
 
 // GetAllLiquidityStakeEntries returns every stored stake entry,
