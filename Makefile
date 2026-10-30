@@ -23,16 +23,18 @@ SERVERMAIN = $(shell pwd)/cmd/znnd
 LIBMAIN = $(shell pwd)/cmd/libznn
 BUILDDIR = $(shell pwd)/build
 GIT_COMMIT=$(shell git rev-parse HEAD)
+GIT_VERSION=$(shell git describe --tags --always)
+METADATA_PKG=github.com/zenon-network/go-zenon/metadata
 GIT_COMMIT_FILE=$(shell pwd)/metadata/git_commit.go
 
 $(EXECUTABLE):
-	go build -o $(BUILDDIR)/$(EXECUTABLE) -buildmode=c-shared -tags libznn $(LIBMAIN)
+	go build -o $(BUILDDIR)/$(EXECUTABLE) -buildmode=c-shared -tags libznn -ldflags "-X $(METADATA_PKG).Version=$(GIT_VERSION)-libznn -X $(METADATA_PKG).GitCommit=$(GIT_COMMIT)" $(LIBMAIN)
 
 libznn: $(EXECUTABLE) ## Build binaries
 	@echo "Build libznn done."
 
 znnd:
-	go build -o $(BUILDDIR)/znnd $(SERVERMAIN)
+	go build -o $(BUILDDIR)/znnd -ldflags "-X $(METADATA_PKG).Version=$(GIT_VERSION) -X $(METADATA_PKG).GitCommit=$(GIT_COMMIT)" $(SERVERMAIN)
 	@echo "Build znnd done."
 	@echo "Run \"$(BUILDDIR)/znnd\" to start znnd."
 
