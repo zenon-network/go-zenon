@@ -88,6 +88,13 @@ func GetSentinelInfoByOwner(context db.DB, address types.Address) *SentinelInfo 
 		return parseSentinelInfo(data)
 	}
 }
+
+// GetAllSentinelInfo returns every stored sentinel, in storage-key
+// (owner address byte) order; database errors panic via
+// common.DealWithErr.
+// Entries whose value is empty (tombstone deletion markers left by a
+// rollback) are skipped, matching GetSentinelInfoByOwner's treatment
+// of empty values as absent.
 func GetAllSentinelInfo(context db.DB) []*SentinelInfo {
 	iterator := context.NewIterator([]byte{sentinelInfoPrefix})
 	defer iterator.Release()
@@ -98,10 +105,19 @@ func GetAllSentinelInfo(context db.DB) []*SentinelInfo {
 			common.DealWithErr(iterator.Error())
 			break
 		}
-		sentinelInfoList = append(sentinelInfoList, parseSentinelInfo(iterator.Value()))
+		if data := iterator.Value(); len(data) > 0 {
+			sentinelInfoList = append(sentinelInfoList, parseSentinelInfo(data))
+		}
 	}
 	return sentinelInfoList
 }
+
+// IterateSentinelEntries calls f for each stored sentinel in
+// storage-key order, stopping early and returning f's error if it
+// fails; database errors panic via common.DealWithErr.
+// Entries whose value is empty (tombstone deletion markers left by a
+// rollback) are skipped, matching GetSentinelInfoByOwner's treatment
+// of empty values as absent.
 func IterateSentinelEntries(context db.DB, f func(*SentinelInfo) error) error {
 	iterator := context.NewIterator([]byte{sentinelInfoPrefix})
 	defer iterator.Release()
@@ -112,9 +128,11 @@ func IterateSentinelEntries(context db.DB, f func(*SentinelInfo) error) error {
 			break
 		}
 
-		sentinelInfo := parseSentinelInfo(iterator.Value())
-		if err := f(sentinelInfo); err != nil {
-			return err
+		if data := iterator.Value(); len(data) > 0 {
+			sentinelInfo := parseSentinelInfo(data)
+			if err := f(sentinelInfo); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
