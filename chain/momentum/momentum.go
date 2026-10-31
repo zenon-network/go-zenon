@@ -40,6 +40,11 @@ func (ms *momentumStore) GetMomentumsByHash(blockHash types.Hash, higher bool, c
 	if err != nil {
 		return nil, err
 	}
+	// parseMomentum reports an unknown hash as (nil, nil), which callers such as
+	// HasBlock and GetBlock already account for.
+	if momentum == nil {
+		return nil, nil
+	}
 	return ms.GetMomentumsByHeight(momentum.Height, higher, count)
 }
 func (ms *momentumStore) GetMomentumByHeight(height uint64) (*nom.Momentum, error) {

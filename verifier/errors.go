@@ -50,6 +50,7 @@ var (
 	ErrABPoWInvalid                = errors.New("account-block nonce/difficulty is invalid")
 	ErrABDescendantMustBeZero      = errors.New("account-block descendant blocks must be empty")
 	ErrABDescendantVerify          = errors.New("account-block descendant block failed to pass verifications")
+	ErrABPlasmaMustBeZero          = errors.New("account-block base/total plasma must be zero")
 	ErrABPreviousMissing           = errors.New("account-block previous block is missing")
 	ErrABMAGap                     = errors.New("account-block momentum-acknowledged points to an older momentum than previous")
 	ErrABMAMustBeTheSame           = errors.New("account-block momentum-acknowledged must have the same value for batched blocks")
