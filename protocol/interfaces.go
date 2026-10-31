@@ -54,6 +54,12 @@ type chainManager interface {
 	Status() (td uint64, currentBlock types.Hash, genesisBlock types.Hash)
 
 	InsertChain(chain []*nom.DetailedMomentum) (int, error)
+	// InsertChainMoved is InsertChain that also reports whether the
+	// canonical frontier is different after the call, read under the
+	// insert lock the call holds: false for a batch the node already had
+	// and for a replacement that was rejected and restored, true when new
+	// momentums stayed on the chain, with or without a later error.
+	InsertChainMoved(chain []*nom.DetailedMomentum) (int, bool, error)
 	VerifyMomentum(detailed *nom.DetailedMomentum) error
 }
 

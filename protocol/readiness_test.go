@@ -28,13 +28,20 @@ func useReadinessClock(t *testing.T) *readinessClock {
 	return clock
 }
 
-// readinessBridge is a stub bridge with a settable frontier height.
+// readinessBridge is a stub bridge with a settable frontier height and a
+// settable insert outcome.
 type readinessBridge struct {
 	stubChainBridge
 	height uint64
+	// moved is what InsertChainMoved reports; false models a batch the
+	// node already had.
+	moved bool
 }
 
 func (b *readinessBridge) CurrentBlock() *nom.Momentum { return &nom.Momentum{Height: b.height} }
+func (b *readinessBridge) InsertChainMoved([]*nom.DetailedMomentum) (int, bool, error) {
+	return 0, b.moved, nil
+}
 
 type readinessPeer struct{ id discover.NodeID }
 
@@ -152,8 +159,10 @@ func TestReadyToProduce_RemovingTheTallerPeerReleases(t *testing.T) {
 	}
 }
 
-// A batch imported by a download session is the one thing that restarts the
-// window; an import through the fetcher's path does not.
+// A batch imported by a download session that left new momentums on the
+// chain is the one thing that restarts the window; an import through the
+// fetcher's path does not, and neither does a download batch the node
+// already had.
 func TestReadyToProduce_DownloadImportRestartsTheWindow(t *testing.T) {
 	clock := useReadinessClock(t)
 	pm, bridge := newReadinessManager(t, 1, 10)
@@ -170,6 +179,15 @@ func TestReadyToProduce_DownloadImportRestartsTheWindow(t *testing.T) {
 		t.Fatal("a fetcher-path import restarted the window")
 	}
 
+	// A batch the node already had: the frontier did not move.
+	if _, err := pm.insertFromDownload(nil); err != nil {
+		t.Fatal(err)
+	}
+	if !pm.ReadyToProduce() {
+		t.Fatal("a download batch that moved nothing restarted the window")
+	}
+
+	bridge.moved = true
 	if _, err := pm.insertFromDownload(nil); err != nil {
 		t.Fatal(err)
 	}
@@ -181,16 +199,25 @@ func TestReadyToProduce_DownloadImportRestartsTheWindow(t *testing.T) {
 		t.Fatal("still blocked a full window after the last import")
 	}
 
-	// A failed import is not progress.
+	// A failed import that moved nothing is not progress; one that left a
+	// valid prefix on the chain before failing is.
 	clock.t = clock.t.Add(time.Second)
 	bridge.height = 10
 	failing := &failingInsertBridge{readinessBridge: bridge}
 	pm.chainman = failing
+	bridge.moved = false
 	if _, err := pm.insertFromDownload(nil); err == nil {
 		t.Fatal("expected the injected failure")
 	}
 	if !pm.ReadyToProduce() {
-		t.Fatal("a failed import restarted the window")
+		t.Fatal("a failed import that moved nothing restarted the window")
+	}
+	bridge.moved = true
+	if _, err := pm.insertFromDownload(nil); err == nil {
+		t.Fatal("expected the injected failure")
+	}
+	if pm.ReadyToProduce() {
+		t.Fatal("a kept prefix before a failure is progress and must restart the window")
 	}
 }
 
@@ -198,6 +225,9 @@ type failingInsertBridge struct{ *readinessBridge }
 
 func (b *failingInsertBridge) InsertChain([]*nom.DetailedMomentum) (int, error) {
 	return 0, errors.New("injected import failure")
+}
+func (b *failingInsertBridge) InsertChainMoved([]*nom.DetailedMomentum) (int, bool, error) {
+	return 0, b.moved, errors.New("injected import failure")
 }
 
 // A running download session blocks production however long the window has

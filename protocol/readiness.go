@@ -45,11 +45,16 @@ func (p *producerProgress) idleFor() time.Duration {
 }
 
 // insertFromDownload is the chain insert the downloader is given. It
-// records a successful batch import as sync progress before handing the
-// result back.
+// records sync progress when the call left new momentums on the chain, as
+// reported by the bridge under its insert lock, before handing the result
+// back. A batch the node already had is not progress, so a peer that keeps
+// serving a known suffix cannot hold production; a valid prefix that stayed
+// on the chain before a later candidate failed is progress, since the
+// frontier moved on verified momentums; a replacement that failed and was
+// restored is not.
 func (pm *ProtocolManager) insertFromDownload(momentums []*nom.DetailedMomentum) (int, error) {
-	index, err := pm.chainman.InsertChain(momentums)
-	if err == nil {
+	index, moved, err := pm.chainman.InsertChainMoved(momentums)
+	if moved {
 		pm.progress.markImport()
 	}
 	return index, err
@@ -60,10 +65,11 @@ func (pm *ProtocolManager) insertFromDownload(momentums []*nom.DetailedMomentum)
 // and keeps its meaning.
 //
 // Production is blocked while fewer than minPeers peers are connected,
-// while a download session is running or its import queue is draining
-// (the frontier is about to move, whatever the advertised target says),
-// and otherwise, while the node is behind the best peer's advertised
-// height, until no session has imported a batch for producerStallWindow.
+// while a download session is running, its import worker owns blocks, or
+// its import queue is draining (the frontier is about to move, whatever
+// the advertised target says), and otherwise, while the node is behind the
+// best peer's advertised height, until no session has imported a batch for
+// producerStallWindow.
 // An advertised height is a claim, not a verified chain: once the window
 // has passed without an import the claim no longer holds production,
 // whatever peers connect or reconnect in the meantime, until a session
@@ -73,7 +79,7 @@ func (pm *ProtocolManager) ReadyToProduce() bool {
 	if info.State == NotEnoughPeers {
 		return false
 	}
-	if pm.downloader.Synchronising() {
+	if pm.downloader.Synchronising() || pm.downloader.Processing() {
 		return false
 	}
 	if _, cached, importing, _ := pm.downloader.Stats(); cached > 0 || importing > 0 {
