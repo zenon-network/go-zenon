@@ -118,6 +118,7 @@ func newStopHarness(parentKnown, gateHeight bool) *stopHarness {
 			return len(momentums), nil
 		},
 		func(string) {},
+		nil,
 	)
 	return h
 }

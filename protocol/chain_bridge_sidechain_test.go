@@ -213,9 +213,17 @@ func expectRolledBack(t *testing.T, c *rollbackCountingChain) {
 // head verification that runs before the rollback.
 func newSideChainBridge(z mock.MockZenon) (*rollbackCountingChain, protocol.ChainBridge) {
 	counting := &rollbackCountingChain{Chain: z.Chain()}
+	return counting, bridgeOn(z, counting)
+}
+
+// bridgeOn builds a fresh bridge over counting. A bridge remembers the side
+// chains it rejected and refuses them before any rollback (see
+// chain_bridge_rejection_test.go), so a test that exercises the
+// rollback-and-restore path repeatedly builds a new bridge per attempt.
+func bridgeOn(z mock.MockZenon, counting *rollbackCountingChain) protocol.ChainBridge {
 	supervisor := vm.NewSupervisor(z.Chain(), z.Consensus())
 	momentumVerifier := verifier.NewVerifier(counting, z.Consensus(), vm.CanonicalBasePlasma)
-	return counting, protocol.NewChainBridge(counting, z.Consensus(), momentumVerifier, supervisor)
+	return protocol.NewChainBridge(counting, z.Consensus(), momentumVerifier, supervisor)
 }
 
 func TestInsertChain_SideChainRestoredWhenCandidateFailsAfterRollback(t *testing.T) {
@@ -586,6 +594,7 @@ func TestInsertChain_RepeatedRestoresKeepStoredPatchesIdentical(t *testing.T) {
 	patchesBefore := storedPatchDumps(t, z.Chain(), target)
 
 	for attempt := 0; attempt < 3; attempt++ {
+		bridge = bridgeOn(z, counting)
 		head := producerMomentum(t, z, momentumAt(t, z.Chain(), 4), 5)
 		tail := attackerMomentum(head, 7)
 		_, err := bridge.InsertChain(detailedOf(head, tail))
@@ -844,6 +853,7 @@ func TestInsertChain_PendingPoolAfterRestore(t *testing.T) {
 					wantFailed = 1
 				}
 				for attempt := 0; attempt < 2; attempt++ {
+					bridge = bridgeOn(f.z, counting)
 					failed, err := bridge.InsertChain(candidates)
 					if err == nil {
 						t.Fatal("expected the side chain to be rejected")
