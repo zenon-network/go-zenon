@@ -96,6 +96,22 @@ type enableDeleteIterator struct {
 	StorageIterator
 }
 
+// Next advances the iterator, skipping tombstone entries (the empty values
+// written by enableDeleteDB.Delete). Without this guard a prefix iteration
+// over a key deleted by a rollback yields the key with a nil Value(), which
+// collection readers hand to UnpackVariablePanic.
+//
+// Ported from go-zenon #246 (e7477a8); this release's StorageIterator has
+// no Prev/Last, so only Next is overridden.
+func (i *enableDeleteIterator) Next() bool {
+	for i.StorageIterator.Next() {
+		if len(i.StorageIterator.Value()) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (i *enableDeleteIterator) Value() []byte {
 	val := i.StorageIterator.Value()
 	if len(val) == 0 {
