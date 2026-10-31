@@ -101,6 +101,41 @@ type enableDeleteIterator struct {
 	StorageIterator
 }
 
+// Next advances the iterator, skipping tombstone entries (empty values
+// written by enableDeleteDB.Delete). Without this guard, iterator-based
+// collection readers that call Value() on a tombstoned key receive nil,
+// which flows into UnpackVariablePanic and panics on errEmptyInput.
+func (i *enableDeleteIterator) Next() bool {
+	for i.StorageIterator.Next() {
+		if len(i.StorageIterator.Value()) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Prev retreats the iterator, skipping tombstone entries.
+func (i *enableDeleteIterator) Prev() bool {
+	for i.StorageIterator.Prev() {
+		if len(i.StorageIterator.Value()) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Last moves the iterator to the last entry, skipping tombstone entries.
+func (i *enableDeleteIterator) Last() bool {
+	if !i.StorageIterator.Last() {
+		return false
+	}
+	if len(i.StorageIterator.Value()) > 0 {
+		return true
+	}
+	// The last entry is a tombstone; walk backwards to find a live one.
+	return i.Prev()
+}
+
 func (i *enableDeleteIterator) Value() []byte {
 	val := i.StorageIterator.Value()
 	if len(val) == 0 {
