@@ -59,6 +59,9 @@ type ProtocolManager struct {
 	downloader *downloader.Downloader
 	fetcher    *fetcher.Fetcher
 	peers      *peerSet
+	// quarantine holds peers refused after serving a side-chain the
+	// bridge rejected on a consensus check; see rejectPeer.
+	quarantine *peerQuarantine
 
 	SubProtocols []p2p.Protocol
 
@@ -80,14 +83,15 @@ type ProtocolManager struct {
 func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *ProtocolManager {
 	// Create the protocol manager with the base fields
 	manager := &ProtocolManager{
-		minPeers:  minPeers,
-		txpool:    bridge,
-		chainman:  bridge,
-		peers:     newPeerSet(),
-		newPeerCh: make(chan *peer, 1),
-		txsyncCh:  make(chan *txsync),
-		quitSync:  make(chan struct{}),
-		netId:     int(networkId),
+		minPeers:   minPeers,
+		txpool:     bridge,
+		chainman:   bridge,
+		peers:      newPeerSet(),
+		quarantine: newPeerQuarantine(peerQuarantinePeriod, peerQuarantineCap),
+		newPeerCh:  make(chan *peer, 1),
+		txsyncCh:   make(chan *txsync),
+		quitSync:   make(chan struct{}),
+		netId:      int(networkId),
 	}
 	// Initiate a sub-protocol for every implemented version we can handle
 	manager.SubProtocols = make([]p2p.Protocol, len(ProtocolVersions))
@@ -113,7 +117,8 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 		manager.chainman.GetBlock,
 		manager.chainman.CurrentBlock,
 		manager.chainman.InsertChain,
-		manager.removePeer)
+		manager.removePeer,
+		manager.rejectPeer)
 
 	verifier := func(detailed *nom.DetailedMomentum) error {
 		return manager.chainman.VerifyMomentum(detailed)
@@ -128,9 +133,26 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 		manager.BroadcastMomentum,
 		heighter,
 		manager.chainman.InsertChain,
-		manager.removePeer)
+		manager.removePeer,
+		manager.rejectPeer)
 
 	return manager
+}
+
+// rejectPeer is the downloader's and fetcher's import-failure hook. When
+// the bridge reports a SideChainRejected, the peer served a branch this
+// node refuses on a consensus check; it is quarantined, so it cannot
+// restart the download-and-reject cycle on the next sync interval or by
+// reconnecting, and removed. Any other failure is left to the caller's
+// existing handling.
+func (pm *ProtocolManager) rejectPeer(id string, err error) {
+	var rejected *SideChainRejected
+	if !errors.As(err, &rejected) {
+		return
+	}
+	pm.quarantine.add(id)
+	log.Info("quarantining peer after rejected side-chain", "peer-id", id, "momentum-identifier", rejected.Momentum, "reason", rejected.Cause, "period", peerQuarantinePeriod)
+	pm.removePeer(id)
 }
 
 func (pm *ProtocolManager) removePeer(id string) {
@@ -214,6 +236,10 @@ func (pm *ProtocolManager) newPeer(pv, nv int, p p2p.Peer, rw p2p.MsgReadWriter)
 // handle is the callback invoked to manage the life cycle of an eth peer. When
 // this function terminates, the peer is disconnected.
 func (pm *ProtocolManager) handle(p *peer) error {
+	if pm.quarantine.active(p.id) {
+		log.Info("refusing quarantined peer", "peer-id", p.id, "address", p.RemoteAddr().String())
+		return errPeerQuarantined
+	}
 	log.Info("peer connected", "peer-id", p.id, "address", p.RemoteAddr().String(), "name", p.Name())
 
 	// Execute the Ethereum handshake

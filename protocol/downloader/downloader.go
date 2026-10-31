@@ -92,6 +92,11 @@ type chainInsertFn func([]*nom.DetailedMomentum) (int, error)
 // peerDropFn is a callback type for dropping a peer detected as malicious.
 type peerDropFn func(id string)
 
+// peerRejectFn is a callback type reporting that a batch served by the
+// peer failed to import, with the import error, before the peer is
+// dropped. It may be nil.
+type peerRejectFn func(id string, err error)
+
 type blockPack struct {
 	peerId string
 	blocks []*nom.DetailedMomentum
@@ -144,6 +149,7 @@ type Downloader struct {
 	headBlock   headRetrievalFn  // Retrieves the head block from the chain
 	insertChain chainInsertFn    // Injects a batch of blocks into the chain
 	dropPeer    peerDropFn       // Drops a peer for misbehaving
+	rejectPeer  peerRejectFn     // Reports an import failure attributed to a peer (optional)
 
 	// Status
 	synchroniseMock func(id string, hash types.Hash) error // Replacement for synchronise during testing
@@ -170,7 +176,7 @@ type Block struct {
 }
 
 // New creates a new downloader to fetch hashes and blocks from remote peers.
-func New(hasBlock hashCheckFn, getBlock blockRetrievalFn, headBlock headRetrievalFn, insertChain chainInsertFn, dropPeer peerDropFn) *Downloader {
+func New(hasBlock hashCheckFn, getBlock blockRetrievalFn, headBlock headRetrievalFn, insertChain chainInsertFn, dropPeer peerDropFn, rejectPeer peerRejectFn) *Downloader {
 	// Create the base downloader
 	downloader := &Downloader{
 		queue:       newQueue(),
@@ -180,6 +186,7 @@ func New(hasBlock hashCheckFn, getBlock blockRetrievalFn, headBlock headRetrieva
 		headBlock:   headBlock,
 		insertChain: insertChain,
 		dropPeer:    dropPeer,
+		rejectPeer:  rejectPeer,
 		newPeerCh:   make(chan *peer, 1),
 		hashCh:      make(chan hashPack, 1),
 		blockCh:     make(chan blockPack, 1),
@@ -868,6 +875,9 @@ func (d *Downloader) process() {
 			index, err := d.insertChain(raw)
 			if err != nil {
 				log.Info("Block import failed", "momentum-height", raw[index].Momentum.Height, "reason", err)
+				if d.rejectPeer != nil {
+					d.rejectPeer(blocks[index].OriginPeer, err)
+				}
 				d.dropPeer(blocks[index].OriginPeer)
 				d.cancel()
 				return

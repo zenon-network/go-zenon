@@ -72,7 +72,7 @@ func mockAncestorChains(head, remoteHead, forkAt uint64) (*Downloader, *peer) {
 	}
 	headBlock := func() *nom.Momentum { return &nom.Momentum{Height: head} }
 
-	d := New(hasBlock, getBlock, headBlock, nil, nil)
+	d := New(hasBlock, getBlock, headBlock, nil, nil, nil)
 
 	p := newPeer("test-peer", 0, peerHash(remoteHead), nil, nil, nil)
 	p.getAbsHashes = func(from uint64, count int) error {

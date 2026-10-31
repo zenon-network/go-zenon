@@ -163,12 +163,20 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 	case nom.BlockTypeUserReceive:
 		return vm.applyReceive(block)
 	case nom.BlockTypeContractReceive:
-		generated, _, err := vm.generateEmbeddedReceive(block.FromBlockHash)
+		generated, executionErr, err := vm.generateEmbeddedReceive(block.FromBlockHash)
 		if err != nil {
 			return err
 		}
 		if generated.ChangesHash != block.ChangesHash {
-			return errors.Errorf("auto-received block has different changes-hash expected %v but got %v", generated.ChangesHash, block.ChangesHash)
+			if executionErr != nil {
+				// The local generation failed inside the contract method. A
+				// storage failure there is indistinguishable from a
+				// deterministic contract failure at this point, so the
+				// mismatch is not a verdict on the block and carries no
+				// sentinel; callers treat it as an ordinary import failure.
+				return errors.Errorf("auto-received block has different changes-hash expected %v but got %v (local generation failed: %v)", generated.ChangesHash, block.ChangesHash, executionErr)
+			}
+			return errors.Wrapf(constants.ErrAutoReceiveChangesHashMismatch, "expected %v but got %v", generated.ChangesHash, block.ChangesHash)
 		}
 		computed := generated.ComputeHash()
 		if computed != block.Hash {

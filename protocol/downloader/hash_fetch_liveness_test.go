@@ -63,6 +63,7 @@ func newLivenessRun(t *testing.T, name string, replies [][]types.Hash) *liveness
 			return 0, nil
 		},
 		func(string) {},
+		nil,
 	)
 	r.d.cancelCh = make(chan struct{})
 	atomic.StoreInt32(&r.d.synchronising, 1)

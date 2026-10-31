@@ -213,9 +213,17 @@ func expectRolledBack(t *testing.T, c *rollbackCountingChain) {
 // head verification that runs before the rollback.
 func newSideChainBridge(z mock.MockZenon) (*rollbackCountingChain, protocol.ChainBridge) {
 	counting := &rollbackCountingChain{Chain: z.Chain()}
+	return counting, bridgeOn(z, counting)
+}
+
+// bridgeOn builds a fresh bridge over counting. A bridge remembers the side
+// chains it rejected and refuses them before any rollback (see
+// chain_bridge_rejection_test.go), so a test that exercises the
+// rollback-and-restore path repeatedly builds a new bridge per attempt.
+func bridgeOn(z mock.MockZenon, counting *rollbackCountingChain) protocol.ChainBridge {
 	supervisor := vm.NewSupervisor(z.Chain(), z.Consensus())
 	momentumVerifier := verifier.NewVerifier(counting, z.Consensus(), vm.CanonicalBasePlasma)
-	return counting, protocol.NewChainBridge(counting, z.Consensus(), momentumVerifier, supervisor)
+	return protocol.NewChainBridge(counting, z.Consensus(), momentumVerifier, supervisor)
 }
 
 func TestInsertChain_SideChainRestoredWhenCandidateFailsAfterRollback(t *testing.T) {
@@ -481,6 +489,19 @@ func TestInsertChain_RestoreBoundaryAtRemovedBranchLength(t *testing.T) {
 				expectFrontierAt(t, f.z.Chain(), f.fork[tc.committed-1].Momentum)
 			}
 
+			// Offering the same batch again is refused before anything is
+			// applied, whichever path it takes: as a side chain when the
+			// original branch was restored, or as an extension of the kept
+			// prefix, where the failed candidate now links to the frontier.
+			rollbacks := counting.rollbacks
+			frontier := f.z.Chain().GetFrontierMomentumStore().Identifier()
+			_, err = bridge.InsertChain(candidates)
+			if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+				t.Fatalf("expected the retry to be refused as known invalid, got %v", err)
+			}
+			common.Expect(t, counting.rollbacks, rollbacks)
+			common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), frontier)
+
 			// Whatever was kept is real state: the rest of the genuine fork
 			// still inserts on top of it.
 			_, err = bridge.InsertChain(f.fork)
@@ -530,8 +551,7 @@ func TestInsertChain_SideChainDepthBoundary(t *testing.T) {
 	// Depth 31: rejected before anything is touched.
 	tooDeep := momentumAt(t, z.Chain(), 9)
 	head := attackerMomentum(tooDeep, 10)
-	tail := attackerMomentum(head, 41)
-	_, err := bridge.InsertChain(detailedOf(head, tail))
+	_, err := bridge.InsertChain(append(detailedOf(head), invalidTail(head, 41)...))
 	if err == nil {
 		t.Fatal("expected a 31-deep side chain to be rejected")
 	}
@@ -542,8 +562,7 @@ func TestInsertChain_SideChainDepthBoundary(t *testing.T) {
 	// comes back.
 	deepest := momentumAt(t, z.Chain(), 10)
 	head = producerMomentum(t, z, deepest, 11)
-	tail = attackerMomentum(head, 41)
-	_, err = bridge.InsertChain(detailedOf(head, tail))
+	_, err = bridge.InsertChain(append(detailedOf(head), invalidTail(head, 41)...))
 	if err == nil {
 		t.Fatal("expected the side chain to be rejected")
 	}
@@ -586,9 +605,9 @@ func TestInsertChain_RepeatedRestoresKeepStoredPatchesIdentical(t *testing.T) {
 	patchesBefore := storedPatchDumps(t, z.Chain(), target)
 
 	for attempt := 0; attempt < 3; attempt++ {
+		bridge = bridgeOn(z, counting)
 		head := producerMomentum(t, z, momentumAt(t, z.Chain(), 4), 5)
-		tail := attackerMomentum(head, 7)
-		_, err := bridge.InsertChain(detailedOf(head, tail))
+		_, err := bridge.InsertChain(append(detailedOf(head), invalidTail(head, 7)...))
 		if err == nil {
 			t.Fatalf("attempt %d: expected the side chain to be rejected", attempt)
 		}
@@ -844,6 +863,7 @@ func TestInsertChain_PendingPoolAfterRestore(t *testing.T) {
 					wantFailed = 1
 				}
 				for attempt := 0; attempt < 2; attempt++ {
+					bridge = bridgeOn(f.z, counting)
 					failed, err := bridge.InsertChain(candidates)
 					if err == nil {
 						t.Fatal("expected the side chain to be rejected")
