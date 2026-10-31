@@ -23,7 +23,7 @@ type chainBridge struct {
 	supervisor *vm.Supervisor
 	// rejected remembers side-chain momentums refused on a consensus check
 	// so a later batch carrying one is refused before any rollback.
-	rejected *rejectedMomentums
+	rejected *rejectedCandidates
 }
 
 func (c chainBridge) rollbackSideChain(insert sync.Locker, identifier types.HashHeight) error {
@@ -51,7 +51,7 @@ func NewChainBridge(chain chain.Chain, consensus consensus.Consensus, verifier v
 		consensus:  consensus,
 		verifier:   verifier,
 		supervisor: supervisor,
-		rejected:   newRejectedMomentums(rejectedMomentumTTL, rejectedMomentumCap),
+		rejected:   newRejectedCandidates(rejectedCandidateTTL, rejectedCandidateCap),
 	}
 }
 
@@ -241,11 +241,8 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		// the same way again, since that verdict is deterministic for the
 		// state at the fork point. Refuse the batch before anything is
 		// removed, whichever peer served it this time.
-		for index, detailed := range momentums {
-			if c.rejected.has(detailed.Momentum.Hash) {
-				log.Info("side-chain carries a momentum rejected earlier, refusing before rollback", "momentum-identifier", detailed.Momentum.Identifier())
-				return index + start, c.reject(detailed.Momentum, ErrSideChainKnownInvalid)
-			}
+		if index, known := c.firstRemembered(momentums); known {
+			return index + start, c.reject(momentums[index], ErrSideChainKnownInvalid)
 		}
 
 		// Everything that can be checked before any canonical momentum is
@@ -256,7 +253,7 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		for index, detailed := range momentums {
 			if err := verifier.MomentumStatic(detailed.Momentum); err != nil {
 				log.Info("side-chain momentum failed static verification", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
-				return index + start, c.rejectIfValidation(detailed.Momentum, validationFailure(err))
+				return index + start, c.rejectIfValidation(detailed, validationFailure(err))
 			}
 		}
 		// The head extends target, which the node has, so its state-dependent
@@ -264,7 +261,7 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		// momentums the node does not have yet.
 		if err := c.verifier.Momentum(momentums[0]); err != nil {
 			log.Info("side-chain head failed verification", "reason", err, "momentum-identifier", head.Identifier())
-			return start, c.rejectIfValidation(head, validationFailure(err))
+			return start, c.rejectIfValidation(momentums[0], validationFailure(err))
 		}
 		// The head's producer is judged by the election of the chain the head
 		// belongs to, which agrees with ours up to target. Our own frontier
@@ -278,7 +275,7 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		}
 		if !isProducer {
 			log.Info("side-chain head not signed by the elected producer", "momentum-identifier", head.Identifier(), "producer", head.Producer())
-			return start, c.reject(head, verifier.ErrMProducerInvalid)
+			return start, c.reject(momentums[0], verifier.ErrMProducerInvalid)
 		}
 
 		// The remaining checks need the replacement state, so keep the branch
@@ -317,7 +314,7 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 			// window, whereas the committed prefix has no such bound.
 			if committed > len(removed) {
 				log.Info("side-chain replacement failed after exceeding the removed branch, keeping the applied prefix", "reason", err, "target", target.Identifier(), "num-applied", committed, "num-removed", len(removed))
-				return failed + start, c.rejectIfValidation(momentums[failed].Momentum, err)
+				return failed + start, c.rejectIfValidation(momentums[failed], err)
 			}
 			log.Info("side-chain replacement failed, restoring original branch", "reason", err, "target", target.Identifier(), "num-momentums", len(removed))
 			if restoreErr := c.restoreBranch(insert, target.Identifier(), removed); restoreErr != nil {
@@ -329,16 +326,37 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 			if restoreErr := c.chain.RestoreUncommitted(insert, pendingSnapshot); restoreErr != nil {
 				log.Error("error while restoring account-pool after rejected side-chain", "reason", restoreErr, "cause", err, "target", target.Identifier())
 			}
-			return failed + start, c.rejectIfValidation(momentums[failed].Momentum, err)
+			return failed + start, c.rejectIfValidation(momentums[failed], err)
 		}
 		return 0, nil
 	}
 
+	// The extension path has no rollback to protect, but a candidate
+	// rejected earlier can land here: after a replacement prefix longer
+	// than the removed branch was kept, the candidate that failed on top of
+	// it now extends the frontier, and a retry skips the known prefix.
+	// Refuse it before applying its content, so the retry costs nothing and
+	// the serving peer is still held to account.
+	if index, known := c.firstRemembered(momentums); known {
+		return index + start, c.reject(momentums[index], ErrSideChainKnownInvalid)
+	}
 	failed, _, err := c.insertMomentums(insert, momentums)
 	if err != nil {
 		return failed + start, err
 	}
 	return 0, nil
+}
+
+// firstRemembered returns the index of the first candidate whose served
+// bytes were rejected earlier and are still remembered.
+func (c chainBridge) firstRemembered(momentums []*nom.DetailedMomentum) (int, bool) {
+	for index, detailed := range momentums {
+		if c.remembered(detailed) {
+			log.Info("batch carries a momentum rejected earlier, refusing before applying it", "momentum-identifier", detailed.Momentum.Identifier())
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 // restoreBranch drops whatever replaced the branch above target and puts the

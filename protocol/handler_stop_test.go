@@ -24,8 +24,10 @@ func (s *stubChainBridge) GetBlock(types.Hash) *nom.DetailedMomentum { return ni
 func (s *stubChainBridge) GetBlockByNumber(uint64) (*nom.Momentum, error) {
 	return nil, nil
 }
-func (s *stubChainBridge) CurrentBlock() *nom.Momentum               { return nil }
-func (s *stubChainBridge) Status() (uint64, types.Hash, types.Hash)  { return 0, types.Hash{}, types.Hash{} }
+func (s *stubChainBridge) CurrentBlock() *nom.Momentum { return nil }
+func (s *stubChainBridge) Status() (uint64, types.Hash, types.Hash) {
+	return 0, types.Hash{}, types.Hash{}
+}
 func (s *stubChainBridge) InsertChain([]*nom.DetailedMomentum) (int, error) {
 	return 0, nil
 }

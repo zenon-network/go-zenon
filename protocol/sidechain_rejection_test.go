@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/p2p"
@@ -33,9 +34,9 @@ func hashOf(b byte) types.Hash {
 	return types.NewHash([]byte{b})
 }
 
-func TestRejectedMomentumsExpireAndRefresh(t *testing.T) {
+func TestRejectedCandidatesExpireAndRefresh(t *testing.T) {
 	clock := useSteppedClock(t)
-	r := newRejectedMomentums(time.Hour, 16)
+	r := newRejectedCandidates(time.Hour, 16)
 
 	if r.has(hashOf(1)) {
 		t.Fatal("unknown hash reported as rejected")
@@ -63,9 +64,9 @@ func TestRejectedMomentumsExpireAndRefresh(t *testing.T) {
 	}
 }
 
-func TestRejectedMomentumsCapEvictsOldest(t *testing.T) {
+func TestRejectedCandidatesCapEvictsOldest(t *testing.T) {
 	clock := useSteppedClock(t)
-	r := newRejectedMomentums(time.Hour, 3)
+	r := newRejectedCandidates(time.Hour, 3)
 	for b := byte(1); b <= 3; b++ {
 		r.add(hashOf(b))
 		clock.t = clock.t.Add(time.Minute)
@@ -201,5 +202,54 @@ func TestHandleRefusesQuarantinedPeerBeforeHandshake(t *testing.T) {
 	clock.t = clock.t.Add(peerQuarantinePeriod)
 	if err := pm.handle(p); errors.Is(err, errPeerQuarantined) {
 		t.Fatal("peer still refused after the quarantine expired")
+	}
+}
+
+func TestRememberableExcludesContextVerdicts(t *testing.T) {
+	for _, verdict := range []error{verifier.ErrMPreviousMissing, verifier.ErrABPreviousMissing, verifier.ErrABMAMissing, verifier.ErrABFromBlockMissing} {
+		if rememberable(fmt.Errorf("ctx: %w", verdict)) {
+			t.Fatalf("%v depends on the batch or the state and must not be remembered", verdict)
+		}
+	}
+	for _, verdict := range []error{verifier.ErrMChangesHashInvalid, verifier.ErrMProducerInvalid, constants.ErrAutoReceiveChangesHashMismatch, ErrSideChainKnownInvalid} {
+		if !rememberable(verdict) {
+			t.Fatalf("%v is a verdict on the candidate's bytes and must be remembered", verdict)
+		}
+	}
+}
+
+// The key covers what the hashes do not: a copy with a different momentum
+// signature, or a block with a different changes-hash or signature, keys
+// differently although every hash is unchanged.
+func TestCandidateKeyCoversUnhashedFields(t *testing.T) {
+	block := &nom.AccountBlock{Version: 1, ChainIdentifier: 1, BlockType: nom.BlockTypeUserSend, Height: 1, Signature: []byte{1}}
+	momentum := &nom.Momentum{Version: 1, ChainIdentifier: 1, Height: 2, Signature: []byte{1}}
+	genuine := &nom.DetailedMomentum{Momentum: momentum, AccountBlocks: []*nom.AccountBlock{block}}
+	key, ok := candidateKey(genuine)
+	if !ok {
+		t.Fatal("genuine candidate must serialise")
+	}
+	again, _ := candidateKey(genuine)
+	if again != key {
+		t.Fatal("the key must be deterministic")
+	}
+
+	tamperedMomentum := *momentum
+	tamperedMomentum.Signature = []byte{2}
+	if k, _ := candidateKey(&nom.DetailedMomentum{Momentum: &tamperedMomentum, AccountBlocks: genuine.AccountBlocks}); k == key {
+		t.Fatal("a different momentum signature must change the key")
+	}
+	for name, tamper := range map[string]func(*nom.AccountBlock){
+		"changes-hash": func(b *nom.AccountBlock) { b.ChangesHash = types.NewHash([]byte{9}) },
+		"signature":    func(b *nom.AccountBlock) { b.Signature = []byte{2} },
+	} {
+		tampered := block.Copy()
+		tamper(tampered)
+		if tampered.ComputeHash() != block.ComputeHash() {
+			t.Fatalf("%s: the block hash must not cover the tampered field for this test to mean anything", name)
+		}
+		if k, _ := candidateKey(&nom.DetailedMomentum{Momentum: momentum, AccountBlocks: []*nom.AccountBlock{tampered}}); k == key {
+			t.Fatalf("%s: a tampered block must change the key", name)
+		}
 	}
 }

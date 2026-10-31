@@ -14,9 +14,11 @@ func InternalError(err error) error {
 }
 
 // DescendantVerifyError wraps err raised while verifying a descendant block
-// of a contract-receive. It unwraps to ErrABDescendantVerify.
+// of a contract-receive. It unwraps to ErrABDescendantVerify and to err, so
+// an internal failure inside the descendant check stays recognisable as
+// ErrVerifierInternal.
 func DescendantVerifyError(err error) error {
-	return fmt.Errorf("%w - %v", ErrABDescendantVerify, err)
+	return fmt.Errorf("%w - %w", ErrABDescendantVerify, err)
 }
 
 // Verifier errors. ErrVerifierInternal marks an unexpected failure while

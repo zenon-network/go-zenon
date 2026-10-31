@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/protocol"
 	"github.com/zenon-network/go-zenon/verifier"
@@ -107,4 +108,62 @@ func TestInsertChain_PreRollbackRejectionIsRememberedToo(t *testing.T) {
 	}
 	common.Expect(t, counting.rollbacks, 0)
 	expectChainEquals(t, z.Chain(), before)
+}
+
+// A tampered copy served under the genuine momentum hash is remembered by the
+// bytes that were served, so the genuine branch is still judged on its own
+// merits afterwards. The tampered fields are ones no hash covers.
+func TestInsertChain_TamperedCopyDoesNotPoisonTheGenuineBranch(t *testing.T) {
+	cases := []struct {
+		name   string
+		tamper func(batch []*nom.DetailedMomentum)
+	}{
+		{"momentum signature", func(batch []*nom.DetailedMomentum) {
+			copied := *batch[0].Momentum
+			copied.Signature = append([]byte(nil), copied.Signature...)
+			copied.Signature[0] ^= 0xff
+			batch[0] = &nom.DetailedMomentum{Momentum: &copied, AccountBlocks: batch[0].AccountBlocks}
+		}},
+		{"block signature", func(batch []*nom.DetailedMomentum) {
+			blocks := make([]*nom.AccountBlock, len(batch[0].AccountBlocks))
+			for i, block := range batch[0].AccountBlocks {
+				blocks[i] = block.Copy()
+			}
+			blocks[0].Signature = append([]byte(nil), blocks[0].Signature...)
+			blocks[0].Signature[0] ^= 0xff
+			batch[0] = &nom.DetailedMomentum{Momentum: batch[0].Momentum, AccountBlocks: blocks}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			z := mock.NewMockZenon(t)
+			defer z.StopPanic()
+			z.InsertMomentumsTo(6)
+			fork := buildFork(t, z, 5, 7, 1)
+			if len(fork[0].AccountBlocks) == 0 {
+				t.Fatal("fork head carries no account block")
+			}
+			counting, bridge := newSideChainBridge(z)
+
+			tampered := append([]*nom.DetailedMomentum{}, fork...)
+			tc.tamper(tampered)
+			common.Expect(t, tampered[0].Momentum.Hash, fork[0].Momentum.Hash)
+
+			_, err := bridge.InsertChain(tampered)
+			var rejected *protocol.SideChainRejected
+			if !errors.As(err, &rejected) {
+				t.Fatalf("expected the tampered copy to be rejected, got %v", err)
+			}
+			_, err = bridge.InsertChain(tampered)
+			if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+				t.Fatalf("expected the same bytes to be refused as known invalid, got %v", err)
+			}
+			rollbacks := counting.rollbacks
+
+			_, err = bridge.InsertChain(fork)
+			common.FailIfErr(t, err)
+			common.Expect(t, counting.rollbacks, rollbacks+1)
+			expectFrontierAt(t, z.Chain(), fork[len(fork)-1].Momentum)
+		})
+	}
 }

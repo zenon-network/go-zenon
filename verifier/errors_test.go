@@ -51,3 +51,13 @@ func TestIsValidationError(t *testing.T) {
 		t.Fatal("an unrelated error or nil is not a verdict")
 	}
 }
+
+func TestDescendantVerifyErrorKeepsItsCause(t *testing.T) {
+	wrapped := DescendantVerifyError(InternalError(errors.New("store")))
+	if !errors.Is(wrapped, ErrABDescendantVerify) || !errors.Is(wrapped, ErrVerifierInternal) {
+		t.Fatalf("descendant wrapper lost a cause: %v", wrapped)
+	}
+	if IsValidationError(DescendantVerifyError(ErrABSignatureInvalid)) != true {
+		t.Fatal("a descendant verdict must still be a validation error")
+	}
+}

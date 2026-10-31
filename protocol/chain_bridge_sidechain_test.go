@@ -489,6 +489,19 @@ func TestInsertChain_RestoreBoundaryAtRemovedBranchLength(t *testing.T) {
 				expectFrontierAt(t, f.z.Chain(), f.fork[tc.committed-1].Momentum)
 			}
 
+			// Offering the same batch again is refused before anything is
+			// applied, whichever path it takes: as a side chain when the
+			// original branch was restored, or as an extension of the kept
+			// prefix, where the failed candidate now links to the frontier.
+			rollbacks := counting.rollbacks
+			frontier := f.z.Chain().GetFrontierMomentumStore().Identifier()
+			_, err = bridge.InsertChain(candidates)
+			if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+				t.Fatalf("expected the retry to be refused as known invalid, got %v", err)
+			}
+			common.Expect(t, counting.rollbacks, rollbacks)
+			common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), frontier)
+
 			// Whatever was kept is real state: the rest of the genuine fork
 			// still inserts on top of it.
 			_, err = bridge.InsertChain(f.fork)
