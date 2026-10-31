@@ -204,7 +204,7 @@ func (b *failingInsertBridge) InsertChain([]*nom.DetailedMomentum) (int, error) 
 // been exceeded.
 func TestReadyToProduce_RunningSessionBlocks(t *testing.T) {
 	clock := useReadinessClock(t)
-	pm, _ := newReadinessManager(t, 1, 10)
+	pm, bridge := newReadinessManager(t, 1, 10)
 	p := addPeer(t, pm, 1, 12)
 	clock.t = clock.t.Add(2 * producerStallWindow)
 	if !pm.ReadyToProduce() {
@@ -243,6 +243,13 @@ func TestReadyToProduce_RunningSessionBlocks(t *testing.T) {
 	if pm.ReadyToProduce() {
 		t.Fatal("ready while a download session is running")
 	}
+	// Reaching the advertised height does not end the session; the
+	// frontier may still move, so the caught-up fast path waits too.
+	bridge.height = 12
+	if pm.ReadyToProduce() {
+		t.Fatal("ready while a session runs although the frontier matches the target")
+	}
+	bridge.height = 10
 	close(release)
 	// An empty hash set ends the session quickly.
 	_ = pm.downloader.DeliverHashes(p.id, nil, nil)

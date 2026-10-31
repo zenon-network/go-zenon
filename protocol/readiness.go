@@ -59,27 +59,28 @@ func (pm *ProtocolManager) insertFromDownload(momentums []*nom.DetailedMomentum)
 // current slot. It is the producer's gate; SyncInfo stays the telemetry
 // and keeps its meaning.
 //
-// Production is blocked while fewer than minPeers peers are connected, and
-// while the node is behind the best peer's advertised height for as long
-// as a download session is running, its import queue is draining, or a
-// session imported a batch within producerStallWindow. An advertised
-// height is a claim, not a verified chain: once no session has imported
-// anything for the window the claim no longer holds production, whatever
-// peers connect or reconnect in the meantime, until a session does import
-// a batch again.
+// Production is blocked while fewer than minPeers peers are connected,
+// while a download session is running or its import queue is draining
+// (the frontier is about to move, whatever the advertised target says),
+// and otherwise, while the node is behind the best peer's advertised
+// height, until no session has imported a batch for producerStallWindow.
+// An advertised height is a claim, not a verified chain: once the window
+// has passed without an import the claim no longer holds production,
+// whatever peers connect or reconnect in the meantime, until a session
+// does import a batch again.
 func (pm *ProtocolManager) ReadyToProduce() bool {
 	info := pm.syncInfo()
-	switch info.State {
-	case NotEnoughPeers:
+	if info.State == NotEnoughPeers {
 		return false
-	case SyncDone:
-		return true
 	}
 	if pm.downloader.Synchronising() {
 		return false
 	}
 	if _, cached, importing, _ := pm.downloader.Stats(); cached > 0 || importing > 0 {
 		return false
+	}
+	if info.State == SyncDone {
+		return true
 	}
 	return pm.progress.idleFor() >= producerStallWindow
 }
