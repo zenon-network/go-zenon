@@ -138,6 +138,11 @@ type Downloader struct {
 	importDone  int       // Number of taken blocks already imported from the last batch
 	importLock  sync.Mutex
 
+	// processHook, when set, runs in process after a batch has been taken
+	// from the queue and before it is published as importQueue. Tests use
+	// it to hold the worker inside that handoff.
+	processHook func(blocks []*Block)
+
 	// Callbacks
 	hasBlock    hashCheckFn      // Checks if a block is present in the chain
 	getBlock    blockRetrievalFn // Retrieves a block from the chain
@@ -217,6 +222,16 @@ func (d *Downloader) Stats() (pending int, cached int, importing int, estimate t
 // Synchronising returns whether the downloader is currently retrieving blocks.
 func (d *Downloader) Synchronising() bool {
 	return atomic.LoadInt32(&d.synchronising) > 0
+}
+
+// Processing returns whether the import worker owns blocks: from the moment
+// it takes a batch out of the queue until it has imported it or given up.
+// Stats does not see a batch between being taken and being published as
+// importQueue, and a session may already have ended by then, so callers
+// that must not act while blocks are about to change the frontier check
+// this as well.
+func (d *Downloader) Processing() bool {
+	return atomic.LoadInt32(&d.processing) > 0
 }
 
 // RegisterPeer injects a new download peer into the set of block source to be
@@ -843,6 +858,9 @@ func (d *Downloader) process() {
 		blocks := d.queue.TakeBlocks()
 		if len(blocks) == 0 {
 			return
+		}
+		if d.processHook != nil {
+			d.processHook(blocks)
 		}
 		// Reset the import statistics
 		d.importLock.Lock()

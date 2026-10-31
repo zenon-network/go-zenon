@@ -149,6 +149,21 @@ func (c chainBridge) VerifyMomentum(detailed *nom.DetailedMomentum) error {
 }
 
 func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error) {
+	return c.insertChain(momentums, nil)
+}
+
+// InsertChainMoved inserts like InsertChain and also reports whether the
+// canonical frontier changed during the call. The comparison is made under
+// the insert lock the call holds, so it is attributable to this call alone:
+// a batch the node already had, or a replacement that failed and was
+// restored, reports false; new momentums that stayed on the chain report
+// true, also when a later candidate in the batch failed.
+func (c chainBridge) InsertChainMoved(momentums []*nom.DetailedMomentum) (index int, moved bool, err error) {
+	index, err = c.insertChain(momentums, &moved)
+	return index, moved, err
+}
+
+func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool) (int, error) {
 	// Cheap structural check on peer-supplied data before anything below
 	// indexes or dereferences it, before anything is sized from it, before
 	// any rollback and before any pool state is touched. The verifier
@@ -172,6 +187,12 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 	defer insert.Unlock()
 
 	store := c.chain.GetFrontierMomentumStore()
+	if moved != nil {
+		before := store.Identifier()
+		// Runs before the unlock above, so the frontier read is this
+		// call's outcome and not a later insert's.
+		defer func() { *moved = c.chain.GetFrontierMomentumStore().Identifier() != before }()
+	}
 
 	// remove momentums which we already have
 	start := 0

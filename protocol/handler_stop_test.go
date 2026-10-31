@@ -35,6 +35,9 @@ func (s *stubChainBridge) Status() (uint64, types.Hash, types.Hash) {
 func (s *stubChainBridge) InsertChain([]*nom.DetailedMomentum) (int, error) {
 	return 0, nil
 }
+func (s *stubChainBridge) InsertChainMoved([]*nom.DetailedMomentum) (int, bool, error) {
+	return 0, false, nil
+}
 func (s *stubChainBridge) VerifyMomentum(*nom.DetailedMomentum) error { return nil }
 
 // Calling Stop() twice must be safe: the second call is a no-op due to

@@ -863,3 +863,7 @@ func TestMaxDetailedMomentumWireSize(t *testing.T) {
 	t.Logf("budget=%d, softLimit=%d, total=%d, maxMsg=%d, margin=%d",
 		MaxDetailedMomentumWireSize, SoftResponseLimit, total, ProtocolMaxMsgSize, ProtocolMaxMsgSize-total)
 }
+
+func (c *lookupCountingChain) InsertChainMoved([]*nom.DetailedMomentum) (int, bool, error) {
+	return 0, false, nil
+}

@@ -1089,3 +1089,7 @@ func TestPeer_DefaultBudgetsAreIndependentAndEndWithTheConnection(t *testing.T) 
 		t.Fatal("the default budget's wait did not end when the connection closed")
 	}
 }
+
+func (c *budgetTestChain) InsertChainMoved([]*nom.DetailedMomentum) (int, bool, error) {
+	return 0, false, nil
+}
