@@ -1,7 +1,9 @@
 package protocol
 
 import (
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -24,8 +26,12 @@ func (s *stubChainBridge) GetBlock(types.Hash) *nom.DetailedMomentum { return ni
 func (s *stubChainBridge) GetBlockByNumber(uint64) (*nom.Momentum, error) {
 	return nil, nil
 }
-func (s *stubChainBridge) CurrentBlock() *nom.Momentum               { return nil }
-func (s *stubChainBridge) Status() (uint64, types.Hash, types.Hash)  { return 0, types.Hash{}, types.Hash{} }
+func (s *stubChainBridge) CurrentBlock() *nom.Momentum {
+	return &nom.Momentum{Height: 0}
+}
+func (s *stubChainBridge) Status() (uint64, types.Hash, types.Hash) {
+	return 0, types.Hash{}, types.Hash{}
+}
 func (s *stubChainBridge) InsertChain([]*nom.DetailedMomentum) (int, error) {
 	return 0, nil
 }
@@ -44,4 +50,36 @@ func TestProtocolManagerStopTwice(t *testing.T) {
 	// Second Stop: must be a no-op (stopOnce already fired) and must not
 	// panic. The closed quitSync channel is not re-closed.
 	pm.Stop()
+}
+
+// Start followed by Stop must return promptly and leave no goroutines
+// behind. Before the fix that added pm.wg.Add/Done around txsyncLoop,
+// Stop() only waited for the syncer goroutine and could return while
+// txsyncLoop was still running.
+func TestProtocolManagerStartStop(t *testing.T) {
+	pm := NewProtocolManager(1, 1, &stubChainBridge{})
+	pm.Start()
+
+	done := make(chan struct{})
+	go func() {
+		pm.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Stop returned; both syncer and txsyncLoop have been joined.
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop() did not return within 5s; txsyncLoop may not be tracked by wg")
+	}
+
+	// After Stop() returns, no goroutines spawned by Start() should remain.
+	// Allow a brief window for any untracked goroutine to exit.
+	time.Sleep(50 * time.Millisecond)
+	before := runtime.NumGoroutine()
+	time.Sleep(100 * time.Millisecond)
+	after := runtime.NumGoroutine()
+	if after > before {
+		t.Logf("goroutines grew from %d to %d after Stop returned", before, after)
+	}
 }
