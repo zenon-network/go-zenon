@@ -79,10 +79,18 @@ func (pm *ProtocolManager) ReadyToProduce() bool {
 	if info.State == NotEnoughPeers {
 		return false
 	}
-	if pm.downloader.Synchronising() || pm.downloader.Processing() {
+	if pm.downloader.Synchronising() {
 		return false
 	}
+	// Stats before Processing, in that order: a delivered batch sits in the
+	// queue, where Stats counts it, until the worker takes it, and the
+	// worker sets its flag before it takes anything. Read the other way
+	// round, a worker starting between the two reads could take the batch
+	// before Stats looked and both checks would come back empty.
 	if _, cached, importing, _ := pm.downloader.Stats(); cached > 0 || importing > 0 {
+		return false
+	}
+	if pm.downloader.Processing() {
 		return false
 	}
 	if info.State == SyncDone {
