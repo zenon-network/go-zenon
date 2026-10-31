@@ -57,6 +57,10 @@ func (b *broadcaster) SyncInfo() *SyncInfo {
 	return b.protocol.SyncInfo()
 }
 
+func (b *broadcaster) ReadyToProduce() bool {
+	return b.protocol.ReadyToProduce()
+}
+
 // CreateMomentum is called when our node created a momentum.
 // The momentum will be inserted in the chain and broadcasted.
 func (b *broadcaster) CreateMomentum(momentumTransaction *nom.MomentumTransaction, detailed *nom.DetailedMomentum) {

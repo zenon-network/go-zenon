@@ -180,6 +180,9 @@ func (zenon *mockZenon) SyncInfo() *protocol.SyncInfo {
 func (zenon *mockZenon) SyncState() protocol.SyncState {
 	return protocol.SyncDone
 }
+func (zenon *mockZenon) ReadyToProduce() bool {
+	return true
+}
 func (zenon *mockZenon) CreateMomentum(momentumTransaction *nom.MomentumTransaction, detailed *nom.DetailedMomentum) {
 	insert := zenon.chain.AcquireInsert("mock-zenon create-momentum")
 	defer insert.Unlock()

@@ -73,6 +73,11 @@ type ChainBridge interface {
 // sync progress, since producers must not act on a stale frontier.
 type Broadcaster interface {
 	SyncInfo() *SyncInfo
+	// ReadyToProduce is the producer's gate: false while too few peers are
+	// connected or while a download session towards a higher advertised
+	// height is running, draining, or imported recently. See
+	// ProtocolManager.ReadyToProduce.
+	ReadyToProduce() bool
 	CreateMomentum(*nom.MomentumTransaction, *nom.DetailedMomentum)
 	CreateAccountBlock(*nom.AccountBlockTransaction) error
 }
