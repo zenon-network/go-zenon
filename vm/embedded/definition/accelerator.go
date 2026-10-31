@@ -349,6 +349,9 @@ func parsePhase(data []byte) *Phase {
 // GetProjectList returns every stored project, in storage-key (id
 // byte) order; database errors panic via common.DealWithErr, so the
 // returned error is always nil.
+// Entries whose value is empty (tombstone deletion markers left by a
+// rollback) are skipped, matching GetProjectEntry's treatment of empty
+// values as absent.
 func GetProjectList(context db.DB) ([]*Project, error) {
 	iterator := context.NewIterator([]byte{projectKeyPrefix})
 	defer iterator.Release()
@@ -359,7 +362,9 @@ func GetProjectList(context db.DB) ([]*Project, error) {
 			common.DealWithErr(iterator.Error())
 			break
 		}
-		projectList = append(projectList, parseProject(iterator.Value()))
+		if data := iterator.Value(); len(data) > 0 {
+			projectList = append(projectList, parseProject(data))
+		}
 	}
 
 	return projectList, nil
