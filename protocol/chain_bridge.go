@@ -256,7 +256,7 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 		for index, detailed := range momentums {
 			if err := verifier.MomentumStatic(detailed.Momentum); err != nil {
 				log.Info("side-chain momentum failed static verification", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
-				return index + start, c.reject(detailed.Momentum, err)
+				return index + start, c.rejectIfValidation(detailed.Momentum, validationFailure(err))
 			}
 		}
 		// The head extends target, which the node has, so its state-dependent

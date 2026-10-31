@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -91,8 +92,12 @@ func TestValidationFailureClassification(t *testing.T) {
 	}{
 		{"verifier verdict", verifier.ErrMChangesHashInvalid, true},
 		{"wrapped verdict", errors.Join(errors.New("ctx"), verifier.ErrMProducerInvalid), true},
+		{"auto-receive mismatch", fmt.Errorf("expected a but got b: %w", constants.ErrAutoReceiveChangesHashMismatch), true},
+		{"plasma bound", constants.ErrNotEnoughPlasma, true},
+		{"clock-dependent verdict", verifier.ErrMTimestampInTheFuture, false},
 		{"verifier internal", verifier.InternalError(errors.New("store")), false},
 		{"vm panic", constants.ErrVmRunPanic, false},
+		{"raw store error", errors.New("leveldb: closed"), false},
 		{"nil", nil, false},
 	}
 	for _, c := range cases {

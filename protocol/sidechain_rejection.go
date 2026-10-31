@@ -36,9 +36,9 @@ var ErrSideChainKnownInvalid = errors.New("side-chain momentum was already rejec
 // is deterministic for the state at the fork point, so the bridge remembers
 // the momentum and refuses any later batch that carries it before rolling
 // anything back, whichever peer serves it, and the protocol layer
-// quarantines the peer that served it. Internal failures (store errors,
-// verifier.ErrVerifierInternal, constants.ErrVmRunPanic, failed commits)
-// are never classified this way.
+// quarantines the peer that served it. Only consensus verdicts are
+// classified this way (see validationFailure); store errors, internal
+// failures, failed commits and clock-dependent checks are not.
 type SideChainRejected struct {
 	Momentum types.HashHeight
 	Cause    error
@@ -58,13 +58,27 @@ type validationError struct{ err error }
 func (e *validationError) Error() string { return e.err.Error() }
 func (e *validationError) Unwrap() error { return e.err }
 
-// validationFailure tags err as a validation failure unless it reports an
-// internal problem, which is not a verdict on the momentum.
+// validationFailure tags err when it is a consensus verdict on the
+// momentum, one a later offer of the same momentum reproduces: a verifier
+// validation error (verifier.IsValidationError), a contract-receive whose
+// changes-hash differs from the locally generated one, or a plasma bound.
+// Everything else is returned unchanged and is never remembered or held
+// against the peer: store errors, verifier.ErrVerifierInternal,
+// constants.ErrVmRunPanic, and verifier.ErrMTimestampInTheFuture, which
+// depends on the local clock. A verdict missing from the list costs only
+// the memory, never a wrong rejection.
 func validationFailure(err error) error {
-	if err == nil || errors.Is(err, verifier.ErrVerifierInternal) || errors.Is(err, constants.ErrVmRunPanic) {
+	if err == nil || errors.Is(err, verifier.ErrVerifierInternal) || errors.Is(err, constants.ErrVmRunPanic) || errors.Is(err, verifier.ErrMTimestampInTheFuture) {
 		return err
 	}
-	return &validationError{err: err}
+	if verifier.IsValidationError(err) ||
+		errors.Is(err, constants.ErrAutoReceiveChangesHashMismatch) ||
+		errors.Is(err, constants.ErrBlockPlasmaLimitReached) ||
+		errors.Is(err, constants.ErrNotEnoughPlasma) ||
+		errors.Is(err, constants.ErrNotEnoughTotalPlasma) {
+		return &validationError{err: err}
+	}
+	return err
 }
 
 // rejectedMomentums remembers momentum hashes rejected on a consensus

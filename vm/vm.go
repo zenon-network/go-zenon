@@ -168,7 +168,7 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 			return err
 		}
 		if generated.ChangesHash != block.ChangesHash {
-			return errors.Errorf("auto-received block has different changes-hash expected %v but got %v", generated.ChangesHash, block.ChangesHash)
+			return errors.Wrapf(constants.ErrAutoReceiveChangesHashMismatch, "expected %v but got %v", generated.ChangesHash, block.ChangesHash)
 		}
 		computed := generated.ComputeHash()
 		if computed != block.Hash {
