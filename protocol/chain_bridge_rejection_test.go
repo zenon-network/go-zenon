@@ -167,3 +167,37 @@ func TestInsertChain_TamperedCopyDoesNotPoisonTheGenuineBranch(t *testing.T) {
 		})
 	}
 }
+
+// A batch whose later candidate does not extend the one before it is refused
+// as malformed before any check that depends on state, so a genuine
+// momentum offered behind a competing one is never judged under the wrong
+// state, never remembered, and still inserts on its own afterwards. The
+// refusal is an ordinary failure, not a SideChainRejected: the batch's
+// composition failed, not the candidate or the peer that delivered it.
+func TestInsertChain_MixedBatchIsRefusedBeforeRollbackAndDoesNotPoisonTheExtension(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(6)
+	// A6: a valid competing momentum at height 6, forking below our frontier.
+	competing := buildFork(t, z, 5, 6, 2)
+	// B7: a genuine extension of our own momentum 6, carrying a User1 send
+	// whose account height collides with the one A6 carries.
+	extension := buildFork(t, z, 6, 7, 1)
+	counting, bridge := newSideChainBridge(z)
+	before := snapshotChain(t, z.Chain())
+
+	_, err := bridge.InsertChain([]*nom.DetailedMomentum{competing[0], extension[0]})
+	if err == nil {
+		t.Fatal("expected the mixed batch to be refused")
+	}
+	var rejected *protocol.SideChainRejected
+	if errors.As(err, &rejected) || errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+		t.Fatalf("a mixed batch is malformed, not a verdict on a candidate: %v", err)
+	}
+	common.Expect(t, counting.rollbacks, 0)
+	expectChainEquals(t, z.Chain(), before)
+
+	_, err = bridge.InsertChain(extension)
+	common.FailIfErr(t, err)
+	expectFrontierAt(t, z.Chain(), extension[0].Momentum)
+}

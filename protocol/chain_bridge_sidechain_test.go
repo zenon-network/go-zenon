@@ -551,8 +551,7 @@ func TestInsertChain_SideChainDepthBoundary(t *testing.T) {
 	// Depth 31: rejected before anything is touched.
 	tooDeep := momentumAt(t, z.Chain(), 9)
 	head := attackerMomentum(tooDeep, 10)
-	tail := attackerMomentum(head, 41)
-	_, err := bridge.InsertChain(detailedOf(head, tail))
+	_, err := bridge.InsertChain(append(detailedOf(head), invalidTail(head, 41)...))
 	if err == nil {
 		t.Fatal("expected a 31-deep side chain to be rejected")
 	}
@@ -563,8 +562,7 @@ func TestInsertChain_SideChainDepthBoundary(t *testing.T) {
 	// comes back.
 	deepest := momentumAt(t, z.Chain(), 10)
 	head = producerMomentum(t, z, deepest, 11)
-	tail = attackerMomentum(head, 41)
-	_, err = bridge.InsertChain(detailedOf(head, tail))
+	_, err = bridge.InsertChain(append(detailedOf(head), invalidTail(head, 41)...))
 	if err == nil {
 		t.Fatal("expected the side chain to be rejected")
 	}
@@ -609,8 +607,7 @@ func TestInsertChain_RepeatedRestoresKeepStoredPatchesIdentical(t *testing.T) {
 	for attempt := 0; attempt < 3; attempt++ {
 		bridge = bridgeOn(z, counting)
 		head := producerMomentum(t, z, momentumAt(t, z.Chain(), 4), 5)
-		tail := attackerMomentum(head, 7)
-		_, err := bridge.InsertChain(detailedOf(head, tail))
+		_, err := bridge.InsertChain(append(detailedOf(head), invalidTail(head, 7)...))
 		if err == nil {
 			t.Fatalf("attempt %d: expected the side chain to be rejected", attempt)
 		}

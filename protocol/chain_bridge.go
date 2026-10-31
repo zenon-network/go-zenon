@@ -169,6 +169,18 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 			return index, err
 		}
 	}
+	// Every candidate must extend the one before it. The head's link is
+	// checked against the store below; a later candidate that does not
+	// chain would otherwise have its content applied under the state the
+	// earlier ones left, and any verdict reached that way is a verdict on
+	// the batch, not on the candidate. This is structural, like the checks
+	// above: nothing is remembered and nothing is attributed to a peer.
+	for index := 1; index < len(momentums); index++ {
+		if momentums[index].Momentum.Previous() != momentums[index-1].Momentum.Identifier() {
+			log.Error("momentums to insert do not chain", "index", index, "momentum-identifier", momentums[index].Momentum.Identifier(), "previous", momentums[index].Momentum.Previous(), "preceding", momentums[index-1].Momentum.Identifier())
+			return index, errors.Errorf("momentums to insert do not chain: %v does not extend %v", momentums[index].Momentum.Identifier(), momentums[index-1].Momentum.Identifier())
+		}
+	}
 	a := momentums[0]
 	b := momentums[len(momentums)-1]
 	log.Info("start inserting chain", "num-momentums", len(momentums), "start-identifier", a.Momentum.Identifier(), "end-identifier", b.Momentum.Identifier())

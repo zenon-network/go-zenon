@@ -62,11 +62,13 @@ func (e *validationError) Unwrap() error { return e.err }
 // momentum, one a later offer of the same momentum reproduces: a verifier
 // validation error (verifier.IsValidationError), a contract-receive whose
 // changes-hash differs from the locally generated one, or a plasma bound.
-// Everything else is returned unchanged and is never remembered or held
-// against the peer: store errors, verifier.ErrVerifierInternal,
-// constants.ErrVmRunPanic, and verifier.ErrMTimestampInTheFuture, which
-// depends on the local clock. A verdict missing from the list costs only
-// the memory, never a wrong rejection.
+// Everything else is returned unchanged, so it is never remembered and
+// never quarantines the peer (the caller's ordinary import-failure
+// handling, a disconnect, still applies): store errors,
+// verifier.ErrVerifierInternal, constants.ErrVmRunPanic, and
+// verifier.ErrMTimestampInTheFuture, which depends on the local clock. A
+// verdict missing from the list costs only the memory, never a wrong
+// rejection.
 func validationFailure(err error) error {
 	if err == nil || errors.Is(err, verifier.ErrVerifierInternal) || errors.Is(err, constants.ErrVmRunPanic) || errors.Is(err, verifier.ErrMTimestampInTheFuture) {
 		return err
@@ -83,8 +85,10 @@ func validationFailure(err error) error {
 
 // contextVerdicts are verdicts that depend on what else the batch or the
 // state holds rather than on the candidate's own bytes: the same candidate
-// can be valid in a complete batch. They still reject the batch and hold
-// the serving peer to account, but the candidate is not remembered.
+// can be valid in a complete batch. They reject the batch as an ordinary
+// import failure: the candidate is not remembered, and the peer that
+// served it is not quarantined, since the batch's composition, not the
+// candidate or its supplier, is what failed.
 var contextVerdicts = []error{
 	verifier.ErrMPreviousMissing,
 	verifier.ErrABPreviousMissing,
@@ -191,13 +195,17 @@ func (c chainBridge) remembered(detailed *nom.DetailedMomentum) bool {
 	return ok && c.rejected.has(key)
 }
 
-// reject returns the typed error for a consensus verdict on detailed and,
-// when the verdict is one its bytes reproduce, remembers those bytes.
+// reject returns the typed error for a consensus verdict on detailed and
+// remembers the bytes served for it. A verdict that depends on the batch
+// or the state rather than on those bytes (contextVerdicts) is returned
+// as it is: neither remembered nor typed, so the caller's ordinary
+// import-failure handling applies and no peer is quarantined for it.
 func (c chainBridge) reject(detailed *nom.DetailedMomentum, cause error) error {
-	if rememberable(cause) {
-		if key, ok := candidateKey(detailed); ok {
-			c.rejected.add(key)
-		}
+	if !rememberable(cause) {
+		return cause
+	}
+	if key, ok := candidateKey(detailed); ok {
+		c.rejected.add(key)
 	}
 	return &SideChainRejected{Momentum: detailed.Momentum.Identifier(), Cause: cause}
 }

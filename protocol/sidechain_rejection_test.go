@@ -206,9 +206,21 @@ func TestHandleRefusesQuarantinedPeerBeforeHandshake(t *testing.T) {
 }
 
 func TestRememberableExcludesContextVerdicts(t *testing.T) {
+	bridge := chainBridge{rejected: newRejectedCandidates(time.Hour, 8)}
+	candidate := &nom.DetailedMomentum{Momentum: &nom.Momentum{Version: 1, ChainIdentifier: 1, Height: 2}}
 	for _, verdict := range []error{verifier.ErrMPreviousMissing, verifier.ErrABPreviousMissing, verifier.ErrABMAMissing, verifier.ErrABFromBlockMissing} {
 		if rememberable(fmt.Errorf("ctx: %w", verdict)) {
 			t.Fatalf("%v depends on the batch or the state and must not be remembered", verdict)
+		}
+		// Such a verdict leaves reject as an ordinary failure: not typed, so
+		// no peer is quarantined for it, and nothing remembered.
+		err := bridge.rejectIfValidation(candidate, validationFailure(fmt.Errorf("ctx: %w", verdict)))
+		var rejected *SideChainRejected
+		if errors.As(err, &rejected) || !errors.Is(err, verdict) {
+			t.Fatalf("%v must come back untyped with its cause, got %v", verdict, err)
+		}
+		if bridge.rejected.len() != 0 {
+			t.Fatalf("%v was remembered", verdict)
 		}
 	}
 	for _, verdict := range []error{verifier.ErrMChangesHashInvalid, verifier.ErrMProducerInvalid, constants.ErrAutoReceiveChangesHashMismatch, ErrSideChainKnownInvalid} {

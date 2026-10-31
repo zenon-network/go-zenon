@@ -35,6 +35,15 @@ func TestValidationErrorsListsEveryVerdict(t *testing.T) {
 	if declared == 0 || declared != len(validationErrors) {
 		t.Fatalf("validationErrors has %d entries, errors.go declares %d verdicts", len(validationErrors), declared)
 	}
+	// Equal counts prove the sets equal only if the list holds no
+	// duplicate: every entry is a declared sentinel by construction.
+	seen := make(map[error]bool, len(validationErrors))
+	for _, verdict := range validationErrors {
+		if verdict == nil || seen[verdict] {
+			t.Fatalf("validationErrors lists %v twice, so a declared verdict is missing", verdict)
+		}
+		seen[verdict] = true
+	}
 }
 
 func TestIsValidationError(t *testing.T) {
