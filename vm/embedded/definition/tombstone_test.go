@@ -13,9 +13,9 @@ import (
 // skipped instead of panicking the parse helpers, matching the
 // by-id getters' treatment of empty values as absent.
 //
-// The tombstone encoding is produced by enableDeleteDB.Delete(false),
-// which writes Put(key, []byte{}) — the same encoding that
-// AppendPatchToLevelDBBatch(..., false) writes during a Pop. Using
+// The tombstone encoding is produced by enableDeleteDB.Delete, which
+// writes Put(key, []byte{}) — the same encoding Pop leaves behind when
+// it applies the rollback patch through the delete-aware wrapper. Using
 // Delete() through the wrapper pins the encoding rather than assuming
 // it.
 
@@ -41,7 +41,7 @@ func TestGetAllSentinelInfoSkipsTombstones(t *testing.T) {
 	}
 
 	// Insert a second sentinel, then delete it through the enableDelete
-	// wrapper (fullDelete=false), which writes an empty-value tombstone.
+	// wrapper, which writes an empty-value tombstone.
 	tombstone := &SentinelInfo{
 		SentinelInfoKey: SentinelInfoKey{Owner: owner2},
 		ZnnAmount:       big.NewInt(300),
