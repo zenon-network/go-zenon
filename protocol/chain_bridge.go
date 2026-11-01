@@ -129,14 +129,17 @@ func (c chainBridge) InsertChain(momentums []*nom.DetailedMomentum) (int, error)
 }
 
 // InsertChainMoved inserts like InsertChain and also reports whether the
-// canonical frontier changed during the call. The comparison is made under
-// the insert lock the call holds, so it is attributable to this call alone:
-// a batch the node already had, or an extension that was rejected, reports
-// false; new momentums that stayed on the chain report true, also when a
-// later candidate in the batch failed. A side-chain replacement is rolled
-// back before it is applied and not restored when it fails on this release
-// line, so a rejected replacement reports true as well: the frontier is at
-// the fork point afterwards, and the retry from there is an extension.
+// call left the canonical frontier higher than it found it. The comparison
+// is made under the insert lock the call holds, so it is attributable to
+// this call alone: a batch the node already had, or an extension that was
+// rejected, reports false; new momentums that stayed on the chain report
+// true, also when a later candidate in the batch failed. A side-chain
+// replacement is rolled back to the fork point before it is applied and is
+// not restored when it fails on this release line, so a rejected replacement
+// leaves the frontier below where it started; that is a loss, not progress,
+// and it reports false, as it does on public dev where the branch is
+// restored. The retry from the fork point is an extension and reports false
+// as well.
 func (c chainBridge) InsertChainMoved(momentums []*nom.DetailedMomentum) (index int, moved bool, err error) {
 	index, err = c.insertChain(momentums, &moved)
 	return index, moved, err
@@ -169,8 +172,10 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 	if moved != nil {
 		before := store.Identifier()
 		// Runs before the unlock above, so the frontier read is this
-		// call's outcome and not a later insert's.
-		defer func() { *moved = c.chain.GetFrontierMomentumStore().Identifier() != before }()
+		// call's outcome and not a later insert's. Height, not identity:
+		// a rollback to the fork point changes the frontier without
+		// leaving the node any further along.
+		defer func() { *moved = c.chain.GetFrontierMomentumStore().Identifier().Height > before.Height }()
 	}
 
 	// remove momentums which we already have

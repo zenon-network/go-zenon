@@ -51,10 +51,14 @@ func (p *producerProgress) idleFor() time.Duration {
 // serving a known suffix cannot hold production; a valid prefix that stayed
 // on the chain before a later candidate failed is progress, since the
 // frontier moved on verified momentums; an extension that was rejected is
-// not. A replacement that was rolled back to the fork point and then
-// rejected counts once, since the frontier did move; its retry from the
-// fork point does not, so a peer serving the same rejected branch holds
-// production for one window and no longer.
+// not, and neither is a side-chain replacement that was rejected after the
+// rollback to the fork point: the frontier moved, but down, and on this
+// release line it stays there. Counting that would re-arm the window each
+// time the node produced above the fork point and was rolled back again by
+// the same branch, so a peer serving a rejected branch could mute production
+// indefinitely; not counting it means the window expires once and the
+// pillar produces between rollbacks. The rollback itself, and what it
+// discards, are the sync layer's problem (#239), not this gate's.
 func (pm *ProtocolManager) insertFromDownload(momentums []*nom.DetailedMomentum) (int, error) {
 	index, moved, err := pm.chainman.InsertChainMoved(momentums)
 	if moved {

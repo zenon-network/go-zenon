@@ -43,10 +43,13 @@ type chainManager interface {
 
 	InsertChain(chain []*nom.DetailedMomentum) (int, error)
 	// InsertChainMoved is InsertChain that also reports whether the
-	// canonical frontier is different after the call, read under the
-	// insert lock the call holds: false for a batch the node already had
-	// and for a replacement that was rejected and left the frontier where it
-	// was, true when the frontier changed, with or without a later error.
+	// canonical frontier is higher after the call than before it, read
+	// under the insert lock the call holds: false for a batch the node
+	// already had, for an extension that was rejected, and for a side-chain
+	// replacement that was rejected after the rollback to the fork point
+	// (this release line does not restore the branch, so the frontier ends
+	// below where it started); true when the frontier moved up, with or
+	// without a later error.
 	InsertChainMoved(chain []*nom.DetailedMomentum) (int, bool, error)
 }
 
