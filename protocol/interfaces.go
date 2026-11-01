@@ -42,6 +42,12 @@ type chainManager interface {
 	Status() (td uint64, currentBlock types.Hash, genesisBlock types.Hash)
 
 	InsertChain(chain []*nom.DetailedMomentum) (int, error)
+	// InsertChainMoved is InsertChain that also reports whether the
+	// canonical frontier is different after the call, read under the
+	// insert lock the call holds: false for a batch the node already had
+	// and for a replacement that was rejected and left the frontier where it
+	// was, true when the frontier changed, with or without a later error.
+	InsertChainMoved(chain []*nom.DetailedMomentum) (int, bool, error)
 }
 
 type ChainBridge interface {
@@ -51,6 +57,11 @@ type ChainBridge interface {
 
 type Broadcaster interface {
 	SyncInfo() *SyncInfo
+	// ReadyToProduce is the producer's gate: false while too few peers are
+	// connected or while a download session towards a higher advertised
+	// height is running, draining, or imported recently. See
+	// ProtocolManager.ReadyToProduce.
+	ReadyToProduce() bool
 	CreateMomentum(*nom.MomentumTransaction)
 	CreateAccountBlock(*nom.AccountBlockTransaction)
 }

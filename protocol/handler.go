@@ -45,6 +45,8 @@ type ProtocolManager struct {
 	downloader *downloader.Downloader
 	fetcher    *fetcher.Fetcher
 	peers      *peerSet
+	// progress is what ReadyToProduce measures the stall window from.
+	progress *producerProgress
 
 	SubProtocols []p2p.Protocol
 
@@ -68,6 +70,7 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 		txpool:    bridge,
 		chainman:  bridge,
 		peers:     newPeerSet(),
+		progress:  newProducerProgress(),
 		newPeerCh: make(chan *peer, 1),
 		txsyncCh:  make(chan *txsync),
 		quitSync:  make(chan struct{}),
@@ -94,7 +97,7 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 		manager.chainman.HasBlock,
 		manager.chainman.GetBlock,
 		manager.chainman.CurrentBlock,
-		manager.chainman.InsertChain,
+		manager.insertFromDownload,
 		manager.removePeer)
 
 	validator := func(block *nom.Momentum, parent *nom.Momentum) error {
