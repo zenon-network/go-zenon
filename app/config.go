@@ -121,10 +121,11 @@ func applyFlagsToConfig(ctx *cli.Context, cfg *node.Config) {
 
 // readConfigFromFile overlays the JSON config file onto cfg. An explicit
 // --config names the file, and a file that cannot be read or parsed is an
-// error. Without --config the file is <data path>/config.json: a file that
+// error. Without --config the file is <data path>/config.json: an entry that
 // does not exist is not an error and the defaults apply, but one that exists
-// and cannot be read or parsed is, so the node never starts on the defaults
-// in place of the operator's file. The flag's default value is only a
+// and cannot be read or parsed is (including a symlink whose target is
+// missing), so the node never starts on the defaults in place of the
+// operator's file. The flag's default value is only a
 // placeholder for the help text and is never opened.
 func readConfigFromFile(ctx *cli.Context, cfg *node.Config) error {
 	if file := ctx.String(ConfigFileFlag.Name); ctx.IsSet(ConfigFileFlag.Name) && file != "" {
@@ -150,6 +151,13 @@ func readConfigFromFile(ctx *cli.Context, cfg *node.Config) error {
 
 	jsonConf, err := os.ReadFile(configPath)
 	if errors.Is(err, fs.ErrNotExist) {
+		// A dangling symlink also reads as "does not exist", but the entry
+		// is there: only an entry that is itself absent means no file.
+		if _, lstatErr := os.Lstat(configPath); !errors.Is(lstatErr, fs.ErrNotExist) {
+			err = fmt.Errorf("config file %s exists but cannot be read (a symlink to a missing target?): %w", configPath, err)
+			log.Error("Config file exists but cannot be read", "configPath", configPath, "error", err)
+			return err
+		}
 		log.Warn("Config file missing: you can provide a data path using the --data flag or provide a config file using the --config flag", "configPath", configPath)
 		return nil
 	}

@@ -191,6 +191,33 @@ func TestConfig_UnreadableImplicitConfigIsAnError(t *testing.T) {
 	})
 }
 
+// A config.json that is a symlink to a missing target is reported by the
+// read as "does not exist", like an absent file. The entry is there, so the
+// operator meant a config file: that is an error, not a fallback to the
+// defaults. A genuinely absent entry still falls back.
+func TestConfig_DanglingSymlinkImplicitConfigIsAnError(t *testing.T) {
+	t.Run("missing file falls back to the defaults", func(t *testing.T) {
+		dataPath := t.TempDir()
+		stdout := captureStdout(t)
+		cfg, err := MakeConfig(configContext(t, "--"+DataPathFlag.Name, dataPath))
+		stdout()
+		if err != nil {
+			t.Fatalf("missing %s/config.json must not be an error: %v", dataPath, err)
+		}
+		if cfg.Name != node.DefaultNodeConfig.Name {
+			t.Fatalf("Name=%q, want the default %q", cfg.Name, node.DefaultNodeConfig.Name)
+		}
+	})
+	t.Run("dangling symlink", func(t *testing.T) {
+		dataPath := t.TempDir()
+		target := filepath.Join(t.TempDir(), "gone.json")
+		if err := os.Symlink(target, filepath.Join(dataPath, defaultNodeConfigFileName)); err != nil {
+			t.Skipf("cannot create a symlink here: %v", err)
+		}
+		requireImplicitConfigError(t, dataPath)
+	})
+}
+
 func requireImplicitConfigError(t *testing.T, dataPath string) {
 	t.Helper()
 	stdout := captureStdout(t)
