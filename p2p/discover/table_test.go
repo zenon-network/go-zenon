@@ -3,6 +3,7 @@ package discover
 import (
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -12,6 +13,7 @@ import (
 type heldPingTransport struct {
 	started chan NodeID
 	release chan error
+	onClose func() // optional, run by close
 }
 
 func (tr *heldPingTransport) ping(id NodeID, _ *net.UDPAddr) error {
@@ -25,7 +27,11 @@ func (tr *heldPingTransport) findnode(NodeID, *net.UDPAddr, NodeID) ([]*Node, er
 	return nil, nil
 }
 
-func (tr *heldPingTransport) close() {}
+func (tr *heldPingTransport) close() {
+	if tr.onClose != nil {
+		tr.onClose()
+	}
+}
 
 // fullBucket returns a bucket at capacity whose oldest entry is the last one.
 func fullBucket(t *testing.T) *bucket {
@@ -117,6 +123,240 @@ func TestPingReplaceRestoresRecordDeletedDuringRefresh(t *testing.T) {
 			if !tab.db.lastPong(oldest.ID).After(stale) {
 				t.Errorf("last pong of the entry that answered the refresh ping was not refreshed")
 			}
+		})
+	}
+}
+
+// lockWithin takes mu, giving up after d. It reports whether the lock was
+// taken; the caller must unlock it if so.
+func lockWithin(mu *sync.Mutex, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for !mu.TryLock() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return true
+}
+
+// bucketIDs returns the IDs in b, most recently active first. The caller
+// must hold tab.mutex.
+func bucketIDs(b *bucket) []NodeID {
+	ids := make([]NodeID, len(b.entries))
+	for i, n := range b.entries {
+		ids[i] = n.ID
+	}
+	return ids
+}
+
+func countID(ids []NodeID, id NodeID) int {
+	n := 0
+	for _, x := range ids {
+		if x == id {
+			n++
+		}
+	}
+	return n
+}
+
+// A full bucket pings its least recently active entry before a newcomer may
+// replace it. That ping waits up to respTimeout for the pong, and the table
+// lock must not be held meanwhile: the read loop takes it to answer
+// FINDNODE, so holding it would stall every inbound packet, including the
+// pong the ping is waiting for. Fails if pingreplace holds tab.mutex across
+// the ping.
+func TestFindnodeIsAnsweredWhileReplacementPingIsOutstanding(t *testing.T) {
+	u := newTestUDP(t, false)
+	tr := &heldPingTransport{started: make(chan NodeID, 1), release: make(chan error, 1), onClose: u.udp.close}
+	u.tab.net = tr
+	defer u.close(t, 5*time.Second)
+
+	peer := newSender(t, 40000)
+	if err := u.tab.db.updateNode(newNode(peer.id(), peer.addr.IP, uint16(peer.addr.Port), uint16(peer.addr.Port))); err != nil {
+		t.Fatal(err)
+	}
+	newcomer, b, oldest := bondableNewcomer(t, u.tab)
+
+	bonded := make(chan struct{})
+	go func() {
+		u.tab.bond(false, newcomer.ID, newcomer.addr(), newcomer.TCP)
+		close(bonded)
+	}()
+	select {
+	case id := <-tr.started:
+		if id != oldest.ID {
+			t.Fatalf("refresh pinged %x, want the oldest entry %x", id[:4], oldest.ID[:4])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh never pinged the oldest entry")
+	}
+
+	answered := make(chan error, 1)
+	go func() {
+		answered <- peer.deliver(u, findnodePacket, &findnode{
+			Target:     peer.id(),
+			Expiration: uint64(time.Now().Add(expiration).Unix()),
+		})
+	}()
+	stalled := false
+	select {
+	case err := <-answered:
+		if err != nil {
+			t.Errorf("FINDNODE from a bonded peer rejected: %v", err)
+		}
+		if got := u.conn.count(peer.addr, neighborsPacket); got == 0 {
+			t.Error("FINDNODE from a bonded peer got no NEIGHBORS reply")
+		}
+	case <-time.After(2 * time.Second):
+		stalled = true
+		t.Error("FINDNODE was not answered while the replacement ping was outstanding")
+	}
+
+	tr.release <- nil
+	select {
+	case <-bonded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("bond did not return after the replacement ping was answered")
+	}
+	if stalled {
+		select {
+		case <-answered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("FINDNODE handler did not return after the replacement ping was answered")
+		}
+	}
+	u.tab.mutex.Lock()
+	ids := bucketIDs(b)
+	u.tab.mutex.Unlock()
+	if countID(ids, oldest.ID) != 1 || countID(ids, newcomer.ID) != 0 {
+		t.Error("the oldest entry answered the ping but was replaced")
+	}
+}
+
+// bondableNewcomer returns a node that tab knows from its database, so a
+// bond with it goes straight to the table, together with its bucket, which
+// is filled to capacity, and that bucket's least recently active entry.
+func bondableNewcomer(t *testing.T, tab *Table) (newcomer *Node, b *bucket, oldest *Node) {
+	t.Helper()
+	newcomer = newNode(newTestNodeID(t), net.IPv4(10, 0, 1, 1), 30303, 30303)
+	if err := tab.db.updateNode(newcomer); err != nil {
+		t.Fatal(err)
+	}
+	tab.mutex.Lock()
+	defer tab.mutex.Unlock()
+	b = tab.buckets[logdist(tab.self.sha, newcomer.sha)]
+	b.entries = fullBucket(t).entries
+	return newcomer, b, b.entries[bucketSize-1]
+}
+
+// A bond with a node that is not in its full bucket pings the oldest entry
+// with the table unlocked, so the bucket can change before the outcome is
+// applied. A failed ping evicts the entry
+// that was pinged only if it is still the least recently active entry of a
+// full bucket; otherwise the newcomer is placed by what the bucket holds
+// now. Fails if the outcome is applied to a bucket that changed meanwhile.
+func TestReplacementRevalidatesBucketAfterPing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// change runs with tab.mutex held while the ping is outstanding.
+		change func(t *testing.T, b *bucket, oldest, newcomer *Node)
+		// check gets the bucket's IDs after bond returned.
+		check func(t *testing.T, ids []NodeID, oldest, newcomer *Node)
+	}{
+		{
+			name:   "unchanged bucket evicts the oldest entry",
+			change: func(*testing.T, *bucket, *Node, *Node) {},
+			check: func(t *testing.T, ids []NodeID, oldest, newcomer *Node) {
+				if len(ids) != bucketSize || ids[0] != newcomer.ID || countID(ids, oldest.ID) != 0 {
+					t.Errorf("unresponsive oldest entry was not replaced by the newcomer")
+				}
+			},
+		},
+		{
+			name: "oldest entry refreshed meanwhile is kept",
+			change: func(t *testing.T, b *bucket, oldest, _ *Node) {
+				// A concurrent bond with the oldest entry moves it to the front.
+				if !b.bump(newNode(oldest.ID, oldest.IP, oldest.UDP, oldest.TCP)) {
+					t.Fatal("precondition: oldest entry not in bucket")
+				}
+			},
+			check: func(t *testing.T, ids []NodeID, oldest, newcomer *Node) {
+				if countID(ids, oldest.ID) != 1 {
+					t.Errorf("entry refreshed while the ping was outstanding was evicted")
+				}
+				if countID(ids, newcomer.ID) != 0 {
+					t.Errorf("newcomer replaced another entry than the one that was pinged")
+				}
+				if len(ids) != bucketSize {
+					t.Errorf("bucket has %d entries, want %d", len(ids), bucketSize)
+				}
+			},
+		},
+		{
+			name: "oldest entry removed meanwhile frees a slot",
+			change: func(_ *testing.T, b *bucket, _, _ *Node) {
+				b.entries = b.entries[:bucketSize-1]
+			},
+			check: func(t *testing.T, ids []NodeID, oldest, newcomer *Node) {
+				if len(ids) != bucketSize || ids[0] != newcomer.ID || countID(ids, oldest.ID) != 0 {
+					t.Errorf("newcomer was not placed in the freed slot: %d entries", len(ids))
+				}
+			},
+		},
+		{
+			name: "newcomer added meanwhile is not duplicated",
+			change: func(_ *testing.T, b *bucket, _, newcomer *Node) {
+				// A concurrent bond put the newcomer at the front in place
+				// of another entry; the oldest entry is still last.
+				copy(b.entries[1:], b.entries[:3])
+				b.entries[0] = newcomer
+			},
+			check: func(t *testing.T, ids []NodeID, oldest, newcomer *Node) {
+				if countID(ids, newcomer.ID) != 1 {
+					t.Errorf("newcomer appears %d times, want 1", countID(ids, newcomer.ID))
+				}
+				if countID(ids, oldest.ID) != 1 {
+					t.Errorf("oldest entry was evicted although the newcomer was already in the bucket")
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := &heldPingTransport{started: make(chan NodeID, 1), release: make(chan error, 1)}
+			tab := newTable(tr, newTestNodeID(t), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 30303}, "")
+			defer tab.Close()
+
+			newcomer, b, oldest := bondableNewcomer(t, tab)
+
+			done := make(chan struct{})
+			go func() {
+				tab.bond(false, newcomer.ID, newcomer.addr(), newcomer.TCP)
+				close(done)
+			}()
+			select {
+			case <-tr.started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("refresh never pinged the oldest entry")
+			}
+			if !lockWithin(&tab.mutex, 2*time.Second) {
+				tr.release <- errors.New("timeout")
+				<-done
+				t.Fatal("table lock is held while the replacement ping is outstanding")
+			}
+			tc.change(t, b, oldest, newcomer)
+			tab.mutex.Unlock()
+
+			tr.release <- errors.New("timeout")
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("bond did not return after the ping failed")
+			}
+			tab.mutex.Lock()
+			ids := bucketIDs(b)
+			tab.mutex.Unlock()
+			tc.check(t, ids, oldest, newcomer)
 		})
 	}
 }
