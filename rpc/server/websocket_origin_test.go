@@ -110,3 +110,36 @@ func TestWebsocketHandler_OriginCheckDoesNotLeakGoroutines(t *testing.T) {
 		t.Fatalf("%d goroutines left behind by %d rejected handshakes", leaked, 2*requests)
 	}
 }
+
+// OriginRuleAdmitsAnyHost must agree with the handshake check: a rule it
+// calls open lets an origin on an unnamed host through, and a rule it calls
+// closed turns that origin away.
+func TestOriginRuleAdmitsAnyHost(t *testing.T) {
+	cases := []struct {
+		rule   string
+		origin string // an origin on a host the rule does not name
+		open   bool
+	}{
+		{"*", "http://attacker.invalid", true},
+		{"http://", "http://attacker.invalid", true},
+		{"HTTPS://", "https://attacker.invalid", true},
+		{"http://:8546", "http://attacker.invalid:8546", true},
+		{"http://wallet.example", "http://attacker.invalid", false},
+		{"http://wallet.example:8546", "http://attacker.invalid:8546", false},
+		{"wallet.example", "http://attacker.invalid", false},
+		{"http://localhost", "http://attacker.invalid", false},
+		{"", "http://attacker.invalid", false},
+	}
+	for _, c := range cases {
+		t.Run(c.rule, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Origin", c.origin)
+			if got := wsHandshakeValidator([]string{c.rule})(req); got != c.open {
+				t.Fatalf("handshake check admitted %s under %q: %v, want %v", c.origin, c.rule, got, c.open)
+			}
+			if got := OriginRuleAdmitsAnyHost(c.rule); got != c.open {
+				t.Fatalf("OriginRuleAdmitsAnyHost(%q) = %v, want %v", c.rule, got, c.open)
+			}
+		})
+	}
+}

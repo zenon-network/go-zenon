@@ -2,7 +2,9 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -119,8 +121,10 @@ func applyFlagsToConfig(ctx *cli.Context, cfg *node.Config) {
 
 // readConfigFromFile overlays the JSON config file onto cfg. An explicit
 // --config names the file, and a file that cannot be read or parsed is an
-// error. Without --config the file is <data path>/config.json, and a
-// missing file is not an error; the flag's default value is only a
+// error. Without --config the file is <data path>/config.json: a file that
+// does not exist is not an error and the defaults apply, but one that exists
+// and cannot be read or parsed is, so the node never starts on the defaults
+// in place of the operator's file. The flag's default value is only a
 // placeholder for the help text and is never opened.
 func readConfigFromFile(ctx *cli.Context, cfg *node.Config) error {
 	if file := ctx.String(ConfigFileFlag.Name); ctx.IsSet(ConfigFileFlag.Name) && file != "" {
@@ -144,15 +148,18 @@ func readConfigFromFile(ctx *cli.Context, cfg *node.Config) error {
 
 	configPath := filepath.Join(dataPath, defaultNodeConfigFileName)
 
-	if jsonConf, err := os.ReadFile(configPath); err == nil {
-		err = json.Unmarshal(jsonConf, &cfg)
-		if err == nil {
-			return nil
-		}
+	jsonConf, err := os.ReadFile(configPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		log.Warn("Config file missing: you can provide a data path using the --data flag or provide a config file using the --config flag", "configPath", configPath)
+		return nil
+	}
+	if err != nil {
+		log.Error("Config file exists but cannot be read", "configPath", configPath, "error", err)
+		return err
+	}
+	if err := json.Unmarshal(jsonConf, &cfg); err != nil {
 		log.Error("Config malformed: please check", "error", err)
 		return err
-	} else {
-		log.Warn("Config file missing: you can provide a data path using the --data flag or provide a config file using the --config flag", "configPath", configPath)
 	}
 	return nil
 }

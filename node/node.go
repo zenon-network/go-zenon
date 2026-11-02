@@ -206,7 +206,8 @@ func (s *sporkOracle) IsLibp2pActive() bool {
 //
 // If any step after startZenon fails, Start unwinds what was started —
 // the p2p server, RPC endpoints, Zenon core, wallet and data-dir lock —
-// so the caller can retry with corrected config or shut down cleanly.
+// and leaves the Node stopped for good: the database is closed and Wait
+// returns. To try again with corrected config, build a new Node.
 // The unwind calls the individual stop methods directly (not Stop) to
 // avoid re-acquiring the lock that Start already holds.
 //

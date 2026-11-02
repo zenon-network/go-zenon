@@ -3,6 +3,9 @@ package node
 import (
 	"fmt"
 	"net"
+	"strings"
+
+	rpc "github.com/zenon-network/go-zenon/rpc/server"
 )
 
 // rpcExposureWarning is one thing an operator running an RPC endpoint should
@@ -19,8 +22,8 @@ func (w rpcExposureWarning) String() string {
 
 // rpcExposureWarnings lists, for every live RPC listener, what reaches beyond
 // the local machine and which browser checks are disabled: one entry per
-// protocol per non-loopback bind, one per wildcard origin list, and one for a
-// wildcard HTTP virtual-host list. It reads the servers' actual state rather
+// protocol per non-loopback bind, one per origin list that admits browser
+// origins on any host, and one for a wildcard HTTP virtual-host list. It reads the servers' actual state rather
 // than the configuration, so it reports exactly what is bound. The shipped
 // defaults produce none.
 func (node *Node) rpcExposureWarnings() []rpcExposureWarning {
@@ -37,6 +40,8 @@ func (node *Node) rpcExposureWarnings() []rpcExposureWarning {
 			}
 			if hasWildcard(e.cors) {
 				warnings = append(warnings, rpcExposureWarning{"HTTP-RPC accepts any browser origin", "cors", "*"})
+			} else if pattern, ok := firstMatch(e.cors, corsPatternAdmitsAnyHost); ok {
+				warnings = append(warnings, rpcExposureWarning{"HTTP-RPC accepts browser origins on any host: the CORS pattern leaves the host open", "cors", pattern})
 			}
 			if hasWildcard(e.vhosts) {
 				warnings = append(warnings, rpcExposureWarning{"HTTP-RPC answers any Host header, so a page that rebinds a DNS name to this address is same-origin with it", "vhosts", "*"})
@@ -48,6 +53,8 @@ func (node *Node) rpcExposureWarnings() []rpcExposureWarning {
 			}
 			if hasWildcard(e.origins) {
 				warnings = append(warnings, rpcExposureWarning{"WS-RPC accepts any browser origin", "origins", "*"})
+			} else if rule, ok := firstMatch(e.origins, rpc.OriginRuleAdmitsAnyHost); ok {
+				warnings = append(warnings, rpcExposureWarning{"WS-RPC accepts browser origins on any host: the origin rule names no host", "origins", rule})
 			}
 		}
 	}
@@ -118,4 +125,42 @@ func hasWildcard(list []string) bool {
 		}
 	}
 	return false
+}
+
+// firstMatch returns the first item in list for which match is true.
+func firstMatch(list []string, match func(string) bool) (string, bool) {
+	for _, item := range list {
+		if match(item) {
+			return item, true
+		}
+	}
+	return "", false
+}
+
+// corsPatternAdmitsAnyHost reports whether a CORS origin pattern, as the
+// rs/cors middleware matches it, lets through an origin on a host the
+// operator did not name. The middleware treats "*" as allow-all and splits
+// any other pattern at its first '*' into a prefix and a suffix that the
+// origin must start and end with. The host is pinned only when the suffix
+// carries a dot-led domain ("https://*.wallet.example"), or when the
+// wildcard sits in the scheme so a literal host follows ("*://host").
+// Anything else ("http://*", "http://*:8545", "http://localhost*") admits
+// hosts of the sender's choosing.
+func corsPatternAdmitsAnyHost(pattern string) bool {
+	pattern = strings.ToLower(pattern)
+	if pattern == "*" {
+		return true
+	}
+	i := strings.IndexByte(pattern, '*')
+	if i < 0 {
+		return false
+	}
+	suffix := pattern[i+1:]
+	if strings.Contains(suffix, "://") {
+		return false
+	}
+	if j := strings.LastIndexByte(suffix, ':'); j >= 0 {
+		suffix = suffix[:j] // drop the port
+	}
+	return len(suffix) < 2 || suffix[0] != '.'
 }

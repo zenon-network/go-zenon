@@ -113,6 +113,22 @@ func wsHandshakeValidator(allowedOrigins []string) func(*http.Request) bool {
 	return f
 }
 
+// OriginRuleAdmitsAnyHost reports whether an allowed-origin rule, as the
+// handshake check applies it, places no constraint on the browser origin's
+// host: "*", or a rule that parses to an empty hostname such as "http://"
+// or "http://:8546", which admits every origin with that scheme (and port).
+// The check ignores an empty rule, so that reports false.
+func OriginRuleAdmitsAnyHost(rule string) bool {
+	if rule == "*" {
+		return true
+	}
+	if rule == "" {
+		return false
+	}
+	_, hostname, _, err := parseOriginURL(rule)
+	return err == nil && hostname == ""
+}
+
 type wsHandshakeError struct {
 	err    error
 	status string
