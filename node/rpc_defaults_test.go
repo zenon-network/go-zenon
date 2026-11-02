@@ -436,7 +436,7 @@ const (
 	wsOriginWarning   = "WS-RPC accepts any browser origin"
 	httpVhostWarning  = "HTTP-RPC answers any Host header"
 
-	httpOpenOriginWarning = "HTTP-RPC accepts browser origins on any host"
+	httpOpenOriginWarning = "HTTP-RPC accepts browser origins on every host a wildcard CORS pattern matches"
 	wsOpenOriginWarning   = "WS-RPC accepts browser origins on any host"
 )
 
@@ -456,7 +456,7 @@ type exposureWarnings struct {
 	httpBind, httpOrigin, httpVhost, wsBind, wsOrigin int
 
 	// httpOpenOrigin and wsOpenOrigin count the warnings for an origin
-	// rule other than "*" that still leaves the host open.
+	// rule other than "*" that leaves the host, or part of it, open.
 	httpOpenOrigin, wsOpenOrigin int
 }
 
@@ -602,11 +602,14 @@ func TestRPCExposureWarning(t *testing.T) {
 				cfg.HTTPCors, cfg.WSOrigins = []string{"http://*", "*"}, []string{"http://", "*"}
 			},
 			exposureWarnings{httpOrigin: 1, wsOrigin: 1}, false},
-		{"a subdomain CORS pattern and host-bearing WS rules do not warn",
+		{"a subdomain CORS pattern warns, host-bearing WS rules do not",
 			func(cfg *RPCConfig) {
 				cfg.HTTPCors = []string{"https://*.wallet.example"}
 				cfg.WSOrigins = []string{"https://wallet.example", "wallet.example", "http://localhost:8546"}
 			},
+			exposureWarnings{httpOpenOrigin: 1}, false},
+		{"CORS wildcards confined to the scheme or the port do not warn",
+			func(cfg *RPCConfig) { cfg.HTTPCors = []string{"*://wallet.example", "http://wallet.example:*"} },
 			exposureWarnings{}, false},
 	}
 	for _, layout := range listenerLayouts {

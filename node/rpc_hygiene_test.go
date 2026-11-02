@@ -44,40 +44,50 @@ func TestStopRPCClearsServersAfterFailedStart(t *testing.T) {
 	}
 }
 
-// corsPatternAdmitsAnyHost must agree with the CORS middleware: each
-// pattern it calls open lets an origin on a host the operator never named
-// through, and each pattern it calls closed turns that origin away.
-func TestCORSPatternAdmitsAnyHost(t *testing.T) {
+// corsPatternWildcardsHost must never miss a pattern the CORS middleware
+// uses to grant an origin on a host the operator did not name. It may warn
+// on more than that (a subdomain wildcard), but not on less.
+func TestCORSPatternWildcardsHost(t *testing.T) {
 	cases := []struct {
 		pattern string
 		origin  string // an origin on a host the pattern does not name
-		open    bool
+		granted bool   // the middleware grants origin under pattern
+		warns   bool
 	}{
-		{"*", "http://attacker.invalid", true},
-		{"http://*", "http://attacker.invalid", true},
-		{"HTTPS://*", "https://attacker.invalid", true},
-		{"http://*:8545", "http://attacker.invalid:8545", true},
-		{"http://localhost*", "http://localhost.attacker.invalid", true},
-		{"http://*wallet.example", "http://attackerwallet.example", true},
-		{"https://*.wallet.example", "https://attacker.invalid", false},
-		{"https://*.wallet.example:8545", "https://attacker.invalid:8545", false},
-		{"*.wallet.example", "http://attacker.invalid", false},
-		{"*://wallet.example", "http://attacker.invalid", false},
-		{"https://wallet.example", "https://attacker.invalid", false},
+		{"*", "http://attacker.invalid", true, true},
+		{"http://*", "http://attacker.invalid", true, true},
+		{"HTTPS://*", "https://attacker.invalid", true, true},
+		{"http://*:8545", "http://attacker.invalid:8545", true, true},
+		{"http://localhost*", "http://localhost.attacker.invalid", true, true},
+		{"http://*wallet.example", "http://attackerwallet.example", true, true},
+		{"http://*.com", "http://attacker.com", true, true},
+		{"https://*.co.uk", "https://attacker.co.uk", true, true},
+		{"ht*", "https://attacker.invalid", true, true},
+		{"https://*.wallet.example", "https://attacker.invalid", false, true},
+		{"https://*.wallet.example:8545", "https://attacker.invalid:8545", false, true},
+		{"*.wallet.example", "http://attacker.invalid", false, true},
+		{"http://[::*]", "http://attacker.invalid", false, true},
+		{"*://wallet.example", "http://attacker.invalid", false, false},
+		{"http://wallet.example:*", "http://wallet.example.attacker.invalid", false, false},
+		{"http://[::1]:*", "http://attacker.invalid", false, false},
+		{"https://wallet.example", "https://attacker.invalid", false, false},
 	}
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	for _, c := range cases {
 		t.Run(c.pattern, func(t *testing.T) {
+			if c.granted && !c.warns {
+				t.Fatalf("table row %q: a pattern that grants an unnamed host must warn", c.pattern)
+			}
 			req := httptest.NewRequest(http.MethodPost, "/", nil)
 			req.Header.Set("Origin", c.origin)
 			rec := httptest.NewRecorder()
 			newCorsHandler(ok, []string{c.pattern}).ServeHTTP(rec, req)
 			granted := rec.Header().Get("Access-Control-Allow-Origin") != ""
-			if granted != c.open {
-				t.Fatalf("middleware granted %s under %q: %v, want %v", c.origin, c.pattern, granted, c.open)
+			if granted != c.granted {
+				t.Fatalf("middleware granted %s under %q: %v, want %v", c.origin, c.pattern, granted, c.granted)
 			}
-			if got := corsPatternAdmitsAnyHost(c.pattern); got != c.open {
-				t.Fatalf("corsPatternAdmitsAnyHost(%q) = %v, want %v", c.pattern, got, c.open)
+			if got := corsPatternWildcardsHost(c.pattern); got != c.warns {
+				t.Fatalf("corsPatternWildcardsHost(%q) = %v, want %v", c.pattern, got, c.warns)
 			}
 		})
 	}
@@ -96,11 +106,10 @@ func (b blockingProbe) Block() string {
 }
 
 // stop must not wait on an HTTP request that does not finish: past the
-// shutdown bound it closes the connection and returns.
+// shutdown bound it closes the connection, so the client sees it drop while
+// the handler is still blocked, and returns.
 func TestHTTPServerStopBoundsInFlightRequest(t *testing.T) {
 	probe := blockingProbe{entered: make(chan struct{}, 1), release: make(chan struct{})}
-	t.Cleanup(func() { close(probe.release) })
-
 	h := newHTTPServer(rpc.DefaultHTTPTimeouts)
 	h.shutdownTimeout = 100 * time.Millisecond
 	if err := h.setListenAddr("127.0.0.1", 0); err != nil {
@@ -113,13 +122,28 @@ func TestHTTPServerStopBoundsInFlightRequest(t *testing.T) {
 	if err := h.start(); err != nil {
 		t.Fatal(err)
 	}
+	addr := h.listenAddr()
+
+	clientErr := make(chan error, 1)
+	// Cleanups run last-in first-out: stop the server, release the
+	// handler, then wait for the client so nothing outlives the test.
+	t.Cleanup(func() {
+		select {
+		case <-clientErr:
+		case <-time.After(stackTestTimeout):
+			t.Error("the client goroutine did not finish")
+		}
+	})
+	t.Cleanup(func() { close(probe.release) })
+	t.Cleanup(h.stop)
 
 	go func() {
 		body := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"probe.block","params":[]}`)
-		resp, err := http.Post("http://"+h.listenAddr(), "application/json", body)
+		resp, err := http.Post("http://"+addr, "application/json", body)
 		if err == nil {
 			_ = resp.Body.Close()
 		}
+		clientErr <- err
 	}()
 	select {
 	case <-probe.entered:
@@ -139,6 +163,18 @@ func TestHTTPServerStopBoundsInFlightRequest(t *testing.T) {
 	}
 	if addr := h.exposure().addr; addr != nil {
 		t.Fatalf("server still listens on %s after stop", addr)
+	}
+
+	// The handler is still blocked: only closing the connection can end
+	// the client's request now.
+	select {
+	case err := <-clientErr:
+		clientErr <- err // for the cleanup
+		if err == nil {
+			t.Fatal("the client got a response although the handler never returned")
+		}
+	case <-time.After(stackTestTimeout):
+		t.Fatal("the client's connection was not closed after stop")
 	}
 }
 

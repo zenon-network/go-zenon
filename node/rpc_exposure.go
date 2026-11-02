@@ -40,8 +40,8 @@ func (node *Node) rpcExposureWarnings() []rpcExposureWarning {
 			}
 			if hasWildcard(e.cors) {
 				warnings = append(warnings, rpcExposureWarning{"HTTP-RPC accepts any browser origin", "cors", "*"})
-			} else if pattern, ok := firstMatch(e.cors, corsPatternAdmitsAnyHost); ok {
-				warnings = append(warnings, rpcExposureWarning{"HTTP-RPC accepts browser origins on any host: the CORS pattern leaves the host open", "cors", pattern})
+			} else if pattern, ok := firstMatch(e.cors, corsPatternWildcardsHost); ok {
+				warnings = append(warnings, rpcExposureWarning{"HTTP-RPC accepts browser origins on every host a wildcard CORS pattern matches", "cors", pattern})
 			}
 			if hasWildcard(e.vhosts) {
 				warnings = append(warnings, rpcExposureWarning{"HTTP-RPC answers any Host header, so a page that rebinds a DNS name to this address is same-origin with it", "vhosts", "*"})
@@ -137,16 +137,17 @@ func firstMatch(list []string, match func(string) bool) (string, bool) {
 	return "", false
 }
 
-// corsPatternAdmitsAnyHost reports whether a CORS origin pattern, as the
-// rs/cors middleware matches it, lets through an origin on a host the
-// operator did not name. The middleware treats "*" as allow-all and splits
-// any other pattern at its first '*' into a prefix and a suffix that the
-// origin must start and end with. The host is pinned only when the suffix
-// carries a dot-led domain ("https://*.wallet.example"), or when the
-// wildcard sits in the scheme so a literal host follows ("*://host").
-// Anything else ("http://*", "http://*:8545", "http://localhost*") admits
-// hosts of the sender's choosing.
-func corsPatternAdmitsAnyHost(pattern string) bool {
+// corsPatternWildcardsHost reports whether a CORS origin pattern, as the
+// rs/cors middleware matches it, leaves any part of the origin's host to
+// the wildcard. The middleware treats "*" as allow-all and splits any other
+// pattern at its first '*' into a prefix and a suffix that the origin must
+// start and end with, so "http://*", "http://localhost*" and
+// "https://*.com" all match hosts of the sender's choosing. A subdomain
+// pattern ("https://*.wallet.example") is reported too: whether every host
+// under that domain is the operator's is not something the pattern shows.
+// Only a wildcard confined to the scheme ("*://wallet.example") or to the
+// port ("http://wallet.example:*") leaves the host literal.
+func corsPatternWildcardsHost(pattern string) bool {
 	pattern = strings.ToLower(pattern)
 	if pattern == "*" {
 		return true
@@ -155,12 +156,19 @@ func corsPatternAdmitsAnyHost(pattern string) bool {
 	if i < 0 {
 		return false
 	}
-	suffix := pattern[i+1:]
+	prefix, suffix := pattern[:i], pattern[i+1:]
 	if strings.Contains(suffix, "://") {
-		return false
+		return false // in the scheme: a literal host follows
 	}
-	if j := strings.LastIndexByte(suffix, ':'); j >= 0 {
-		suffix = suffix[:j] // drop the port
+	j := strings.Index(prefix, "://")
+	if j < 0 {
+		return true
 	}
-	return len(suffix) < 2 || suffix[0] != '.'
+	host := prefix[j+3:]
+	if k := strings.LastIndexByte(host, ']'); k >= 0 {
+		host = host[k+1:] // past a bracketed IPv6 literal
+	} else if strings.HasPrefix(host, "[") {
+		return true // inside an IPv6 literal
+	}
+	return !strings.Contains(host, ":") // after the host's ':' it is the port
 }
