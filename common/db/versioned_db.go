@@ -619,7 +619,9 @@ func (m *ldbManager) GetPatch(identifier types.HashHeight) Patch {
 	return m.getPatch(identifier)
 }
 func (m *ldbManager) getPatch(identifier types.HashHeight) Patch {
-	snapshot, _ := m.ldb.GetSnapshot()
+	snapshot, err := m.ldb.GetSnapshot()
+	common.DealWithErr(err)
+	defer snapshot.Release()
 	value, err := snapshot.Get(common.JoinBytes(patchByte, common.Uint64ToBytes(identifier.Height)), nil)
 	if err == leveldb.ErrNotFound {
 		return nil
@@ -631,7 +633,9 @@ func (m *ldbManager) getPatch(identifier types.HashHeight) Patch {
 	return patch
 }
 func (m *ldbManager) getRollback(height uint64) Patch {
-	snapshot, _ := m.ldb.GetSnapshot()
+	snapshot, err := m.ldb.GetSnapshot()
+	common.DealWithErr(err)
+	defer snapshot.Release()
 	value, err := snapshot.Get(common.JoinBytes(rollbackByte, common.Uint64ToBytes(height)), nil)
 	if err == leveldb.ErrNotFound {
 		return nil
@@ -675,7 +679,10 @@ func (m *ldbManager) Add(transaction Transaction) error {
 		}
 	}
 
-	rollbackPatch := RollbackPatch(db, patch)
+	rollbackPatch, err := RollbackPatch(db, patch)
+	if err != nil {
+		return err
+	}
 	batch := new(leveldb.Batch)
 	batch.Put(common.JoinBytes(patchByte, common.Uint64ToBytes(identifier.Height)), patch.Dump())
 	batch.Put(common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height)), rollbackPatch.Dump())

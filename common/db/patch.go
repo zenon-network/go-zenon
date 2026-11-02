@@ -54,14 +54,20 @@ func (pp *patchPrinter) Delete(key []byte) {
 }
 
 type patchRollback struct {
-	db DB
-	rb Patch
+	db  DB
+	rb  Patch
+	err error // first read that failed for a reason other than ErrNotFound
 }
 
 func (pr *patchRollback) rollback(key []byte) {
+	if pr.err != nil {
+		return
+	}
 	value, err := pr.db.Get(key)
 	if err == leveldb.ErrNotFound {
 		pr.rb.Delete(key)
+	} else if err != nil {
+		pr.err = fmt.Errorf("can't read %v to build the rollback patch: %w", hex.EncodeToString(key), err)
 	} else {
 		pr.rb.Put(key, value)
 	}
@@ -303,8 +309,10 @@ func ApplyWithoutOverride(db db, patch Patch) error {
 // returned patch after patch itself leaves db unchanged; the
 // LevelDB-backed Manager persists these inverses to undo and to
 // reconstruct historical versions. The patch must not have been
-// applied to db yet. It panics if patch cannot be replayed.
-func RollbackPatch(db DB, patch Patch) Patch {
+// applied to db yet. A read of db that fails for any reason other than
+// the key being absent leaves the inverse unknown and is returned as an
+// error, with no patch. It panics if patch cannot be replayed.
+func RollbackPatch(db DB, patch Patch) (Patch, error) {
 	pr := &patchRollback{
 		db: db,
 		rb: NewPatch(),
@@ -313,5 +321,8 @@ func RollbackPatch(db DB, patch Patch) Patch {
 	err := patch.Replay(pr)
 	common.DealWithErr(err)
 
-	return pr.rb
+	if pr.err != nil {
+		return nil, pr.err
+	}
+	return pr.rb, nil
 }

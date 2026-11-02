@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/zenon-network/go-zenon/common"
@@ -23,7 +24,8 @@ func TestRollbackPatch(t *testing.T) {
 	db2.Delete([]byte{4, 1, 2})
 
 	p1, _ := db2.Changes()
-	rp1 := RollbackPatch(db1, p1)
+	rp1, err := RollbackPatch(db1, p1)
+	common.FailIfErr(t, err)
 
 	common.ExpectString(t, DebugPatch(rp1), `
 010203 - 64
@@ -81,4 +83,51 @@ func TestFrontierWriteKeysAreCopies(t *testing.T) {
 		t.Fatal("modifying a returned key altered the key returned next time")
 	}
 	common.ExpectString(t, string(again[0]), string(frontierIdentifierKey))
+}
+
+// failingGetDB fails reads of one key with a store error other than
+// ErrNotFound.
+type failingGetDB struct {
+	DB
+	key []byte
+	err error
+}
+
+func (f *failingGetDB) Get(key []byte) ([]byte, error) {
+	if string(key) == string(f.key) {
+		return nil, f.err
+	}
+	return f.DB.Get(key)
+}
+
+// RollbackPatch records, for each key the patch touches, the value the key
+// has now. A read that fails for a reason other than the key being absent
+// leaves that value unknown: the inverse cannot be built, and recording the
+// key as empty would make a later rollback write the wrong value.
+func TestRollbackPatchPropagatesReadError(t *testing.T) {
+	base := NewMemDB()
+	common.FailIfErr(t, base.Put([]byte{1}, []byte{10}))
+	common.FailIfErr(t, base.Put([]byte{2}, []byte{20}))
+
+	patch := NewPatch()
+	patch.Put([]byte{1}, []byte{11})
+	patch.Put([]byte{2}, []byte{21})
+	patch.Delete([]byte{3})
+
+	readErr := errors.New("injected read failure")
+	rollback, err := RollbackPatch(&failingGetDB{DB: base, key: []byte{2}, err: readErr}, patch)
+	if !errors.Is(err, readErr) {
+		t.Fatalf("RollbackPatch with a failing read = (%v, %v), want the read error", rollback, err)
+	}
+	if rollback != nil {
+		t.Fatalf("RollbackPatch returned an inverse beside its error:%s", DebugPatch(rollback))
+	}
+
+	// Absent keys are still recorded as deletes.
+	rollback, err = RollbackPatch(base, patch)
+	common.FailIfErr(t, err)
+	common.ExpectString(t, DebugPatch(rollback), `
+01 - 0a
+02 - 14
+03 - DELETE`)
 }

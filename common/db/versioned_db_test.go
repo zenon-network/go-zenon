@@ -2068,3 +2068,43 @@ func TestMemDBManagerStopConcurrentWithAdd(t *testing.T) {
 	}
 	common.FailIfErr(t, m.Stop())
 }
+
+// aliveSnapshots reads goleveldb's count of snapshots not yet released.
+func aliveSnapshots(t *testing.T, m *ldbManager) int {
+	t.Helper()
+	v, err := m.ldb.GetProperty("leveldb.alivesnaps")
+	common.FailIfErr(t, err)
+	var n int
+	if _, err := fmt.Sscan(v, &n); err != nil {
+		t.Fatalf("leveldb.alivesnaps = %q: %v", v, err)
+	}
+	return n
+}
+
+// getPatch and getRollback read one key from a fresh snapshot and return a
+// copy of it. They release the snapshot themselves rather than leave it to
+// the garbage collector's finalizer.
+func TestLevelDBManagerPatchReadsReleaseSnapshots(t *testing.T) {
+	m := mustNewLevelDBManager(t, t.TempDir()).(*ldbManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+	for seed := int64(1); seed <= 3; seed++ {
+		common.FailIfErr(t, m.Add(newMockTransaction(seed, m.Frontier())))
+	}
+	frontier := GetFrontierIdentifier(m.Frontier())
+
+	before := aliveSnapshots(t, m)
+	const reads = 50
+	for i := 0; i < reads; i++ {
+		if m.GetPatch(frontier) == nil {
+			t.Fatal("no patch at the frontier")
+		}
+		for height := uint64(1); height <= frontier.Height; height++ {
+			if m.getRollback(height) == nil {
+				t.Fatalf("no rollback at height %d", height)
+			}
+		}
+	}
+	if after := aliveSnapshots(t, m); after != before {
+		t.Fatalf("%d patch and rollback reads left %d snapshots alive (before %d)", reads*(1+int(frontier.Height)), after, before)
+	}
+}

@@ -286,3 +286,25 @@ func TestGetMomentumPatchReturnsIndependentCopy(t *testing.T) {
 		t.Fatal("altering the returned patch changed what is returned next")
 	}
 }
+
+// RollbackTo a height the chain does not have is an error, and nothing is
+// popped. The store answers a missing height with (nil, nil).
+func TestRollbackToMissingTargetIsAnError(t *testing.T) {
+	manager := &fakeMomentumManagerDB{frontiers: newMomentumFrontiers(2)}
+	pool, listener := newTestMomentumPool(manager)
+
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("RollbackTo(height 3) on a two-momentum chain panicked: %v", r)
+			}
+		}()
+		err = pool.RollbackTo(&sync.Mutex{}, testHashHeight(3))
+	}()
+
+	common.ExpectTrue(t, err != nil)
+	common.Expect(t, manager.popCalls, 0)
+	common.Expect(t, listener.deletes, 0)
+	common.Expect(t, db.GetFrontierIdentifier(manager.Frontier()), testHashHeight(2))
+}

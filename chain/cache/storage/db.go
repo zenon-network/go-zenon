@@ -161,7 +161,10 @@ func (m *cacheManager) Add(identifier types.HashHeight, patch db.Patch) error {
 		return leveldb.ErrClosed
 	}
 
-	rollbackPatch := db.RollbackPatch(db.NewLevelDBWrapperWithFullDelete(m.ldb).Subset(storageByte), patch)
+	rollbackPatch, err := db.RollbackPatch(db.NewLevelDBWrapperWithFullDelete(m.ldb).Subset(storageByte), patch)
+	if err != nil {
+		return err
+	}
 	batch := new(leveldb.Batch)
 	batch.Put(common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height)), rollbackPatch.Dump())
 	if identifier.Height > rollbackCacheSize {
