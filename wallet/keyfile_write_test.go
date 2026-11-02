@@ -183,6 +183,32 @@ func TestKeyFileWriteResolvesTheDirectoryLikeTheRename(t *testing.T) {
 	}
 }
 
+// keyFileDir keeps the directory as Path spells it and never turns a
+// relative path into the drive root.
+func TestKeyFileDir(t *testing.T) {
+	cases := []struct{ path, want string }{
+		{"wallet", "."},
+		{"dir/wallet", "dir/"},
+		{"/abs/dir/wallet", "/abs/dir/"},
+		{"A/link/../wallet", "A/link/../"},
+	}
+	if runtime.GOOS == "windows" {
+		cases = []struct{ path, want string }{
+			{`wallet`, `.`},
+			{`dir\wallet`, `dir\`},
+			{`C:wallet`, `C:.`},
+			{`C:\wallet`, `C:\`},
+			{`C:\dir\wallet`, `C:\dir\`},
+			{`\\server\share\wallet`, `\\server\share\`},
+		}
+	}
+	for _, c := range cases {
+		if got := keyFileDir(c.path); got != c.want {
+			t.Errorf("keyFileDir(%q) = %q, want %q", c.path, got, c.want)
+		}
+	}
+}
+
 // The base address in a key file is in the clear. Decrypt derives the
 // address from the decrypted seed, so a file that advertises another one
 // has been edited, and must not open as if it were what it claims to be.

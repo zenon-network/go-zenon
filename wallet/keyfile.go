@@ -103,10 +103,7 @@ func (kf *KeyFile) Write() error {
 	if err != nil {
 		return err
 	}
-	dir, _ := filepath.Split(kf.Path)
-	if dir == "" {
-		dir = "."
-	}
+	dir := keyFileDir(kf.Path)
 	tmp, err := os.CreateTemp(dir, ".keyfile-*.tmp")
 	if err != nil {
 		return err
@@ -134,6 +131,19 @@ func (kf *KeyFile) Write() error {
 	tmpPath = ""
 	syncDir(dir)
 	return nil
+}
+
+// keyFileDir returns the directory path lives in, as path spells it: it is
+// not cleaned, so "A/link/../wallet" gives "A/link/../", which the kernel
+// resolves exactly as it resolves path. A path with no directory part
+// gives ".", and on Windows a drive-relative path ("C:wallet") gives "C:.",
+// the current directory on that drive, not the drive's root.
+func keyFileDir(path string) string {
+	dir, _ := filepath.Split(path)
+	if dir == "" || dir == filepath.VolumeName(path) {
+		dir += "."
+	}
+	return dir
 }
 
 // syncDir makes a rename in dir durable where the platform supports it.
