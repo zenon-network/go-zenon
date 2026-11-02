@@ -496,8 +496,11 @@ type ldbManager struct {
 	l2Cache  *lru.Cache
 	ldb      *leveldb.DB
 	write    func(*leveldb.Batch) error
-	changes  sync.Mutex
-	stopped  bool
+	// rollbackPatch builds the inverse in Add; RollbackPatch in production,
+	// replaceable by tests like write.
+	rollbackPatch func(DB, Patch) (Patch, error)
+	changes       sync.Mutex
+	stopped       bool
 }
 
 // NewLevelDBManager opens (or creates) the versioned database in dir
@@ -528,6 +531,7 @@ func NewLevelDBManager(dir string) (Manager, error) {
 		write: func(batch *leveldb.Batch) error {
 			return ldb.Write(batch, nil)
 		},
+		rollbackPatch: RollbackPatch,
 	}, nil
 }
 
@@ -679,7 +683,7 @@ func (m *ldbManager) Add(transaction Transaction) error {
 		}
 	}
 
-	rollbackPatch, err := RollbackPatch(db, patch)
+	rollbackPatch, err := m.rollbackPatch(db, patch)
 	if err != nil {
 		return err
 	}
