@@ -569,8 +569,10 @@ type AccountBlockMarshal struct {
 
 // ToNomMarshalJson converts the block to its JSON wire
 // representation, rendering Amount as a base-10 string and Nonce as
-// hex; descendants are converted recursively. A nil Amount renders as
-// the string "<nil>".
+// hex; descendants are converted recursively, and a nil descendant
+// entry is kept as a nil entry, which encodes as JSON null (and which
+// the decoders refuse by index). A nil Amount renders as the string
+// "<nil>".
 func (ab *AccountBlock) ToNomMarshalJson() *AccountBlockMarshal {
 	aux := &AccountBlockMarshal{
 		Version:              ab.Version,
@@ -598,6 +600,10 @@ func (ab *AccountBlock) ToNomMarshalJson() *AccountBlockMarshal {
 
 	aux.DescendantBlocks = make([]*AccountBlockMarshal, 0, len(ab.DescendantBlocks))
 	for _, dBlock := range ab.DescendantBlocks {
+		if dBlock == nil {
+			aux.DescendantBlocks = append(aux.DescendantBlocks, nil)
+			continue
+		}
 		aux.DescendantBlocks = append(aux.DescendantBlocks, dBlock.ToNomMarshalJson())
 	}
 	return aux
@@ -606,11 +612,12 @@ func (ab *AccountBlock) ToNomMarshalJson() *AccountBlockMarshal {
 // FromNomMarshalJson converts the wire representation back to an
 // AccountBlock, descendants included. It does not validate: an Amount
 // string that is not a valid base-10 integer silently decodes to 0
-// (common.StringToBigInt), and an invalid Nonce string is silently
+// (common.StringToBigInt), an invalid Nonce string is silently
 // ignored, leaving the nonce zero — unlike AccountBlock.UnmarshalJSON,
-// which reports a nonce error. The JSON decoders call Check first, so
-// the trees they hand over are bounded and their descendants' nonces
-// valid.
+// which reports a nonce error — and a nil descendant entry is kept as
+// a nil entry. The JSON decoders call Check first, so the trees they
+// hand over are bounded, free of nil entries, and their descendants'
+// nonces valid.
 func (ab *AccountBlockMarshal) FromNomMarshalJson() *AccountBlock {
 	aux := &AccountBlock{
 		Version:              ab.Version,
@@ -639,6 +646,10 @@ func (ab *AccountBlockMarshal) FromNomMarshalJson() *AccountBlock {
 
 	aux.DescendantBlocks = make([]*AccountBlock, 0, len(ab.DescendantBlocks))
 	for _, dBlock := range ab.DescendantBlocks {
+		if dBlock == nil {
+			aux.DescendantBlocks = append(aux.DescendantBlocks, nil)
+			continue
+		}
 		aux.DescendantBlocks = append(aux.DescendantBlocks, dBlock.FromNomMarshalJson())
 	}
 	return aux

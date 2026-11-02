@@ -272,3 +272,55 @@ func TestAccountBlockMarshal_Check_DescendantDepthIsBounded(t *testing.T) {
 		t.Fatalf("MaxAmountDigits = %d, want the %d digits of 2^255-1", MaxAmountDigits, len(common.BigP255m1.String()))
 	}
 }
+
+// A nil entry in DescendantBlocks is not a valid block, but encoding one
+// must behave as it did before descendants were converted on the way
+// out: the entry is preserved as JSON null (which the decoders then
+// refuse by index), never dereferenced. Both the immediate nil and one
+// below a non-nil child, and the same through FromNomMarshalJson.
+func TestAccountBlock_MarshalJSON_PreservesNilDescendantEntries(t *testing.T) {
+	cases := []struct {
+		name  string
+		block *AccountBlock
+		want  string
+		null  string // the index path of the null, for the decoder's error
+	}{
+		{
+			name:  "immediate nil",
+			block: &AccountBlock{Height: 1, DescendantBlocks: []*AccountBlock{nil}},
+			want:  `"descendantBlocks":[null]`,
+			null:  "index 0",
+		},
+		{
+			name: "nil below a non-nil child",
+			block: &AccountBlock{Height: 1, DescendantBlocks: []*AccountBlock{
+				{Height: 2, DescendantBlocks: []*AccountBlock{{Height: 3}, nil}},
+			}},
+			want: `"height":3,`,
+			null: "index 0: descendant block at index 1 is null",
+		},
+	}
+	for _, c := range cases {
+		encoded, err := json.Marshal(c.block)
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", c.name, err)
+		}
+		if !strings.Contains(string(encoded), c.want) || !strings.Contains(string(encoded), "null]") {
+			t.Fatalf("%s: encoded %.120s..., want it to contain %q and a null list entry", c.name, encoded, c.want)
+		}
+		// The wire form keeps the nil as before, and the decoder refuses
+		// it by index as before.
+		wire := c.block.ToNomMarshalJson()
+		if len(wire.DescendantBlocks) != len(c.block.DescendantBlocks) {
+			t.Fatalf("%s: wire form has %d descendants, want %d", c.name, len(wire.DescendantBlocks), len(c.block.DescendantBlocks))
+		}
+		if _, err := decodeBlockJSON(t, string(encoded)); err == nil || !strings.Contains(err.Error(), c.null) {
+			t.Fatalf("%s: decoding the encoded form: err = %v, want a null error at %q", c.name, err, c.null)
+		}
+		// Converting a wire form that carries a nil keeps the nil too.
+		back := wire.FromNomMarshalJson()
+		if len(back.DescendantBlocks) != len(wire.DescendantBlocks) {
+			t.Fatalf("%s: FromNomMarshalJson has %d descendants, want %d", c.name, len(back.DescendantBlocks), len(wire.DescendantBlocks))
+		}
+	}
+}
