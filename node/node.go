@@ -281,6 +281,11 @@ func (node *Node) unwindStart() {
 // Every cleanup step runs even when an earlier one fails; the returned
 // error is the join of the wallet and core stop errors (stopRPC and
 // closeDataDir log their own), matching zenon.Stop.
+//
+// The RPC servers wait a bounded time for in-flight HTTP requests and then
+// close their connections. That bounds Stop, not the RPC methods: a method
+// that does not watch its context can still be running when Stop returns
+// and Wait unblocks, after the Zenon core it reads from has been stopped.
 func (node *Node) Stop() error {
 	node.lock.Lock()
 	defer node.lock.Unlock()
@@ -312,7 +317,8 @@ func (node *Node) Stop() error {
 	return stderrors.Join(errs...)
 }
 
-// Wait blocks until the node is stopped.
+// Wait blocks until the node is stopped. Like Stop, it does not wait for
+// RPC methods that ignore their context; see Stop.
 func (node *Node) Wait() {
 	<-node.stop
 }

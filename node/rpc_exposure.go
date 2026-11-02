@@ -139,14 +139,17 @@ func firstMatch(list []string, match func(string) bool) (string, bool) {
 
 // corsPatternWildcardsHost reports whether a CORS origin pattern, as the
 // rs/cors middleware matches it, leaves any part of the origin's host to
-// the wildcard. The middleware treats "*" as allow-all and splits any other
-// pattern at its first '*' into a prefix and a suffix that the origin must
-// start and end with, so "http://*", "http://localhost*" and
-// "https://*.com" all match hosts of the sender's choosing. A subdomain
-// pattern ("https://*.wallet.example") is reported too: whether every host
-// under that domain is the operator's is not something the pattern shows.
-// Only a wildcard confined to the scheme ("*://wallet.example") or to the
-// port ("http://wallet.example:*") leaves the host literal.
+// the wildcard. It follows rs/cors v1.8.2 (cors.go New, utils.go
+// wildcard.match): "*" is allow-all, and any other pattern is split at its
+// first '*' into a prefix and a suffix that the origin must start and end
+// with. So "http://*", "http://localhost*" and "https://*.com" all match
+// hosts of the sender's choosing. TestCORSPatternWildcardsHost checks this
+// against the middleware itself, so an rs/cors upgrade that changes the
+// rule fails there. A subdomain pattern ("https://*.wallet.example") is
+// reported too: whether every host under that domain is the operator's is
+// not something the pattern shows. Only a wildcard confined to the scheme
+// ("*://wallet.example") or to the port ("http://wallet.example:*") leaves
+// the host literal.
 func corsPatternWildcardsHost(pattern string) bool {
 	pattern = strings.ToLower(pattern)
 	if pattern == "*" {
