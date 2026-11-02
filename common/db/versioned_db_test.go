@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -2081,9 +2084,30 @@ func aliveSnapshots(t *testing.T, m *ldbManager) int {
 	return n
 }
 
+// settledSnapshots runs the garbage collector until goleveldb's finalizers
+// have released every unreferenced snapshot, so the count stops moving,
+// and returns that count.
+func settledSnapshots(t *testing.T, m *ldbManager) int {
+	t.Helper()
+	n := aliveSnapshots(t, m)
+	for i := 0; i < 50; i++ {
+		runtime.GC()
+		time.Sleep(10 * time.Millisecond) // finalizers run on their own goroutine
+		next := aliveSnapshots(t, m)
+		if next == n && i > 0 {
+			return n
+		}
+		n = next
+	}
+	t.Fatalf("snapshot count did not settle (last %d)", n)
+	return n
+}
+
 // getPatch and getRollback read one key from a fresh snapshot and return a
 // copy of it. They release the snapshot themselves rather than leave it to
-// the garbage collector's finalizer.
+// the garbage collector's finalizer. The count is taken with the collector
+// off, after the setup's own snapshots have been finalized, so neither a
+// late finalizer nor a collection during the reads moves it.
 func TestLevelDBManagerPatchReadsReleaseSnapshots(t *testing.T) {
 	m := mustNewLevelDBManager(t, t.TempDir()).(*ldbManager)
 	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
@@ -2092,7 +2116,9 @@ func TestLevelDBManagerPatchReadsReleaseSnapshots(t *testing.T) {
 	}
 	frontier := GetFrontierIdentifier(m.Frontier())
 
-	before := aliveSnapshots(t, m)
+	before := settledSnapshots(t, m)
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer debug.SetMemoryLimit(debug.SetMemoryLimit(math.MaxInt64))
 	const reads = 50
 	for i := 0; i < reads; i++ {
 		if m.GetPatch(frontier) == nil {

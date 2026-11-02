@@ -19,7 +19,10 @@ func (ms *momentumStore) GetFrontierAccountBlock(address types.Address) (*nom.Ac
 
 // GetAccountBlock returns the block the header names, or nil if the account
 // chain has no block at that height. A block at that height with another
-// hash is an inconsistent store, not the block asked for, and is an error.
+// hash is not the block asked for, and is an error: the header and this
+// store view disagree, either because the store is inconsistent or because
+// the header came from a branch this view no longer holds (a caller that
+// read a momentum before a reorg and prefetches it from the new frontier).
 func (ms *momentumStore) GetAccountBlock(header types.AccountHeader) (*nom.AccountBlock, error) {
 	block, err := ms.GetAccountStore(header.Address).ByHeight(header.Height)
 	if err != nil || block == nil {
