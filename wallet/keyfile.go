@@ -88,15 +88,26 @@ func ReadKeyFile(path string) (*KeyFile, error) {
 // over Path. The key file therefore ends up private whatever the mode of a
 // file it replaces, a symlink at Path is replaced rather than followed, and
 // a reader sees either the old file or the new one, never a partial write.
-// The temporary name starts with a dot, so a leftover from a crash is
-// skipped by the manager's scan.
+// The temporary name is short and starts with a dot, so it fits wherever
+// Path's own name does and a leftover from a crash is skipped by the
+// manager's scan. The directory is taken from Path without cleaning it,
+// so the temporary file and Path resolve through the same directory even
+// when Path runs through a symlink and "..".
+//
+// The new file is created fresh, so it carries the permissions a new file
+// in that directory gets: mode 0600 plus whatever ACL the directory passes
+// on to new files. A directory whose inherited ACL grants others access
+// exposes every key file created in it, with or without this change.
 func (kf *KeyFile) Write() error {
 	keyFileJson, err := json.MarshalIndent(kf, "", "    ")
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(kf.Path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(kf.Path)+".tmp-*")
+	dir, _ := filepath.Split(kf.Path)
+	if dir == "" {
+		dir = "."
+	}
+	tmp, err := os.CreateTemp(dir, ".keyfile-*.tmp")
 	if err != nil {
 		return err
 	}

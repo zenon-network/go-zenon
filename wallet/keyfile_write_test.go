@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/zenon-network/go-zenon/common/types"
@@ -118,6 +119,68 @@ func TestKeyFileWriteReplacesASymlink(t *testing.T) {
 	}
 	requirePrivateKeyFile(t, path)
 	requireOnlyEntry(t, dir, "wallet")
+}
+
+// A name as long as the filesystem allows is still writable: the
+// temporary file's name does not grow with Path's.
+func TestKeyFileWriteLongName(t *testing.T) {
+	dir := t.TempDir()
+	name := strings.Repeat("w", 250)
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("probe"), 0o600); err != nil {
+		t.Skipf("this filesystem does not take a %d-byte name: %v", len(name), err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := encryptedKeyFile(t, testKeyStore(t), path).Write(); err != nil {
+		t.Fatalf("Write to a %d-byte name: %v", len(name), err)
+	}
+	requirePrivateKeyFile(t, path)
+	requireOnlyEntry(t, dir, name)
+}
+
+// Path's directory is the one the kernel resolves, not the one a lexical
+// clean suggests: through a symlink, "link/.." is the link target's
+// parent. The temporary file must be created there, where the rename
+// lands, and not in the lexical parent, which may not even be writable.
+func TestKeyFileWriteResolvesTheDirectoryLikeTheRename(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinked directories and Unix permission bits")
+	}
+	a, b := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(b, "child"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(b, "child"), filepath.Join(a, "link")); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	if err := os.Chmod(a, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(a, 0o700) })
+	if f, err := os.CreateTemp(a, "probe"); err == nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		t.Skip("mode 0500 does not stop this user writing the directory (root)")
+	}
+
+	path := a + string(filepath.Separator) + "link" + string(filepath.Separator) + ".." + string(filepath.Separator) + "wallet"
+	if err := encryptedKeyFile(t, testKeyStore(t), path).Write(); err != nil {
+		t.Fatalf("Write(%s): %v", path, err)
+	}
+	requirePrivateKeyFile(t, filepath.Join(b, "wallet"))
+	for _, d := range []string{a, b} {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".") {
+				t.Fatalf("%s holds the temporary file %s after Write", d, e.Name())
+			}
+		}
+	}
 }
 
 // The base address in a key file is in the clear. Decrypt derives the
