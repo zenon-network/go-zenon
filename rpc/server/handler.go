@@ -369,8 +369,9 @@ func (h *handler) handleSubscriptionResult(msg *jsonrpcMessage) {
 
 // activeClientSub returns the client subscription registered under id while
 // its forwarding loop runs. An entry whose loop has stopped is retired: it
-// receives nothing more and its goroutine no longer counts in callWG, so the
-// ID is free for the server to give to a new subscription.
+// receives nothing more and nothing at teardown needs it, since its goroutine
+// leaves callWG right after the loop stops and close waits for that. The ID
+// is then free for the server to give to a new subscription.
 func (h *handler) activeClientSub(id string) *ClientSubscription {
 	sub := h.clientSubs[id]
 	if sub == nil {
