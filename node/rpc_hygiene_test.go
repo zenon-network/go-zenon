@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -119,15 +120,17 @@ func TestHTTPServerStopBoundsInFlightRequest(t *testing.T) {
 	if err := h.enableRPC(apis, httpConfig{Modules: []string{"probe"}}); err != nil {
 		t.Fatal(err)
 	}
+	handlerDone := signalHandlerDone(h)
 	if err := h.start(); err != nil {
 		t.Fatal(err)
 	}
 	addr := h.listenAddr()
 
 	clientErr := make(chan error, 1)
-	// Cleanups run last-in first-out: release the handler first, so a stop
-	// still waiting on it (if the bound regressed) can finish, then stop
-	// the server, then wait for the client so nothing outlives the test.
+	// Cleanups run last-in first-out: release the method first, so a stop
+	// still waiting on it (if the bound regressed) can finish; then wait
+	// for the request handler to return, stop the server and wait for the
+	// client, so nothing outlives the test.
 	t.Cleanup(func() {
 		select {
 		case <-clientErr:
@@ -136,6 +139,13 @@ func TestHTTPServerStopBoundsInFlightRequest(t *testing.T) {
 		}
 	})
 	t.Cleanup(h.stop)
+	t.Cleanup(func() {
+		select {
+		case <-handlerDone:
+		case <-time.After(stackTestTimeout):
+			t.Error("the request handler did not return after the method was released")
+		}
+	})
 	t.Cleanup(func() { close(probe.release) })
 
 	go func() {
@@ -177,6 +187,33 @@ func TestHTTPServerStopBoundsInFlightRequest(t *testing.T) {
 	case <-time.After(stackTestTimeout):
 		t.Fatal("the client's connection was not closed after stop")
 	}
+
+	// stop returned without the request: its handler is still running, and
+	// only the release in cleanup lets it finish. Bounded shutdown closes
+	// the connection; it does not end a method that ignores its context.
+	select {
+	case <-handlerDone:
+		t.Fatal("the request handler returned although the method was never released")
+	default:
+	}
+}
+
+// signalHandlerDone wraps the HTTP JSON-RPC handler installed on h so that
+// the returned channel is closed once a request handler has returned: the
+// whole handler stack around the method, not only the method itself. It
+// must be called after enableRPC and before start.
+func signalHandlerDone(h *httpServer) <-chan struct{} {
+	done := make(chan struct{})
+	var once sync.Once
+	installed := h.httpHandler.Load().(*rpcHandler)
+	h.httpHandler.Store(&rpcHandler{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer once.Do(func() { close(done) })
+			installed.Handler.ServeHTTP(w, r)
+		}),
+		server: installed.server,
+	})
+	return done
 }
 
 // The open-origin warnings name the rule that leaves the host open, so the
