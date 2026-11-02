@@ -339,13 +339,18 @@ type ClientSubscription struct {
 	quit        chan error
 	forwardDone chan struct{}
 	unsubDone   chan struct{}
+
+	// unsubscribeErr is the outcome of the unsubscribe request, nil once the
+	// server has confirmed it. It is written before unsubDone is closed and
+	// only when the request was sent.
+	unsubscribeErr error
 }
 
 // This is the sentinel value sent on sub.quit when Unsubscribe is called.
 var errUnsubscribed = errors.New("unsubscribed")
 
 // errDuplicateSubscriptionID is returned by Subscribe when the server
-// answers with the ID of a subscription the connection already has.
+// answers with the ID of a subscription still active on the connection.
 var errDuplicateSubscriptionID = errors.New("duplicate subscription ID")
 
 func newClientSubscription(c *Client, namespace string, channel reflect.Value) *ClientSubscription {
@@ -425,7 +430,7 @@ func (sub *ClientSubscription) run(connCtx context.Context, forwarded func()) {
 
 	// Call the unsubscribe method on the server.
 	if unsubscribe {
-		sub.requestUnsubscribe(connCtx)
+		sub.unsubscribeErr = sub.requestUnsubscribe(connCtx)
 	}
 
 	// Send the error.

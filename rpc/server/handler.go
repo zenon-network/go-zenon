@@ -362,8 +362,26 @@ func (h *handler) handleSubscriptionResult(msg *jsonrpcMessage) {
 		h.log.Debug("Dropping invalid subscription message")
 		return
 	}
-	if h.clientSubs[result.ID] != nil {
-		h.clientSubs[result.ID].deliver(result.Result)
+	if sub := h.activeClientSub(result.ID); sub != nil {
+		sub.deliver(result.Result)
+	}
+}
+
+// activeClientSub returns the client subscription registered under id while
+// its forwarding loop runs. An entry whose loop has stopped is retired: it
+// receives nothing more and its goroutine no longer counts in callWG, so the
+// ID is free for the server to give to a new subscription.
+func (h *handler) activeClientSub(id string) *ClientSubscription {
+	sub := h.clientSubs[id]
+	if sub == nil {
+		return nil
+	}
+	select {
+	case <-sub.forwardDone:
+		delete(h.clientSubs, id)
+		return nil
+	default:
+		return sub
 	}
 }
 
@@ -393,10 +411,11 @@ func (h *handler) handleResponse(msg *jsonrpcMessage) {
 	if op.err = json.Unmarshal(msg.Result, &op.sub.subid); op.err != nil {
 		return
 	}
-	// The ID names the subscription for the rest of the connection; a
-	// second subscription under it would take over the first one's
-	// notifications and leave its forwarding loop without a way to stop.
-	if h.clientSubs[op.sub.subid] != nil {
+	// The ID names the subscription while it is active; a second
+	// subscription under it would take over the first one's notifications
+	// and leave its forwarding loop without a way to stop. The ID of a
+	// subscription that has ended may be reused.
+	if h.activeClientSub(op.sub.subid) != nil {
 		op.err = errDuplicateSubscriptionID
 		return
 	}

@@ -199,6 +199,57 @@ func TestClientRejectsDuplicateSubscriptionID(t *testing.T) {
 	}
 }
 
+// Once the server has confirmed an unsubscribe, that subscription has ended
+// and no longer owns its ID: a later subscribe the server answers with the
+// same ID on the same connection succeeds, and the notifications for the ID
+// go to the new subscription only.
+func TestClientReusesIDOfEndedSubscription(t *testing.T) {
+	client, codec := newLifecycleClient(t)
+
+	old := make(chan int, 4)
+	sub, err := subscribeScripted(t, client, codec, old, "0xabc")
+	if err != nil {
+		t.Fatalf("first subscribe: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		sub.Unsubscribe()
+		close(done)
+	}()
+	codec.awaitWriting(t) // the unsubscribe request
+	codec.releaseWrites()
+	codec.injectReply(codec.lastRequestID(t), "true")
+	select {
+	case <-done:
+	case <-time.After(subscribeTimeout / 2):
+		t.Fatal("Unsubscribe did not return after the server confirmed it")
+	}
+	// Unsubscribe also returns after a failed or timed-out request; only a
+	// nil outcome means the server confirmed.
+	if sub.unsubscribeErr != nil {
+		t.Fatalf("the unsubscribe request failed: %v", sub.unsubscribeErr)
+	}
+
+	reused := make(chan int, 4)
+	if _, err := subscribeScripted(t, client, codec, reused, "0xabc"); err != nil {
+		t.Fatalf("subscribe reusing the ID of an ended subscription: %v", err)
+	}
+	injectNotification(codec, "0xabc", "7")
+	select {
+	case v := <-reused:
+		if v != 7 {
+			t.Fatalf("new subscription received %d, want 7", v)
+		}
+	case <-time.After(pendingCallTestTimeout):
+		t.Fatal("new subscription does not receive the notifications for its ID")
+	}
+	select {
+	case v := <-old:
+		t.Fatalf("ended subscription received %d", v)
+	default:
+	}
+}
+
 // Unsubscribe asks the server to drop the subscription and waits for the
 // answer, but not for longer than subscribeTimeout: a server that withholds
 // the answer cannot keep Unsubscribe from returning.
