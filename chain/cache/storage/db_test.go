@@ -210,3 +210,75 @@ func TestGetFrontierIdentifierReadError(t *testing.T) {
 	}()
 	GetFrontierIdentifier(ldb)
 }
+
+// failingGetDB fails reads of one key with a store error other than
+// ErrNotFound.
+type failingGetDB struct {
+	db.DB
+	key []byte
+	err error
+}
+
+func (f *failingGetDB) Get(key []byte) ([]byte, error) {
+	if string(key) == string(f.key) {
+		return nil, f.err
+	}
+	return f.DB.Get(key)
+}
+
+// A read failure while Add builds the inverse must abort Add with that
+// error and nothing written: no frontier move, no change to any value, and
+// no rollback record at the attempted height. A fresh patch then adds and
+// pops normally. Add replays its frontier entry into the patch it is
+// given, so the retry builds a new one rather than reusing the first.
+func TestAddInverseReadFailureWritesNothing(t *testing.T) {
+	m := mustNewCacheDBManager(t, t.TempDir()).(*cacheManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+	common.FailIfErr(t, m.Add(getMockIdentifier(1), getMockPatch([]byte{1})))
+
+	before := GetFrontierIdentifier(m.DB())
+	beforeDump := db.DebugDB(m.DB())
+	attempt := func() db.Patch {
+		patch := db.NewPatch()
+		patch.Put([]byte{1}, []byte{9}) // overwrites a value from height 1
+		patch.Put([]byte{2}, []byte{2})
+		return patch
+	}
+
+	readErr := errors.New("injected read failure")
+	m.rollbackPatch = func(d db.DB, p db.Patch) (db.Patch, error) {
+		return db.RollbackPatch(&failingGetDB{DB: d, key: []byte{1}, err: readErr}, p)
+	}
+	write := m.write
+	writes := 0
+	m.write = func(b *leveldb.Batch) error {
+		writes++
+		return write(b)
+	}
+
+	if err := m.Add(getMockIdentifier(2), attempt()); !errors.Is(err, readErr) {
+		t.Fatalf("Add with a failing inverse read = %v, want the read error", err)
+	}
+	if writes != 0 {
+		t.Fatalf("Add wrote %d batches after the inverse failed", writes)
+	}
+	common.Expect(t, GetFrontierIdentifier(m.DB()), before)
+	common.ExpectString(t, db.DebugDB(m.DB()), beforeDump)
+	has, err := m.ldb.Has(common.JoinBytes(rollbackByte, common.Uint64ToBytes(2)), nil)
+	common.FailIfErr(t, err)
+	if has {
+		t.Fatal("a rollback record for the failed height 2 was written")
+	}
+
+	// Control: with the inverse built normally, a fresh patch adds, and
+	// popping it restores the state above, including the overwritten value.
+	m.rollbackPatch = db.RollbackPatch
+	common.FailIfErr(t, m.Add(getMockIdentifier(2), attempt()))
+	common.Expect(t, GetFrontierIdentifier(m.DB()), getMockIdentifier(2))
+	if value, err := m.DB().Get([]byte{1}); err != nil || string(value) != string([]byte{9}) {
+		t.Fatalf("after the control Add, key 01 = %x (%v), want 09", value, err)
+	}
+	common.FailIfErr(t, m.Pop())
+	common.Expect(t, GetFrontierIdentifier(m.DB()), before)
+	common.ExpectString(t, db.DebugDB(m.DB()), beforeDump)
+}

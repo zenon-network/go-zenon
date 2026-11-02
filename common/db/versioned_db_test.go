@@ -2134,3 +2134,78 @@ func TestLevelDBManagerPatchReadsReleaseSnapshots(t *testing.T) {
 		t.Fatalf("%d patch and rollback reads left %d snapshots alive (before %d)", reads*(1+int(frontier.Height)), after, before)
 	}
 }
+
+// keysOf returns the keys patch writes, in replay order.
+func keysOf(t *testing.T, patch Patch) [][]byte {
+	t.Helper()
+	pr := &patchRecorder{}
+	common.FailIfErr(t, patch.Replay(pr))
+	keys := make([][]byte, 0, len(pr.puts))
+	for _, kv := range pr.puts {
+		keys = append(keys, kv.key)
+	}
+	return keys
+}
+
+// A read failure while Add builds the inverse must abort Add with that
+// error and nothing written: no frontier move, no change to any value, and
+// neither a patch nor a rollback record at the attempted height. A fresh
+// transaction then adds and pops normally. Add consumes its transaction's
+// changes, so the retry builds a new one rather than reusing the first.
+func TestLevelDBManagerAddInverseReadFailureWritesNothing(t *testing.T) {
+	m := mustNewLevelDBManager(t, t.TempDir()).(*ldbManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+	common.FailIfErr(t, m.Add(newMockTransaction(1, m.Frontier())))
+
+	before := GetFrontierIdentifier(m.Frontier())
+	beforeDump := DebugDB(m.Frontier())
+	attempt := newMockTransaction(2, m.Frontier())
+	height := attempt.commit.Identifier().Height
+	touched := keysOf(t, attempt.patch)
+	if len(touched) == 0 {
+		t.Fatal("the attempted transaction writes no keys")
+	}
+
+	readErr := errors.New("injected read failure")
+	m.rollbackPatch = func(d DB, p Patch) (Patch, error) {
+		return RollbackPatch(&failingGetDB{DB: d, key: touched[len(touched)/2], err: readErr}, p)
+	}
+	write := m.write
+	writes := 0
+	m.write = func(b *leveldb.Batch) error {
+		writes++
+		return write(b)
+	}
+
+	if err := m.Add(attempt); !errors.Is(err, readErr) {
+		t.Fatalf("Add with a failing inverse read = %v, want the read error", err)
+	}
+	if writes != 0 {
+		t.Fatalf("Add wrote %d batches after the inverse failed", writes)
+	}
+	common.Expect(t, GetFrontierIdentifier(m.Frontier()), before)
+	common.ExpectString(t, DebugDB(m.Frontier()), beforeDump)
+	for _, key := range [][]byte{
+		common.JoinBytes(patchByte, common.Uint64ToBytes(height)),
+		common.JoinBytes(rollbackByte, common.Uint64ToBytes(height)),
+	} {
+		has, err := m.ldb.Has(key, nil)
+		common.FailIfErr(t, err)
+		if has {
+			t.Fatalf("record %x for the failed height %d was written", key, height)
+		}
+	}
+
+	// Control: with the inverse built normally, a fresh transaction adds,
+	// and popping it restores the state above.
+	m.rollbackPatch = RollbackPatch
+	retry := newMockTransaction(2, m.Frontier())
+	common.FailIfErr(t, m.Add(retry))
+	common.Expect(t, GetFrontierIdentifier(m.Frontier()), retry.commit.Identifier())
+	if writes != 1 {
+		t.Fatalf("the control Add wrote %d batches, want 1", writes)
+	}
+	common.FailIfErr(t, m.Pop())
+	common.Expect(t, GetFrontierIdentifier(m.Frontier()), before)
+	common.ExpectString(t, DebugDB(m.Frontier()), beforeDump)
+}
