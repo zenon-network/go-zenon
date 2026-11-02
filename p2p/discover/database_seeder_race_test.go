@@ -7,9 +7,9 @@ import (
 )
 
 // Concurrent querySeeds and close calls must not race. querySeeds holds
-// seederMu for one batch; close holds it exclusively while releasing the
-// iterator and closing the store. Under -race any unsynchronised access
-// to db.seeder or the store is reported.
+// seederMu for one batch; close holds it while closing the store. Under
+// -race any unsynchronised access to the seed cursor or the store is
+// reported.
 func TestQuerySeedsCloseRace(t *testing.T) {
 	db, err := newNodeDB("", Version, newTestNodeID(t))
 	if err != nil {

@@ -410,7 +410,10 @@ func (db *nodeDB) updateFindFails(id NodeID, fails int) error {
 //
 // Each batch iterates from the key after the one where the previous batch
 // stopped and releases its iterator before returning: an open iterator pins
-// the store version it was created on, and batches can be hours apart.
+// the store version it was created on, and batches can be hours apart. Each
+// batch therefore sees the store as it is then, so a node stored after the
+// previous batch is handed out in the current pass if its key sorts after
+// where that batch stopped, and in the next pass otherwise.
 func (db *nodeDB) querySeeds(n int) []*Node {
 	db.seederMu.Lock()
 	defer db.seederMu.Unlock()

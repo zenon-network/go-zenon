@@ -109,7 +109,7 @@ func TestPingReplaceRestoresRecordDeletedDuringRefresh(t *testing.T) {
 				if tab.db.hasEntries(oldest.ID) {
 					t.Errorf("a failed refresh brought the deleted record back")
 				}
-				if b.entries[0] != newcomer {
+				if b.entries[0].ID != newcomer.ID {
 					t.Errorf("the unresponsive oldest entry was not replaced by the newcomer")
 				}
 				return
@@ -294,6 +294,28 @@ func TestReplacementRevalidatesBucketAfterPing(t *testing.T) {
 			},
 		},
 		{
+			name: "oldest entry refreshed meanwhile and last again is kept",
+			change: func(t *testing.T, b *bucket, oldest, _ *Node) {
+				// The refreshed entry is a new *Node with the same ID; the
+				// other entries are then refreshed after it, which makes
+				// it the last entry again.
+				if !b.bump(newNode(oldest.ID, oldest.IP, oldest.UDP, oldest.TCP)) {
+					t.Fatal("precondition: oldest entry not in bucket")
+				}
+				for _, n := range append([]*Node(nil), b.entries[1:]...) {
+					b.bump(newNode(n.ID, n.IP, n.UDP, n.TCP))
+				}
+				if b.entries[bucketSize-1].ID != oldest.ID {
+					t.Fatal("precondition: refreshed entry is not last again")
+				}
+			},
+			check: func(t *testing.T, ids []NodeID, oldest, newcomer *Node) {
+				if countID(ids, oldest.ID) != 1 || countID(ids, newcomer.ID) != 0 {
+					t.Errorf("entry refreshed while the ping was outstanding was evicted")
+				}
+			},
+		},
+		{
 			name: "oldest entry removed meanwhile frees a slot",
 			change: func(_ *testing.T, b *bucket, _, _ *Node) {
 				b.entries = b.entries[:bucketSize-1]
@@ -358,5 +380,79 @@ func TestReplacementRevalidatesBucketAfterPing(t *testing.T) {
 			tab.mutex.Unlock()
 			tc.check(t, ids, oldest, newcomer)
 		})
+	}
+}
+
+// Only one ping of a bucket's least recently active entry is outstanding at
+// a time. Otherwise a ping that failed could be applied after a later ping
+// to the same entry was answered, evicting a live entry, since an answered
+// ping is recorded only in the database. A second newcomer for the full
+// bucket meanwhile is not admitted. Fails if a second replacement ping is
+// sent while one is outstanding.
+func TestReplacementPingsOneAtATimePerBucket(t *testing.T) {
+	tr := &heldPingTransport{started: make(chan NodeID, 2), release: make(chan error, 2)}
+	tab := newTable(tr, newTestNodeID(t), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 30303}, "")
+	defer tab.Close()
+
+	first, b, oldest := bondableNewcomer(t, tab)
+	var second *Node
+	for second == nil {
+		n := newNode(newTestNodeID(t), net.IPv4(10, 0, 1, 2), 30303, 30303)
+		if tab.buckets[logdist(tab.self.sha, n.sha)] == b {
+			second = n
+		}
+	}
+	if err := tab.db.updateNode(second); err != nil {
+		t.Fatal(err)
+	}
+
+	firstDone := make(chan struct{})
+	go func() {
+		tab.bond(false, first.ID, first.addr(), first.TCP)
+		close(firstDone)
+	}()
+	select {
+	case <-tr.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh never pinged the oldest entry")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		tab.bond(false, second.ID, second.addr(), second.TCP)
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+	case <-tr.started:
+		// Let both pings fail so both bonds return, then report.
+		tr.release <- errors.New("timeout")
+		tr.release <- errors.New("timeout")
+		for _, done := range []chan struct{}{firstDone, secondDone} {
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("bond did not return after its ping failed")
+			}
+		}
+		t.Fatal("a second replacement ping was sent while one was outstanding")
+	case <-time.After(5 * time.Second):
+		t.Fatal("second bond neither returned nor pinged")
+	}
+
+	tr.release <- errors.New("timeout")
+	select {
+	case <-firstDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first bond did not return after its ping failed")
+	}
+	tab.mutex.Lock()
+	ids := bucketIDs(b)
+	tab.mutex.Unlock()
+	if countID(ids, second.ID) != 0 {
+		t.Error("second newcomer was admitted while the replacement ping was outstanding")
+	}
+	if ids[0] != first.ID || countID(ids, oldest.ID) != 0 {
+		t.Error("unresponsive oldest entry was not replaced by the first newcomer")
 	}
 }

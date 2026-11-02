@@ -107,6 +107,10 @@ type transport interface {
 type bucket struct {
 	lastLookup time.Time
 	entries    []*Node
+
+	// replacing is set while pingreplace waits for the ping of this
+	// bucket's least recently active entry. See pingreplace.
+	replacing bool
 }
 
 func newTable(t transport, ourID NodeID, ourAddr *net.UDPAddr, nodeDBPath string) *Table {
@@ -505,22 +509,35 @@ func (tab *Table) pingpong(w *bondproc, pinged bool, id NodeID, addr *net.UDPAdd
 // The caller must not hold tab.mutex. The ping waits up to respTimeout for
 // the pong and is sent with the table unlocked, since the read loop takes
 // tab.mutex to answer FINDNODE and must not stall behind it; so must the
-// pong the ping is waiting for. The bucket can therefore change while the
-// ping is outstanding, and its outcome is applied to the bucket as it is
-// afterwards: the pinged entry is evicted only if it is still the least
-// recently active entry of a full bucket. An entry that was refreshed
-// meanwhile has been replaced by a new *Node at the front, so comparing
-// pointers tells it apart from the entry that failed to answer.
+// pong the ping is waiting for. The outcome is therefore applied to the
+// bucket as it is after the ping:
+//
+//   - Only one such ping per bucket is outstanding at a time. A newcomer for
+//     the full bucket meanwhile is not admitted (it stays in the database and
+//     is admitted when it is next bonded), so the failure of one ping is
+//     never applied after a later ping to the same entry was answered.
+//   - Entries are stored as copies of their own, so the last slot still
+//     holding the pinged *Node means that entry has not been refreshed or
+//     re-added since; only then is it evicted.
 func (tab *Table) pingreplace(new *Node, b *bucket) {
+	cpy := *new
+	new = &cpy
+
 	tab.mutex.Lock()
-	if b.bump(new) || tab.insertFront(new, b) {
+	if b.bump(new) || tab.insertFront(new, b) || b.replacing {
 		tab.mutex.Unlock()
 		return
 	}
+	b.replacing = true
 	oldest := b.entries[bucketSize-1]
 	tab.mutex.Unlock()
 
-	if err := tab.ping(oldest.ID, oldest.addr()); err == nil {
+	err := tab.ping(oldest.ID, oldest.addr())
+
+	tab.mutex.Lock()
+	b.replacing = false
+	if err == nil {
+		tab.mutex.Unlock()
 		// The node responded, we don't need to replace it. Write its
 		// record again: a sweep that ran while the ping was outstanding
 		// may have expired the old one, and the fresh pong alone does not
@@ -528,8 +545,6 @@ func (tab *Table) pingreplace(new *Node, b *bucket) {
 		tab.db.updateNode(oldest)
 		return
 	}
-
-	tab.mutex.Lock()
 	defer tab.mutex.Unlock()
 	if b.bump(new) || tab.insertFront(new, b) || b.entries[bucketSize-1] != oldest {
 		return
