@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,10 @@ func New(config *Config) *Manager {
 // it into the encrypted set. It does not decrypt any store. It returns
 // an error if the directory cannot be created or listed.
 //
+// Start may be called again to rescan the directory. A store unlocked
+// from a file that is gone, or that now holds different encrypted data,
+// is zeroed and dropped; a store whose file is unchanged stays unlocked.
+//
 // Start resolves WalletDir to an absolute path before scanning so that
 // every indexed path is absolute, regardless of how the directory was
 // configured. This keeps absolute-path lookups working when WalletDir
@@ -84,16 +89,45 @@ func (m *Manager) Start() error {
 	}
 	m.log.Info("successfully ensured WalletDir exists", "wallet-dir-path", m.config.WalletDir)
 
-	m.encrypted = make(map[string]*KeyFile)
 	keyFiles, err := m.ListEntropyFilesInStandardDir()
 	if err != nil {
 		m.log.Error("wallet start err", "err", err)
 		return err
 	}
+	previous := m.encrypted
+	m.encrypted = make(map[string]*KeyFile, len(keyFiles))
 	for _, keyFile := range keyFiles {
 		m.encrypted[keyFile.Path] = keyFile
 	}
+	if m.decrypted == nil {
+		m.decrypted = make(map[string]*KeyStore)
+	}
+	for path, ks := range m.decrypted {
+		if kf, ok := m.encrypted[path]; ok && sameEncryptedKey(previous[path], kf) {
+			continue
+		}
+		if ks != nil {
+			ks.Zero()
+		}
+		delete(m.decrypted, path)
+	}
 	return nil
+}
+
+// sameEncryptedKey reports whether two reads of a key file hold the same
+// encrypted key under the same parameters, so a store decrypted from one
+// is the store the other decrypts to.
+func sameEncryptedKey(a, b *KeyFile) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.BaseAddress == b.BaseAddress &&
+		a.Version == b.Version &&
+		a.Crypto.CipherName == b.Crypto.CipherName &&
+		a.Crypto.KDF == b.Crypto.KDF &&
+		bytes.Equal(a.Crypto.CipherData, b.Crypto.CipherData) &&
+		bytes.Equal(a.Crypto.AesNonce, b.Crypto.AesNonce) &&
+		bytes.Equal(a.Crypto.Argon2Params.Salt, b.Crypto.Argon2Params.Salt)
 }
 
 // Stop zeroes every unlocked key store (see KeyStore.Zero) and drops

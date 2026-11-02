@@ -18,6 +18,10 @@ var (
 	// not the length the cipher expects, so the file cannot have been
 	// written by this code and decrypting it is refused up front.
 	ErrKeyFileInvalidNonce = errors.New("unable to read KeyFile. Invalid nonce length")
+	// ErrKeyFileAddressMismatch is returned by Decrypt when the base
+	// address a KeyFile advertises in the clear is not the address its
+	// decrypted seed derives, so the file has been edited.
+	ErrKeyFileAddressMismatch = errors.New("unable to open KeyFile. Its base address does not match its key")
 
 	// === keyStore errors ===
 

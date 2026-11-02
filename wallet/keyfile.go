@@ -3,6 +3,7 @@ package wallet
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
@@ -82,14 +83,58 @@ func ReadKeyFile(path string) (*KeyFile, error) {
 	return k, nil
 }
 
-// Write serializes the key file as indented JSON to its Path. A newly
-// created file gets mode 0700; an existing file keeps its permissions.
+// Write serializes the key file as indented JSON to its Path. It writes a
+// new file with mode 0600 in the same directory, syncs it and renames it
+// over Path. The key file therefore ends up private whatever the mode of a
+// file it replaces, a symlink at Path is replaced rather than followed, and
+// a reader sees either the old file or the new one, never a partial write.
+// The temporary name starts with a dot, so a leftover from a crash is
+// skipped by the manager's scan.
 func (kf *KeyFile) Write() error {
 	keyFileJson, err := json.MarshalIndent(kf, "", "    ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(kf.Path, keyFileJson, 0700)
+	dir := filepath.Dir(kf.Path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(kf.Path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		if tmpPath != "" {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(keyFileJson); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, kf.Path); err != nil {
+		return err
+	}
+	tmpPath = ""
+	syncDir(dir)
+	return nil
+}
+
+// syncDir makes a rename in dir durable where the platform supports it.
+// Directories cannot be synced on every platform (Windows), so a failure
+// is not an error: the key file itself has already been synced.
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
 }
 
 // Decrypt recovers the KeyStore from the key file using password. It
@@ -98,7 +143,10 @@ func (kf *KeyFile) Write() error {
 // the key store (mnemonic, seed, and base address) from it. It returns
 // ErrWrongPassword when the password does not authenticate the
 // ciphertext, and ErrKeyFileInvalidNonce, before any key derivation,
-// when the stored nonce is not the length the cipher expects.
+// when the stored nonce is not the length the cipher expects. A file that
+// advertises a base address other than the one its seed derives returns
+// ErrKeyFileAddressMismatch; one that advertises none (the zero address)
+// is accepted.
 func (kf *KeyFile) Decrypt(password string) (*KeyStore, error) {
 	if len(kf.Crypto.AesNonce) != gcmNonceSize {
 		return nil, ErrKeyFileInvalidNonce
@@ -114,5 +162,13 @@ func (kf *KeyFile) Decrypt(password string) (*KeyStore, error) {
 		return nil, ErrWrongPassword
 	}
 
-	return keyStoreFromEntropy(entropy)
+	ks, err := keyStoreFromEntropy(entropy)
+	if err != nil {
+		return nil, err
+	}
+	if kf.BaseAddress != (types.Address{}) && kf.BaseAddress != ks.BaseAddress {
+		ks.Zero()
+		return nil, ErrKeyFileAddressMismatch
+	}
+	return ks, nil
 }
