@@ -536,3 +536,70 @@ func TestExpireNodesStopsBetweenIdentitiesOnQuit(t *testing.T) {
 		}
 	}
 }
+
+// aliveIterators returns the number of LevelDB iterators that have not been
+// released.
+func aliveIterators(t *testing.T, db *nodeDB) string {
+	t.Helper()
+	n, err := db.lvl.GetProperty("leveldb.aliveiters")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// querySeeds hands out the stored nodes in batches, continuing where the
+// previous batch stopped, and starts over after a batch comes back empty.
+// No iterator may outlive a batch: an open iterator pins the store version
+// it was created on until it is released, and seeding can be hours apart.
+// Fails if querySeeds keeps its iterator between calls.
+func TestQuerySeedsReleasesIteratorAfterEachBatch(t *testing.T) {
+	db, err := newNodeDB("", Version, newTestNodeID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.close()
+
+	stored := make(map[NodeID]bool)
+	for i := 0; i < 8; i++ {
+		id := newTestNodeID(t)
+		if err := db.updateNode(newNode(id, net.IPv4(10, 0, 0, byte(i+1)), 30303, 30303)); err != nil {
+			t.Fatal(err)
+		}
+		// Fields other than the node record sit between the records and
+		// must be skipped.
+		if err := db.updateLastPong(id, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		stored[id] = true
+	}
+
+	var batches [][]*Node
+	for i, want := range []int{3, 3, 2, 0, 3} {
+		seeds := db.querySeeds(3)
+		if got := aliveIterators(t, db); got != "0" {
+			t.Errorf("batch %d: %s iterators left open after querySeeds returned", i, got)
+		}
+		if len(seeds) != want {
+			t.Fatalf("batch %d: got %d seeds, want %d", i, len(seeds), want)
+		}
+		batches = append(batches, seeds)
+	}
+	seen := make(map[NodeID]bool)
+	for _, batch := range batches[:3] {
+		for _, n := range batch {
+			if !stored[n.ID] || seen[n.ID] {
+				t.Errorf("seed %x handed out twice or never stored", n.ID[:4])
+			}
+			seen[n.ID] = true
+		}
+	}
+	if len(seen) != len(stored) {
+		t.Errorf("a full pass handed out %d of %d stored nodes", len(seen), len(stored))
+	}
+	for i, n := range batches[4] {
+		if n.ID != batches[0][i].ID {
+			t.Errorf("the pass after an empty batch did not start over: seed %d is %x, want %x", i, n.ID[:4], batches[0][i].ID[:4])
+		}
+	}
+}
