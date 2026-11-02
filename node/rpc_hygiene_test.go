@@ -125,8 +125,9 @@ func TestHTTPServerStopBoundsInFlightRequest(t *testing.T) {
 	addr := h.listenAddr()
 
 	clientErr := make(chan error, 1)
-	// Cleanups run last-in first-out: stop the server, release the
-	// handler, then wait for the client so nothing outlives the test.
+	// Cleanups run last-in first-out: release the handler first, so a stop
+	// still waiting on it (if the bound regressed) can finish, then stop
+	// the server, then wait for the client so nothing outlives the test.
 	t.Cleanup(func() {
 		select {
 		case <-clientErr:
@@ -134,8 +135,8 @@ func TestHTTPServerStopBoundsInFlightRequest(t *testing.T) {
 			t.Error("the client goroutine did not finish")
 		}
 	})
-	t.Cleanup(func() { close(probe.release) })
 	t.Cleanup(h.stop)
+	t.Cleanup(func() { close(probe.release) })
 
 	go func() {
 		body := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"probe.block","params":[]}`)
