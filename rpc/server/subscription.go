@@ -353,6 +353,10 @@ var errUnsubscribed = errors.New("unsubscribed")
 // answers with the ID of a subscription still active on the connection.
 var errDuplicateSubscriptionID = errors.New("duplicate subscription ID")
 
+// errUnsubscribeNotConfirmed is the outcome of an unsubscribe request the
+// server answered without an error but with a result other than true.
+var errUnsubscribeNotConfirmed = errors.New("server did not confirm the unsubscribe")
+
 func newClientSubscription(c *Client, namespace string, channel reflect.Value) *ClientSubscription {
 	sub := &ClientSubscription{
 		client:      c,
@@ -513,10 +517,17 @@ func (sub *ClientSubscription) unmarshal(result json.RawMessage) (interface{}, e
 // requestUnsubscribe asks the server to end the subscription under a
 // subscribeTimeout deadline that also ends when connCtx does, because the
 // connection's handler is closing: a server that withholds the answer, or a
-// connection that is going away, must not keep Unsubscribe waiting.
+// connection that is going away, must not keep Unsubscribe waiting. It
+// returns nil only when the server answers true.
 func (sub *ClientSubscription) requestUnsubscribe(connCtx context.Context) error {
 	ctx, cancel := context.WithTimeout(connCtx, subscribeTimeout)
 	defer cancel()
-	var result interface{}
-	return sub.client.CallContext(ctx, &result, sub.namespace+unsubscribeMethodSuffix, sub.subid)
+	var confirmed bool
+	if err := sub.client.CallContext(ctx, &confirmed, sub.namespace+unsubscribeMethodSuffix, sub.subid); err != nil {
+		return err
+	}
+	if !confirmed {
+		return errUnsubscribeNotConfirmed
+	}
+	return nil
 }

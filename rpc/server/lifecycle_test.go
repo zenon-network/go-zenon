@@ -250,6 +250,47 @@ func TestClientReusesIDOfEndedSubscription(t *testing.T) {
 	}
 }
 
+// An unsubscribe the server answers without an error is confirmed only by a
+// true result. Any other answer is recorded as the request's outcome, so it
+// cannot pass for a confirmation.
+func TestUnsubscribeRecordsUnconfirmedReply(t *testing.T) {
+	for _, tc := range []struct {
+		name, reply string
+		want        error // nil: any non-nil outcome
+	}{
+		{"false", "false", errUnsubscribeNotConfirmed},
+		{"null", "null", errUnsubscribeNotConfirmed},
+		{"not a boolean", `"ok"`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, codec := newLifecycleClient(t)
+			sub, err := subscribeScripted(t, client, codec, make(chan int, 1), "0xabc")
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan struct{})
+			go func() {
+				sub.Unsubscribe()
+				close(done)
+			}()
+			codec.awaitWriting(t) // the unsubscribe request
+			codec.releaseWrites()
+			codec.injectReply(codec.lastRequestID(t), tc.reply)
+			select {
+			case <-done:
+			case <-time.After(subscribeTimeout / 2):
+				t.Fatal("Unsubscribe did not return after the server answered")
+			}
+			if sub.unsubscribeErr == nil {
+				t.Fatalf("reply %s recorded as a confirmed unsubscribe", tc.reply)
+			}
+			if tc.want != nil && !errors.Is(sub.unsubscribeErr, tc.want) {
+				t.Fatalf("reply %s: outcome %v, want %v", tc.reply, sub.unsubscribeErr, tc.want)
+			}
+		})
+	}
+}
+
 // Unsubscribe asks the server to drop the subscription and waits for the
 // answer, but not for longer than subscribeTimeout: a server that withholds
 // the answer cannot keep Unsubscribe from returning.
