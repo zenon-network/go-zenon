@@ -3,6 +3,7 @@ package wallet
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -185,6 +186,69 @@ func TestStartRescanDropsStoresOfFilesChangedThroughGetKeyFile(t *testing.T) {
 		if ks := stores[name]; ks.Seed != nil || ks.Entropy != nil {
 			t.Fatalf("%s: the old store was dropped without being zeroed", name)
 		}
+	}
+}
+
+// A key file that cannot be read during a rescan is treated like one that
+// is gone: its store is zeroed and dropped, and the rescan still completes,
+// so it cannot keep the stores of removed files unlocked. Once the file can
+// be read again it is known again, locked.
+func TestStartRescanDropsTheStoreOfAnUnreadableFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits")
+	}
+	names := []string{"unreadable", "removed", "kept"}
+	m := testManagerWithStores(t, names...)
+	stores := map[string]*KeyStore{}
+	for _, name := range names {
+		if err := m.Unlock(name, testPassword); err != nil {
+			t.Fatal(err)
+		}
+		ks, err := m.GetKeyStore(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stores[name] = ks
+	}
+
+	unreadable := m.MakePathAbsolut("unreadable")
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o600) })
+	if _, err := os.ReadFile(unreadable); err == nil {
+		t.Skip("mode 0 does not stop this user reading the file (root)")
+	}
+	if err := os.Remove(m.MakePathAbsolut("removed")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(); err != nil {
+		t.Fatalf("Start with an unreadable key file = %v, want nil", err)
+	}
+
+	for _, name := range []string{"unreadable", "removed"} {
+		if unlocked, err := m.IsUnlocked(name); err != ErrKeyStoreNotFound {
+			t.Fatalf("%s: IsUnlocked = %v, %v; want ErrKeyStoreNotFound", name, unlocked, err)
+		}
+		if ks := stores[name]; ks.Seed != nil || ks.Entropy != nil {
+			t.Fatalf("%s: the old store was not zeroed", name)
+		}
+	}
+	if unlocked, err := m.IsUnlocked("kept"); err != nil || !unlocked {
+		t.Fatalf("kept: IsUnlocked = %v, %v; want true, nil", unlocked, err)
+	}
+
+	if err := os.Chmod(unreadable, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if unlocked, err := m.IsUnlocked("unreadable"); err != nil || unlocked {
+		t.Fatalf("readable again: IsUnlocked = %v, %v; want false, nil", unlocked, err)
+	}
+	if err := m.Unlock("unreadable", testPassword); err != nil {
+		t.Fatalf("readable again: Unlock = %v", err)
 	}
 }
 
