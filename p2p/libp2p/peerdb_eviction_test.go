@@ -611,9 +611,10 @@ func TestPeerDBNewcomerTieBreaks(t *testing.T) {
 		t.Fatalf("the later arrival must go, not the refreshed older newcomer: later=%v older=%v", d.has(later), d.has(older))
 	}
 
-	// Same first-seen: oldest lastSeen first, then the lower key. Two over.
+	// Same first-seen: oldest lastSeen first, then the lower key. One over,
+	// so only the first of y and z goes and the key order is checked.
 	d2, clock2 := openTestPeerDB(t)
-	for i := 0; i < peerDBMaxRecords-1; i++ {
+	for i := 0; i < peerDBMaxRecords-2; i++ {
 		d2.recordConnected(syntheticPeer(1, i), subnetAddr(t, 1, i))
 	}
 	establish(clock2)
@@ -623,9 +624,9 @@ func TestPeerDBNewcomerTieBreaks(t *testing.T) {
 	}
 	*clock2 = clock2.Add(time.Minute)
 	d2.recordConnected(x, subnetAddr(t, 5, 0)) // x: newest lastSeen; y and z tie on both stamps
-	d2.expire()                                // 2002 -> 2000
-	if !d2.has(x) || d2.has(y) || d2.has(z) {
-		t.Fatalf("same first-seen: oldest lastSeen first, then lower key; x=%v y=%v z=%v", d2.has(x), d2.has(y), d2.has(z))
+	d2.expire()                                // 2001 -> 2000
+	if !d2.has(x) || d2.has(y) || !d2.has(z) {
+		t.Fatalf("same first-seen: oldest lastSeen first, then lower key (y before z); x=%v y=%v z=%v", d2.has(x), d2.has(y), d2.has(z))
 	}
 }
 
