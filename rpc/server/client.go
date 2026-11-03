@@ -406,10 +406,6 @@ func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
 		return errBatchTooLarge
 	}
 	msgs := make([]*jsonrpcMessage, len(b))
-	op := &requestOp{
-		ids:  make([]json.RawMessage, len(b)),
-		resp: make(chan *jsonrpcMessage, len(b)),
-	}
 	byID := make(map[string]int, len(b))
 	for i, elem := range b {
 		msg, err := c.newMessage(elem.Method, elem.Args...)
@@ -417,7 +413,6 @@ func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
 			return err
 		}
 		msgs[i] = msg
-		op.ids[i] = msg.ID
 		byID[string(msg.ID)] = i
 	}
 
@@ -439,6 +434,13 @@ func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
 		return nil
 	}
 
+	op := &requestOp{
+		ids:  make([]json.RawMessage, len(msgs)),
+		resp: make(chan *jsonrpcMessage, len(msgs)),
+	}
+	for i, msg := range msgs {
+		op.ids[i] = msg.ID
+	}
 	err := c.send(ctx, op, msgs)
 	// Wait for all responses to come back.
 	for n := 0; n < len(b) && err == nil; n++ {
