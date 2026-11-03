@@ -107,6 +107,10 @@ type transport interface {
 type bucket struct {
 	lastLookup time.Time
 	entries    []*Node
+
+	// replacing is set while pingreplace waits for the ping of this
+	// bucket's least recently active entry. See pingreplace.
+	replacing bool
 }
 
 func newTable(t transport, ourID NodeID, ourAddr *net.UDPAddr, nodeDBPath string) *Table {
@@ -439,13 +443,7 @@ func (tab *Table) bond(pinged bool, id NodeID, addr *net.UDPAddr, tcpPort uint16
 	}
 	// Even if bonding temporarily failed, give the node a chance
 	if node != nil {
-		tab.mutex.Lock()
-		defer tab.mutex.Unlock()
-
-		b := tab.buckets[logdist(tab.self.sha, node.sha)]
-		if !b.bump(node) {
-			tab.pingreplace(node, b)
-		}
+		tab.pingreplace(node, tab.buckets[logdist(tab.self.sha, node.sha)])
 		tab.db.updateFindFails(id, 0)
 	}
 	return node, result
@@ -504,27 +502,80 @@ func (tab *Table) pingpong(w *bondproc, pinged bool, id NodeID, addr *net.UDPAdd
 	close(w.done)
 }
 
+// pingreplace moves new to the front of b, which must be its bucket. If new
+// is not in b and b is full, the least recently active entry is pinged first
+// and only replaced by new if it does not answer.
+//
+// The caller must not hold tab.mutex. The ping waits up to respTimeout for
+// the pong and is sent with the table unlocked, since the read loop takes
+// tab.mutex to answer FINDNODE and must not stall behind it; so must the
+// pong the ping is waiting for. The outcome is therefore applied to the
+// bucket as it is after the ping:
+//
+//   - Only one such ping per bucket is outstanding at a time. A newcomer for
+//     the full bucket meanwhile is not admitted (it stays in the database and
+//     is admitted when it is next bonded), so the failure of one ping is
+//     never applied after a later ping to the same entry was answered.
+//   - Entries are stored as copies of their own, so the last slot still
+//     holding the pinged *Node means that entry has not been refreshed or
+//     re-added since; only then is it evicted.
+//   - Whatever the outcome, a newcomer that was added meanwhile is moved to
+//     the front rather than added twice, and a slot freed meanwhile is given
+//     to the newcomer.
 func (tab *Table) pingreplace(new *Node, b *bucket) {
-	if len(b.entries) == bucketSize {
-		oldest := b.entries[bucketSize-1]
-		if err := tab.ping(oldest.ID, oldest.addr()); err == nil {
-			// The node responded, we don't need to replace it. Write its
-			// record again: a sweep that ran while the ping was outstanding
-			// may have expired the old one, and the fresh pong alone does not
-			// make the node a seed after a restart.
-			tab.db.updateNode(oldest)
-			return
+	cpy := *new
+	new = &cpy
+
+	tab.mutex.Lock()
+	if b.bump(new) || tab.insertFront(new, b) || b.replacing {
+		tab.mutex.Unlock()
+		return
+	}
+	b.replacing = true
+	oldest := b.entries[bucketSize-1]
+	tab.mutex.Unlock()
+
+	err := tab.ping(oldest.ID, oldest.addr())
+
+	tab.mutex.Lock()
+	b.replacing = false
+	if err == nil {
+		// The node responded, we don't need to replace it. The newcomer
+		// still takes a slot that was freed meanwhile.
+		if !b.bump(new) {
+			tab.insertFront(new, b)
 		}
-	} else {
-		// Add a slot at the end so the last entry doesn't
-		// fall off when adding the new node.
-		b.entries = append(b.entries, nil)
+		tab.mutex.Unlock()
+		// Write the responsive node's record again: a sweep that ran while
+		// the ping was outstanding may have expired the old one, and the
+		// fresh pong alone does not make the node a seed after a restart.
+		tab.db.updateNode(oldest)
+		return
+	}
+	defer tab.mutex.Unlock()
+	if b.bump(new) || tab.insertFront(new, b) || b.entries[bucketSize-1] != oldest {
+		return
 	}
 	copy(b.entries[1:], b.entries)
 	b.entries[0] = new
 	if tab.nodeAddedHook != nil {
 		tab.nodeAddedHook(new)
 	}
+}
+
+// insertFront puts n at the front of b if b is not full, and reports whether
+// it did. The caller must hold tab.mutex.
+func (tab *Table) insertFront(n *Node, b *bucket) bool {
+	if len(b.entries) >= bucketSize {
+		return false
+	}
+	b.entries = append(b.entries, nil)
+	copy(b.entries[1:], b.entries)
+	b.entries[0] = n
+	if tab.nodeAddedHook != nil {
+		tab.nodeAddedHook(n)
+	}
+	return true
 }
 
 // ping a remote endpoint and wait for a reply, also updating the node database

@@ -33,7 +33,6 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/errors"
-	"github.com/syndtr/goleveldb/leveldb/iterator"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	"github.com/syndtr/goleveldb/leveldb/storage"
 	"github.com/syndtr/goleveldb/leveldb/util"
@@ -50,12 +49,12 @@ var (
 
 // nodeDB stores all nodes we know about.
 type nodeDB struct {
-	lvl    *leveldb.DB       // Interface to the database itself
-	seeder iterator.Iterator // Iterator for fetching possible seed nodes
+	lvl        *leveldb.DB // Interface to the database itself
+	seedCursor []byte      // Key at which the last batch of seeds stopped, nil to start over
 
 	// seederMu orders querySeeds against close: querySeeds holds it for
-	// the duration of one batch, close holds it exclusively while releasing
-	// the iterator and closing the store.
+	// the duration of one batch, close holds it while closing the store, so
+	// no batch iterates over a closed store.
 	seederMu sync.Mutex
 
 	self NodeID // Own node id to prevent adding it into the database
@@ -408,19 +407,34 @@ func (db *nodeDB) updateFindFails(id NodeID, fails int) error {
 //
 // If the database runs out of potential seeds, we restart the startup counter
 // and start iterating over the peers again.
+//
+// Each batch iterates from the key after the one where the previous batch
+// stopped and releases its iterator before returning: an open iterator pins
+// the store version it was created on, and batches can be hours apart. Each
+// batch therefore sees the store as it is then, so a node stored after the
+// previous batch is handed out in the current pass if its key sorts after
+// where that batch stopped, and in the next pass otherwise.
 func (db *nodeDB) querySeeds(n int) []*Node {
 	db.seederMu.Lock()
 	defer db.seederMu.Unlock()
 
-	// Create a new seed iterator if none exists
-	if db.seeder == nil {
-		db.seeder = db.lvl.NewIterator(nil, nil)
+	var slice *util.Range
+	if db.seedCursor != nil {
+		// The smallest key after the cursor is the cursor followed by 0.
+		start := make([]byte, len(db.seedCursor)+1)
+		copy(start, db.seedCursor)
+		slice = &util.Range{Start: start}
 	}
+	seeder := db.lvl.NewIterator(slice, nil)
+	defer seeder.Release()
+
 	// Iterate over the nodes and find suitable seeds
 	nodes := make([]*Node, 0, n)
-	for len(nodes) < n && db.seeder.Next() {
+	for len(nodes) < n && seeder.Next() {
+		db.seedCursor = append(db.seedCursor[:0], seeder.Key()...)
+
 		// Iterate until a discovery node is found
-		id, field := splitKey(db.seeder.Key())
+		id, field := splitKey(seeder.Key())
 		if field != nodeDBDiscoverRoot {
 			continue
 		}
@@ -434,24 +448,19 @@ func (db *nodeDB) querySeeds(n int) []*Node {
 			nodes = append(nodes, node)
 		}
 	}
-	// Release the iterator if we reached the end
+	// Start over with the next batch if we reached the end
 	if len(nodes) == 0 {
-		db.seeder.Release()
-		db.seeder = nil
+		db.seedCursor = nil
 	}
 	return nodes
 }
 
 // close flushes and closes the database files. A sweep in progress is told
-// to stop and joined first: it holds iterators, and the store must not be
-// closed under them.
+// to stop and joined first, and a batch of seeds in progress is waited for:
+// both hold iterators, and the store must not be closed under them.
 func (db *nodeDB) close() {
 	db.seederMu.Lock()
-	if db.seeder != nil {
-		db.seeder.Release()
-		db.seeder = nil
-	}
-	db.seederMu.Unlock()
+	defer db.seederMu.Unlock()
 	close(db.quit)
 	db.wg.Wait()
 	db.lvl.Close()
