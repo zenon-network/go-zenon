@@ -23,7 +23,8 @@ import "fmt"
 type HTTPError struct {
 	StatusCode int
 	Status     string
-	Body       []byte
+	// Body holds at most the first 64 KiB of the response body.
+	Body []byte
 }
 
 // Error returns the HTTP status, followed by the response body when

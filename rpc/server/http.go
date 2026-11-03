@@ -33,6 +33,9 @@ import (
 const (
 	maxRequestContentLength = 1024 * 1024 * 5
 	contentType             = "application/json"
+	// maxHTTPErrorBodySize bounds how much of a non-2xx response body the
+	// client reads and keeps in HTTPError.Body.
+	maxHTTPErrorBodySize = 64 * 1024
 )
 
 // https://www.jsonrpc.org/historical/json-rpc-over-http.html#id13
@@ -138,6 +141,11 @@ func (c *Client) sendHTTP(ctx context.Context, op *requestOp, msg interface{}) e
 	}
 	defer respBody.Close()
 
+	// A notification (Notify) has no channel to deliver to and expects no
+	// reply, so whatever the server sent is not read.
+	if op.resp == nil {
+		return nil
+	}
 	var respmsg jsonrpcMessage
 	if err := json.NewDecoder(respBody).Decode(&respmsg); err != nil {
 		return err
@@ -146,19 +154,47 @@ func (c *Client) sendHTTP(ctx context.Context, op *requestOp, msg interface{}) e
 	return nil
 }
 
-func (c *Client) sendBatchHTTP(ctx context.Context, op *requestOp, msgs []*jsonrpcMessage) error {
+// sendBatchHTTP sends msgs as one batch and returns the server's reply. Each
+// returned message answers a distinct element of msgs; calls the server left
+// unanswered have no message.
+func (c *Client) sendBatchHTTP(ctx context.Context, msgs []*jsonrpcMessage) ([]*jsonrpcMessage, error) {
 	hc := c.writeConn.(*httpConn)
 	respBody, err := hc.doRequest(ctx, msgs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer respBody.Close()
-	var respmsgs []jsonrpcMessage
+	var respmsgs []*jsonrpcMessage
 	if err := json.NewDecoder(respBody).Decode(&respmsgs); err != nil {
-		return err
+		return nil, err
 	}
-	for i := 0; i < len(respmsgs); i++ {
-		op.resp <- &respmsgs[i]
+	if err := checkBatchResponse(msgs, respmsgs); err != nil {
+		return nil, err
+	}
+	return respmsgs, nil
+}
+
+// checkBatchResponse reports an error unless every element of resps answers
+// a distinct call of msgs. Unlike a connection's dispatch loop, which drops
+// unsolicited replies, the HTTP path receives the whole reply at once and
+// rejects it as a whole: the IDs are not echoed in the error because the
+// server chose them.
+func checkBatchResponse(msgs, resps []*jsonrpcMessage) error {
+	if len(resps) > len(msgs) {
+		return fmt.Errorf("%w: %d responses to %d calls", errInvalidBatchResponse, len(resps), len(msgs))
+	}
+	pending := make(map[string]struct{}, len(msgs))
+	for _, msg := range msgs {
+		pending[string(msg.ID)] = struct{}{}
+	}
+	for i, resp := range resps {
+		if resp == nil {
+			return fmt.Errorf("%w: element %d is null", errInvalidBatchResponse, i)
+		}
+		if _, ok := pending[string(resp.ID)]; !ok {
+			return fmt.Errorf("%w: element %d answers no outstanding call", errInvalidBatchResponse, i)
+		}
+		delete(pending, string(resp.ID))
 	}
 	return nil
 }
@@ -185,9 +221,10 @@ func (hc *httpConn) doRequest(ctx context.Context, msg interface{}) (io.ReadClos
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
 		var buf bytes.Buffer
 		var body []byte
-		if _, err := buf.ReadFrom(resp.Body); err == nil {
+		if _, err := buf.ReadFrom(io.LimitReader(resp.Body, maxHTTPErrorBodySize)); err == nil {
 			body = buf.Bytes()
 		}
 
@@ -233,6 +270,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if code, err := validateRequest(r); err != nil {
 		http.Error(w, err.Error(), code)
+		return
+	}
+	// OPTIONS carries no call, so its body is never dispatched. A CORS
+	// preflight is answered by the CORS handler in front of this one when
+	// CORS is configured.
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	// All checks passed, create a codec that reads directly from the request body

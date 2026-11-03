@@ -17,7 +17,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -46,6 +45,13 @@ var (
 	ErrSubscriptionQueueOverflow = errors.New("subscription queue overflow")
 	errClientReconnected         = errors.New("client reconnected")
 	errDead                      = errors.New("connection lost")
+	// ErrMissingBatchResponse is set as the Error of a batch element the
+	// server's HTTP reply did not answer.
+	ErrMissingBatchResponse = errors.New("response batch did not contain a response to this call")
+	// errInvalidBatchResponse is returned when an HTTP batch reply has more
+	// elements than the batch had calls, or an element that answers no call
+	// of the batch or one already answered.
+	errInvalidBatchResponse = errors.New("invalid batch response")
 )
 
 const (
@@ -76,8 +82,10 @@ type BatchElem struct {
 	// non-nil pointer value of the desired type, otherwise the response will be
 	// discarded.
 	Result interface{}
-	// Error is set if the server returns an error for this request, or if
-	// unmarshaling into Result fails. It is not set for I/O errors.
+	// Error is set if the server returns an error for this request, if
+	// unmarshaling into Result fails, or if an HTTP reply carries no
+	// response for this request (ErrMissingBatchResponse). It is not set for
+	// I/O errors.
 	Error error
 }
 
@@ -365,8 +373,9 @@ func (c *Client) CallContext(ctx context.Context, result interface{}, method str
 // BatchCall sends all given requests as a single batch and waits for the server
 // to return a response for all of them.
 //
-// In contrast to Call, BatchCall only returns I/O errors. Any error specific to
-// a request is reported through the Error field of the corresponding BatchElem.
+// In contrast to Call, BatchCall only returns errors that concern the batch as
+// a whole, as BatchCallContext does. Any error specific to a request is
+// reported through the Error field of the corresponding BatchElem.
 //
 // Note that batch calls may not be executed atomically on the server side.
 func (c *Client) BatchCall(b []BatchElem) error {
@@ -378,9 +387,15 @@ func (c *Client) BatchCall(b []BatchElem) error {
 // waits for the server to return a response for all of them. The wait
 // duration is bounded by the context's deadline.
 //
-// In contrast to CallContext, BatchCallContext only returns errors that have occurred
-// while sending the request. Any error specific to a request is reported through the
-// Error field of the corresponding BatchElem.
+// In contrast to CallContext, BatchCallContext only returns errors that concern the
+// batch as a whole: sending it, waiting for it, or, over HTTP, a reply that does not
+// match it. Any error specific to a request is reported through the Error field of
+// the corresponding BatchElem.
+//
+// Over HTTP the reply arrives in one piece. A reply that answers a call
+// outside the batch, answers a call twice or has more elements than the
+// batch is rejected as a whole with an error, and no element is touched; a
+// call the reply leaves unanswered gets ErrMissingBatchResponse.
 //
 // Note that batch calls may not be executed atomically on the server side.
 func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
@@ -391,26 +406,42 @@ func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
 		return errBatchTooLarge
 	}
 	msgs := make([]*jsonrpcMessage, len(b))
-	op := &requestOp{
-		ids:  make([]json.RawMessage, len(b)),
-		resp: make(chan *jsonrpcMessage, len(b)),
-	}
+	byID := make(map[string]int, len(b))
 	for i, elem := range b {
 		msg, err := c.newMessage(elem.Method, elem.Args...)
 		if err != nil {
 			return err
 		}
 		msgs[i] = msg
+		byID[string(msg.ID)] = i
+	}
+
+	if c.isHTTP {
+		// The reply is complete once its body is read, and sendBatchHTTP has
+		// checked that each element answers a distinct call of the batch.
+		resps, err := c.sendBatchHTTP(ctx, msgs)
+		if err != nil {
+			return err
+		}
+		for _, resp := range resps {
+			i := byID[string(resp.ID)]
+			delete(byID, string(resp.ID))
+			b[i].setResponse(resp)
+		}
+		for _, i := range byID {
+			b[i].Error = ErrMissingBatchResponse
+		}
+		return nil
+	}
+
+	op := &requestOp{
+		ids:  make([]json.RawMessage, len(msgs)),
+		resp: make(chan *jsonrpcMessage, len(msgs)),
+	}
+	for i, msg := range msgs {
 		op.ids[i] = msg.ID
 	}
-
-	var err error
-	if c.isHTTP {
-		err = c.sendBatchHTTP(ctx, op, msgs)
-	} else {
-		err = c.send(ctx, op, msgs)
-	}
-
+	err := c.send(ctx, op, msgs)
 	// Wait for all responses to come back.
 	for n := 0; n < len(b) && err == nil; n++ {
 		var resp *jsonrpcMessage
@@ -418,27 +449,24 @@ func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
 		if err != nil {
 			break
 		}
-		// Find the element corresponding to this response.
-		// The element is guaranteed to be present because dispatch
-		// only sends valid IDs to our channel.
-		var elem *BatchElem
-		for i := range msgs {
-			if bytes.Equal(msgs[i].ID, resp.ID) {
-				elem = &b[i]
-				break
-			}
-		}
-		if resp.Error != nil {
-			elem.Error = resp.Error
-			continue
-		}
-		if len(resp.Result) == 0 {
-			elem.Error = ErrNoResult
-			continue
-		}
-		elem.Error = json.Unmarshal(resp.Result, elem.Result)
+		// Find the element corresponding to this response. The element is
+		// guaranteed to be present because dispatch only sends each valid
+		// ID to our channel once.
+		b[byID[string(resp.ID)]].setResponse(resp)
 	}
 	return err
+}
+
+// setResponse records the outcome of the call that resp answers.
+func (elem *BatchElem) setResponse(resp *jsonrpcMessage) {
+	switch {
+	case resp.Error != nil:
+		elem.Error = resp.Error
+	case len(resp.Result) == 0:
+		elem.Error = ErrNoResult
+	default:
+		elem.Error = json.Unmarshal(resp.Result, elem.Result)
+	}
 }
 
 // Notify sends a notification, i.e. a method call that doesn't expect a response.
