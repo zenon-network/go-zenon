@@ -519,6 +519,9 @@ func (tab *Table) pingpong(w *bondproc, pinged bool, id NodeID, addr *net.UDPAdd
 //   - Entries are stored as copies of their own, so the last slot still
 //     holding the pinged *Node means that entry has not been refreshed or
 //     re-added since; only then is it evicted.
+//   - Whatever the outcome, a newcomer that was added meanwhile is moved to
+//     the front rather than added twice, and a slot freed meanwhile is given
+//     to the newcomer.
 func (tab *Table) pingreplace(new *Node, b *bucket) {
 	cpy := *new
 	new = &cpy
@@ -537,11 +540,15 @@ func (tab *Table) pingreplace(new *Node, b *bucket) {
 	tab.mutex.Lock()
 	b.replacing = false
 	if err == nil {
+		// The node responded, we don't need to replace it. The newcomer
+		// still takes a slot that was freed meanwhile.
+		if !b.bump(new) {
+			tab.insertFront(new, b)
+		}
 		tab.mutex.Unlock()
-		// The node responded, we don't need to replace it. Write its
-		// record again: a sweep that ran while the ping was outstanding
-		// may have expired the old one, and the fresh pong alone does not
-		// make the node a seed after a restart.
+		// Write the responsive node's record again: a sweep that ran while
+		// the ping was outstanding may have expired the old one, and the
+		// fresh pong alone does not make the node a seed after a restart.
 		tab.db.updateNode(oldest)
 		return
 	}

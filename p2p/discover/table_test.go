@@ -262,10 +262,13 @@ func bondableNewcomer(t *testing.T, tab *Table) (newcomer *Node, b *bucket, olde
 // applied. A failed ping evicts the entry
 // that was pinged only if it is still the least recently active entry of a
 // full bucket; otherwise the newcomer is placed by what the bucket holds
-// now. Fails if the outcome is applied to a bucket that changed meanwhile.
+// now. An answered ping keeps the entry, and the newcomer still takes a slot
+// that was freed meanwhile. Fails if the outcome is applied to a bucket that
+// changed meanwhile.
 func TestReplacementRevalidatesBucketAfterPing(t *testing.T) {
 	for _, tc := range []struct {
-		name string
+		name     string
+		answered bool // the oldest entry answers the ping
 		// change runs with tab.mutex held while the ping is outstanding.
 		change func(t *testing.T, b *bucket, oldest, newcomer *Node)
 		// check gets the bucket's IDs after bond returned.
@@ -350,6 +353,50 @@ func TestReplacementRevalidatesBucketAfterPing(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:     "answered ping keeps a full bucket",
+			answered: true,
+			change:   func(*testing.T, *bucket, *Node, *Node) {},
+			check: func(t *testing.T, ids []NodeID, oldest, newcomer *Node) {
+				if len(ids) != bucketSize || countID(ids, oldest.ID) != 1 || countID(ids, newcomer.ID) != 0 {
+					t.Errorf("responsive oldest entry was replaced by the newcomer")
+				}
+			},
+		},
+		{
+			name:     "answered ping with another entry removed meanwhile admits the newcomer",
+			answered: true,
+			change: func(_ *testing.T, b *bucket, _, _ *Node) {
+				// A concurrent lookup deletes an entry that failed findnode.
+				b.entries = append(b.entries[:3], b.entries[4:]...)
+			},
+			check: func(t *testing.T, ids []NodeID, oldest, newcomer *Node) {
+				if len(ids) != bucketSize || ids[0] != newcomer.ID {
+					t.Errorf("newcomer was not placed in the freed slot: %d entries", len(ids))
+				}
+				if countID(ids, oldest.ID) != 1 {
+					t.Errorf("responsive oldest entry was evicted")
+				}
+			},
+		},
+		{
+			name:     "answered ping with newcomer added meanwhile is not duplicated",
+			answered: true,
+			change: func(_ *testing.T, b *bucket, _, newcomer *Node) {
+				// A concurrent lookup deleted two entries and a concurrent
+				// bond put the newcomer into one of the freed slots.
+				b.entries = append(b.entries[:3], b.entries[5:]...)
+				b.entries = append([]*Node{newcomer}, b.entries...)
+			},
+			check: func(t *testing.T, ids []NodeID, oldest, newcomer *Node) {
+				if countID(ids, newcomer.ID) != 1 {
+					t.Errorf("newcomer appears %d times, want 1", countID(ids, newcomer.ID))
+				}
+				if len(ids) != bucketSize-1 || countID(ids, oldest.ID) != 1 {
+					t.Errorf("bucket has %d entries, want %d with the oldest entry", len(ids), bucketSize-1)
+				}
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := &heldPingTransport{started: make(chan NodeID, 1), release: make(chan error, 1)}
@@ -376,11 +423,15 @@ func TestReplacementRevalidatesBucketAfterPing(t *testing.T) {
 			tc.change(t, b, oldest, newcomer)
 			tab.mutex.Unlock()
 
-			tr.release <- errors.New("timeout")
+			if tc.answered {
+				tr.release <- nil
+			} else {
+				tr.release <- errors.New("timeout")
+			}
 			select {
 			case <-done:
 			case <-time.After(5 * time.Second):
-				t.Fatal("bond did not return after the ping failed")
+				t.Fatal("bond did not return after the ping")
 			}
 			tab.mutex.Lock()
 			ids := bucketIDs(b)
