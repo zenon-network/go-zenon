@@ -22,6 +22,11 @@ var (
 	// address a KeyFile advertises in the clear is not the address its
 	// decrypted seed derives, so the file has been edited.
 	ErrKeyFileAddressMismatch = errors.New("unable to open KeyFile. Its base address does not match its key")
+	// ErrKeyFileNotDurable is returned by Write when the key file is in
+	// place at its Path but its directory could not be synced, so a
+	// crash may still lose or roll back the new file. Writing again is
+	// safe.
+	ErrKeyFileNotDurable = errors.New("key file written, but its directory could not be synced: the rename may not survive a crash")
 
 	// === keyStore errors ===
 

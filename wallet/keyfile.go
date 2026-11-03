@@ -2,8 +2,12 @@ package wallet
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
@@ -98,6 +102,16 @@ func ReadKeyFile(path string) (*KeyFile, error) {
 // in that directory gets: mode 0600 plus whatever ACL the directory passes
 // on to new files. A directory whose inherited ACL grants others access
 // exposes every key file created in it, with or without this change.
+//
+// After the rename Write syncs the directory, so that the new name survives
+// a crash as well as the contents. If that fails, the key file is already
+// in place at Path but may be lost or rolled back by a crash, and Write
+// returns an error wrapping ErrKeyFileNotDurable; writing again is safe,
+// though it fails the same way until the cause is fixed. How durable the
+// rename is depends on the filesystem: directory syncing is skipped on
+// Windows, and a filesystem that reports it cannot sync a directory (such
+// as Linux 9p mounts using 9p2000 or 9p2000.u, or some FUSE filesystems) is
+// not treated as a failure.
 func (kf *KeyFile) Write() error {
 	keyFileJson, err := json.MarshalIndent(kf, "", "    ")
 	if err != nil {
@@ -129,7 +143,9 @@ func (kf *KeyFile) Write() error {
 		return err
 	}
 	tmpPath = ""
-	syncDir(dir)
+	if err := syncDir(dir); err != nil {
+		return fmt.Errorf("%w: %s: %w", ErrKeyFileNotDurable, kf.Path, err)
+	}
 	return nil
 }
 
@@ -146,16 +162,33 @@ func keyFileDir(path string) string {
 	return dir
 }
 
-// syncDir makes a rename in dir durable where the platform supports it.
-// Directories cannot be synced on every platform (Windows), so a failure
-// is not an error: the key file itself has already been synced.
-func syncDir(dir string) {
+// syncDir makes a rename in dir durable. It skips Windows, where a
+// directory cannot be opened for syncing this way, and returns nil when the
+// filesystem reports that it does not support syncing a directory. A
+// failure to open the directory or any other sync error is returned.
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	d, err := os.Open(dir)
 	if err != nil {
-		return
+		return err
 	}
-	_ = d.Sync()
+	err = d.Sync()
 	_ = d.Close()
+	if dirSyncUnsupported(err) {
+		return nil
+	}
+	return err
+}
+
+// dirSyncUnsupported reports whether err from syncing a directory means
+// the filesystem cannot sync directories at all, rather than that a sync
+// failed: EINVAL (for example Linux 9p mounts using 9p2000 or 9p2000.u,
+// whose directories have no fsync) and ENOTSUP, EOPNOTSUPP or ENOSYS (for
+// example FUSE filesystems without a directory-sync handler).
+func dirSyncUnsupported(err error) bool {
+	return errors.Is(err, syscall.EINVAL) || errors.Is(err, errors.ErrUnsupported)
 }
 
 // Decrypt recovers the KeyStore from the key file using password. It

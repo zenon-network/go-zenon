@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/zenon-network/go-zenon/common/types"
@@ -179,6 +180,63 @@ func TestKeyFileWriteResolvesTheDirectoryLikeTheRename(t *testing.T) {
 			if strings.HasPrefix(e.Name(), ".") {
 				t.Fatalf("%s holds the temporary file %s after Write", d, e.Name())
 			}
+		}
+	}
+}
+
+// A directory that cannot be synced after the rename makes Write report
+// ErrKeyFileNotDurable, wrapping the cause, while the new key file is
+// already in place. The directory here can be written and searched but not
+// opened for reading, so the rename succeeds and opening it to sync fails.
+func TestKeyFileWriteReportsAnUnsyncedDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows cannot sync a directory; Write does not try")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root opens the directory whatever its mode")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wallet")
+	if err := os.Chmod(dir, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	err := encryptedKeyFile(t, testKeyStore(t), path).Write()
+	if !errors.Is(err, ErrKeyFileNotDurable) {
+		t.Fatalf("Write into a directory that cannot be synced: %v, want %v", err, ErrKeyFileNotDurable)
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("Write error %v does not wrap the permission error that stopped the sync", err)
+	}
+
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	requirePrivateKeyFile(t, path)
+	requireOnlyEntry(t, dir, "wallet")
+}
+
+// A filesystem that cannot sync directories at all is not a failed sync:
+// those results are told apart from the errors of a sync that failed.
+func TestDirSyncUnsupported(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{syscall.EINVAL, true},
+		{syscall.ENOTSUP, true},
+		{syscall.EOPNOTSUPP, true},
+		{syscall.ENOSYS, true},
+		{&os.PathError{Op: "sync", Path: "wallet", Err: syscall.EINVAL}, true},
+		{&os.PathError{Op: "sync", Path: "wallet", Err: syscall.ENOTSUP}, true},
+		{syscall.EIO, false},
+		{syscall.EACCES, false},
+		{&os.PathError{Op: "sync", Path: "wallet", Err: syscall.EIO}, false},
+	} {
+		if got := dirSyncUnsupported(tc.err); got != tc.want {
+			t.Errorf("dirSyncUnsupported(%v) = %t, want %t", tc.err, got, tc.want)
 		}
 	}
 }
