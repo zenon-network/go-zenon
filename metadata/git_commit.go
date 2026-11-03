@@ -2,12 +2,17 @@ package metadata
 
 import "runtime/debug"
 
-// GitCommit is the git revision the binary was built from, read once at
-// startup from the vcs.revision setting that the go toolchain embeds in
-// the build info. It is empty when the build carries no VCS information,
-// for example when built from an unversioned source tree or with VCS
-// stamping disabled.
-var GitCommit = func() string {
+// GitCommit is the git revision the binary was built from, injected at
+// build time via -ldflags -X. It is empty when the build does not set it.
+var GitCommit = ""
+
+// CommitHash returns GitCommit, falling back to the vcs.revision setting
+// that the go toolchain embeds in the build info. It returns "" when
+// neither is available.
+func CommitHash() string {
+	if GitCommit != "" {
+		return GitCommit
+	}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, setting := range info.Settings {
 			if setting.Key == "vcs.revision" {
@@ -16,4 +21,4 @@ var GitCommit = func() string {
 		}
 	}
 	return ""
-}()
+}
