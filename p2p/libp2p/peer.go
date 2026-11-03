@@ -81,7 +81,12 @@ func (c *peerConn) close(err error) {
 	// the stream gracefully (half-close — the remote can still drain
 	// anything we already sent).
 	if r, ok := err.(p2p.DiscReason); ok && r != p2p.DiscNetworkError {
-		c.stream.SetWriteDeadline(time.Now().Add(discWriteTimeout))
+		// The limit also cuts short a write still stalled on the stream,
+		// which holds the write lock the disc frame needs, so both
+		// writes are bounded by discWriteTimeout rather than
+		// frameWriteTimeout each. The Close below is not: yamux queues
+		// its FIN on the session without a deadline.
+		c.rw.limitWriteDeadline(time.Now().Add(discWriteTimeout))
 		p2p.Send(c.rw, discMsg, []p2p.DiscReason{r})
 		c.stream.Close()
 		return
@@ -294,6 +299,18 @@ loop:
 
 	p.rw.close(reason)
 	close(p.closed)
+	// Join the read loop, the ping loop and every protocol goroutine
+	// before returning, as the legacy backend does: runPeer frees the
+	// peer's slot as soon as run returns, and a protocol handler still
+	// inside Run would otherwise keep its registration past the removal,
+	// which a reconnect with the same identity then trips over. The read
+	// and ping loops and the protocol reads and writes unblock on the
+	// closed stream or p.closed, and the final sends on protoErr, readErr
+	// and writeErr have buffer space, so the join is bounded by the
+	// handlers' own exit: a handler busy with local work (a chain
+	// insert, say) holds the slot, and Stop, until that work returns, as
+	// on the legacy backend.
+	p.wg.Wait()
 	common.P2PLogger.Debug("peer.run() finished")
 	if requested {
 		reason = p2p.DiscRequested

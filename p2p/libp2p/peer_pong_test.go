@@ -38,11 +38,14 @@ type heldStream struct {
 	wmu       sync.Mutex
 	remaining int // payload bytes still expected for the current frame
 
-	wdeadline atomic.Value // time.Time; a held write fails when it passes
+	wdeadline atomic.Value  // time.Time; a held write fails when it passes
+	wdset     chan struct{} // signalled on every SetWriteDeadline
 }
 
 // writeDeadline returns a channel that fires at the current write
-// deadline, or nil (never fires) when none is set.
+// deadline, or nil (never fires) when none is set. A held write re-reads
+// the deadline whenever it is set again, as a yamux stream does, so a
+// deadline moved while a write is held applies to that write.
 func (s *heldStream) writeDeadline() <-chan time.Time {
 	d, ok := s.wdeadline.Load().(time.Time)
 	if !ok || d.IsZero() {
@@ -57,6 +60,7 @@ func newHeldStream() *heldStream {
 		entered: make(chan uint64, 1024),
 		allow:   make(chan struct{}),
 		closed:  make(chan struct{}),
+		wdset:   make(chan struct{}, 1),
 	}
 }
 
@@ -98,15 +102,18 @@ func (s *heldStream) Write(p []byte) (int, error) {
 		s.remaining = 0
 		return 0, err
 	}
-	select {
-	case <-s.allow:
-		return len(p), nil
-	case <-s.closed:
-		s.remaining = 0
-		return 0, io.ErrClosedPipe
-	case <-s.writeDeadline():
-		s.remaining = 0
-		return 0, errors.New("heldStream: write deadline exceeded")
+	for {
+		select {
+		case <-s.allow:
+			return len(p), nil
+		case <-s.closed:
+			s.remaining = 0
+			return 0, io.ErrClosedPipe
+		case <-s.writeDeadline():
+			s.remaining = 0
+			return 0, errors.New("heldStream: write deadline exceeded")
+		case <-s.wdset:
+		}
 	}
 }
 
@@ -116,13 +123,22 @@ func (s *heldStream) CloseRead() error                   { return nil }
 func (s *heldStream) CloseWrite() error                  { return nil }
 func (s *heldStream) SetDeadline(t time.Time) error      { return nil }
 func (s *heldStream) SetReadDeadline(t time.Time) error  { return nil }
-func (s *heldStream) SetWriteDeadline(t time.Time) error { s.wdeadline.Store(t); return nil }
+func (s *heldStream) SetWriteDeadline(t time.Time) error { return s.setWriteDeadline(t) }
 func (s *heldStream) ID() string                         { return "held" }
 func (s *heldStream) Protocol() protocol.ID              { return "" }
 func (s *heldStream) SetProtocol(id protocol.ID) error   { return nil }
 func (s *heldStream) Stat() network.Stats                { return network.Stats{} }
 func (s *heldStream) Conn() network.Conn                 { return nil }
 func (s *heldStream) Scope() network.StreamScope         { return nil }
+
+func (s *heldStream) setWriteDeadline(t time.Time) error {
+	s.wdeadline.Store(t)
+	select {
+	case s.wdset <- struct{}{}:
+	default:
+	}
+	return nil
+}
 
 // deliver hands a base-protocol message with an empty list payload to the
 // read loop. Because the read loop handles each message before reading
@@ -195,9 +211,8 @@ func runPongTestPeerWithTicks(t *testing.T, s *heldStream, pingC <-chan time.Tim
 	}()
 	t.Cleanup(func() {
 		// Close the stream first: the read loop ends with EOF and any
-		// write still held in the stream fails at once, so run cannot
-		// sit in its disconnect write (WriteMsg applies its own 20 s
-		// deadline there) past this cleanup's budget.
+		// write still held in the stream fails at once, so run does not
+		// sit in its disconnect write until discWriteTimeout.
 		s.Close()
 		go p.Disconnect(p2p.DiscQuitting)
 		select {

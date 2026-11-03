@@ -3,8 +3,10 @@ package libp2p
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"testing"
 	"time"
 
@@ -315,3 +317,136 @@ func (s *netConnStream) SetProtocol(id protocol.ID) error   { return nil }
 func (s *netConnStream) Stat() network.Stats                { return network.Stats{} }
 func (s *netConnStream) Conn() network.Conn                 { return nil }
 func (s *netConnStream) Scope() network.StreamScope         { return nil }
+
+// A header claiming a large payload must not make ReadMsg reserve that
+// payload before it arrives. Each read below gets a header claiming
+// maxMessageSize followed by at most 200 KiB and then the end of the
+// stream; the bytes allocated per read must stay far below the claim.
+func TestStreamRW_ReadMsgAllocatesForReceivedBytesOnly(t *testing.T) {
+	for _, sent := range []int{0, 200 * 1024} {
+		t.Run(fmt.Sprintf("sent_%d", sent), func(t *testing.T) {
+			var header [8]byte
+			binary.BigEndian.PutUint32(header[0:4], 1)
+			binary.BigEndian.PutUint32(header[4:8], maxMessageSize)
+			frame := append(header[:], make([]byte, sent)...)
+
+			const reads = 16
+			streams := make([]*mockStream, reads)
+			for i := range streams {
+				streams[i] = newMockStream()
+				streams[i].readBuf.Write(frame)
+			}
+			wantErr := io.ErrUnexpectedEOF
+			if sent == 0 {
+				wantErr = io.EOF
+			}
+
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			for _, ms := range streams {
+				if _, err := NewStreamRW(ms).ReadMsg(); err != wantErr {
+					t.Fatalf("ReadMsg error = %v, want %v", err, wantErr)
+				}
+			}
+			runtime.ReadMemStats(&after)
+
+			perRead := (after.TotalAlloc - before.TotalAlloc) / reads
+			if perRead > 1024*1024 {
+				t.Fatalf("ReadMsg allocated %d bytes per read for a header claiming %d bytes with %d sent; want at most 1 MiB", perRead, maxMessageSize, sent)
+			}
+		})
+	}
+}
+
+// One byte over maxMessageSize is still rejected from the header alone,
+// with the same error as before, and nothing after the header is read.
+func TestStreamRW_RejectsOneByteOverMax(t *testing.T) {
+	ms := newMockStream()
+	var header [8]byte
+	binary.BigEndian.PutUint32(header[0:4], 1)
+	binary.BigEndian.PutUint32(header[4:8], maxMessageSize+1)
+	ms.readBuf.Write(header[:])
+	sentinel := []byte("payload that must stay unread")
+	ms.readBuf.Write(sentinel)
+
+	_, err := NewStreamRW(ms).ReadMsg()
+	want := fmt.Sprintf("message too large: %d bytes (max %d)", maxMessageSize+1, maxMessageSize)
+	if err == nil || err.Error() != want {
+		t.Fatalf("ReadMsg error = %v, want %q", err, want)
+	}
+	if ms.readBuf.Len() != len(sentinel) {
+		t.Fatalf("ReadMsg consumed %d bytes past the header of a rejected frame", len(sentinel)-ms.readBuf.Len())
+	}
+}
+
+// Payloads from 0 bytes to maxMessageSize, around the first buffer
+// boundaries and at the limit, arrive intact when the stream hands them
+// over in short reads, and the payload buffer is exactly the payload's
+// size.
+func TestStreamRW_ReadMsgPayloadSizes(t *testing.T) {
+	sizes := []int{
+		0, 1,
+		initialPayloadBuffer - 1, initialPayloadBuffer, initialPayloadBuffer + 1,
+		2*initialPayloadBuffer + 7, 3*initialPayloadBuffer + 7,
+		maxMessageSize - 1, maxMessageSize,
+	}
+	for _, size := range sizes {
+		t.Run(fmt.Sprintf("size_%d", size), func(t *testing.T) {
+			payload := make([]byte, size)
+			for i := range payload {
+				payload[i] = byte(i * 31)
+			}
+			var header [8]byte
+			binary.BigEndian.PutUint32(header[0:4], 7)
+			binary.BigEndian.PutUint32(header[4:8], uint32(size))
+			ms := newMockStream()
+			ms.readBuf.Write(header[:])
+			ms.readBuf.Write(payload)
+			rw := NewStreamRW(&shortReadStream{mockStream: ms, max: 4093})
+
+			msg, err := rw.ReadMsg()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if msg.Code != 7 || msg.Size != uint32(size) {
+				t.Fatalf("code=%d size=%d, want 7 and %d", msg.Code, msg.Size, size)
+			}
+			pr := msg.Payload.(*payloadReader)
+			if len(pr.data) != size || cap(pr.data) != size {
+				t.Fatalf("payload len=%d cap=%d, want both %d", len(pr.data), cap(pr.data), size)
+			}
+			if !bytes.Equal(pr.data, payload) {
+				t.Fatal("payload content mismatch")
+			}
+		})
+	}
+}
+
+// A stream that ends partway through a payload, past the first buffer,
+// reports io.ErrUnexpectedEOF as it did when the payload was read in one
+// piece.
+func TestStreamRW_ReadMsgTruncatedPayload(t *testing.T) {
+	var header [8]byte
+	binary.BigEndian.PutUint32(header[0:4], 1)
+	binary.BigEndian.PutUint32(header[4:8], 3*initialPayloadBuffer)
+	ms := newMockStream()
+	ms.readBuf.Write(header[:])
+	ms.readBuf.Write(make([]byte, 2*initialPayloadBuffer))
+
+	if _, err := NewStreamRW(ms).ReadMsg(); err != io.ErrUnexpectedEOF {
+		t.Fatalf("ReadMsg error = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+}
+
+// shortReadStream returns at most max bytes per Read.
+type shortReadStream struct {
+	*mockStream
+	max int
+}
+
+func (s *shortReadStream) Read(p []byte) (int, error) {
+	if len(p) > s.max {
+		p = p[:s.max]
+	}
+	return s.mockStream.Read(p)
+}
