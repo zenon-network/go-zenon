@@ -87,10 +87,13 @@ type MomentumPool interface {
 // unconfirmed blocks; GetAccountStore returns the state at an exact
 // identifier — the stable (momentum-confirmed) version or any pooled
 // one, nil otherwise — and GetPatch the state patch a pooled block
-// produced. GetNewMomentumContent returns the uncommitted blocks a
-// new momentum should confirm — at most MaxAccountBlocksInMomentum
-// and within the detailed momentum's wire-size budget, keeping
-// contract-send batches whole. SnapshotUncommitted and
+// produced. GetNewMomentumContent is the content selection used
+// before the dynamic-plasma spork (pillar.ContentSelector replaces it
+// after): it returns the uncommitted blocks a new momentum should
+// confirm — at most MaxAccountBlocksInMomentum and within the detailed
+// momentum's wire-size budget, keeping contract-send batches whole and
+// skipping a batch that does not fit along with the rest of its
+// account's chain. SnapshotUncommitted and
 // RestoreUncommitted save and put back the pending state of given
 // addresses across a rollback.
 type AccountPool interface {
