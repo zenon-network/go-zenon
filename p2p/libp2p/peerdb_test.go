@@ -214,9 +214,12 @@ func TestPeerDBEmptyAddrsKeepExisting(t *testing.T) {
 	}
 }
 
-// TestPeerDBExpireCapsRecordCount verifies expire() evicts the
-// oldest-lastSeen records once the database holds more than
-// peerDBMaxRecords, rather than letting it grow without bound.
+// TestPeerDBExpireCapsRecordCount verifies the cap holds after an
+// expire() pass and that established records are evicted group-wise:
+// eight /16 groups of 256 records (the last of 218), all established,
+// over the cap by ten. The ten evictions come from the full groups, one
+// or two each, never from the smaller group, and within a group the
+// oldest lastSeen goes first.
 func TestPeerDBExpireCapsRecordCount(t *testing.T) {
 	d, err := openPeerDB(filepath.Join(t.TempDir(), "peerdb"))
 	if err != nil {
@@ -228,15 +231,15 @@ func TestPeerDBExpireCapsRecordCount(t *testing.T) {
 	d.now = func() time.Time { return clock }
 
 	const extra = 10
-	var newest []peer.ID
+	groups := make(map[int][]peer.ID)
 	for i := 0; i < peerDBMaxRecords+extra; i++ {
 		pid := testPeerID(t)
-		d.recordConnected(pid, []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/10.%d.%d.%d/tcp/35995", (i>>16)&0xff, (i>>8)&0xff, i&0xff))})
-		if i >= extra {
-			newest = append(newest, pid)
-		}
+		group := (i >> 8) & 0xff // 0..7
+		d.recordConnected(pid, []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/10.%d.0.%d/tcp/35995", group, i&0xff))})
+		groups[group] = append(groups[group], pid)
 		clock = clock.Add(time.Second)
 	}
+	clock = clock.Add(peerDBTenure + time.Hour) // everyone is established
 
 	d.expire()
 
@@ -248,9 +251,23 @@ func TestPeerDBExpireCapsRecordCount(t *testing.T) {
 	for _, s := range seeds {
 		present[s.ID] = true
 	}
-	for _, pid := range newest {
-		if !present[pid] {
-			t.Fatalf("expire() evicted a newer record (%s) while over cap", pid)
+	for group, ids := range groups {
+		lost := 0
+		for _, pid := range ids {
+			if !present[pid] {
+				lost++
+			}
+		}
+		if len(ids) < 256 && lost != 0 {
+			t.Fatalf("the smaller group %d (%d records) lost %d; only the largest groups may lose records", group, len(ids), lost)
+		}
+		if lost > 2 {
+			t.Fatalf("group %d lost %d records; the loss must spread across the largest groups", group, lost)
+		}
+		for i, pid := range ids { // the oldest-lastSeen records of a group go first
+			if want := i >= lost; present[pid] != want {
+				t.Fatalf("group %d record %d present=%v, want %v", group, i, present[pid], want)
+			}
 		}
 	}
 }
