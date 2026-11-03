@@ -143,9 +143,17 @@ func TestStartRescanDropsUnlockedStoresOfChangedFiles(t *testing.T) {
 // it back changed both sides of the rescan comparison, so the store
 // unlocked from the old contents stayed unlocked.
 func TestStartRescanDropsStoresOfFilesChangedThroughGetKeyFile(t *testing.T) {
-	m := testManagerWithStores(t, "replaced", "edited")
+	// Changing bytes in place catches a copy that still shares a slice.
+	changes := map[string]func(kf *KeyFile){
+		"replaced": func(kf *KeyFile) { *kf = *encryptedKeyFile(t, otherKeyStore(t), kf.Path) },
+		"cipher":   func(kf *KeyFile) { kf.Crypto.CipherData[0] ^= 0xff },
+		"nonce":    func(kf *KeyFile) { kf.Crypto.AesNonce[0] ^= 0xff },
+		"salt":     func(kf *KeyFile) { kf.Crypto.Argon2Params.Salt[0] ^= 0xff },
+	}
+	names := []string{"replaced", "cipher", "nonce", "salt"}
+	m := testManagerWithStores(t, names...)
 	stores := map[string]*KeyStore{}
-	for _, name := range []string{"replaced", "edited"} {
+	for _, name := range names {
 		if err := m.Unlock(name, testPassword); err != nil {
 			t.Fatal(err)
 		}
@@ -156,28 +164,21 @@ func TestStartRescanDropsStoresOfFilesChangedThroughGetKeyFile(t *testing.T) {
 		stores[name] = ks
 	}
 
-	replaced, err := m.GetKeyFile("replaced")
-	if err != nil {
-		t.Fatal(err)
-	}
-	*replaced = *encryptedKeyFile(t, otherKeyStore(t), replaced.Path)
-	if err := replaced.Write(); err != nil {
-		t.Fatal(err)
-	}
-	// Changing bytes in place catches a copy that still shares slices.
-	edited, err := m.GetKeyFile("edited")
-	if err != nil {
-		t.Fatal(err)
-	}
-	edited.Crypto.CipherData[0] ^= 0xff
-	if err := edited.Write(); err != nil {
-		t.Fatal(err)
+	for _, name := range names {
+		kf, err := m.GetKeyFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changes[name](kf)
+		if err := kf.Write(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := m.Start(); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, name := range []string{"replaced", "edited"} {
+	for _, name := range names {
 		if unlocked, err := m.IsUnlocked(name); err != nil || unlocked {
 			t.Fatalf("%s: IsUnlocked = %v, %v; want false, nil", name, unlocked, err)
 		}
