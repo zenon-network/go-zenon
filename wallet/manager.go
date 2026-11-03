@@ -130,6 +130,15 @@ func sameEncryptedKey(a, b *KeyFile) bool {
 		bytes.Equal(a.Crypto.Argon2Params.Salt, b.Crypto.Argon2Params.Salt)
 }
 
+// clone returns a deep copy of kf: the copy shares no byte slice with it.
+func (kf *KeyFile) clone() *KeyFile {
+	c := *kf
+	c.Crypto.CipherData = bytes.Clone(kf.Crypto.CipherData)
+	c.Crypto.AesNonce = bytes.Clone(kf.Crypto.AesNonce)
+	c.Crypto.Argon2Params.Salt = bytes.Clone(kf.Crypto.Argon2Params.Salt)
+	return &c
+}
+
 // Stop zeroes every unlocked key store (see KeyStore.Zero) and drops
 // the manager's references to all known key files. Nil entries are
 // skipped, so it is safe whatever sequence of Unlock and Lock calls
@@ -155,15 +164,17 @@ func (m *Manager) MakePathAbsolut(path string) string {
 	}
 }
 
-// GetKeyFile returns the known key file at path, resolving path against
-// the wallet directory first. It returns ErrKeyStoreNotFound when no
-// such file is known to the manager.
+// GetKeyFile returns a copy of the known key file at path, resolving path
+// against the wallet directory first. Changing the copy, or writing it
+// back, does not change the manager's record, which Start compares with
+// the rescanned file. It returns ErrKeyStoreNotFound when no such file is
+// known to the manager.
 func (m *Manager) GetKeyFile(path string) (*KeyFile, error) {
 	path = m.MakePathAbsolut(path)
 	if kf, ok := m.encrypted[path]; !ok {
 		return nil, ErrKeyStoreNotFound
 	} else {
-		return kf, nil
+		return kf.clone(), nil
 	}
 }
 

@@ -139,6 +139,54 @@ func TestStartRescanDropsUnlockedStoresOfChangedFiles(t *testing.T) {
 	}
 }
 
+// GetKeyFile handed out the manager's own record. Changing it and writing
+// it back changed both sides of the rescan comparison, so the store
+// unlocked from the old contents stayed unlocked.
+func TestStartRescanDropsStoresOfFilesChangedThroughGetKeyFile(t *testing.T) {
+	m := testManagerWithStores(t, "replaced", "edited")
+	stores := map[string]*KeyStore{}
+	for _, name := range []string{"replaced", "edited"} {
+		if err := m.Unlock(name, testPassword); err != nil {
+			t.Fatal(err)
+		}
+		ks, err := m.GetKeyStore(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stores[name] = ks
+	}
+
+	replaced, err := m.GetKeyFile("replaced")
+	if err != nil {
+		t.Fatal(err)
+	}
+	*replaced = *encryptedKeyFile(t, otherKeyStore(t), replaced.Path)
+	if err := replaced.Write(); err != nil {
+		t.Fatal(err)
+	}
+	// Changing bytes in place catches a copy that still shares slices.
+	edited, err := m.GetKeyFile("edited")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited.Crypto.CipherData[0] ^= 0xff
+	if err := edited.Write(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"replaced", "edited"} {
+		if unlocked, err := m.IsUnlocked(name); err != nil || unlocked {
+			t.Fatalf("%s: IsUnlocked = %v, %v; want false, nil", name, unlocked, err)
+		}
+		if ks := stores[name]; ks.Seed != nil || ks.Entropy != nil {
+			t.Fatalf("%s: the old store was dropped without being zeroed", name)
+		}
+	}
+}
+
 // Stop drops both maps; a later Start must leave the manager usable.
 func TestStartAfterStopCanUnlock(t *testing.T) {
 	m := testManagerWithStores(t, "store1")
