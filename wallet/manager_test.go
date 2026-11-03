@@ -192,7 +192,7 @@ func TestStartRescanDropsStoresOfFilesChangedThroughGetKeyFile(t *testing.T) {
 // A key file that cannot be read during a rescan is treated like one that
 // is gone: its store is zeroed and dropped, and the rescan still completes,
 // so it cannot keep the stores of removed files unlocked. Once the file can
-// be read again it is known again, locked.
+// be read again, a later rescan lists it again, locked.
 func TestStartRescanDropsTheStoreOfAnUnreadableFile(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix permission bits")

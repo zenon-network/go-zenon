@@ -64,12 +64,13 @@ func New(config *Config) *Manager {
 // an error if the directory cannot be created or listed.
 //
 // Start may be called again to rescan the directory. A store stays
-// unlocked only if its file is read back with the same encrypted data.
-// The scan skips files it cannot read or that are not valid key files, so
-// a store unlocked from a file that is gone, cannot be read (even for a
-// moment), is no longer a valid key file, or now holds different encrypted
-// data is zeroed and dropped, with a warning logged. Such a file does not
-// fail the rescan; once it reads again it is known again, locked.
+// unlocked only if this scan reads its file back with the same encrypted
+// data. The scan skips files it cannot read or that are not valid key
+// files, so a store unlocked from a file that is gone, that this scan
+// cannot read (even if the failure is passing), that is no longer a valid
+// key file, or that now holds different encrypted data is zeroed and
+// dropped, with a warning logged. Such a file does not fail the rescan; a
+// later Start that can read it lists it again, locked.
 //
 // Start resolves WalletDir to an absolute path before scanning so that
 // every indexed path is absolute, regardless of how the directory was
@@ -112,9 +113,9 @@ func (m *Manager) Start() error {
 		}
 		if ks != nil {
 			ks.Zero()
+			m.log.Warn("locked a key store: its key file is gone, unreadable or changed", "path", path)
 		}
 		delete(m.decrypted, path)
-		m.log.Warn("locked a key store: its key file is gone, unreadable or changed", "path", path)
 	}
 	return nil
 }
