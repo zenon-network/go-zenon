@@ -339,10 +339,23 @@ type ClientSubscription struct {
 	quit        chan error
 	forwardDone chan struct{}
 	unsubDone   chan struct{}
+
+	// unsubscribeErr is the outcome of the unsubscribe request, nil once the
+	// server has confirmed it. It is written before unsubDone is closed and
+	// only when the request was sent.
+	unsubscribeErr error
 }
 
 // This is the sentinel value sent on sub.quit when Unsubscribe is called.
 var errUnsubscribed = errors.New("unsubscribed")
+
+// errDuplicateSubscriptionID is returned by Subscribe when the server
+// answers with the ID of a subscription still active on the connection.
+var errDuplicateSubscriptionID = errors.New("duplicate subscription ID")
+
+// errUnsubscribeNotConfirmed is the outcome of an unsubscribe request the
+// server answered without an error but with a result other than true.
+var errUnsubscribeNotConfirmed = errors.New("server did not confirm the unsubscribe")
 
 func newClientSubscription(c *Client, namespace string, channel reflect.Value) *ClientSubscription {
 	sub := &ClientSubscription{
@@ -372,7 +385,10 @@ func (sub *ClientSubscription) Err() <-chan error {
 }
 
 // Unsubscribe unsubscribes the notification and closes the error channel.
-// It can safely be called more than once.
+// It can safely be called more than once. The request to the server carries
+// a five-second deadline and is abandoned when the connection closes; a
+// write already in progress on the connection can delay it by up to that
+// write's own timeout.
 func (sub *ClientSubscription) Unsubscribe() {
 	sub.errOnce.Do(func() {
 		select {
@@ -404,7 +420,9 @@ func (sub *ClientSubscription) close(err error) {
 
 // run is the forwarding loop of the subscription. It runs in its own goroutine and
 // is launched by the client's handler after the subscription has been created.
-func (sub *ClientSubscription) run() {
+// connCtx ends when the connection's handler closes; forwarded is called once
+// the loop has stopped sending to sub.channel.
+func (sub *ClientSubscription) run(connCtx context.Context, forwarded func()) {
 	defer close(sub.unsubDone)
 
 	unsubscribe, err := sub.forward()
@@ -412,10 +430,11 @@ func (sub *ClientSubscription) run() {
 	// The client's dispatch loop won't be able to execute the unsubscribe call if it is
 	// blocked in sub.deliver() or sub.close(). Closing forwardDone unblocks them.
 	close(sub.forwardDone)
+	forwarded()
 
 	// Call the unsubscribe method on the server.
 	if unsubscribe {
-		sub.requestUnsubscribe()
+		sub.unsubscribeErr = sub.requestUnsubscribe(connCtx)
 	}
 
 	// Send the error.
@@ -438,6 +457,7 @@ func (sub *ClientSubscription) forward() (unsubscribeServer bool, err error) {
 		{Dir: reflect.SelectSend, Chan: sub.channel},
 	}
 	buffer := list.New()
+	bufferBytes := 0 // encoded size of the notifications in buffer
 
 	for {
 		var chosen int
@@ -447,7 +467,7 @@ func (sub *ClientSubscription) forward() (unsubscribeServer bool, err error) {
 			chosen, recv, _ = reflect.Select(cases[:2])
 		} else {
 			// Non-empty buffer, send the first queued item.
-			cases[2].Send = reflect.ValueOf(buffer.Front().Value)
+			cases[2].Send = reflect.ValueOf(buffer.Front().Value.(queuedNotification).value)
 			chosen, recv, _ = reflect.Select(cases)
 		}
 
@@ -463,20 +483,29 @@ func (sub *ClientSubscription) forward() (unsubscribeServer bool, err error) {
 			return false, err
 
 		case 1: // <-sub.in
-			val, err := sub.unmarshal(recv.Interface().(json.RawMessage))
+			raw := recv.Interface().(json.RawMessage)
+			if buffer.Len() == maxClientSubscriptionBuffer || bufferBytes+len(raw) > maxClientSubscriptionBufferBytes {
+				return true, ErrSubscriptionQueueOverflow
+			}
+			val, err := sub.unmarshal(raw)
 			if err != nil {
 				return true, err
 			}
-			if buffer.Len() == maxClientSubscriptionBuffer {
-				return true, ErrSubscriptionQueueOverflow
-			}
-			buffer.PushBack(val)
+			buffer.PushBack(queuedNotification{value: val, size: len(raw)})
+			bufferBytes += len(raw)
 
 		case 2: // sub.channel<-
 			cases[2].Send = reflect.Value{} // Don't hold onto the value.
-			buffer.Remove(buffer.Front())
+			bufferBytes -= buffer.Remove(buffer.Front()).(queuedNotification).size
 		}
 	}
+}
+
+// queuedNotification is a decoded notification waiting in a subscription's
+// buffer, with the size of its encoding.
+type queuedNotification struct {
+	value interface{}
+	size  int
 }
 
 func (sub *ClientSubscription) unmarshal(result json.RawMessage) (interface{}, error) {
@@ -485,7 +514,20 @@ func (sub *ClientSubscription) unmarshal(result json.RawMessage) (interface{}, e
 	return val.Elem().Interface(), err
 }
 
-func (sub *ClientSubscription) requestUnsubscribe() error {
-	var result interface{}
-	return sub.client.Call(&result, sub.namespace+unsubscribeMethodSuffix, sub.subid)
+// requestUnsubscribe asks the server to end the subscription under a
+// subscribeTimeout deadline that also ends when connCtx does, because the
+// connection's handler is closing: a server that withholds the answer, or a
+// connection that is going away, must not keep Unsubscribe waiting. It
+// returns nil only when the server answers true.
+func (sub *ClientSubscription) requestUnsubscribe(connCtx context.Context) error {
+	ctx, cancel := context.WithTimeout(connCtx, subscribeTimeout)
+	defer cancel()
+	var confirmed bool
+	if err := sub.client.CallContext(ctx, &confirmed, sub.namespace+unsubscribeMethodSuffix, sub.subid); err != nil {
+		return err
+	}
+	if !confirmed {
+		return errUnsubscribeNotConfirmed
+	}
+	return nil
 }

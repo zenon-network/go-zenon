@@ -224,12 +224,14 @@ func (h *handler) handleMsg(msg *jsonrpcMessage, slotAcquired bool) {
 	})
 }
 
-// close cancels all requests except for inflightReq and waits for
-// call goroutines to shut down.
+// close cancels all requests except for inflightReq, cancels the contexts
+// of the calls still running and waits for their goroutines to shut down.
+// The contexts are cancelled first: a call that returns only when its
+// context ends would otherwise hold the connection's teardown open.
 func (h *handler) close(err error, inflightReq *requestOp) {
 	h.cancelAllRequests(err, inflightReq)
-	h.callWG.Wait()
 	h.cancelRoot()
+	h.callWG.Wait()
 	h.cancelServerSubscriptions(err)
 }
 
@@ -360,8 +362,27 @@ func (h *handler) handleSubscriptionResult(msg *jsonrpcMessage) {
 		h.log.Debug("Dropping invalid subscription message")
 		return
 	}
-	if h.clientSubs[result.ID] != nil {
-		h.clientSubs[result.ID].deliver(result.Result)
+	if sub := h.activeClientSub(result.ID); sub != nil {
+		sub.deliver(result.Result)
+	}
+}
+
+// activeClientSub returns the client subscription registered under id while
+// its forwarding loop runs. An entry whose loop has stopped is retired: it
+// receives nothing more and nothing at teardown needs it, since its goroutine
+// leaves callWG right after the loop stops and close waits for that. The ID
+// is then free for the server to give to a new subscription.
+func (h *handler) activeClientSub(id string) *ClientSubscription {
+	sub := h.clientSubs[id]
+	if sub == nil {
+		return nil
+	}
+	select {
+	case <-sub.forwardDone:
+		delete(h.clientSubs, id)
+		return nil
+	default:
+		return sub
 	}
 }
 
@@ -388,14 +409,23 @@ func (h *handler) handleResponse(msg *jsonrpcMessage) {
 		op.err = msg.Error
 		return
 	}
-	if op.err = json.Unmarshal(msg.Result, &op.sub.subid); op.err == nil {
-		h.callWG.Add(1)
-		go func() {
-			op.sub.run()
-			h.callWG.Done()
-		}()
-		h.clientSubs[op.sub.subid] = op.sub
+	if op.err = json.Unmarshal(msg.Result, &op.sub.subid); op.err != nil {
+		return
 	}
+	// The ID names the subscription while it is active; a second
+	// subscription under it would take over the first one's notifications
+	// and leave its forwarding loop without a way to stop. The ID of a
+	// subscription that has ended may be reused.
+	if h.activeClientSub(op.sub.subid) != nil {
+		op.err = errDuplicateSubscriptionID
+		return
+	}
+	// close waits for the forwarding loop, not for the unsubscribe request
+	// that may follow it: that request needs the client's dispatch loop,
+	// which is the one running close.
+	h.callWG.Add(1)
+	go op.sub.run(h.rootCtx, h.callWG.Done)
+	h.clientSubs[op.sub.subid] = op.sub
 }
 
 // handleCallMsg executes a call message and returns the answer.

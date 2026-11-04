@@ -175,6 +175,11 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 	} else {
 		h.handleMsg(reqs[0], false)
 	}
+	// The answer is written by the call's goroutine and must reach the
+	// response before ServeHTTP returns, so the call runs to the end before
+	// close cancels its context. The request's own context still ends it if
+	// the client goes away.
+	h.callWG.Wait()
 }
 
 // Stop stops admitting new codecs and closes every codec registered before it
