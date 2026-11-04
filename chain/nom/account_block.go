@@ -22,8 +22,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 
 	"github.com/pkg/errors"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/zenon-network/go-zenon/common"
@@ -499,12 +501,35 @@ func DeserializeAccountBlock(data []byte) (*AccountBlock, error) {
 	return DeProtoAccountBlock(pb)
 }
 
+// Bounds the JSON decoders apply to a wire-form block before converting
+// it, so that decoding costs time linear in the input.
+const (
+	// MaxDescendantDepth is how many levels of descendant blocks may
+	// nest below the block being decoded from JSON: a ceiling set to
+	// the recursion limit the protobuf decoder applies to stored blocks
+	// (protowire.DefaultRecursionLimit), which that decoder reaches a
+	// few levels earlier because each block's hash fields nest too.
+	// encoding/json stops nested input at about half this depth under
+	// its own nesting limit; the explicit bound keeps the invariant on
+	// this side of it rather than on the library's.
+	MaxDescendantDepth = protowire.DefaultRecursionLimit
+)
+
+// MaxAmountDigits is the longest decimal string the JSON decoders accept
+// for an amount: the length of 2^255-1 (common.BigP255m1), the largest
+// amount the verifier admits and the largest token supply
+// (constants.TokenMaxSupplyBig). big.Int.SetString takes more than
+// linear time in the length of its input, so longer strings are refused
+// before they are parsed. A sign character counts toward the length.
+var MaxAmountDigits = len(common.BigP255m1.String())
+
 // AccountBlockMarshal is the JSON wire representation of
 // AccountBlock: identical except that Amount is a base-10 string and
 // Nonce a hex string, so amounts round-trip without precision loss.
 // TotalPlasma is serialized as "usedPlasma" (matching the tag on
-// AccountBlock itself), and DescendantBlocks remain full AccountBlock
-// values whose own custom marshalling applies recursively.
+// AccountBlock itself), and DescendantBlocks hold the wire form of each
+// descendant, so a whole tree is encoded and decoded in one pass of
+// encoding/json rather than once per level.
 type AccountBlockMarshal struct {
 	Version         uint64 `json:"version"`
 	ChainIdentifier uint64 `json:"chainIdentifier"`
@@ -526,7 +551,7 @@ type AccountBlockMarshal struct {
 	FromBlockHash types.Hash `json:"fromBlockHash"`
 
 	// Batch information
-	DescendantBlocks []*AccountBlock `json:"descendantBlocks"` // hash of DescendantBlocks is included in hash
+	DescendantBlocks []*AccountBlockMarshal `json:"descendantBlocks"` // hash of DescendantBlocks is included in hash
 
 	Data []byte `json:"data"` // hash of Data is included in hash
 
@@ -544,8 +569,10 @@ type AccountBlockMarshal struct {
 
 // ToNomMarshalJson converts the block to its JSON wire
 // representation, rendering Amount as a base-10 string and Nonce as
-// hex. The descendant block pointers are shared, not copied. A nil
-// Amount renders as the string "<nil>".
+// hex; descendants are converted recursively, and a nil descendant
+// entry is kept as a nil entry, which encodes as JSON null (and which
+// the decoders refuse by index). A nil Amount renders as the string
+// "<nil>".
 func (ab *AccountBlock) ToNomMarshalJson() *AccountBlockMarshal {
 	aux := &AccountBlockMarshal{
 		Version:              ab.Version,
@@ -571,18 +598,26 @@ func (ab *AccountBlock) ToNomMarshalJson() *AccountBlockMarshal {
 		Signature:            ab.Signature,
 	}
 
-	aux.DescendantBlocks = make([]*AccountBlock, 0, len(ab.DescendantBlocks))
+	aux.DescendantBlocks = make([]*AccountBlockMarshal, 0, len(ab.DescendantBlocks))
 	for _, dBlock := range ab.DescendantBlocks {
-		aux.DescendantBlocks = append(aux.DescendantBlocks, dBlock)
+		if dBlock == nil {
+			aux.DescendantBlocks = append(aux.DescendantBlocks, nil)
+			continue
+		}
+		aux.DescendantBlocks = append(aux.DescendantBlocks, dBlock.ToNomMarshalJson())
 	}
 	return aux
 }
 
 // FromNomMarshalJson converts the wire representation back to an
-// AccountBlock. An Amount string that is not a valid base-10 integer
-// silently decodes to 0 (common.StringToBigInt), and an invalid Nonce
-// string is silently ignored, leaving the nonce zero — unlike
-// AccountBlock.UnmarshalJSON, which reports a nonce error.
+// AccountBlock, descendants included. It does not validate: an Amount
+// string that is not a valid base-10 integer silently decodes to 0
+// (common.StringToBigInt), an invalid Nonce string is silently
+// ignored, leaving the nonce zero — unlike AccountBlock.UnmarshalJSON,
+// which reports a nonce error — and a nil descendant entry is kept as
+// a nil entry. The JSON decoders call Check first, so the trees they
+// hand over are bounded, free of nil entries, and their descendants'
+// nonces valid.
 func (ab *AccountBlockMarshal) FromNomMarshalJson() *AccountBlock {
 	aux := &AccountBlock{
 		Version:              ab.Version,
@@ -611,23 +646,103 @@ func (ab *AccountBlockMarshal) FromNomMarshalJson() *AccountBlock {
 
 	aux.DescendantBlocks = make([]*AccountBlock, 0, len(ab.DescendantBlocks))
 	for _, dBlock := range ab.DescendantBlocks {
-		aux.DescendantBlocks = append(aux.DescendantBlocks, dBlock)
+		if dBlock == nil {
+			aux.DescendantBlocks = append(aux.DescendantBlocks, nil)
+			continue
+		}
+		aux.DescendantBlocks = append(aux.DescendantBlocks, dBlock.FromNomMarshalJson())
 	}
 	return aux
 }
 
-// CheckDescendants returns an error naming the index of the first null
-// entry in DescendantBlocks. JSON decoding leaves a null list element
-// as a nil pointer, which every consumer of the list (Copy, hashing,
-// the verifier) dereferences; the decoders call this so such input is
-// rejected at the boundary instead.
-func (ab *AccountBlockMarshal) CheckDescendants() error {
+// Check rejects a wire form that must not be converted, before any
+// amount in it is parsed: a null entry in a descendant list (JSON
+// decoding leaves it as a nil pointer, which every consumer of the list
+// dereferences), an Amount longer than MaxAmountDigits at any level,
+// descendants nested deeper than MaxDescendantDepth, and a descendant
+// whose Nonce does not decode. The root's own nonce is left to the
+// decoder that owns it (AccountBlock.UnmarshalJSON reports it,
+// FromNomMarshalJson ignores it). A failure below the root is reported
+// as a DescendantError carrying the index path to the offending block,
+// built once, so locating a failure costs no more than reaching it.
+// Every JSON decoder that yields an AccountBlock calls it.
+//
+// Check sees the tree as encoding/json left it. A JSON object that
+// repeats the descendantBlocks key is decoded by that package with the
+// later list reusing the elements of the earlier one field by field,
+// so a later entry that omits its nonce keeps the earlier entry's.
+func (ab *AccountBlockMarshal) Check() error {
+	err := ab.check(0)
+	if located, ok := err.(*DescendantError); ok {
+		// The path was collected leaf to root on the way back up.
+		for i, j := 0, len(located.Path)-1; i < j; i, j = i+1, j-1 {
+			located.Path[i], located.Path[j] = located.Path[j], located.Path[i]
+		}
+	}
+	return err
+}
+
+func (ab *AccountBlockMarshal) check(depth int) error {
+	if len(ab.Amount) > MaxAmountDigits {
+		return fmt.Errorf("amount string has %d characters, more than the %d of the largest valid amount", len(ab.Amount), MaxAmountDigits)
+	}
+	if depth > 0 {
+		if err := new(Nonce).UnmarshalText([]byte(ab.Nonce)); err != nil {
+			return err
+		}
+	}
+	if len(ab.DescendantBlocks) > 0 && depth+1 > MaxDescendantDepth {
+		return fmt.Errorf("descendant blocks nested deeper than %d levels", MaxDescendantDepth)
+	}
 	for index, dBlock := range ab.DescendantBlocks {
 		if dBlock == nil {
 			return fmt.Errorf("descendant block at index %d is null", index)
 		}
+		err := dBlock.check(depth + 1)
+		if err == nil {
+			continue
+		}
+		located, ok := err.(*DescendantError)
+		if !ok {
+			located = &DescendantError{Err: err}
+		}
+		located.Path = append(located.Path, index)
+		return located
 	}
 	return nil
+}
+
+// DescendantError is a Check failure in a descendant block, located by
+// Path, the list indices from the root's descendant list down to the
+// block whose check failed with Err. Its message names every level of
+// a short path and elides the middle of a long one, so the message
+// stays small however deep the failure.
+type DescendantError struct {
+	Path []int
+	Err  error
+}
+
+func (e *DescendantError) Error() string {
+	var b strings.Builder
+	path := e.Path
+	const shown = 8
+	if len(path) > shown {
+		for _, index := range path[:shown/2] {
+			fmt.Fprintf(&b, "descendant block at index %d: ", index)
+		}
+		fmt.Fprintf(&b, "%d more levels: ", len(path)-shown/2-1)
+		path = path[len(path)-1:]
+	}
+	for _, index := range path {
+		fmt.Fprintf(&b, "descendant block at index %d: ", index)
+	}
+	b.WriteString(e.Err.Error())
+	return b.String()
+}
+
+// Unwrap returns the check failure at the located block.
+func (e *DescendantError) Unwrap() error {
+	return e.Err
 }
 
 // MarshalJSON encodes the block via its AccountBlockMarshal wire
@@ -637,45 +752,25 @@ func (ab *AccountBlock) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON decodes the AccountBlockMarshal wire form produced by
-// MarshalJSON. An invalid Amount string silently decodes to 0, while
-// an invalid Nonce string or a null descendant entry is reported as an
-// error.
+// MarshalJSON in one pass over the input. An invalid Amount string
+// silently decodes to 0, while an invalid Nonce string at any level, a
+// null descendant entry, an Amount longer than MaxAmountDigits or
+// descendants nested deeper than MaxDescendantDepth is reported as an
+// error and leaves the receiver unchanged.
 func (ab *AccountBlock) UnmarshalJSON(data []byte) error {
 	aux := new(AccountBlockMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
-	if err := aux.CheckDescendants(); err != nil {
+	if err := aux.Check(); err != nil {
+		return err
+	}
+	var nonce Nonce
+	if err := nonce.UnmarshalText([]byte(aux.Nonce)); err != nil {
 		return err
 	}
 
-	ab.Version = aux.Version
-	ab.ChainIdentifier = aux.ChainIdentifier
-	ab.BlockType = aux.BlockType
-	ab.Hash = aux.Hash
-	ab.PreviousHash = aux.PreviousHash
-	ab.Height = aux.Height
-	ab.MomentumAcknowledged = aux.MomentumAcknowledged
-	ab.Address = aux.Address
-	ab.ToAddress = aux.ToAddress
-	ab.Amount = common.StringToBigInt(aux.Amount)
-	ab.TokenStandard = aux.TokenStandard
-	ab.FromBlockHash = aux.FromBlockHash
-	ab.DescendantBlocks = make([]*AccountBlock, len(aux.DescendantBlocks))
-	ab.Data = aux.Data
-	ab.FusedPlasma = aux.FusedPlasma
-	ab.Difficulty = aux.Difficulty
-	if err := ab.Nonce.UnmarshalText([]byte(aux.Nonce)); err != nil {
-		return err
-	}
-	ab.BasePlasma = aux.BasePlasma
-	ab.TotalPlasma = aux.TotalPlasma
-	ab.ChangesHash = aux.ChangesHash
-	ab.PublicKey = aux.PublicKey
-	ab.Signature = aux.Signature
-	for index, dBlock := range aux.DescendantBlocks {
-		ab.DescendantBlocks[index] = dBlock
-	}
-
+	*ab = *aux.FromNomMarshalJson()
+	ab.Nonce = nonce
 	return nil
 }

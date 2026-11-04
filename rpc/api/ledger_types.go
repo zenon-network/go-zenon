@@ -93,14 +93,17 @@ func (block *AccountBlock) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON decodes the AccountBlockMarshal wire form produced by
-// MarshalJSON, converting string-encoded amounts back to *big.Int. A
-// null entry in descendantBlocks is an error.
+// MarshalJSON, converting string-encoded amounts back to *big.Int.
+// Decoding is linear in the input: a null entry in descendantBlocks, an
+// amount or token supply string longer than nom.MaxAmountDigits, or
+// descendants nested deeper than nom.MaxDescendantDepth is an error,
+// raised before any of the strings is parsed.
 func (block *AccountBlock) UnmarshalJSON(data []byte) error {
 	aux := new(AccountBlockMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
-	if err := aux.checkDescendantsDeep(); err != nil {
+	if err := aux.checkDeep(); err != nil {
 		return err
 	}
 
@@ -115,14 +118,19 @@ func (block *AccountBlock) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// checkDescendantsDeep rejects a null entry in this block's descendant
-// list or in the list of any block in its paired chain, naming the
-// index and, for a paired block, its depth. Every JSON decoder that
-// yields an AccountBlock calls it, since FromApiMarshalJson itself
-// copies the pointers unchecked.
-func (a *AccountBlockMarshal) checkDescendantsDeep() error {
+// checkDeep runs the ledger wire-form checks (nom.AccountBlockMarshal.Check:
+// null descendants, amount length, descendant depth, descendant nonces)
+// and the token supply length check on this block and on every block in
+// its paired chain, naming a paired block's depth. Every JSON decoder
+// that yields an AccountBlock calls it before converting, since
+// FromApiMarshalJson itself parses the strings unchecked.
+func (a *AccountBlockMarshal) checkDeep() error {
 	for depth := 0; a != nil; depth, a = depth+1, a.PairedAccountBlock {
-		if err := a.CheckDescendants(); err != nil {
+		err := a.Check()
+		if err == nil && a.TokenInfo != nil {
+			err = a.TokenInfo.check()
+		}
+		if err != nil {
 			if depth > 0 {
 				return fmt.Errorf("paired block at depth %d: %w", depth, err)
 			}
@@ -134,9 +142,9 @@ func (a *AccountBlockMarshal) checkDescendantsDeep() error {
 
 // FromApiMarshalJson converts the wire representation back to an
 // AccountBlock, parsing string-encoded amounts into *big.Int and
-// converting the token info and paired block (recursively) as well.
-// It does not validate; the JSON decoders check the descendant lists
-// before calling it.
+// converting the token info, descendants and paired block (recursively)
+// as well. It does not validate; the JSON decoders run checkDeep before
+// calling it.
 func (a *AccountBlockMarshal) FromApiMarshalJson() *AccountBlock {
 	aux := &AccountBlock{
 		ConfirmationDetail: a.ConfirmationDetail,
@@ -291,9 +299,26 @@ func (t *Token) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// check rejects a supply string longer than nom.MaxAmountDigits before
+// FromTokenMarshal parses it: a token's supplies are bounded by
+// constants.TokenMaxSupplyBig (2^255-1), and big.Int.SetString takes
+// more than linear time in the length of its input. The account block
+// decoders call it; the standalone Token decoder, which only decodes
+// results, does not.
+func (t *TokenMarshal) check() error {
+	if len(t.TotalSupply) > nom.MaxAmountDigits {
+		return fmt.Errorf("totalSupply string has %d characters, more than the %d of the largest valid supply", len(t.TotalSupply), nom.MaxAmountDigits)
+	}
+	if len(t.MaxSupply) > nom.MaxAmountDigits {
+		return fmt.Errorf("maxSupply string has %d characters, more than the %d of the largest valid supply", len(t.MaxSupply), nom.MaxAmountDigits)
+	}
+	return nil
+}
+
 // FromTokenMarshal converts the wire representation back to a Token,
 // parsing the supply strings as base-10 integers (invalid strings parse
-// to 0).
+// to 0). It does not validate; the account block decoders run check
+// first.
 func (t *TokenMarshal) FromTokenMarshal() *Token {
 	return &Token{
 		TokenName:          t.TokenName,
@@ -357,8 +382,10 @@ func (abl *AccountBlockList) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the AccountBlockListMarshal wire form produced
 // by MarshalJSON, converting string-encoded amounts back to *big.Int.
-// A null list element is skipped; a null entry in any element's
-// descendant list (or its paired chain) is an error.
+// A null list element is skipped; each other element is checked as
+// AccountBlock.UnmarshalJSON checks a block (null descendants, amount
+// and supply length, descendant depth, its paired chain), naming the
+// element on error.
 func (abl *AccountBlockList) UnmarshalJSON(data []byte) error {
 	aux := new(AccountBlockListMarshal)
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -370,7 +397,7 @@ func (abl *AccountBlockList) UnmarshalJSON(data []byte) error {
 		if accBl == nil {
 			continue
 		}
-		if err := accBl.checkDescendantsDeep(); err != nil {
+		if err := accBl.checkDeep(); err != nil {
 			return fmt.Errorf("list element %d: %w", index, err)
 		}
 		block := accBl.FromApiMarshalJson()
