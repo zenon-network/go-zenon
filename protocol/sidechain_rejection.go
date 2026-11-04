@@ -21,16 +21,20 @@ const (
 	// last time they were offered.
 	rejectedCandidateTTL = time.Hour
 	// rejectedCandidateCap bounds the memory; the oldest entry is evicted
-	// when it is full. The bound is on memory, not on what one node can
-	// record: entries are keyed on the bytes served, so every distinct
-	// batch a node varies is a new entry, but a batch records at most one
-	// (the first rejected candidate) and the node is quarantined for
-	// peerQuarantinePeriod on that verdict, so one node id adds one entry
-	// per period and filling the memory takes as many node ids as entries.
-	// Eviction forgets a verdict and nothing else: the candidate is checked
-	// again on its next offer, with the rollback and restore that the
-	// memory spares, which is what happened to every candidate before the
-	// memory existed.
+	// when it is full. The bound is on memory, not on what nodes can
+	// record: entries are keyed on the bytes served for a candidate, so
+	// every distinct candidate a node serves can be a new entry. A batch
+	// records at most one (the first candidate it rejects), and the node
+	// that served it is then quarantined, which refuses its reconnection
+	// while that quarantine entry lasts. The quarantine holds at most
+	// peerQuarantineCap ids and evicts the one expiring soonest, so it
+	// bounds neither how many ids can add entries nor, once an id is
+	// evicted, how soon that id can add another: enough rotating ids can
+	// fill the memory within rejectedCandidateTTL.
+	// Eviction only forgets a verdict: the candidate's next offer takes
+	// the ordinary validation path again, with the rollback and restore
+	// that path makes where it reaches them, as every candidate did before
+	// the memory existed.
 	rejectedCandidateCap = 4096
 )
 
