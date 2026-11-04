@@ -43,13 +43,14 @@ const (
 // rejected, before any canonical momentum is removed.
 var ErrSideChainKnownInvalid = errors.New("side-chain momentum was already rejected")
 
-// SideChainRejected is returned by InsertChain when a side-chain candidate
-// fails a consensus check: the static or state checks of the verifier, the
+// SideChainRejected is returned by InsertChain when a candidate, served
+// as a side-chain replacement or as an extension of the frontier, fails a
+// consensus check: the static or state checks of the verifier, the
 // producer election, or the VM while applying its content. The protocol
 // layer quarantines the peer that served it. When the verdict is one the
 // candidate's own bytes reproduce, the bridge also remembers those bytes
 // and refuses any later batch that carries them before rolling anything
-// back, whichever peer serves them. Only consensus verdicts are classified
+// back or applying anything, whichever peer serves them. Only consensus verdicts are classified
 // this way (see validationFailure); store errors, internal failures, failed
 // commits and clock-dependent checks are not.
 type SideChainRejected struct {

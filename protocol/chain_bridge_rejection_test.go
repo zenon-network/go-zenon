@@ -165,30 +165,50 @@ func TestInsertChain_RejectedCandidateAfterCommittedPrefixIsRefusedAsExtension(t
 	expectChainEquals(t, z.Chain(), withPrefix)
 }
 
-// A plain extension that fails, with no rollback behind it, is an ordinary
-// import failure: not a SideChainRejected, so the serving peer is not
-// quarantined for it, and not remembered, so the next offer is judged on its
-// merits again.
-func TestInsertChain_RejectedExtensionIsNotRemembered(t *testing.T) {
+// A plain extension that fails a consensus check, with no rollback behind
+// it, is classified like a failed replacement: the verdict is attributed to
+// the serving peer and the served bytes are remembered, so the next offer is
+// refused before its content is applied. This is the path a node at a fork
+// point takes first: the other branch extends its frontier until its own
+// next momentum turns that branch into a side chain. The chain is left as it
+// was on both attempts.
+func TestInsertChain_RejectedExtensionIsRememberedAndAttributed(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
 	z.InsertMomentumsTo(6)
 	counting, bridge := newSideChainBridge(z)
 	before := snapshotChain(t, z.Chain())
 
-	batch := detailedOf(attackerMomentum(momentumAt(t, z.Chain(), 6), 7))
-	for attempt := 0; attempt < 2; attempt++ {
-		_, err := bridge.InsertChain(batch)
-		if err == nil {
-			t.Fatalf("attempt %d: expected the extension to be rejected", attempt)
-		}
-		var rejected *protocol.SideChainRejected
-		if errors.As(err, &rejected) || errors.Is(err, protocol.ErrSideChainKnownInvalid) {
-			t.Fatalf("attempt %d: a failed extension is not a side-chain rejection: %v", attempt, err)
-		}
-		if !errors.Is(err, verifier.ErrMChangesHashInvalid) {
-			t.Fatalf("attempt %d: expected the momentum check to fail, got %v", attempt, err)
-		}
+	bad := attackerMomentum(momentumAt(t, z.Chain(), 6), 7)
+	batch := detailedOf(bad)
+
+	_, err := bridge.InsertChain(batch)
+	var rejected *protocol.SideChainRejected
+	if !errors.As(err, &rejected) {
+		t.Fatalf("expected a failed extension to be a SideChainRejected, got %v", err)
+	}
+	if !errors.Is(err, verifier.ErrMChangesHashInvalid) {
+		t.Fatalf("the rejection must keep its cause, got %v", err)
+	}
+	common.Expect(t, rejected.Momentum, bad.Identifier())
+	common.Expect(t, counting.rollbacks, 0)
+	expectChainEquals(t, z.Chain(), before)
+
+	_, err = bridge.InsertChain(batch)
+	if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+		t.Fatalf("expected the retry to be refused as known invalid, got %v", err)
+	}
+	if !errors.As(err, &rejected) {
+		t.Fatalf("the refusal must stay attributable to the peer, got %v", err)
+	}
+	common.Expect(t, counting.rollbacks, 0)
+	expectChainEquals(t, z.Chain(), before)
+
+	// A descendant batch carrying the remembered candidate is refused the
+	// same way, before anything is applied.
+	_, err = bridge.InsertChain(detailedOf(bad, attackerMomentum(bad, 8)))
+	if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+		t.Fatalf("expected a descendant batch to be refused as known invalid, got %v", err)
 	}
 	common.Expect(t, counting.rollbacks, 0)
 	expectChainEquals(t, z.Chain(), before)

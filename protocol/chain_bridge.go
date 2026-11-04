@@ -225,11 +225,6 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 		return 0, err
 	}
 
-	// replacing is set once the chain has been rolled back for a side-chain.
-	// Only a failure after that rollback is a rejected side-chain candidate;
-	// a failed extension leaves the chain as it was and is not remembered.
-	replacing := false
-
 	// if we are dealing with a side-chain, check if it should replace our chain and rollback for insertion
 	if head.Previous() != ourFrontier.Identifier() {
 		// check if we can roll back for insertion
@@ -264,13 +259,13 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 		if err != nil {
 			return 0, errors.Errorf("unable to rollback to %v. Reason:%v", target.Identifier(), err)
 		}
-		replacing = true
 	} else if index, known := c.firstRemembered(momentums); known {
 		// The extension path has no rollback to protect, but a candidate
-		// rejected earlier lands here: this release does not restore the
-		// branch a failed replacement removed, so after a rejection the node
-		// stays at the fork point plus whatever prefix committed, and the
-		// rejected candidate then extends the frontier. Refuse it before
+		// rejected earlier lands here: a node at a fork point meets the
+		// other branch as an extension, and this release does not restore
+		// the branch a failed replacement removed, so after a rejection the
+		// node stays at the fork point plus whatever prefix committed, and
+		// the rejected candidate then extends the frontier. Refuse it before
 		// applying its content, so the retry costs nothing and the serving
 		// peer is still held to account.
 		return index + start, c.reject(momentums[index], ErrSideChainKnownInvalid)
@@ -300,12 +295,16 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 			} else if restoreErr := c.chain.RestoreUncommitted(insert, snapshot); restoreErr != nil {
 				log.Error("error while restoring account-pool after failed momentum", "reason", restoreErr, "momentum-identifier", detailed.Momentum.Identifier())
 			}
-			if replacing {
-				// The served candidate, not the private copy, is what is
-				// remembered: the key is on the bytes the peer sent.
-				return index + start, c.rejectIfValidation(supplied, err)
-			}
-			return index + start, err
+			// A consensus verdict is classified the same way on both paths.
+			// A failed extension leaves the chain as it was, but the node
+			// at a fork point meets the other branch as an extension first:
+			// until its own next momentum turns that branch into a side
+			// chain, every peer serving it would otherwise be re-validated
+			// on every sync interval and never held to account, and the
+			// first rollback would still follow. The served candidate, not
+			// the private copy, is what is remembered: the key is on the
+			// bytes the peer sent.
+			return index + start, c.rejectIfValidation(supplied, err)
 		}
 	}
 

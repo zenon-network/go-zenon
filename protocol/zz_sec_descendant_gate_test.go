@@ -187,6 +187,15 @@ func TestSEC_ContractReceiveRules_AcrossTheRuleHeight(t *testing.T) {
 	}
 	frontierIs(tamperedMomentum.Previous())
 
+	// The bridge remembers a consensus rejection by the bytes served and
+	// refuses them before validating again, since the verdict is stable on
+	// a network. This test moves the rule height, which a network never
+	// does, so every offer after a rejection goes through a bridge with an
+	// empty memory, and it is the validation that is exercised.
+	freshBridge := func() protocol.ChainBridge {
+		return protocol.NewChainBridge(z.Chain(), z.Consensus(), z.Verifier(), supervisor)
+	}
+
 	// 6. ... and after the tampered copy was offered to the pool first, which
 	// admission refuses, so insertion validates the block itself.
 	if err := bridge.AddAccountBlocks([]*nom.AccountBlock{tampered}); err == nil {
@@ -195,7 +204,7 @@ func TestSEC_ContractReceiveRules_AcrossTheRuleHeight(t *testing.T) {
 	if poolHolds(tampered) {
 		t.Fatalf("the pool holds the tampered receive after a refused admission")
 	}
-	if _, err := bridge.InsertChain([]*nom.DetailedMomentum{detailed}); err == nil {
+	if _, err := freshBridge().InsertChain([]*nom.DetailedMomentum{detailed}); err == nil {
 		t.Fatalf("a momentum carrying a tampered receive was accepted with the copy pre-offered")
 	}
 	frontierIs(tamperedMomentum.Previous())
@@ -203,7 +212,7 @@ func TestSEC_ContractReceiveRules_AcrossTheRuleHeight(t *testing.T) {
 	// 7. One below the rule height it is accepted again: the boundary is the
 	// momentum's own height.
 	definition.CommunitySporkAddressRenewalStartHeight = tamperedMomentum.Height + 1
-	_, err = bridge.InsertChain([]*nom.DetailedMomentum{detailed})
+	_, err = freshBridge().InsertChain([]*nom.DetailedMomentum{detailed})
 	common.FailIfErr(t, err)
 	frontierIs(tamperedMomentum.Identifier())
 }
