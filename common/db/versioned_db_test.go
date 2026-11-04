@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -2067,4 +2070,142 @@ func TestMemDBManagerStopConcurrentWithAdd(t *testing.T) {
 		t.Fatalf("expected Add after Stop to fail")
 	}
 	common.FailIfErr(t, m.Stop())
+}
+
+// aliveSnapshots reads goleveldb's count of snapshots not yet released.
+func aliveSnapshots(t *testing.T, m *ldbManager) int {
+	t.Helper()
+	v, err := m.ldb.GetProperty("leveldb.alivesnaps")
+	common.FailIfErr(t, err)
+	var n int
+	if _, err := fmt.Sscan(v, &n); err != nil {
+		t.Fatalf("leveldb.alivesnaps = %q: %v", v, err)
+	}
+	return n
+}
+
+// settledSnapshots runs the garbage collector until goleveldb's finalizers
+// have released every unreferenced snapshot, so the count stops moving,
+// and returns that count.
+func settledSnapshots(t *testing.T, m *ldbManager) int {
+	t.Helper()
+	n := aliveSnapshots(t, m)
+	for i := 0; i < 50; i++ {
+		runtime.GC()
+		time.Sleep(10 * time.Millisecond) // finalizers run on their own goroutine
+		next := aliveSnapshots(t, m)
+		if next == n && i > 0 {
+			return n
+		}
+		n = next
+	}
+	t.Fatalf("snapshot count did not settle (last %d)", n)
+	return n
+}
+
+// getPatch and getRollback read one key from a fresh snapshot and return a
+// copy of it. They release the snapshot themselves rather than leave it to
+// the garbage collector's finalizer. The count is taken with the collector
+// off, after the setup's own snapshots have been finalized, so neither a
+// late finalizer nor a collection during the reads moves it.
+func TestLevelDBManagerPatchReadsReleaseSnapshots(t *testing.T) {
+	m := mustNewLevelDBManager(t, t.TempDir()).(*ldbManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+	for seed := int64(1); seed <= 3; seed++ {
+		common.FailIfErr(t, m.Add(newMockTransaction(seed, m.Frontier())))
+	}
+	frontier := GetFrontierIdentifier(m.Frontier())
+
+	before := settledSnapshots(t, m)
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer debug.SetMemoryLimit(debug.SetMemoryLimit(math.MaxInt64))
+	const reads = 50
+	for i := 0; i < reads; i++ {
+		if m.GetPatch(frontier) == nil {
+			t.Fatal("no patch at the frontier")
+		}
+		for height := uint64(1); height <= frontier.Height; height++ {
+			if m.getRollback(height) == nil {
+				t.Fatalf("no rollback at height %d", height)
+			}
+		}
+	}
+	if after := aliveSnapshots(t, m); after != before {
+		t.Fatalf("%d patch and rollback reads left %d snapshots alive (before %d)", reads*(1+int(frontier.Height)), after, before)
+	}
+}
+
+// keysOf returns the keys patch writes, in replay order.
+func keysOf(t *testing.T, patch Patch) [][]byte {
+	t.Helper()
+	pr := &patchRecorder{}
+	common.FailIfErr(t, patch.Replay(pr))
+	keys := make([][]byte, 0, len(pr.puts))
+	for _, kv := range pr.puts {
+		keys = append(keys, kv.key)
+	}
+	return keys
+}
+
+// A read failure while Add builds the inverse must abort Add with that
+// error and nothing written: no frontier move, no change to any value, and
+// neither a patch nor a rollback record at the attempted height. A fresh
+// transaction then adds and pops normally. Add consumes its transaction's
+// changes, so the retry builds a new one rather than reusing the first.
+func TestLevelDBManagerAddInverseReadFailureWritesNothing(t *testing.T) {
+	m := mustNewLevelDBManager(t, t.TempDir()).(*ldbManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+	common.FailIfErr(t, m.Add(newMockTransaction(1, m.Frontier())))
+
+	before := GetFrontierIdentifier(m.Frontier())
+	beforeDump := DebugDB(m.Frontier())
+	attempt := newMockTransaction(2, m.Frontier())
+	height := attempt.commit.Identifier().Height
+	touched := keysOf(t, attempt.patch)
+	if len(touched) == 0 {
+		t.Fatal("the attempted transaction writes no keys")
+	}
+
+	readErr := errors.New("injected read failure")
+	m.rollbackPatch = func(d DB, p Patch) (Patch, error) {
+		return RollbackPatch(&failingGetDB{DB: d, key: touched[len(touched)/2], err: readErr}, p)
+	}
+	write := m.write
+	writes := 0
+	m.write = func(b *leveldb.Batch) error {
+		writes++
+		return write(b)
+	}
+
+	if err := m.Add(attempt); !errors.Is(err, readErr) {
+		t.Fatalf("Add with a failing inverse read = %v, want the read error", err)
+	}
+	if writes != 0 {
+		t.Fatalf("Add wrote %d batches after the inverse failed", writes)
+	}
+	common.Expect(t, GetFrontierIdentifier(m.Frontier()), before)
+	common.ExpectString(t, DebugDB(m.Frontier()), beforeDump)
+	for _, key := range [][]byte{
+		common.JoinBytes(patchByte, common.Uint64ToBytes(height)),
+		common.JoinBytes(rollbackByte, common.Uint64ToBytes(height)),
+	} {
+		has, err := m.ldb.Has(key, nil)
+		common.FailIfErr(t, err)
+		if has {
+			t.Fatalf("record %x for the failed height %d was written", key, height)
+		}
+	}
+
+	// Control: with the inverse built normally, a fresh transaction adds,
+	// and popping it restores the state above.
+	m.rollbackPatch = RollbackPatch
+	retry := newMockTransaction(2, m.Frontier())
+	common.FailIfErr(t, m.Add(retry))
+	common.Expect(t, GetFrontierIdentifier(m.Frontier()), retry.commit.Identifier())
+	if writes != 1 {
+		t.Fatalf("the control Add wrote %d batches, want 1", writes)
+	}
+	common.FailIfErr(t, m.Pop())
+	common.Expect(t, GetFrontierIdentifier(m.Frontier()), before)
+	common.ExpectString(t, DebugDB(m.Frontier()), beforeDump)
 }

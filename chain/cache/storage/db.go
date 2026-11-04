@@ -67,10 +67,13 @@ type CacheManager interface {
 }
 
 type cacheManager struct {
-	ldb     *leveldb.DB
-	write   func(*leveldb.Batch) error
-	changes sync.Mutex
-	stopped bool
+	ldb   *leveldb.DB
+	write func(*leveldb.Batch) error
+	// rollbackPatch builds the inverse in Add; db.RollbackPatch in
+	// production, replaceable by tests like write.
+	rollbackPatch func(db.DB, db.Patch) (db.Patch, error)
+	changes       sync.Mutex
+	stopped       bool
 }
 
 // NewCacheDBManager opens (or creates) the cache database at
@@ -78,15 +81,16 @@ type cacheManager struct {
 // opened.
 func NewCacheDBManager(dataDir string) (CacheManager, error) {
 	opts := &opt.Options{OpenFilesCacheCapacity: getConsensusOpenFilesCacheCapacity()}
-	db, err := leveldb.OpenFile(path.Join(dataDir, "cache"), opts)
+	ldb, err := leveldb.OpenFile(path.Join(dataDir, "cache"), opts)
 	if err != nil {
 		return nil, errors.Wrapf(err, "open cache database at %s", path.Join(dataDir, "cache"))
 	}
 	return &cacheManager{
-		ldb: db,
+		ldb: ldb,
 		write: func(batch *leveldb.Batch) error {
-			return db.Write(batch, nil)
+			return ldb.Write(batch, nil)
 		},
+		rollbackPatch: db.RollbackPatch,
 	}, nil
 }
 
@@ -161,7 +165,10 @@ func (m *cacheManager) Add(identifier types.HashHeight, patch db.Patch) error {
 		return leveldb.ErrClosed
 	}
 
-	rollbackPatch := db.RollbackPatch(db.NewLevelDBWrapperWithFullDelete(m.ldb).Subset(storageByte), patch)
+	rollbackPatch, err := m.rollbackPatch(db.NewLevelDBWrapperWithFullDelete(m.ldb).Subset(storageByte), patch)
+	if err != nil {
+		return err
+	}
 	batch := new(leveldb.Batch)
 	batch.Put(common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height)), rollbackPatch.Dump())
 	if identifier.Height > rollbackCacheSize {

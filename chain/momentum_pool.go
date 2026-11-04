@@ -205,6 +205,9 @@ func (c *momentumPool) RollbackTo(insertLocker sync.Locker, identifier types.Has
 	if err != nil {
 		return err
 	}
+	if momentum == nil {
+		return errors.Errorf("can't rollback momentums. No momentum at height %v for %v", identifier.Height, identifier)
+	}
 	if momentum.Hash != identifier.Hash {
 		return errors.Errorf("can't rollback momentums. Expected %v but got %v instead", momentum.Identifier(), identifier)
 	}

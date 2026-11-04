@@ -496,8 +496,11 @@ type ldbManager struct {
 	l2Cache  *lru.Cache
 	ldb      *leveldb.DB
 	write    func(*leveldb.Batch) error
-	changes  sync.Mutex
-	stopped  bool
+	// rollbackPatch builds the inverse in Add; RollbackPatch in production,
+	// replaceable by tests like write.
+	rollbackPatch func(DB, Patch) (Patch, error)
+	changes       sync.Mutex
+	stopped       bool
 }
 
 // NewLevelDBManager opens (or creates) the versioned database in dir
@@ -528,6 +531,7 @@ func NewLevelDBManager(dir string) (Manager, error) {
 		write: func(batch *leveldb.Batch) error {
 			return ldb.Write(batch, nil)
 		},
+		rollbackPatch: RollbackPatch,
 	}, nil
 }
 
@@ -619,7 +623,9 @@ func (m *ldbManager) GetPatch(identifier types.HashHeight) Patch {
 	return m.getPatch(identifier)
 }
 func (m *ldbManager) getPatch(identifier types.HashHeight) Patch {
-	snapshot, _ := m.ldb.GetSnapshot()
+	snapshot, err := m.ldb.GetSnapshot()
+	common.DealWithErr(err)
+	defer snapshot.Release()
 	value, err := snapshot.Get(common.JoinBytes(patchByte, common.Uint64ToBytes(identifier.Height)), nil)
 	if err == leveldb.ErrNotFound {
 		return nil
@@ -631,7 +637,9 @@ func (m *ldbManager) getPatch(identifier types.HashHeight) Patch {
 	return patch
 }
 func (m *ldbManager) getRollback(height uint64) Patch {
-	snapshot, _ := m.ldb.GetSnapshot()
+	snapshot, err := m.ldb.GetSnapshot()
+	common.DealWithErr(err)
+	defer snapshot.Release()
 	value, err := snapshot.Get(common.JoinBytes(rollbackByte, common.Uint64ToBytes(height)), nil)
 	if err == leveldb.ErrNotFound {
 		return nil
@@ -675,7 +683,10 @@ func (m *ldbManager) Add(transaction Transaction) error {
 		}
 	}
 
-	rollbackPatch := RollbackPatch(db, patch)
+	rollbackPatch, err := m.rollbackPatch(db, patch)
+	if err != nil {
+		return err
+	}
 	batch := new(leveldb.Batch)
 	batch.Put(common.JoinBytes(patchByte, common.Uint64ToBytes(identifier.Height)), patch.Dump())
 	batch.Put(common.JoinBytes(rollbackByte, common.Uint64ToBytes(identifier.Height)), rollbackPatch.Dump())

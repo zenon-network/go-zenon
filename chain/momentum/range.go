@@ -63,6 +63,11 @@ func (ms *momentumStore) GetMomentumBeforeTime(timestamp *time.Time) (*nom.Momen
 		} else {
 			lowBoundary = block
 			estimateHeight = block.Height + uint64(timeSec-block.Timestamp.Unix())
+			// A target inside the same second as block gives a zero step;
+			// move up anyway or the next pass reads this height again.
+			if estimateHeight <= block.Height {
+				estimateHeight = block.Height + 1
+			}
 			if estimateHeight > frontierMomentum.Height {
 				highBoundary = frontierMomentum
 			}
