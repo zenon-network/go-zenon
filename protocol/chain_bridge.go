@@ -20,6 +20,9 @@ type chainBridge struct {
 	consensus  consensus.Consensus
 	verifier   verifier.Verifier
 	supervisor *vm.Supervisor
+	// rejected remembers side-chain momentums refused on a consensus check
+	// so a later batch carrying one is refused before any rollback.
+	rejected *rejectedCandidates
 }
 
 func NewChainBridge(chain chain.Chain, consensus consensus.Consensus, verifier verifier.Verifier, supervisor *vm.Supervisor) ChainBridge {
@@ -28,6 +31,7 @@ func NewChainBridge(chain chain.Chain, consensus consensus.Consensus, verifier v
 		consensus:  consensus,
 		verifier:   verifier,
 		supervisor: supervisor,
+		rejected:   newRejectedCandidates(rejectedCandidateTTL, rejectedCandidateCap),
 	}
 }
 
@@ -162,6 +166,18 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 			return index, err
 		}
 	}
+	// Every candidate must extend the one before it. The head's link is
+	// checked against the store below; a later candidate that does not
+	// chain would otherwise have its content applied under the state the
+	// earlier ones left, and any verdict reached that way is a verdict on
+	// the batch, not on the candidate. This is structural, like the checks
+	// above: nothing is remembered and nothing is attributed to a peer.
+	for index := 1; index < len(momentums); index++ {
+		if momentums[index].Momentum.Previous() != momentums[index-1].Momentum.Identifier() {
+			log.Error("momentums to insert do not chain", "index", index, "momentum-identifier", momentums[index].Momentum.Identifier(), "previous", momentums[index].Momentum.Previous(), "preceding", momentums[index-1].Momentum.Identifier())
+			return index, errors.Errorf("momentums to insert do not chain: %v does not extend %v", momentums[index].Momentum.Identifier(), momentums[index-1].Momentum.Identifier())
+		}
+	}
 	a := momentums[0]
 	b := momentums[len(momentums)-1]
 	log.Info("start inserting chain", "num-momentums", len(momentums), "start-identifier", a.Momentum.Identifier(), "end-identifier", b.Momentum.Identifier())
@@ -209,6 +225,11 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 		return 0, err
 	}
 
+	// replacing is set once the chain has been rolled back for a side-chain.
+	// Only a failure after that rollback is a rejected side-chain candidate;
+	// a failed extension leaves the chain as it was and is not remembered.
+	replacing := false
+
 	// if we are dealing with a side-chain, check if it should replace our chain and rollback for insertion
 	if head.Previous() != ourFrontier.Identifier() {
 		// check if we can roll back for insertion
@@ -231,10 +252,28 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 			return 0, errors.Errorf("won't insert side-chain which is not longer")
 		}
 
+		// A candidate this node already rejected on a consensus check fails
+		// the same way again, since that verdict is deterministic for the
+		// state at the fork point. Refuse the batch before anything is
+		// removed, whichever peer served it this time.
+		if index, known := c.firstRemembered(momentums); known {
+			return index + start, c.reject(momentums[index], ErrSideChainKnownInvalid)
+		}
+
 		err = c.chain.RollbackTo(insert, target.Identifier())
 		if err != nil {
 			return 0, errors.Errorf("unable to rollback to %v. Reason:%v", target.Identifier(), err)
 		}
+		replacing = true
+	} else if index, known := c.firstRemembered(momentums); known {
+		// The extension path has no rollback to protect, but a candidate
+		// rejected earlier lands here: this release does not restore the
+		// branch a failed replacement removed, so after a rejection the node
+		// stays at the fork point plus whatever prefix committed, and the
+		// rejected candidate then extends the frontier. Refuse it before
+		// applying its content, so the retry costs nothing and the serving
+		// peer is still held to account.
+		return index + start, c.reject(momentums[index], ErrSideChainKnownInvalid)
 	}
 
 	// Insert momentum now
@@ -261,11 +300,28 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 			} else if restoreErr := c.chain.RestoreUncommitted(insert, snapshot); restoreErr != nil {
 				log.Error("error while restoring account-pool after failed momentum", "reason", restoreErr, "momentum-identifier", detailed.Momentum.Identifier())
 			}
+			if replacing {
+				// The served candidate, not the private copy, is what is
+				// remembered: the key is on the bytes the peer sent.
+				return index + start, c.rejectIfValidation(supplied, err)
+			}
 			return index + start, err
 		}
 	}
 
 	return 0, nil
+}
+
+// firstRemembered returns the index of the first candidate whose served
+// bytes were rejected earlier and are still remembered.
+func (c chainBridge) firstRemembered(momentums []*nom.DetailedMomentum) (int, bool) {
+	for index, detailed := range momentums {
+		if c.remembered(detailed) {
+			log.Info("batch carries a momentum rejected earlier, refusing before applying it", "momentum-identifier", detailed.Momentum.Identifier())
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 // validatePrefetchedBlocks rejects a detailed momentum whose block list is not
@@ -346,7 +402,7 @@ func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMo
 		transaction, err := c.supervisor.ApplyBlockInMomentum(block, detailed.Momentum.Height)
 		if err != nil {
 			log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
-			return err
+			return validationFailure(err)
 		}
 		if err := c.chain.ForceAddAccountBlockTransaction(insert, transaction); err != nil {
 			log.Error("error while inserting account-block in pool", "reason", err, "account-block-header", block.Header())
@@ -356,7 +412,7 @@ func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMo
 
 	transaction, err := c.supervisor.ApplyMomentum(detailed)
 	if err != nil {
-		return err
+		return validationFailure(err)
 	}
 	if err := c.chain.AddMomentumTransaction(insert, transaction); err != nil {
 		log.Error("error while inserting momentum", "reason", err, "momentum-identifier", detailed.Momentum.Identifier())
