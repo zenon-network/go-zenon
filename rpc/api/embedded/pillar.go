@@ -534,12 +534,17 @@ type PillarEpochHistoryList struct {
 // synthesized entries with zero percentages, counts and weight, so the
 // method does not distinguish a not-yet-registered pillar from an idle
 // one. A pageSize above 1024 is rejected with
-// api.ErrPageSizeParamTooBig.
+// api.ErrPageSizeParamTooBig, and a pillarName longer than
+// constants.PillarNameLengthMax bytes with api.ErrNameParamTooLong;
+// both checks run before any state is read.
 //
 // JSON-RPC: embedded.pillar.getPillarEpochHistory
 func (a *PillarApi) GetPillarEpochHistory(pillarName string, pageIndex, pageSize uint32) (*PillarEpochHistoryList, error) {
 	if pageSize > api.RpcMaxPageSize {
 		return nil, api.ErrPageSizeParamTooBig
+	}
+	if err := checkPillarName(pillarName); err != nil {
+		return nil, err
 	}
 
 	_, context, err := api.GetFrontierContext(a.chain, types.PillarContract)

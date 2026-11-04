@@ -298,10 +298,19 @@ func (a *AcceleratorApi) GetVoteBreakdown(id types.Hash) (*definition.VoteBreakd
 // given project or phase ids, at the account-pool frontier, one result
 // per requested hash in the same order. A hash the pillar has not voted
 // on yields a nil entry instead of an error; vote values are 0 for yes, 1 for
-// no and 2 for abstain.
+// no and 2 for abstain. A name longer than constants.PillarNameLengthMax
+// bytes is rejected with api.ErrNameParamTooLong and more than
+// api.RpcMaxPageSize hashes with api.ErrListParamTooBig; both checks run
+// before any state is read.
 //
 // JSON-RPC: embedded.accelerator.getPillarVotes
 func (a *AcceleratorApi) GetPillarVotes(name string, hashes []types.Hash) ([]*definition.PillarVote, error) {
+	if err := checkPillarName(name); err != nil {
+		return nil, err
+	}
+	if len(hashes) > api.RpcMaxPageSize {
+		return nil, api.ErrListParamTooBig
+	}
 	_, context, err := api.GetFrontierContext(a.chain, types.AcceleratorContract)
 	if err != nil {
 		return nil, err

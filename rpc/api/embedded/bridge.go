@@ -7,6 +7,7 @@ import (
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/implementation"
+	"math"
 	"reflect"
 	"sort"
 	"strings"
@@ -353,24 +354,35 @@ func (a *BridgeApi) getToken(zts types.ZenonTokenStandard) (*api.Token, error) {
 	return nil, nil
 }
 
-func (a *BridgeApi) getRedeemableIn(unwrapTokenRequest definition.UnwrapTokenRequest, tokenPair definition.TokenPair, momentum nom.Momentum) uint64 {
-	var redeemableIn uint64
-	if momentum.Height-unwrapTokenRequest.RegistrationMomentumHeight >= uint64(tokenPair.RedeemDelay) {
-		redeemableIn = 0
-	} else {
-		redeemableIn = unwrapTokenRequest.RegistrationMomentumHeight + uint64(tokenPair.RedeemDelay) - momentum.Height
+// countdownFrom returns how many momentums after start the momentum at
+// height reaches start+delay: 0 once it has, otherwise the remaining
+// count. The request heights come from the account-pool frontier
+// (api.GetFrontierContext), which can be ahead of the momentum the
+// handler reports against, so start may exceed height; the heights are
+// ordered before subtracting so that case counts down from start
+// instead of wrapping the unsigned difference to a large value that
+// reads as "already reached". A remainder that does not fit in uint64
+// saturates rather than wrapping; chain heights never come near it.
+func countdownFrom(start uint64, delay uint32, height uint64) uint64 {
+	if height >= start {
+		if elapsed := height - start; elapsed < uint64(delay) {
+			return uint64(delay) - elapsed
+		}
+		return 0
 	}
-	return redeemableIn
+	behind := start - height
+	if behind > math.MaxUint64-uint64(delay) {
+		return math.MaxUint64
+	}
+	return behind + uint64(delay)
+}
+
+func (a *BridgeApi) getRedeemableIn(unwrapTokenRequest definition.UnwrapTokenRequest, tokenPair definition.TokenPair, momentum nom.Momentum) uint64 {
+	return countdownFrom(unwrapTokenRequest.RegistrationMomentumHeight, tokenPair.RedeemDelay, momentum.Height)
 }
 
 func (a *BridgeApi) getConfirmationsToFinality(wrapTokenRequest definition.WrapTokenRequest, confirmationsToFinality uint32, momentum nom.Momentum) uint64 {
-	var actualConfirmationsToFinality uint64
-	if momentum.Height-wrapTokenRequest.CreationMomentumHeight >= uint64(confirmationsToFinality) {
-		actualConfirmationsToFinality = 0
-	} else {
-		actualConfirmationsToFinality = wrapTokenRequest.CreationMomentumHeight + uint64(confirmationsToFinality) - momentum.Height
-	}
-	return actualConfirmationsToFinality
+	return countdownFrom(wrapTokenRequest.CreationMomentumHeight, confirmationsToFinality, momentum.Height)
 }
 
 // GetWrapTokenRequestById returns the wrap request whose id is the hash

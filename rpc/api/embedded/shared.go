@@ -21,8 +21,22 @@ import (
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/rpc/api"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
+
+// checkPillarName rejects a name longer than the pillar contract will
+// ever register (constants.PillarNameLengthMax bytes, the same byte
+// count the contract checks) with api.ErrNameParamTooLong. Handlers
+// that key reads or responses by a caller-supplied name call it before
+// opening a frontier context, so an oversized name costs neither a
+// state read nor a response that carries it.
+func checkPillarName(name string) error {
+	if len(name) > constants.PillarNameLengthMax {
+		return api.ErrNameParamTooLong
+	}
+	return nil
+}
 
 func getDepositedQsr(chain chain.Chain, contract types.Address, address types.Address) (*big.Int, error) {
 	_, context, err := api.GetFrontierContext(chain, contract)
