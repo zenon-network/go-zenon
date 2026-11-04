@@ -142,12 +142,10 @@ func sliceTypeCheck(t Type, val reflect.Value) error {
 		return errType(formatSliceString(t.Elem.Kind, t.Size), formatSliceString(val.Type().Elem().Kind(), val.Len()))
 	}
 
-	if t.Elem.T == SliceTy {
+	if t.Elem.T == SliceTy || t.Elem.T == ArrayTy {
 		if val.Len() > 0 {
 			return sliceTypeCheck(*t.Elem, val.Index(0))
 		}
-	} else if t.Elem.T == ArrayTy {
-		return sliceTypeCheck(*t.Elem, val.Index(0))
 	}
 
 	if elemKind := val.Type().Elem().Kind(); (elemKind != reflect.Slice && elemKind != t.Elem.Kind) ||
@@ -166,12 +164,35 @@ func typeCheck(t Type, value reflect.Value) error {
 	}
 
 	// Check base type validity. Element types will be checked later on.
-	if t.Kind != reflect.Array && t.Kind != value.Kind() {
-		return errType(t.Kind, value.Kind())
-	} else if t.T == FixedBytesTy && t.Size != value.Len() {
-		return errType(t.Type, value.Type())
-	} else {
+	switch t.T {
+	case AddressTy, TokenStandardTy, HashTy, FixedBytesTy:
+		// packElement writes these bytes into a single word, so the value
+		// must hold exactly t.Size bytes; a longer one would shift every
+		// following argument and a shorter one would be silently padded.
+		if !isByteSequence(value) {
+			return errType(t.Type, value.Kind())
+		}
+		if value.Len() != t.Size {
+			return errType(t.Type, value.Type())
+		}
 		return nil
 	}
+	if t.Kind != value.Kind() {
+		return errType(t.Kind, value.Kind())
+	}
+	return nil
+}
 
+// isByteSequence reports whether packElement can read value as bytes: a
+// byte slice, or an array whose element type is byte itself, since
+// mustArrayToByteSlice copies it into a []byte.
+func isByteSequence(value reflect.Value) bool {
+	switch value.Kind() {
+	case reflect.Slice:
+		return value.Type().Elem().Kind() == reflect.Uint8
+	case reflect.Array:
+		return value.Type().Elem() == reflect.TypeOf(byte(0))
+	default:
+		return false
+	}
 }
