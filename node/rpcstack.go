@@ -68,13 +68,23 @@ type httpServer struct {
 	port     int
 
 	handlerNames map[string]string
+
+	// shutdownTimeout bounds how long stop waits for in-flight HTTP
+	// requests before it closes their connections.
+	shutdownTimeout time.Duration
 }
+
+// defaultShutdownTimeout is how long an HTTP server waits on stop for
+// in-flight requests to finish. A request still running after that has its
+// connection closed, so one slow call cannot hold the node's shutdown.
+const defaultShutdownTimeout = 5 * time.Second
 
 func newHTTPServer(timeouts rpc.HTTPTimeouts) *httpServer {
 	h := &httpServer{
-		log:          common.NodeLogger.New("submodule", "http-server"),
-		timeouts:     timeouts,
-		handlerNames: make(map[string]string),
+		log:             common.NodeLogger.New("submodule", "http-server"),
+		timeouts:        timeouts,
+		handlerNames:    make(map[string]string),
+		shutdownTimeout: defaultShutdownTimeout,
 	}
 
 	h.httpHandler.Store((*rpcHandler)(nil))
@@ -245,25 +255,25 @@ func (h *httpServer) stop() {
 	h.doStop()
 }
 
+// doStop shuts the server down and clears its handlers and address. It does
+// so even when nothing is listening: a startRPC that failed after enabling a
+// protocol leaves a handler and an address behind, and a later start would
+// otherwise bind them. The caller must hold h.mu.
 func (h *httpServer) doStop() {
-	if h.listener == nil {
-		return // not running
-	}
+	h.disableRPC()
+	h.disableWS()
 
-	// Shut down the server.
-	httpHandler := h.httpHandler.Load().(*rpcHandler)
-	wsHandler := h.wsHandler.Load().(*rpcHandler)
-	if httpHandler != nil {
-		h.httpHandler.Store((*rpcHandler)(nil))
-		httpHandler.server.Stop()
+	if h.listener != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), h.shutdownTimeout)
+		if err := h.server.Shutdown(ctx); err != nil {
+			h.log.Warn("HTTP server did not drain in time, closing open connections",
+				"endpoint", h.listener.Addr(), "timeout", h.shutdownTimeout, "error", err)
+			h.server.Close()
+		}
+		cancel()
+		h.listener.Close()
+		h.log.Info("HTTP server stopped", "endpoint", h.listener.Addr())
 	}
-	if wsHandler != nil {
-		h.wsHandler.Store((*rpcHandler)(nil))
-		wsHandler.server.Stop()
-	}
-	h.server.Shutdown(context.Background())
-	h.listener.Close()
-	h.log.Info("HTTP server stopped", "endpoint", h.listener.Addr())
 
 	// Clear out everything to allow re-configuring it later.
 	h.host, h.port, h.endpoint = "", 0, ""

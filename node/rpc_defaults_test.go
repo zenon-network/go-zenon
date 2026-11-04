@@ -435,6 +435,9 @@ const (
 	wsBindWarning     = "WS-RPC listens on a non-loopback address"
 	wsOriginWarning   = "WS-RPC accepts any browser origin"
 	httpVhostWarning  = "HTTP-RPC answers any Host header"
+
+	httpOpenOriginWarning = "HTTP-RPC accepts browser origins on every host a wildcard CORS pattern matches"
+	wsOpenOriginWarning   = "WS-RPC accepts browser origins on any host"
 )
 
 func countWarnings(msgs []warning, substr string) int {
@@ -451,6 +454,10 @@ func countWarnings(msgs []warning, substr string) int {
 // warnings a configuration is expected to produce for each protocol.
 type exposureWarnings struct {
 	httpBind, httpOrigin, httpVhost, wsBind, wsOrigin int
+
+	// httpOpenOrigin and wsOpenOrigin count the warnings for an origin
+	// rule other than "*" that leaves the host, or part of it, open.
+	httpOpenOrigin, wsOpenOrigin int
 }
 
 func requireExposureWarnings(t *testing.T, msgs []warning, want exposureWarnings) {
@@ -461,11 +468,14 @@ func requireExposureWarnings(t *testing.T, msgs []warning, want exposureWarnings
 		httpVhost:  countWarnings(msgs, httpVhostWarning),
 		wsBind:     countWarnings(msgs, wsBindWarning),
 		wsOrigin:   countWarnings(msgs, wsOriginWarning),
+
+		httpOpenOrigin: countWarnings(msgs, httpOpenOriginWarning),
+		wsOpenOrigin:   countWarnings(msgs, wsOpenOriginWarning),
 	}
 	if got != want {
 		t.Fatalf("exposure warnings = %+v, want %+v; messages: %v", got, want, msgs)
 	}
-	if extra := len(msgs) - (got.httpBind + got.httpOrigin + got.httpVhost + got.wsBind + got.wsOrigin); extra != 0 {
+	if extra := len(msgs) - (got.httpBind + got.httpOrigin + got.httpVhost + got.wsBind + got.wsOrigin + got.httpOpenOrigin + got.wsOpenOrigin); extra != 0 {
 		t.Fatalf("%d unexpected warnings in %v", extra, msgs)
 	}
 }
@@ -577,6 +587,29 @@ func TestRPCExposureWarning(t *testing.T) {
 			exposureWarnings{}, false},
 		{"a wildcard virtual-host list does not warn when HTTP is off",
 			both(func(cfg *RPCConfig) { cfg.HTTPHost = ""; cfg.HTTPVirtualHosts = []string{"*"} }),
+			exposureWarnings{}, false},
+		{"a CORS pattern with an open host and a WS rule without a host warn per protocol",
+			func(cfg *RPCConfig) { cfg.HTTPCors, cfg.WSOrigins = []string{"http://*"}, []string{"http://"} },
+			exposureWarnings{httpOpenOrigin: 1, wsOpenOrigin: 1}, false},
+		{"open rules beside named ones still warn once per protocol",
+			func(cfg *RPCConfig) {
+				cfg.HTTPCors = []string{"https://wallet.example", "http://*", "https://*:8545"}
+				cfg.WSOrigins = []string{"https://wallet.example", "https://", "http://:8546"}
+			},
+			exposureWarnings{httpOpenOrigin: 1, wsOpenOrigin: 1}, false},
+		{"a bare wildcard is reported as such even beside an open pattern",
+			func(cfg *RPCConfig) {
+				cfg.HTTPCors, cfg.WSOrigins = []string{"http://*", "*"}, []string{"http://", "*"}
+			},
+			exposureWarnings{httpOrigin: 1, wsOrigin: 1}, false},
+		{"a subdomain CORS pattern warns, host-bearing WS rules do not",
+			func(cfg *RPCConfig) {
+				cfg.HTTPCors = []string{"https://*.wallet.example"}
+				cfg.WSOrigins = []string{"https://wallet.example", "wallet.example", "http://localhost:8546"}
+			},
+			exposureWarnings{httpOpenOrigin: 1}, false},
+		{"CORS wildcards confined to the scheme or the port do not warn",
+			func(cfg *RPCConfig) { cfg.HTTPCors = []string{"*://wallet.example", "http://wallet.example:*"} },
 			exposureWarnings{}, false},
 	}
 	for _, layout := range listenerLayouts {

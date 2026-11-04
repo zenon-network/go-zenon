@@ -206,7 +206,8 @@ func (s *sporkOracle) IsLibp2pActive() bool {
 //
 // If any step after startZenon fails, Start unwinds what was started —
 // the p2p server, RPC endpoints, Zenon core, wallet and data-dir lock —
-// so the caller can retry with corrected config or shut down cleanly.
+// and leaves the Node stopped for good: the database is closed and Wait
+// returns. To try again with corrected config, build a new Node.
 // The unwind calls the individual stop methods directly (not Stop) to
 // avoid re-acquiring the lock that Start already holds.
 //
@@ -280,6 +281,11 @@ func (node *Node) unwindStart() {
 // Every cleanup step runs even when an earlier one fails; the returned
 // error is the join of the wallet and core stop errors (stopRPC and
 // closeDataDir log their own), matching zenon.Stop.
+//
+// The RPC servers wait a bounded time for in-flight HTTP requests and then
+// close their connections. That bounds Stop, not the RPC methods: a method
+// that does not watch its context can still be running when Stop returns
+// and Wait unblocks, after the Zenon core it reads from has been stopped.
 func (node *Node) Stop() error {
 	node.lock.Lock()
 	defer node.lock.Unlock()
@@ -311,7 +317,8 @@ func (node *Node) Stop() error {
 	return stderrors.Join(errs...)
 }
 
-// Wait blocks until the node is stopped.
+// Wait blocks until the node is stopped. Like Stop, it does not wait for
+// RPC methods that ignore their context; see Stop.
 func (node *Node) Wait() {
 	<-node.stop
 }

@@ -165,6 +165,73 @@ func TestConfig_MissingImplicitConfigIsOnlyAWarning(t *testing.T) {
 	}
 }
 
+// Without --config, a <data>/config.json that exists but cannot be read is
+// an error: the node must not start on the defaults when the operator's
+// file is there. Only a file that does not exist falls back to them.
+func TestConfig_UnreadableImplicitConfigIsAnError(t *testing.T) {
+	t.Run("directory", func(t *testing.T) {
+		dataPath := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dataPath, defaultNodeConfigFileName), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		requireImplicitConfigError(t, dataPath)
+	})
+	t.Run("permission denied", func(t *testing.T) {
+		dataPath := t.TempDir()
+		path := filepath.Join(dataPath, defaultNodeConfigFileName)
+		writeConfig(t, path, "from-the-data-path")
+		if err := os.Chmod(path, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+		if _, err := os.ReadFile(path); err == nil {
+			t.Skip("mode 000 does not stop this user reading the file (root, or a platform without Unix modes)")
+		}
+		requireImplicitConfigError(t, dataPath)
+	})
+}
+
+// A config.json that is a symlink to a missing target is reported by the
+// read as "does not exist", like an absent file. The entry is there, so the
+// operator meant a config file: that is an error, not a fallback to the
+// defaults. A genuinely absent entry still falls back.
+func TestConfig_DanglingSymlinkImplicitConfigIsAnError(t *testing.T) {
+	t.Run("missing file falls back to the defaults", func(t *testing.T) {
+		dataPath := t.TempDir()
+		stdout := captureStdout(t)
+		cfg, err := MakeConfig(configContext(t, "--"+DataPathFlag.Name, dataPath))
+		stdout()
+		if err != nil {
+			t.Fatalf("missing %s/config.json must not be an error: %v", dataPath, err)
+		}
+		if cfg.Name != node.DefaultNodeConfig.Name {
+			t.Fatalf("Name=%q, want the default %q", cfg.Name, node.DefaultNodeConfig.Name)
+		}
+	})
+	t.Run("dangling symlink", func(t *testing.T) {
+		dataPath := t.TempDir()
+		target := filepath.Join(t.TempDir(), "gone.json")
+		if err := os.Symlink(target, filepath.Join(dataPath, defaultNodeConfigFileName)); err != nil {
+			t.Skipf("cannot create a symlink here: %v", err)
+		}
+		requireImplicitConfigError(t, dataPath)
+	})
+}
+
+func requireImplicitConfigError(t *testing.T, dataPath string) {
+	t.Helper()
+	stdout := captureStdout(t)
+	cfg, err := MakeConfig(configContext(t, "--"+DataPathFlag.Name, dataPath))
+	stdout()
+	if err == nil {
+		t.Fatalf("%s/config.json cannot be read, but MakeConfig returned a config (Name=%q, EnableHTTP=%v) instead of an error",
+			dataPath, cfg.Name, cfg.RPC.EnableHTTP)
+	}
+	if !strings.Contains(err.Error(), defaultNodeConfigFileName) {
+		t.Fatalf("error %q does not name the config file", err)
+	}
+}
+
 // A malformed explicit --config is an error (as it already was).
 func TestConfig_MalformedExplicitConfigIsAnError(t *testing.T) {
 	named := filepath.Join(t.TempDir(), "named.json")
