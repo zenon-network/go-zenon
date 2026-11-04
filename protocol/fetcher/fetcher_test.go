@@ -55,6 +55,7 @@ func newHookedTestHarness(getBlock blockRetrievalFn, verifyBlock blockVerifierFn
 		func() uint64 { return 1 },
 		insertChain,
 		func(id string) { h.droppedPeers <- id },
+		nil,
 	)
 	h.f.fetchingHook = fetchingHook
 	h.f.expiredHook = expiredHook
@@ -820,6 +821,7 @@ func newIdleFetcher() *Fetcher {
 		func() uint64 { return 1 },
 		func([]*nom.DetailedMomentum) (int, error) { return 0, nil },
 		func(string) {},
+		nil,
 	)
 }
 

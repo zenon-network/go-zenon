@@ -26,6 +26,7 @@ func TestProcessingCoversTheImportHandoff(t *testing.T) {
 		func() *nom.Momentum { return &nom.Momentum{} },
 		func([]*nom.DetailedMomentum) (int, error) { imported <- struct{}{}; return 0, nil },
 		func(string) {},
+		nil,
 	)
 	d.processHook = func([]*Block) {
 		close(entered)

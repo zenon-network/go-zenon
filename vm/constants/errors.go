@@ -6,6 +6,10 @@ var (
 	// ErrVmRunPanic replaces any panic the supervisor recovers
 	// during block execution.
 	ErrVmRunPanic = errors.New("supervisor - VM panic")
+	// ErrAutoReceiveChangesHashMismatch rejects a contract-receive block
+	// whose changes-hash differs from the one this node generates for the
+	// same send: the block was produced under other rules or other state.
+	ErrAutoReceiveChangesHashMismatch = errors.New("auto-received block has different changes-hash")
 
 	// ErrNothingToWithdraw rejects a reward-collect or refund call
 	// when the address has no accumulated balance to send back.

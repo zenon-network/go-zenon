@@ -71,6 +71,10 @@ type chainInsertFn func([]*nom.DetailedMomentum) (int, error)
 // peerDropFn is a callback type for dropping a peer detected as malicious.
 type peerDropFn func(id string)
 
+// peerRejectFn is a callback type reporting that a momentum served by the
+// peer failed to import, with the import error. It may be nil.
+type peerRejectFn func(id string, err error)
+
 // announce is the hash notification of the availability of a new block in the
 // network.
 type announce struct {
@@ -123,6 +127,7 @@ type Fetcher struct {
 	chainHeight    chainHeightFn      // Retrieves the current chain's height
 	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
 	dropPeer       peerDropFn         // Drops a peer for misbehaving
+	rejectPeer     peerRejectFn       // Reports an import failure attributed to a peer (optional)
 
 	// Testing hooks
 	fetchingHook func([]types.Hash)  // Method to call upon starting a block fetch
@@ -133,7 +138,7 @@ type Fetcher struct {
 }
 
 // New creates a block fetcher to retrieve blocks based on hash announcements.
-func New(getBlock blockRetrievalFn, verifyBlock blockVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertChain chainInsertFn, dropPeer peerDropFn) *Fetcher {
+func New(getBlock blockRetrievalFn, verifyBlock blockVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertChain chainInsertFn, dropPeer peerDropFn, rejectPeer peerRejectFn) *Fetcher {
 	return &Fetcher{
 		notify:         make(chan *announce),
 		inject:         make(chan *inject),
@@ -152,6 +157,7 @@ func New(getBlock blockRetrievalFn, verifyBlock blockVerifierFn, broadcastBlock 
 		chainHeight:    chainHeight,
 		insertChain:    insertChain,
 		dropPeer:       dropPeer,
+		rejectPeer:     rejectPeer,
 	}
 }
 
@@ -515,6 +521,9 @@ func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 		// Run the actual import and log any issues
 		if _, err := f.insertChain([]*nom.DetailedMomentum{detailed}); err != nil {
 			log.Warn("momentum import failed", "peer", peer, "momentum", momentum.Height, "hash", hash[:4], "reason", err)
+			if f.rejectPeer != nil {
+				f.rejectPeer(peer, err)
+			}
 			return
 		}
 		// If import succeeded, broadcast the momentum

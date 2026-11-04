@@ -16,6 +16,7 @@ func newIdleDownloader() *Downloader {
 		func() *nom.Momentum { return &nom.Momentum{} },
 		func([]*nom.DetailedMomentum) (int, error) { return 0, nil },
 		func(string) {},
+		nil,
 	)
 }
 
