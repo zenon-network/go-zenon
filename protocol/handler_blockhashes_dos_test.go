@@ -66,6 +66,9 @@ func (c *boundRecordingChain) Status() (uint64, types.Hash, types.Hash)  { panic
 func (c *boundRecordingChain) InsertChain([]*nom.DetailedMomentum) (int, error) {
 	panic("not used")
 }
+func (c *boundRecordingChain) InsertChainMoved([]*nom.DetailedMomentum) (int, bool, error) {
+	panic("not used")
+}
 func (c *boundRecordingChain) VerifyMomentum(*nom.DetailedMomentum) error { panic("not used") }
 
 type blockHashesResult struct {
