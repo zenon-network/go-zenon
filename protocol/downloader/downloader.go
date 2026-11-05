@@ -52,6 +52,7 @@ var (
 	blockSoftTTL    = 3 * time.Second  // Request completion threshold for increasing or decreasing a peer's bandwidth
 	blockHardTTL    = 3 * blockSoftTTL // Maximum time allowance before a block request is considered expired
 	crossCheckCycle = time.Second      // Period after which to check for expired cross checks
+	stallTimeout    = 4 * blockHardTTL // Maximum time the block phase may run without handing blocks to the import worker
 
 	maxQueuedHashes = 256 * 1024 // Maximum number of hashes to queue for import (DOS protection)
 	maxBannedHashes = 4096       // Number of bannable hashes before phasing old ones out
@@ -75,6 +76,7 @@ var (
 	errCancelHashFetch  = errors.New("hash fetching canceled (requested)")
 	errCancelBlockFetch = errors.New("block downloading canceled (requested)")
 	errNoSyncActive     = errors.New("no sync active")
+	errStallNoProgress  = errors.New("block download stalled: no progress")
 )
 
 // hashCheckFn is a callback type for verifying a hash's presence in the local chain.
@@ -281,7 +283,7 @@ func (d *Downloader) Synchronise(id string, head types.Hash, td uint64) {
 	case errBusy:
 		log.Debug("Synchronisation already in progress")
 
-	case errTimeout, errBadPeer, errStallingPeer, errBannedHead, errEmptyHashSet, errPeersUnavailable, errInvalidChain, errCrossCheckFailed:
+	case errTimeout, errBadPeer, errStallingPeer, errBannedHead, errEmptyHashSet, errPeersUnavailable, errInvalidChain, errCrossCheckFailed, errStallNoProgress:
 		log.Info("Removing peer", "peer-id", id, "reason", err)
 		d.dropPeer(id)
 
@@ -687,6 +689,15 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 	d.queue.Prepare(from)
 	finished := false
 
+	// Track handover progress: blockOffset advances only when TakeBlocks
+	// hands a contiguous run to the import worker. A peer that withholds
+	// the head block of the download window can otherwise hold the session
+	// open indefinitely — the cache fills behind the hole, nothing is in
+	// flight, and the peers-unavailable guard is skipped because it
+	// requires free cache space (issue #247).
+	lastHandover := time.Now()
+	lastOffset := d.queue.BlockOffset()
+
 	for {
 		select {
 		case <-d.cancelCh:
@@ -816,6 +827,22 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 			// and all failed throw an error
 			if !d.queue.Throttle() && d.queue.InFlight() == 0 && ((len(d.queue.blockCache)/2)-len(d.queue.blockPool)) > 0 {
 				return errPeersUnavailable
+			}
+			// Session-level no-progress deadline (issue #247). If hashes are
+			// still pending but nothing has been handed to the import worker
+			// for stallTimeout, the fetch side can never advance the frontier:
+			// every request either expired back into the queue or is throttled
+			// behind a full cache. The import-worker check excludes the honest
+			// slow-import case: while Processing() is true a batch is owned and
+			// the handover clock is not the right liveness signal. Cancel so
+			// Synchronise drops the peer and retries with another.
+			if offset := d.queue.BlockOffset(); offset != lastOffset {
+				lastOffset = offset
+				lastHandover = time.Now()
+			}
+			if d.queue.Pending() > 0 && !d.Processing() && time.Since(lastHandover) > stallTimeout {
+				log.Warn("Block download stalled: no progress", "pending", d.queue.Pending(), "last-handover", lastHandover)
+				return errStallNoProgress
 			}
 		}
 	}
