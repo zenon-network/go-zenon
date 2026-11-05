@@ -307,3 +307,71 @@ func TestInsertChain_MixedBatchIsRefusedBeforeRollbackAndDoesNotPoisonTheExtensi
 	common.FailIfErr(t, err)
 	expectFrontierAt(t, z.Chain(), extension[0].Momentum)
 }
+
+// What the pool holds must not decide a remembered verdict. The momentum's
+// blocks are applied on top of the pool, and a block the pool already holds
+// with the same bytes is not applied again, so this pins that the pool can
+// neither turn a tampered copy into something other than its own verdict nor
+// get the genuine bytes remembered. The same tampered momentum is offered
+// against three pool states on the extension path, where nothing is rolled
+// back first: in each it is rejected with the same cause, remembered, and
+// refused on retry, the pool is left as it was, and the genuine momentum
+// then inserts on its first offer.
+func TestInsertChain_PoolStateDoesNotColourARememberedVerdict(t *testing.T) {
+	cases := []struct {
+		name string
+		seed func(t *testing.T, f *restoreFixture) []*nom.AccountBlock
+	}{
+		{"empty pool", func(t *testing.T, f *restoreFixture) []*nom.AccountBlock {
+			return nil
+		}},
+		{"genuine copy and descendant", func(t *testing.T, f *restoreFixture) []*nom.AccountBlock {
+			common.FailIfErr(t, f.bridge.AddAccountBlocks([]*nom.AccountBlock{f.receive.Block}))
+			descendant := f.generateReceive(t, f.sends[1])
+			f.addToPool(t, descendant)
+			return []*nom.AccountBlock{f.receive.Block, descendant.Block}
+		}},
+		{"competing chain and another account", func(t *testing.T, f *restoreFixture) []*nom.AccountBlock {
+			first := f.generateReceive(t, f.sends[1])
+			f.addToPool(t, first)
+			second := f.generateReceive(t, f.sends[0])
+			f.addToPool(t, second)
+			if first.Block.Hash == f.receive.Block.Hash {
+				t.Fatal("competing block unexpectedly has the same hash")
+			}
+			f.addToPool(t, f.generateSend(t))
+			return []*nom.AccountBlock{first.Block, second.Block}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRestoreFixture(t)
+			defer f.z.StopPanic()
+			pool := tc.seed(t, f)
+			tampered := f.tamperedMomentum()
+
+			_, err := f.bridge.InsertChain([]*nom.DetailedMomentum{tampered})
+			var rejected *protocol.SideChainRejected
+			if !errors.As(err, &rejected) {
+				t.Fatalf("expected the tampered copy to be rejected whatever the pool holds, got %v", err)
+			}
+			expectChangesHashError(t, err)
+			common.Expect(t, rejected.Momentum, f.detailed.Momentum.Identifier())
+			common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.previous)
+			if pool != nil {
+				f.expectPoolChain(t, pool...)
+			}
+
+			_, err = f.bridge.InsertChain([]*nom.DetailedMomentum{tampered})
+			if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+				t.Fatalf("expected the same bytes to be refused as known invalid, got %v", err)
+			}
+
+			// The genuine bytes were never remembered, so they insert on
+			// their first offer.
+			_, err = f.bridge.InsertChain([]*nom.DetailedMomentum{f.detailed})
+			common.FailIfErr(t, err)
+			common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.detailed.Momentum.Identifier())
+		})
+	}
+}
