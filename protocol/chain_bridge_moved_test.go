@@ -1,10 +1,12 @@
 package protocol_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/protocol"
 )
 
 // InsertChainMoved reports, under the insert lock, whether the call left the
@@ -15,8 +17,9 @@ import (
 // restores it, #83), so a rejected replacement leaves the frontier below
 // where it started: that reports false, the retry from the fork point is an
 // extension and reports false, and only re-advancing the chain reports true
-// again. The last case is run three times over, since the node produces and
-// is rolled back again when the same branch is served again.
+// again. The bridge remembers the rejected branch, so when the same branch
+// is served again after the node re-advanced it is refused before any
+// rollback: the node keeps its own momentum and the call reports false.
 func TestInsertChainMoved_ReportsOnlyRetainedProgress(t *testing.T) {
 	t.Run("valid extension", func(t *testing.T) {
 		f := newRestoreFixture(t)
@@ -45,37 +48,53 @@ func TestInsertChainMoved_ReportsOnlyRetainedProgress(t *testing.T) {
 		common.Expect(t, moved, false)
 		common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.previous)
 	})
-	t.Run("rejected replacement, retried, chain re-advanced", func(t *testing.T) {
+	t.Run("rejected replacement, retried, chain re-advanced, served again", func(t *testing.T) {
 		f := newRestoreFixture(t)
 		defer f.z.StopPanic()
 		side := f.rejectedSideChain()
+
+		// The node is on its own momentum above the fork point.
+		_, moved, err := f.bridge.InsertChainMoved([]*nom.DetailedMomentum{f.detailed})
+		common.FailIfErr(t, err)
+		common.Expect(t, moved, true)
+		common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.detailed.Momentum.Identifier())
+
+		// A longer side chain forks below it; the rollback to the fork
+		// point happens, the first foreign momentum is rejected, and the
+		// frontier stays at the fork point: lower than before, so not
+		// progress.
+		_, moved, err = f.bridge.InsertChainMoved(side)
+		if err == nil {
+			t.Fatal("expected the side chain to be rejected")
+		}
+		common.Expect(t, moved, false)
+		common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.previous)
+
+		// The same branch served again is now an extension of the fork
+		// point; the memory refuses it without moving anything.
+		_, moved, err = f.bridge.InsertChainMoved(side)
+		if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+			t.Fatalf("expected the retried side chain to be refused as known invalid, got %v", err)
+		}
+		common.Expect(t, moved, false)
+		common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.previous)
+
+		// The chain re-advances, which is progress.
+		_, moved, err = f.bridge.InsertChainMoved([]*nom.DetailedMomentum{f.detailed})
+		common.FailIfErr(t, err)
+		common.Expect(t, moved, true)
+
+		// Served again over the re-advanced chain, the branch is refused
+		// before any rollback, so the node keeps its own momentum. Without
+		// the memory this rolled the node back to the fork point once per
+		// session.
 		for round := 0; round < 3; round++ {
-			// The node is on its own momentum above the fork point.
-			_, moved, err := f.bridge.InsertChainMoved([]*nom.DetailedMomentum{f.detailed})
-			common.FailIfErr(t, err)
-			common.Expect(t, moved, true)
-			frontier := f.z.Chain().GetFrontierMomentumStore().Identifier()
-			common.Expect(t, frontier, f.detailed.Momentum.Identifier())
-
-			// A longer side chain forks below it; the rollback to the fork
-			// point happens, the first foreign momentum is rejected, and the
-			// frontier stays at the fork point: lower than before, so not
-			// progress.
 			_, moved, err = f.bridge.InsertChainMoved(side)
-			if err == nil {
-				t.Fatalf("round %d: expected the side chain to be rejected", round)
+			if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+				t.Fatalf("round %d: expected the side chain to be refused as known invalid, got %v", round, err)
 			}
 			common.Expect(t, moved, false)
-			common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.previous)
-
-			// The same branch served again is now an extension of the fork
-			// point; it fails without moving anything.
-			_, moved, err = f.bridge.InsertChainMoved(side)
-			if err == nil {
-				t.Fatalf("round %d: expected the retried side chain to be rejected", round)
-			}
-			common.Expect(t, moved, false)
-			common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.previous)
+			common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.detailed.Momentum.Identifier())
 		}
 	})
 }
