@@ -252,3 +252,107 @@ func TestBlockFetchNoStallWhenIdle(t *testing.T) {
 	go func() { blockErr <- d.fetchBlocks(1) }()
 	expectReturn(t, "fetchBlocks", blockErr, nil, 5*time.Second)
 }
+
+// TestBlockFetchLongImportResetsStallWindow verifies that the stall clock is
+// refreshed while the import worker is busy: an import that runs longer than
+// stallTimeout and yields no handover (the insert returns 0) must leave the
+// peer a full deadline window after the import finishes, not fire
+// immediately because the pre-import handover has aged out.
+func TestBlockFetchLongImportResetsStallWindow(t *testing.T) {
+	origTimeout := stallTimeout
+	stallTimeout = 500 * time.Millisecond
+	defer func() { stallTimeout = origTimeout }()
+	origLimit := blockCacheLimit
+	blockCacheLimit = 16
+	defer func() { blockCacheLimit = origLimit }()
+
+	importEntered := make(chan struct{})
+	releaseImport := make(chan struct{})
+	var entered sync.Once
+	d := New(
+		func(types.Hash) bool { return false },
+		func(types.Hash) *nom.DetailedMomentum { return nil },
+		func() *nom.Momentum { return &nom.Momentum{} },
+		func([]*nom.DetailedMomentum) (int, error) {
+			entered.Do(func() { close(importEntered) })
+			<-releaseImport
+			return 0, nil // no handover: BlockOffset does not advance
+		},
+		func(string) {},
+		nil,
+	)
+	d.cancelCh = make(chan struct{})
+	atomic.StoreInt32(&d.synchronising, 1)
+	defer atomic.StoreInt32(&d.synchronising, 0)
+	defer d.endSession()
+
+	// Deliver only height 1, then hold the withheld tail in flight so the
+	// extra hashes stay pending while the import worker is blocked. Nothing
+	// remains cached, so no TakeBlocks after the release can advance the
+	// offset and mask the clock-refresh under test.
+	p := newPeer("longimport", eth61, types.Hash{}, nil, nil, nil)
+	p.getBlocks = func(hashes []types.Hash) error {
+		blocks := make([]*nom.DetailedMomentum, 0, len(hashes))
+		for _, h := range hashes {
+			if height := stallHeight(h); height <= 1 {
+				blocks = append(blocks, &nom.DetailedMomentum{
+					Momentum: &nom.Momentum{Hash: h, Height: height},
+				})
+			}
+		}
+		if len(blocks) == 0 {
+			return nil
+		}
+		go func() {
+			select {
+			case d.blockCh <- blockPack{"longimport", blocks}:
+			case <-d.cancelCh:
+			}
+		}()
+		return nil
+	}
+	if err := d.peers.Register(p); err != nil {
+		t.Fatalf("register peer: %v", err)
+	}
+
+	d.queue.Prepare(1)
+	d.queue.Insert([]types.Hash{
+		stallHash('l', 1), stallHash('l', 2), stallHash('l', 3),
+		stallHash('l', 4), stallHash('l', 5), stallHash('l', 6),
+		stallHash('l', 7), stallHash('l', 8), stallHash('l', 9),
+		stallHash('l', 10), stallHash('l', 11), stallHash('l', 12),
+	}, true)
+	d.processCh <- false // hash fetcher finished
+
+	blockErr := make(chan error, 1)
+	go func() { blockErr <- d.fetchBlocks(1) }()
+
+	select {
+	case <-importEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("import worker never took a batch")
+	}
+
+	// Keep the import blocked for more than stallTimeout with hashes pending.
+	d.queue.Insert([]types.Hash{
+		stallHash('m', 16), stallHash('m', 17), stallHash('m', 18),
+		stallHash('m', 19), stallHash('m', 20), stallHash('m', 21),
+	}, true)
+	time.Sleep(3 * stallTimeout)
+	select {
+	case err := <-blockErr:
+		t.Fatalf("stall deadline fired while the import worker was busy: %v", err)
+	default:
+	}
+
+	// The import ends with no handover and an aged-out pre-import handover.
+	// With the clock refresh it must still get a full fresh window.
+	close(releaseImport)
+	time.Sleep(stallTimeout / 2) // < stallTimeout after the release
+	select {
+	case err := <-blockErr:
+		t.Fatalf("stall deadline fired without a fresh window after the import: %v", err)
+	default:
+	}
+	expectReturn(t, "fetchBlocks", blockErr, errStallNoProgress, 15*time.Second)
+}

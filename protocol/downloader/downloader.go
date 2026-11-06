@@ -840,6 +840,9 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 				lastOffset = offset
 				lastHandover = time.Now()
 			}
+			if d.Processing() {
+				lastHandover = time.Now()
+			}
 			if d.queue.Pending() > 0 && !d.Processing() && time.Since(lastHandover) > stallTimeout {
 				log.Warn("Block download stalled: no progress", "pending", d.queue.Pending(), "last-handover", lastHandover)
 				return errStallNoProgress
