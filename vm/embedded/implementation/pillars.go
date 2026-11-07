@@ -447,10 +447,10 @@ type rewardSplit struct {
 //
 // Epochs settle in order, so once epoch is settled no later epoch can
 // be governed by a record below the one governing epoch; those records
-// are deleted here. Settlement therefore never rescans records left
-// over from a backlog that has since drained, whether or not the
-// pillar changes its split again. A delete error is returned so the VM
-// rolls the receive back.
+// are deleted here. Once a backlog has drained, settlement thus stops
+// rescanning the records it left behind, whether or not the pillar
+// changes its split again. A delete error is returned so the VM rolls
+// the receive back.
 func epochRewardSplit(context vm_context.AccountVmContext, termsEnforced bool, pillar *definition.PillarInfo, epoch uint64) (rewardSplit, error) {
 	split := rewardSplit{
 		giveBlock:    pillar.GiveBlockRewardPercentage,
@@ -733,8 +733,10 @@ func updatePillarRewards(context vm_context.AccountVmContext) error {
 //   - Records that can no longer govern an unsettled epoch are
 //     deleted: of those with EffectiveEpoch at or below the first
 //     unsettled epoch, only the highest is kept. Settlement prunes the
-//     same way as it advances (epochRewardSplit), so a pillar keeps at
-//     most one record per unsettled epoch, plus one.
+//     same way each time it resolves the pillar's split
+//     (epochRewardSplit). A pillar that earns no reward in an epoch is
+//     not resolved for it, so its older records stay until its split is
+//     next resolved or changed; they are not scanned in the meantime.
 //
 // Any read, put or delete error is returned so the VM rolls the whole
 // receive back rather than settle with a partial record set.
