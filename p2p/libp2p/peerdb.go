@@ -209,9 +209,12 @@ func (d *peerDB) recordDialFail(id peer.ID) {
 // chooses and which would let a stored identity claim a group of its
 // choice. In seeds they get one slot per round between them (on the
 // first restart after an upgrade, when every record is unobserved, that
-// is the plain recency order). Over the cap they are established and
-// lose records as one group, the largest one right after an upgrade, so
-// peers not seen since the upgrade go before peers that have reconnected.
+// is the plain recency order). Over the cap, eviction still takes
+// newcomers (by firstSeen, whatever their group) first; among
+// established records the unobserved ones count as one group, which is
+// typically the largest right after an upgrade, so established peers
+// not seen since the upgrade tend to go before established peers that
+// have reconnected.
 const unobservedGroup = "unobserved"
 
 // relayedOrigin is the stored origin, and the diversity group, of a peer
