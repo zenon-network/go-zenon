@@ -553,8 +553,9 @@ func (l *LedgerApi) GetMomentumsByPage(pageIndex, pageSize uint32) (*MomentumLis
 // The encoded list is bounded by a 10 MB byte budget: when the next
 // momentum would take it past the budget the list stops there and More
 // is set, and the caller continues from the height after the last
-// returned momentum. The first momentum is always returned. A range
-// that fits encodes exactly as before, without a "more" key.
+// returned momentum. If the first momentum of the range alone exceeds
+// the budget, ErrDetailedMomentumTooLarge is returned. A range that
+// fits encodes exactly as before, without a "more" key.
 //
 // JSON-RPC: ledger.getDetailedMomentumsByHeight
 func (l *LedgerApi) GetDetailedMomentumsByHeight(height, count uint64) (*DetailedMomentumList, error) {
