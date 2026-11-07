@@ -199,8 +199,8 @@ func TestMomentumContent_StaleAcknowledgementReceiveWithDataRejected(t *testing.
 	expectIs(t, "fresh receive with data", v.AccountBlock(receive(frontierMomentum(t, z).Identifier())), verifier.ErrABDataMustBeEmpty)
 }
 
-// End to end on the real chain: a stale block that reaches the pool after
-// H without admission (as one queued before H would be) is left out of the
+// End to end on the real chain: a stale block that sits in the pool after
+// H (forced in, as a block queued before H would be) is left out of the
 // next momentum by the producer and evicted from the pool when that
 // momentum is inserted, together with the account's dependent block above
 // it. Another account's block in the same momentum is confirmed.
@@ -216,11 +216,11 @@ func TestAccountPool_StaleAcknowledgementEvictedWithSuffix_EndToEnd(t *testing.T
 
 	stale := userSend(t, z, old)
 	insert := z.Chain().AcquireInsert("test")
-	common.FailIfErr(t, z.Chain().AddAccountBlockTransaction(insert, &nom.AccountBlockTransaction{Block: stale, Changes: db.NewPatch()}))
+	common.FailIfErr(t, z.Chain().ForceAddAccountBlockTransaction(insert, &nom.AccountBlockTransaction{Block: stale, Changes: db.NewPatch()}))
 	insert.Unlock()
 	dependent := userSend(t, z, frontierMomentum(t, z).Identifier())
 	insert = z.Chain().AcquireInsert("test")
-	common.FailIfErr(t, z.Chain().AddAccountBlockTransaction(insert, &nom.AccountBlockTransaction{Block: dependent, Changes: db.NewPatch()}))
+	common.FailIfErr(t, z.Chain().ForceAddAccountBlockTransaction(insert, &nom.AccountBlockTransaction{Block: dependent, Changes: db.NewPatch()}))
 	insert.Unlock()
 	common.Expect(t, len(z.Chain().GetUncommittedAccountBlocksByAddress(g.User1.Address)), 2)
 
@@ -281,4 +281,26 @@ func TestMomentumContent_PreActivationParentUnaffected(t *testing.T) {
 	}
 	v := verifier.NewVerifier(z.Chain(), z.Consensus(), vm.CanonicalBasePlasma)
 	common.FailIfErr(t, v.AccountBlock(userSend(t, z, old)))
+}
+
+// The interleaving an RPC submission can hit: the block is verified while
+// the frontier is H-1, a momentum moves the frontier to H, and only then is
+// the block handed to the pool under the insert lock. The pool rejects it.
+func TestAccountPool_StaleAcknowledgementRejectedAfterFrontierMoves(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	v := verifier.NewVerifier(z.Chain(), z.Consensus(), vm.CanonicalBasePlasma)
+
+	old := frontierMomentum(t, z).Identifier()
+	H := activateAcknowledgementRecency(t, z)
+	z.InsertMomentumsTo(H - 1)
+	stale := userSend(t, z, old)
+	common.FailIfErr(t, v.AccountBlock(stale))
+
+	z.InsertMomentumsTo(H)
+	insert := z.Chain().AcquireInsert("test")
+	err := z.Chain().AddAccountBlockTransaction(insert, &nom.AccountBlockTransaction{Block: stale, Changes: db.NewPatch()})
+	insert.Unlock()
+	expectIs(t, "pool insert at H", err, chain.ErrStaleMomentumAcknowledged)
+	common.Expect(t, len(z.Chain().GetUncommittedAccountBlocksByAddress(g.User1.Address)), 0)
 }

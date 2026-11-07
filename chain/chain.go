@@ -104,6 +104,9 @@ func (c *chain) Init() error {
 	if err := c.chainCache.Init(c.chainManager, frontierStore); err != nil {
 		return err
 	}
+	// Read the acknowledgement recency rule for the committed frontier once
+	// the cache it reads acknowledgements from is up.
+	c.accountPool.primeAcknowledgement()
 
 	fmt.Printf("Initialized NoM. Height: %v, Hash: %v\n", frontier.Height, frontier.Hash)
 	c.log.Info("initialized nom", "identifier", frontier.Identifier())

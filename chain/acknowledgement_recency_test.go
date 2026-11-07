@@ -269,7 +269,7 @@ func TestAcknowledgementRequirement_SporkReadFailureIsError(t *testing.T) {
 		"cache read error": mustRequirement(t, 150, sporks, func(identifier types.HashHeight) store.Cache {
 			return &scriptedCache{identifier: identifier, err: readErr}
 		}),
-		"no cache store": mustRequirement(t, 150, sporks, func(types.HashHeight) store.Cache { return nil }),
+		"no cache store":  mustRequirement(t, 150, sporks, func(types.HashHeight) store.Cache { return nil }),
 		"no cache reader": mustRequirement(t, 150, sporks, nil),
 	}
 	momentumErr, err := newAcknowledgementRequirement(ackAt(150), sporks, func(uint64) (*nom.Momentum, error) {
@@ -467,4 +467,44 @@ func TestAccountPool_UnreadableAcknowledgementKept(t *testing.T) {
 	seedChain(t, ap, ackUser, 90)
 	ap.InsertMomentum(&nom.DetailedMomentum{Momentum: &nom.Momentum{Hash: ackHash(100), Height: 100}})
 	common.Expect(t, pendingHeights(ap, ackUser), 1)
+}
+
+// The pool re-checks every non-forced insert against the frontier the
+// insert lands on, so a block the verifier passed one momentum earlier
+// is rejected once the frontier enforces a spork it does not
+// acknowledge. A forced insert (a block of a momentum being applied) is
+// not re-checked, and a rollback below the enforcement height lifts the
+// rule again.
+func TestAccountPool_StaleAcknowledgementRejectedAtAdmission(t *testing.T) {
+	gate := withRecencySporkId(t)
+	const H = 100
+	storage := db.NewMemDB()
+	enforcedSpork(gate, H).Save(storage)
+	stable := &recencyStable{frontier: &recencyParentStore{identifier: ackAt(H - 1), storage: storage}}
+	ap := newAccountPool(stable)
+	ap.cacheAt = scriptedCacheAt(map[types.Hash]uint64{gate: H})
+	ap.primeAcknowledgement()
+
+	transaction := func(address types.Address, acknowledged uint64) *nom.AccountBlockTransaction {
+		block := userBlock(address, 1, ackAt(acknowledged))
+		block.Hash = block.ComputeHash()
+		return &nom.AccountBlockTransaction{Block: block, Changes: db.NewPatch()}
+	}
+
+	// Frontier H-1: the next momentum may still confirm it.
+	common.FailIfErr(t, ap.addAccountBlockTransaction(transaction(types.Address{0, 1}, 90), false))
+
+	// Frontier H.
+	stable.frontier = &recencyParentStore{identifier: ackAt(H), storage: storage}
+	ap.InsertMomentum(&nom.DetailedMomentum{Momentum: &nom.Momentum{Hash: ackHash(H), Height: H}})
+	if err := ap.addAccountBlockTransaction(transaction(types.Address{0, 2}, 90), false); !errors.Is(err, ErrStaleMomentumAcknowledged) {
+		t.Fatalf("stale insert at H: want ErrStaleMomentumAcknowledged, got %v", err)
+	}
+	common.FailIfErr(t, ap.addAccountBlockTransaction(transaction(types.Address{0, 3}, H), false))
+	common.FailIfErr(t, ap.addAccountBlockTransaction(transaction(types.Address{0, 4}, 90), true))
+
+	// Rolled back to H-1.
+	stable.frontier = &recencyParentStore{identifier: ackAt(H - 1), storage: storage}
+	ap.DeleteMomentum(&nom.DetailedMomentum{Momentum: &nom.Momentum{Hash: ackHash(H), Height: H}})
+	common.FailIfErr(t, ap.addAccountBlockTransaction(transaction(types.Address{0, 5}, 90), false))
 }
