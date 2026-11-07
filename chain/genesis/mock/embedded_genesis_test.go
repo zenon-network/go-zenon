@@ -44,3 +44,8 @@ func TestGenesisCheckSum(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestGenesisPassesCheckGenesis(t *testing.T) {
+	if err := genesis.CheckGenesis(EmbeddedGenesis); err != nil {
+		t.Fatal(err)
+	}
+}
