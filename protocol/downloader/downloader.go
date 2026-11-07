@@ -283,9 +283,23 @@ func (d *Downloader) Synchronise(id string, head types.Hash, td uint64) {
 	case errBusy:
 		log.Debug("Synchronisation already in progress")
 
-	case errTimeout, errBadPeer, errStallingPeer, errBannedHead, errEmptyHashSet, errPeersUnavailable, errInvalidChain, errCrossCheckFailed, errStallNoProgress:
+	case errTimeout, errBadPeer, errStallingPeer, errBannedHead, errEmptyHashSet, errPeersUnavailable, errInvalidChain, errCrossCheckFailed:
 		log.Info("Removing peer", "peer-id", id, "reason", err)
 		d.dropPeer(id)
+
+	case errStallNoProgress:
+		// The deadline only proves that no handover happened for
+		// stallTimeout. If nothing is in flight anymore, the origin is a
+		// sustained withholder and must be dropped. If a request is still
+		// in flight the peer set may just be slow: dropping the best-TD
+		// origin would repeat against the next one on every force sync, so
+		// only cancel the session.
+		if d.queue.InFlight() == 0 {
+			log.Info("Removing peer", "peer-id", id, "reason", err)
+			d.dropPeer(id)
+		} else {
+			log.Info("Synchronisation aborted", "peer-id", id, "reason", err)
+		}
 
 	case errPendingQueue:
 		log.Debug("Synchronisation aborted", "reason", err)
@@ -691,10 +705,12 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 
 	// Track handover progress: blockOffset advances only when TakeBlocks
 	// hands a contiguous run to the import worker. A peer that withholds
-	// the head block of the download window can otherwise hold the session
-	// open indefinitely — the cache fills behind the hole, nothing is in
-	// flight, and the peers-unavailable guard is skipped because it
-	// requires free cache space (issue #247).
+	// the head block of the download window would otherwise hold the
+	// session open indefinitely — the cache fills behind the hole and the
+	// peers-unavailable guard only fires when free cache space remains
+	// (issue #247). The extended guard now ends that state on the spot;
+	// the deadline below remains as a backstop for the in-flight-but-
+	// expiring loop.
 	lastHandover := time.Now()
 	lastOffset := d.queue.BlockOffset()
 
@@ -824,8 +840,14 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 				}
 			}
 			// Make sure that we have peers available for fetching. If all peers have been tried
-			// and all failed throw an error
-			if !d.queue.Throttle() && d.queue.InFlight() == 0 && ((len(d.queue.blockCache)/2)-len(d.queue.blockPool)) > 0 {
+			// and all failed throw an error. The second arm covers the case where the head
+			// block of the window was never delivered: nothing is in flight, no import can
+			// run and no reservation can ever succeed, so the session can never make
+			// progress again — the guard can fire on the spot instead of waiting for the
+			// stall deadline (issue #247).
+			space := d.queue.ReserveSpace()
+			if !d.queue.Throttle() && d.queue.InFlight() == 0 &&
+				(space > 0 || (d.queue.GetHeadBlock() == nil && !d.Processing())) {
 				return errPeersUnavailable
 			}
 			// Session-level no-progress deadline (issue #247). If hashes are
@@ -836,15 +858,11 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 			// slow-import case: while Processing() is true a batch is owned and
 			// the handover clock is not the right liveness signal. Cancel so
 			// Synchronise drops the peer and retries with another.
-			if offset := d.queue.BlockOffset(); offset != lastOffset {
+			if offset := d.queue.BlockOffset(); offset != lastOffset || d.Processing() {
 				lastOffset = offset
 				lastHandover = time.Now()
-			}
-			if d.Processing() {
-				lastHandover = time.Now()
-			}
-			if d.queue.Pending() > 0 && !d.Processing() && time.Since(lastHandover) > stallTimeout {
-				log.Warn("Block download stalled: no progress", "pending", d.queue.Pending(), "last-handover", lastHandover)
+			} else if pending := d.queue.Pending(); pending > 0 && time.Since(lastHandover) > stallTimeout {
+				log.Warn("Block download stalled: no progress", "pending", pending, "last-handover", lastHandover)
 				return errStallNoProgress
 			}
 		}

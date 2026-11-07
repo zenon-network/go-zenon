@@ -123,6 +123,16 @@ func (q *queue) InFlight() int {
 	return len(q.pendPool)
 }
 
+// ReserveSpace returns how many more blocks fit into the cache before
+// Reserve starts returning nil: half the cache minus the blocks already
+// downloaded. It is the same quantity Reserve uses to throttle itself.
+func (q *queue) ReserveSpace() int {
+	q.lock.RLock()
+	defer q.lock.RUnlock()
+
+	return (len(q.blockCache) / 2) - len(q.blockPool)
+}
+
 // Throttle checks if the download should be throttled (active block fetches
 // exceed block cache).
 func (q *queue) Throttle() bool {

@@ -31,11 +31,10 @@ func stallHeight(h types.Hash) uint64 {
 	return stallHeights[h]
 }
 
-// TestBlockFetchStallTimeout verifies that fetchBlocks terminates with
-// errStallNoProgress when a peer withholds the head block of the download
-// window: the cache fills behind the hole, TakeBlocks hands over nothing,
-// and without a session-level deadline the loop would spin forever
-// (issue #247).
+// TestBlockFetchStallTimeout verifies that fetchBlocks terminates when a
+// peer withholds the head block of the download window: the cache fills
+// behind the hole, TakeBlocks hands over nothing, and the extended
+// peers-unavailable guard ends the session on the spot (issue #247).
 func TestBlockFetchStallTimeout(t *testing.T) {
 	origTimeout := stallTimeout
 	stallTimeout = 500 * time.Millisecond
@@ -78,19 +77,23 @@ func TestBlockFetchStallTimeout(t *testing.T) {
 	}
 
 	// Pre-populate the queue with hashes for heights 1..10 and signal
-	// that the hash fetcher is done.
+	// that the hash fetcher is done. Ascending order reserves the head
+	// first: the empty pack puts height 1 into the peer's ignored set,
+	// heights 2..9 fill half the cache behind the hole, and the session
+	// is left with nothing in flight, no cached head and no way to make
+	// progress.
 	d.queue.Prepare(1)
 	d.queue.Insert([]types.Hash{
 		stallHash('s', 1), stallHash('s', 2), stallHash('s', 3),
 		stallHash('s', 4), stallHash('s', 5), stallHash('s', 6),
 		stallHash('s', 7), stallHash('s', 8), stallHash('s', 9),
 		stallHash('s', 10),
-	}, false)
+	}, true)
 	d.processCh <- false // hash fetcher finished
 
 	blockErr := make(chan error, 1)
 	go func() { blockErr <- d.fetchBlocks(1) }()
-	expectReturn(t, "fetchBlocks", blockErr, errStallNoProgress, 15*time.Second)
+	expectReturn(t, "fetchBlocks", blockErr, errPeersUnavailable, 15*time.Second)
 }
 
 // TestBlockFetchNoStallWhileImportBusy verifies the false-positive guard: a
@@ -246,10 +249,13 @@ func TestBlockFetchNoStallWhenIdle(t *testing.T) {
 	}
 
 	d.queue.Prepare(1)
-	d.processCh <- false // hash fetcher done, no hashes to fetch
 
 	blockErr := make(chan error, 1)
 	go func() { blockErr <- d.fetchBlocks(1) }()
+	// Let the stall deadline window elapse while there is nothing pending:
+	// the deadline must not fire on an idle queue.
+	time.Sleep(3 * stallTimeout)
+	d.processCh <- false // hash fetcher done, no hashes to fetch
 	expectReturn(t, "fetchBlocks", blockErr, nil, 5*time.Second)
 }
 
@@ -276,7 +282,7 @@ func TestBlockFetchLongImportResetsStallWindow(t *testing.T) {
 		func([]*nom.DetailedMomentum) (int, error) {
 			entered.Do(func() { close(importEntered) })
 			<-releaseImport
-			return 0, nil // no handover: BlockOffset does not advance
+			return 0, nil // block 1 was handed over; nothing further is takable (2 is withheld in flight)
 		},
 		func(string) {},
 		nil,
@@ -355,4 +361,102 @@ func TestBlockFetchLongImportResetsStallWindow(t *testing.T) {
 	default:
 	}
 	expectReturn(t, "fetchBlocks", blockErr, errStallNoProgress, 15*time.Second)
+}
+
+// TestSynchroniseStallDropGatedOnInFlight verifies the drop policy for
+// errStallNoProgress: the peer is dropped only when nothing is in flight
+// anymore (a sustained withholder); while a request is still in flight the
+// session is cancelled without a drop, so an honest slow peer set cannot
+// get the best-TD origin removed.
+func TestSynchroniseStallDropGatedOnInFlight(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		inFlight bool
+		wantDrop bool
+	}{
+		{"drops the withholder when nothing is in flight", false, true},
+		{"keeps the origin while a request is in flight", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var dropped []string
+			d := newIdleDownloader()
+			d.dropPeer = func(id string) { dropped = append(dropped, id) }
+			d.synchroniseMock = func(string, types.Hash) error { return errStallNoProgress }
+
+			if tc.inFlight {
+				d.queue.Prepare(1)
+				d.queue.Insert([]types.Hash{stallHash('g', 1)}, true)
+				p := newPeer("holder", eth61, types.Hash{}, nil, nil, nil)
+				if err := d.peers.Register(p); err != nil {
+					t.Fatalf("register peer: %v", err)
+				}
+				if req := d.queue.Reserve(p, 1); req == nil {
+					t.Fatal("expected a reserved request")
+				}
+			}
+
+			d.Synchronise("origin", types.Hash{}, 100)
+			if tc.wantDrop {
+				if len(dropped) != 1 || dropped[0] != "origin" {
+					t.Fatalf("expected origin dropped once, got %v", dropped)
+				}
+			} else if len(dropped) != 0 {
+				t.Fatalf("origin must not be dropped while a request is in flight, got %v", dropped)
+			}
+		})
+	}
+}
+
+// TestBlockFetchDeadStateGuard verifies the extended peers-unavailable
+// guard: when the head block of the window was never delivered, the cache
+// is exactly half full and nothing is in flight, no reservation can ever
+// succeed and no import can ever run, so the session can never make
+// progress again — the guard ends it on the spot instead of waiting for
+// the stall deadline (issue #247).
+func TestBlockFetchDeadStateGuard(t *testing.T) {
+	origTimeout := stallTimeout
+	stallTimeout = 500 * time.Millisecond
+	defer func() { stallTimeout = origTimeout }()
+	origLimit := blockCacheLimit
+	blockCacheLimit = 16
+	defer func() { blockCacheLimit = origLimit }()
+
+	d := newIdleDownloader()
+	d.cancelCh = make(chan struct{})
+	atomic.StoreInt32(&d.synchronising, 1)
+	defer atomic.StoreInt32(&d.synchronising, 0)
+	defer d.endSession()
+
+	// Register a peer so the no-peers check passes; it is never used
+	// because no reservation can succeed in the seeded state.
+	p := newPeer("staller", eth61, types.Hash{}, nil, nil, nil)
+	if err := d.peers.Register(p); err != nil {
+		t.Fatalf("register peer: %v", err)
+	}
+
+	hashes := make([]types.Hash, 10)
+	for i := range hashes {
+		hashes[i] = stallHash('d', uint64(i+1))
+	}
+	d.queue.Prepare(1)
+	d.queue.Insert(hashes, true)
+
+	// Seed the dead state: heights 2..9 sit in the cache (exactly half of
+	// it, so Reserve has no space), the slot for the head block stays
+	// empty and height 1 stays pending. No request is in flight and the
+	// import worker owns nothing, so no event can ever change this state.
+	d.queue.lock.Lock()
+	for i, h := range hashes[1:9] {
+		d.queue.blockCache[i+1] = &Block{
+			RawBlock:   &nom.DetailedMomentum{Momentum: &nom.Momentum{Hash: h, Height: uint64(i + 2)}},
+			OriginPeer: "staller",
+		}
+		d.queue.blockPool[h] = uint64(i + 2)
+	}
+	d.queue.lock.Unlock()
+
+	d.processCh <- false // hash fetcher finished
+	blockErr := make(chan error, 1)
+	go func() { blockErr <- d.fetchBlocks(1) }()
+	expectReturn(t, "fetchBlocks", blockErr, errPeersUnavailable, 15*time.Second)
 }
