@@ -549,31 +549,56 @@ func (block *AccountBlock) addAllExtraInfo(chain chain.Chain) error {
 // a variable so tests can lower it.
 var detailedMomentumsByteBudget = 10 * 1000 * 1000
 
-// momentumListToDetailedList pairs each momentum of list with its
-// account blocks, in order, and stops before the encoded list would
-// exceed byteBudget bytes. Each account block is encoded once as it is
-// built to measure it, so work past the budget is bounded by one block
-// (with its paired block): the momentum that would cross the budget is
-// abandoned at that block, nothing after it is read, and More is set.
-// Blocks are read one content header at a time rather than through
-// PrefetchMomentum, which would read a whole momentum up front.
-// When the first momentum alone does not fit, ErrDetailedMomentumTooLarge
-// is returned: a receive block's paired send block, data included, is
-// embedded in the answer, so a momentum's expanded size is not bounded by
-// the verifier's content limit and no exemption would bound the response.
-func momentumListToDetailedList(chain chain.Chain, list *MomentumList, byteBudget int) (*DetailedMomentumList, error) {
+// detailedMomentumsByHeight returns the momentums from height upwards,
+// at most count of them and none above the frontier, each paired with
+// its account blocks, and stops before the encoded list would exceed
+// byteBudget bytes. Count is the frontier height, as in MomentumList.
+//
+// Momentums are read one height at a time from a single store, so the
+// range is the one GetMomentumsByHeight would return, and each account
+// block is read, converted and encoded once as it is built to measure
+// it. Work past the budget is therefore bounded by one momentum header
+// and one block (with its paired block): the momentum that would cross
+// the budget is abandoned at that block, nothing after it is read, and
+// More is set. When the first momentum alone does not fit,
+// ErrDetailedMomentumTooLarge is returned: a receive block's paired send
+// block, data included, is embedded in the answer, so a momentum's
+// expanded size is not bounded by the verifier's content limit and no
+// exemption would bound the response.
+func detailedMomentumsByHeight(chain chain.Chain, height, count uint64, byteBudget int) (*DetailedMomentumList, error) {
+	store := chain.GetFrontierMomentumStore()
+	frontier, err := store.GetFrontierMomentum()
+	if err != nil {
+		return nil, err
+	}
 	ans := &DetailedMomentumList{
-		Count: list.Count,
-		List:  make([]*DetailedMomentum, 0, len(list.List)),
+		Count: int(frontier.Height),
+		List:  []*DetailedMomentum{},
 	}
 	// the encoded list is "[" + elements joined by "," + "]"
 	size := len("[]")
-	for _, momentum := range list.List {
+	for i := uint64(0); i < count; i++ {
+		// one momentum per call; past the frontier, or where height+i
+		// wraps, the store returns none
+		momentums, err := store.GetMomentumsByHeight(height+i, true, 1)
+		if err != nil {
+			return nil, err
+		}
+		if len(momentums) == 0 {
+			break
+		}
+		list, err := ledgerMomentumsToRpc(momentums)
+		if err != nil {
+			return nil, err
+		}
+		if len(list) == 0 {
+			break
+		}
 		separator := 0
 		if len(ans.List) > 0 {
 			separator = len(",")
 		}
-		detailed, encodedSize, err := detailedMomentumWithin(chain, momentum, byteBudget-size-separator)
+		detailed, encodedSize, err := detailedMomentumWithin(chain, list[0], byteBudget-size-separator)
 		if err != nil {
 			return nil, err
 		}

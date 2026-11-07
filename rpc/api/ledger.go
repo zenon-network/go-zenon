@@ -564,9 +564,13 @@ func (l *LedgerApi) GetDetailedMomentumsByHeight(height, count uint64) (*Detaile
 		return nil, ErrCountParamTooBig
 	}
 
-	ans, err := l.GetMomentumsByHeight(height, count)
-	if err != nil {
-		return nil, err
+	if height == 0 {
+		return nil, ErrHeightParamIsZero
 	}
-	return momentumListToDetailedList(l.chain, ans, detailedMomentumsByteBudget)
+
+	ans, err := detailedMomentumsByHeight(l.chain, height, count, detailedMomentumsByteBudget)
+	if err != nil && err != ErrDetailedMomentumTooLarge {
+		l.log.Error("GetDetailedMomentumsByHeight failed", "reason", err, "method-called", "detailedMomentumsByHeight")
+	}
+	return ans, err
 }

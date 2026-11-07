@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"math/big"
 	"testing"
 
@@ -15,13 +16,16 @@ import (
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
-// counts records the work done building detailed momentums: account
-// blocks read from the store, momentums prefetched whole (which the
-// budgeted path must never do), and account blocks converted, each of
-// which looks up its paired block exactly once.
+// counts records the work done building detailed momentums: momentums
+// read through GetMomentumsByHeight, range reads of more than one
+// momentum and whole-momentum prefetches (neither of which the budgeted
+// path may do), account blocks read from the store, and account blocks
+// converted, each of which looks up its paired block exactly once.
 type counts struct {
-	read       int
+	momentums  int
+	bulk       int
 	prefetched int
+	read       int
 	paired     int
 }
 
@@ -37,6 +41,15 @@ func (c countingChain) GetFrontierMomentumStore() store.Momentum {
 type countingStore struct {
 	store.Momentum
 	n *counts
+}
+
+func (s countingStore) GetMomentumsByHeight(height uint64, higher bool, count uint64) ([]*nom.Momentum, error) {
+	if count > 1 {
+		s.n.bulk++
+	}
+	list, err := s.Momentum.GetMomentumsByHeight(height, higher, count)
+	s.n.momentums += len(list)
+	return list, err
 }
 
 func (s countingStore) PrefetchMomentum(m *nom.Momentum) (*nom.DetailedMomentum, error) {
@@ -59,7 +72,7 @@ func (s countingStore) GetAccountBlockByHash(hash types.Hash) (*nom.AccountBlock
 	return s.Momentum.GetAccountBlockByHash(hash)
 }
 
-// unbudgetedDetailedList is momentumListToDetailedList as it was before
+// unbudgetedDetailedList is the detailed list as it was built before
 // the byte budget, kept as the reference for byte-identical responses.
 func unbudgetedDetailedList(chain chain.Chain, list *MomentumList) (*DetailedMomentumList, error) {
 	ans := &DetailedMomentumList{
@@ -173,13 +186,14 @@ func encodedListSize(sizes []int, k int) int {
 }
 
 // A range that fits the budget is answered exactly as before the budget
-// existed: same bytes, no "more" key. The fixture's whole chain is a few
+// existed: same bytes, no "more" key, including ranges that run past the
+// frontier, lie entirely beyond it, or start where height+count wraps. The fixture's whole chain is a few
 // tens of KB, far below the production budget.
 func TestGetDetailedMomentumsByHeight_SmallRangeIsByteIdentical(t *testing.T) {
 	z, l, _ := newBudgetFixture(t)
 	defer z.StopPanic()
 
-	for _, r := range []struct{ height, count uint64 }{{1, 1}, {1, 3}, {2, 4}, {1, RpcMaxCountSize}} {
+	for _, r := range []struct{ height, count uint64 }{{1, 1}, {1, 3}, {2, 4}, {1, RpcMaxCountSize}, {receiveMomentumHeight, 5}, {receiveMomentumHeight + 1, 3}, {100, 0}, {math.MaxUint64, 2}} {
 		ref, _ := reference(t, l, r.height, r.count)
 		got, err := l.GetDetailedMomentumsByHeight(r.height, r.count)
 		if err != nil {
@@ -200,7 +214,7 @@ func TestGetDetailedMomentumsByHeight_SmallRangeIsByteIdentical(t *testing.T) {
 // More, stays within the budget, and expands only one momentum past
 // them, abandoning it at its first block; a budget one byte smaller
 // drops the k-th.
-func TestMomentumListToDetailedList_StopsAtByteBudget(t *testing.T) {
+func TestDetailedMomentumsByHeight_StopsAtByteBudget(t *testing.T) {
 	z, l, n := newBudgetFixture(t)
 	defer z.StopPanic()
 
@@ -214,11 +228,6 @@ func TestMomentumListToDetailedList_StopsAtByteBudget(t *testing.T) {
 			t.Fatalf("momentum %d encodes to only %d bytes; fixture blocks are missing", i, s)
 		}
 	}
-	headers, err := l.GetMomentumsByHeight(height, count)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	for k := 1; k < count; k++ {
 		cases := []struct {
 			budget int
@@ -232,7 +241,7 @@ func TestMomentumListToDetailedList_StopsAtByteBudget(t *testing.T) {
 		}
 		for _, tc := range cases {
 			*n = counts{}
-			got, err := momentumListToDetailedList(l.chain, headers, tc.budget)
+			got, err := detailedMomentumsByHeight(l.chain, height, count, tc.budget)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -245,6 +254,11 @@ func TestMomentumListToDetailedList_StopsAtByteBudget(t *testing.T) {
 			wantPaired := tc.want * budgetFixtureBlocksPerMom
 			if tc.budget == encodedListSize(sizes, tc.want+1)-1 {
 				wantPaired += budgetFixtureBlocksPerMom
+			}
+			// only the returned momentums and the one that crosses are
+			// read, one height at a time
+			if n.momentums != tc.want+1 || n.bulk != 0 {
+				t.Fatalf("budget %d: read %d momentums (%d range reads) for a %d-momentum answer", tc.budget, n.momentums, n.bulk, tc.want)
 			}
 			if n.read != wantPaired || n.paired != wantPaired || n.prefetched != 0 {
 				t.Fatalf("budget %d: read %d and built %d blocks (prefetched %d momentums) for a %d-momentum answer, want %d",
@@ -265,12 +279,12 @@ func TestMomentumListToDetailedList_StopsAtByteBudget(t *testing.T) {
 
 	// The whole range at exactly its size is complete.
 	*n = counts{}
-	got, err := momentumListToDetailedList(l.chain, headers, encodedListSize(sizes, count))
+	got, err := detailedMomentumsByHeight(l.chain, height, count, encodedListSize(sizes, count))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.List) != count || got.More || n.read != count*budgetFixtureBlocksPerMom || n.prefetched != 0 {
-		t.Fatalf("exact budget: got %d momentums more=%v read=%d prefetched=%d", len(got.List), got.More, n.read, n.prefetched)
+	if len(got.List) != count || got.More || n.momentums != count || n.bulk != 0 || n.read != count*budgetFixtureBlocksPerMom || n.prefetched != 0 {
+		t.Fatalf("exact budget: got %d momentums more=%v momentums=%d bulk=%d read=%d prefetched=%d", len(got.List), got.More, n.momentums, n.bulk, n.read, n.prefetched)
 	}
 }
 
@@ -279,7 +293,7 @@ func TestMomentumListToDetailedList_StopsAtByteBudget(t *testing.T) {
 // budget. The receive-only momentum is the case the verifier's content
 // limit does not bound: its blocks carry no data, yet each is answered
 // with its paired send block and that block's data.
-func TestMomentumListToDetailedList_OversizedFirstMomentumIsAnError(t *testing.T) {
+func TestDetailedMomentumsByHeight_OversizedFirstMomentumIsAnError(t *testing.T) {
 	z, l, n := newBudgetFixture(t)
 	defer z.StopPanic()
 
@@ -304,30 +318,22 @@ func TestMomentumListToDetailedList_OversizedFirstMomentumIsAnError(t *testing.T
 	}
 
 	for _, height := range []uint64{2, receiveMomentumHeight} {
-		headers, err := l.GetMomentumsByHeight(height, 2)
-		if err != nil {
-			t.Fatal(err)
-		}
 		*n = counts{}
-		got, err := momentumListToDetailedList(l.chain, headers, 1)
+		got, err := detailedMomentumsByHeight(l.chain, height, RpcMaxCountSize, 1)
 		if err != ErrDetailedMomentumTooLarge || got != nil {
 			t.Fatalf("height %d: got %v, %v; want ErrDetailedMomentumTooLarge", height, got, err)
 		}
-		if n.read != 0 || n.paired != 0 || n.prefetched != 0 {
+		if n.momentums != 1 || n.bulk != 0 || n.read != 0 || n.paired != 0 || n.prefetched != 0 {
 			t.Fatalf("height %d: read %d and built %d blocks (prefetched %d) under a 1-byte budget", height, n.read, n.paired, n.prefetched)
 		}
 	}
 
 	// A budget that holds the momentum and its first block only: the
 	// second block is built, crosses, and the rest are never built.
-	headers, err := l.GetMomentumsByHeight(receiveMomentumHeight, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
 	shell := len(mustMarshal(t, &DetailedMomentum{Momentum: ref.List[0].Momentum, AccountBlocks: []*AccountBlock{}}))
 	budget := len("[]") + shell + len(mustMarshal(t, receives[0]))
 	*n = counts{}
-	if _, err := momentumListToDetailedList(l.chain, headers, budget); err != ErrDetailedMomentumTooLarge {
+	if _, err := detailedMomentumsByHeight(l.chain, receiveMomentumHeight, 1, budget); err != ErrDetailedMomentumTooLarge {
 		t.Fatalf("got %v, want ErrDetailedMomentumTooLarge", err)
 	}
 	if n.read != 2 || n.paired != 2 || n.prefetched != 0 {
@@ -336,12 +342,8 @@ func TestMomentumListToDetailedList_OversizedFirstMomentumIsAnError(t *testing.T
 
 	// Behind a momentum that fits, the oversized one ends the list with
 	// more instead.
-	headers, err = l.GetMomentumsByHeight(receiveMomentumHeight-1, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
 	prev, prevSizes := reference(t, l, receiveMomentumHeight-1, 1)
-	got, err := momentumListToDetailedList(l.chain, headers, encodedListSize(prevSizes, 1)+sizes[0])
+	got, err := detailedMomentumsByHeight(l.chain, receiveMomentumHeight-1, 2, encodedListSize(prevSizes, 1)+sizes[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +390,7 @@ func TestGetDetailedMomentumsByHeight_ContinuesAcrossBudget(t *testing.T) {
 		if len(got.List) == 0 {
 			t.Fatalf("call %d returned no momentums", calls)
 		}
-		if n.prefetched != 0 || n.read > (len(got.List)+1)*budgetFixtureBlocksPerMom {
+		if n.prefetched != 0 || n.bulk != 0 || n.momentums > len(got.List)+1 || n.read > (len(got.List)+1)*budgetFixtureBlocksPerMom {
 			t.Fatalf("call %d read %d blocks (prefetched %d) for %d momentums returned", calls, n.read, n.prefetched, len(got.List))
 		}
 		raw := mustMarshal(t, got)
