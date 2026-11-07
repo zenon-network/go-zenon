@@ -9,10 +9,11 @@ import (
 )
 
 // TestDefaultSeedersAreValidAndUnique checks that every compiled-in
-// legacy seeder is a complete enode URL and that no seeder, node
-// identity or endpoint appears twice. A malformed entry would make
+// legacy seeder is a complete, usable enode URL and that no seeder,
+// node identity or endpoint appears twice. A malformed entry would make
 // Net.Nodes fail and stop the node from starting with the default
-// configuration; a duplicate would silently shrink the bootstrap set.
+// configuration; an unusable or duplicate one would silently shrink the
+// discovery bootstrap set.
 func TestDefaultSeedersAreValidAndUnique(t *testing.T) {
 	if len(DefaultSeeders) == 0 {
 		t.Fatal("DefaultSeeders is empty")
@@ -20,7 +21,8 @@ func TestDefaultSeedersAreValidAndUnique(t *testing.T) {
 
 	urls := make(map[string]int, len(DefaultSeeders))
 	ids := make(map[discover.NodeID]int, len(DefaultSeeders))
-	endpoints := make(map[string]int, len(DefaultSeeders))
+	udpEndpoints := make(map[string]int, len(DefaultSeeders))
+	tcpEndpoints := make(map[string]int, len(DefaultSeeders))
 	for i, url := range DefaultSeeders {
 		if j, ok := urls[url]; ok {
 			t.Errorf("seeder %d duplicates seeder %d: %s", i, j, url)
@@ -33,8 +35,13 @@ func TestDefaultSeedersAreValidAndUnique(t *testing.T) {
 			t.Errorf("seeder %d is not a valid enode URL: %v (%s)", i, err, url)
 			continue
 		}
-		if node.IP == nil || node.IP.IsUnspecified() {
-			t.Errorf("seeder %d has no IP address: %s", i, url)
+		// ParseNode checks only the ID's length; the discovery handshake
+		// needs it to be a point on the curve.
+		if _, err := node.ID.Pubkey(); err != nil {
+			t.Errorf("seeder %d has an invalid node ID: %v (%s)", i, err, url)
+		}
+		if !isPublicUnicast(node.IP) {
+			t.Errorf("seeder %d has a non-public IP address %v: %s", i, node.IP, url)
 		}
 		if node.TCP == 0 || node.UDP == 0 {
 			t.Errorf("seeder %d has a zero port (tcp=%d udp=%d): %s", i, node.TCP, node.UDP, url)
@@ -44,11 +51,18 @@ func TestDefaultSeedersAreValidAndUnique(t *testing.T) {
 		}
 		ids[node.ID] = i
 
-		endpoint := net.JoinHostPort(node.IP.String(), strconv.Itoa(int(node.TCP)))
-		if j, ok := endpoints[endpoint]; ok {
-			t.Errorf("seeder %d reuses the endpoint %s of seeder %d", i, endpoint, j)
+		// Bootstrap bonding goes to the UDP endpoint (which a discport
+		// query can set apart from the TCP port); later dials use TCP.
+		udp := net.JoinHostPort(node.IP.String(), strconv.Itoa(int(node.UDP)))
+		if j, ok := udpEndpoints[udp]; ok {
+			t.Errorf("seeder %d reuses the UDP endpoint %s of seeder %d", i, udp, j)
 		}
-		endpoints[endpoint] = i
+		udpEndpoints[udp] = i
+		tcp := net.JoinHostPort(node.IP.String(), strconv.Itoa(int(node.TCP)))
+		if j, ok := tcpEndpoints[tcp]; ok {
+			t.Errorf("seeder %d reuses the TCP endpoint %s of seeder %d", i, tcp, j)
+		}
+		tcpEndpoints[tcp] = i
 	}
 
 	nodes, err := (&Net{Seeders: DefaultSeeders}).Nodes()
@@ -58,4 +72,14 @@ func TestDefaultSeedersAreValidAndUnique(t *testing.T) {
 	if len(nodes) != len(DefaultSeeders) {
 		t.Fatalf("Net.Nodes returned %d nodes for %d seeders", len(nodes), len(DefaultSeeders))
 	}
+}
+
+// isPublicUnicast reports whether ip is a globally routable unicast
+// address, which a mainnet seeder must have.
+func isPublicUnicast(ip net.IP) bool {
+	return ip != nil &&
+		ip.IsGlobalUnicast() &&
+		!ip.IsPrivate() &&
+		!ip.IsLoopback() &&
+		!ip.IsLinkLocalUnicast()
 }
