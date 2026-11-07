@@ -34,14 +34,25 @@ type broadcastNetPeer struct {
 	onDisc func()
 }
 
+// newBroadcastNetPeer returns a transport peer with node ID {n} that runs
+// onDisc, if set, on its first Disconnect.
 func newBroadcastNetPeer(n byte, onDisc func()) *broadcastNetPeer {
 	return &broadcastNetPeer{id: discover.NodeID{n}, discs: make(chan p2p.DiscReason, 16), onDisc: onDisc}
 }
 
-func (f *broadcastNetPeer) ID() discover.NodeID  { return f.id }
-func (f *broadcastNetPeer) Name() string         { return "broadcast-test" }
-func (f *broadcastNetPeer) Caps() []p2p.Cap      { return nil }
+// ID implements p2p.Peer.
+func (f *broadcastNetPeer) ID() discover.NodeID { return f.id }
+
+// Name implements p2p.Peer.
+func (f *broadcastNetPeer) Name() string { return "broadcast-test" }
+
+// Caps implements p2p.Peer.
+func (f *broadcastNetPeer) Caps() []p2p.Cap { return nil }
+
+// RemoteAddr implements p2p.Peer.
 func (f *broadcastNetPeer) RemoteAddr() net.Addr { return &net.TCPAddr{} }
+
+// Disconnect implements p2p.Peer: it records r and runs onDisc once.
 func (f *broadcastNetPeer) Disconnect(r p2p.DiscReason) {
 	select {
 	case f.discs <- r:
@@ -63,8 +74,10 @@ type recordingRW struct {
 	got chan sentMsg
 }
 
+// newRecordingRW returns a recordingRW with room for every test message.
 func newRecordingRW() *recordingRW { return &recordingRW{got: make(chan sentMsg, 4096)} }
 
+// WriteMsg records m and returns at once.
 func (rw *recordingRW) WriteMsg(m p2p.Msg) error {
 	b, err := io.ReadAll(m.Payload)
 	if err != nil {
@@ -88,6 +101,8 @@ type stallingRW struct {
 	got     chan sentMsg
 }
 
+// newStallingRW returns a stallingRW whose writes block until unblock or
+// close.
 func newStallingRW() *stallingRW {
 	return &stallingRW{
 		entered: make(chan struct{}, 4096),
@@ -97,6 +112,8 @@ func newStallingRW() *stallingRW {
 	}
 }
 
+// WriteMsg signals entered, then blocks until the stream is released, when
+// it records m, or closed, when it fails.
 func (rw *stallingRW) WriteMsg(m p2p.Msg) error {
 	rw.entered <- struct{}{}
 	select {
@@ -112,15 +129,21 @@ func (rw *stallingRW) WriteMsg(m p2p.Msg) error {
 	}
 }
 
+// unblock lets every write through, as a peer that reads again.
 func (rw *stallingRW) unblock() { rw.relOnce.Do(func() { close(rw.release) }) }
-func (rw *stallingRW) close()   { rw.clsOnce.Do(func() { close(rw.closed) }) }
+
+// close fails every pending and later write, as a closed stream.
+func (rw *stallingRW) close() { rw.clsOnce.Do(func() { close(rw.closed) }) }
 
 // hasBlockBridge reports every block as present, so BroadcastMomentum
 // announces.
 type hasBlockBridge struct{ stubChainBridge }
 
+// HasBlock reports every block as present.
 func (*hasBlockBridge) HasBlock(types.Hash) bool { return true }
 
+// newBroadcastTestManager returns a manager with only what the broadcast
+// paths use: a peer set and a chain that has every block.
 func newBroadcastTestManager() *ProtocolManager {
 	return &ProtocolManager{peers: newPeerSet(), chainman: &hasBlockBridge{}}
 }
@@ -156,14 +179,18 @@ func addBroadcastPeerWithQueue(t *testing.T, pm *ProtocolManager, np *broadcastN
 	return p, np
 }
 
+// testMomentum returns a momentum with a hash distinct for each n.
 func testMomentum(n byte) *nom.DetailedMomentum {
 	return &nom.DetailedMomentum{Momentum: &nom.Momentum{Height: uint64(n) + 2, Hash: types.Hash{0xaa, n}}}
 }
 
+// testAccountBlock returns an account block with a hash distinct for each
+// n.
 func testAccountBlock(n byte) *nom.AccountBlock {
 	return &nom.AccountBlock{Hash: types.Hash{0xbb, n}}
 }
 
+// encodeTest RLP-encodes v, failing the test on error.
 func encodeTest(t *testing.T, v interface{}) []byte {
 	t.Helper()
 	b, err := rlp.EncodeToBytes(v)
@@ -189,6 +216,8 @@ func returnsPromptly(t *testing.T, what string, f func()) {
 	}
 }
 
+// expectMsgs fails unless got delivers exactly want, in order, each
+// within broadcastTestWait.
 func expectMsgs(t *testing.T, who string, got <-chan sentMsg, want []sentMsg) {
 	t.Helper()
 	for i, w := range want {
@@ -203,6 +232,7 @@ func expectMsgs(t *testing.T, who string, got <-chan sentMsg, want []sentMsg) {
 	}
 }
 
+// expectNoMsg fails if got delivers a message within 50 ms.
 func expectNoMsg(t *testing.T, who string, got <-chan sentMsg) {
 	t.Helper()
 	select {
@@ -212,6 +242,7 @@ func expectNoMsg(t *testing.T, who string, got <-chan sentMsg) {
 	}
 }
 
+// waitEntered waits until a write to rw has started.
 func waitEntered(t *testing.T, rw *stallingRW) {
 	t.Helper()
 	select {

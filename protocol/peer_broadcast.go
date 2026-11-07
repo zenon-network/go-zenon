@@ -33,10 +33,14 @@ type broadcastMsg struct {
 	payload []byte
 }
 
+// newBroadcastMsg returns a broadcast of the given message code whose
+// payload is the already RLP-encoded message body.
 func newBroadcastMsg(code uint64, payload []byte) broadcastMsg {
 	return broadcastMsg{code: code, payload: payload}
 }
 
+// msg returns a p2p.Msg for one write of m. Each call gets its own
+// reader over the shared payload, so the payload is never consumed.
 func (m broadcastMsg) msg() p2p.Msg {
 	return p2p.Msg{Code: m.code, Size: uint32(len(m.payload)), Payload: bytes.NewReader(m.payload)}
 }
@@ -87,6 +91,9 @@ type broadcastQueue struct {
 	disconnecting atomic.Bool
 }
 
+// newBroadcastQueue returns an empty queue, writer not started, that holds at most size
+// broadcasts and maxBytes of their encoded payloads; see
+// maxQueuedBroadcasts and maxQueuedBroadcastBytes.
 func newBroadcastQueue(size int, maxBytes int64) *broadcastQueue {
 	return &broadcastQueue{
 		queue:    make(chan broadcastMsg, size),
