@@ -76,6 +76,10 @@ const (
 			{"name":"producedBlockNum","type":"int32"},
 			{"name":"expectedBlockNum","type":"int32"},
 			{"name":"weight","type":"uint256"}
+		]},
+		{"type":"variable","name":"pillarEpochTerms","inputs":[
+			{"name":"giveBlockRewardPercentage","type":"uint8"},
+			{"name":"giveDelegateRewardPercentage","type":"uint8"}
 		]}
 	]`
 
@@ -106,6 +110,7 @@ const (
 	legacyPillarEntryVariableName   = "LegacyPillarEntry"
 	delegationInfoVariableName      = "delegationInfo"
 	pillarEpochHistoryVariableName  = "pillarEpochHistory"
+	pillarEpochTermsVariableName    = "pillarEpochTerms"
 )
 
 var (
@@ -117,6 +122,7 @@ var (
 	legacyPillarEntryKeyPrefix   = []byte{3}
 	delegationInfoKeyPrefix      = []byte{4}
 	pillarEpochHistoryKeyPrefix  = []byte{5}
+	pillarEpochTermsKeyPrefix    = []byte{6}
 
 	// AnyPillarType matches every pillar type when filtering with
 	// GetPillarsList.
@@ -670,4 +676,129 @@ func (g *PillarEpochHistory) UnmarshalJSON(data []byte) error {
 	g.ExpectedBlockNum = aux.ExpectedBlockNum
 	g.Weight = common.StringToBigInt(aux.Weight)
 	return nil
+}
+
+// PillarEpochTerms is a pillar's reward-sharing split from
+// EffectiveEpoch onward, until the record with the next higher
+// EffectiveEpoch. Records exist only once the EpochRewardTermsSpork
+// is enforced: the first give-percentage change made through
+// UpdatePillar stores the split in force before it at EffectiveEpoch
+// 0, and every change stores the new split at the epoch after the one
+// in which it executes. A pillar without records is split with the
+// percentages in its PillarInfo.
+//
+// Entries are stored under pillarEpochTermsKeyPrefix (6) followed by
+// the SHA3-256 hash of the pillar name and EffectiveEpoch as 8
+// big-endian bytes, so one pillar's records share a key prefix and
+// iterate in ascending EffectiveEpoch order.
+type PillarEpochTerms struct {
+	Name                         string `json:"name"`
+	EffectiveEpoch               uint64 `json:"effectiveEpoch"`
+	GiveBlockRewardPercentage    uint8  `json:"giveBlockRewardPercentage"`
+	GiveDelegateRewardPercentage uint8  `json:"giveDelegateRewardPercentage"`
+}
+
+// Save stores the split under its name+EffectiveEpoch key, returning
+// any pack or put error; name and epoch are recovered from the key
+// when parsing.
+func (t *PillarEpochTerms) Save(context db.DB) error {
+	data, err := ABIPillars.PackVariable(
+		pillarEpochTermsVariableName,
+		t.GiveBlockRewardPercentage,
+		t.GiveDelegateRewardPercentage,
+	)
+	if err != nil {
+		return err
+	}
+	return context.Put(GetPillarEpochTermsKey(t.Name, t.EffectiveEpoch), data)
+}
+
+// Delete removes the record stored under its name+EffectiveEpoch key.
+func (t *PillarEpochTerms) Delete(context db.DB) error {
+	return context.Delete(GetPillarEpochTermsKey(t.Name, t.EffectiveEpoch))
+}
+
+func getPillarEpochTermsPrefixKey(name string) []byte {
+	return common.JoinBytes(pillarEpochTermsKeyPrefix, types.NewHash([]byte(name)).Bytes())
+}
+
+// GetPillarEpochTermsKey returns pillarEpochTermsKeyPrefix (6)
+// followed by the SHA3-256 hash of the pillar name and effectiveEpoch
+// as 8 big-endian bytes.
+func GetPillarEpochTermsKey(name string, effectiveEpoch uint64) []byte {
+	epochBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(epochBytes, effectiveEpoch)
+	return common.JoinBytes(getPillarEpochTermsPrefixKey(name), epochBytes)
+}
+
+func parsePillarEpochTermsEntry(name string, key, data []byte) (*PillarEpochTerms, error) {
+	if len(key) != 1+types.HashSize+8 || key[0] != pillarEpochTermsKeyPrefix[0] {
+		return nil, errors.Errorf("invalid key! Not PillarEpochTerms key")
+	}
+	if len(data) == 0 {
+		return nil, constants.ErrDataNonExistent
+	}
+	entry := new(PillarEpochTerms)
+	if err := ABIPillars.UnpackVariable(entry, pillarEpochTermsVariableName, data); err != nil {
+		return nil, err
+	}
+	entry.Name = name
+	entry.EffectiveEpoch = binary.BigEndian.Uint64(key[1+types.HashSize:])
+	return entry, nil
+}
+
+// GetPillarEpochTermsList returns the reward-sharing records stored
+// for the named pillar in ascending EffectiveEpoch order; a pillar
+// without records yields an empty list.
+func GetPillarEpochTermsList(context db.DB, name string) ([]*PillarEpochTerms, error) {
+	iterator := context.NewIterator(getPillarEpochTermsPrefixKey(name))
+	defer iterator.Release()
+	list := make([]*PillarEpochTerms, 0)
+	for {
+		if !iterator.Next() {
+			if iterator.Error() != nil {
+				return nil, iterator.Error()
+			}
+			break
+		}
+		entry, err := parsePillarEpochTermsEntry(name, iterator.Key(), iterator.Value())
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, entry)
+	}
+	return list, nil
+}
+
+// GetPillarEpochTermsForEpoch returns the record that governs epoch
+// for the named pillar: the one with the highest EffectiveEpoch not
+// above epoch. It returns constants.ErrDataNonExistent when the
+// pillar has no such record, in which case the PillarInfo percentages
+// apply.
+func GetPillarEpochTermsForEpoch(context db.DB, name string, epoch uint64) (*PillarEpochTerms, error) {
+	iterator := context.NewIterator(getPillarEpochTermsPrefixKey(name))
+	defer iterator.Release()
+	var found *PillarEpochTerms
+	for {
+		if !iterator.Next() {
+			if iterator.Error() != nil {
+				return nil, iterator.Error()
+			}
+			break
+		}
+		entry, err := parsePillarEpochTermsEntry(name, iterator.Key(), iterator.Value())
+		if err != nil {
+			return nil, err
+		}
+		// keys are in ascending EffectiveEpoch order, so no later
+		// record can govern epoch either
+		if entry.EffectiveEpoch > epoch {
+			break
+		}
+		found = entry
+	}
+	if found == nil {
+		return nil, constants.ErrDataNonExistent
+	}
+	return found, nil
 }

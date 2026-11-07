@@ -422,7 +422,74 @@ type pillarEpochReward struct {
 	Weight           *big.Int
 }
 
+// isEpochRewardTermsSporkEnforced reports whether
+// types.EpochRewardTermsSpork is active at the context's momentum.
+func isEpochRewardTermsSporkEnforced(context vm_context.AccountVmContext) bool {
+	active, err := context.CacheStore().IsSporkActive(types.EpochRewardTermsSpork)
+	common.DealWithErr(err)
+	return active
+}
+
+// rewardSplit is the pair of give-percentages a pillar's epoch reward
+// is split with.
+type rewardSplit struct {
+	giveBlock    uint8
+	giveDelegate uint8
+}
+
+// epochRewardSplit returns the split that settles the pillar's reward
+// for epoch. Before types.EpochRewardTermsSpork it is the percentages
+// in the pillar's PillarInfo at settlement time. After the spork it is
+// the definition.PillarEpochTerms record that governs epoch, falling
+// back to PillarInfo only for a pillar that has no record covering
+// epoch, which means its give-percentages have not changed since the
+// spork activated.
+//
+// Epochs settle in order, so once epoch is settled no later epoch can
+// be governed by a record below the one governing epoch; those records
+// are deleted here. Once a backlog has drained, settlement thus stops
+// rescanning the records it left behind, whether or not the pillar
+// changes its split again. A delete error is returned so the VM rolls
+// the receive back.
+func epochRewardSplit(context vm_context.AccountVmContext, termsEnforced bool, pillar *definition.PillarInfo, epoch uint64) (rewardSplit, error) {
+	split := rewardSplit{
+		giveBlock:    pillar.GiveBlockRewardPercentage,
+		giveDelegate: pillar.GiveDelegateRewardPercentage,
+	}
+	if !termsEnforced {
+		return split, nil
+	}
+	records, err := definition.GetPillarEpochTermsList(context.Storage(), pillar.Name)
+	if err != nil {
+		return rewardSplit{}, err
+	}
+	// records are in ascending EffectiveEpoch order
+	governing := -1
+	for i, record := range records {
+		if record.EffectiveEpoch > epoch {
+			break
+		}
+		governing = i
+	}
+	if governing < 0 {
+		return split, nil
+	}
+	for i := 0; i < governing; i++ {
+		if err := records[i].Delete(context.Storage()); err != nil {
+			return rewardSplit{}, err
+		}
+	}
+	return rewardSplit{
+		giveBlock:    records[governing].GiveBlockRewardPercentage,
+		giveDelegate: records[governing].GiveDelegateRewardPercentage,
+	}, nil
+}
+
 // distributed reward for all pillars in one epoch
+//
+// The give-percentages that split each pillar's reward come from
+// epochRewardSplit; the same values are recorded in the pillar's
+// PillarEpochHistory for epoch.
 func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint64) error {
 	pillarReward, err := computePillarsRewardForEpoch(context, epoch)
 	if err != nil {
@@ -431,6 +498,12 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 
 	toGive := make(map[string]*big.Int)
 	pillarInfos, err := definition.GetPillarsList(context.Storage(), false, definition.AnyPillarType)
+	if err != nil {
+		return err
+	}
+
+	termsEnforced := isEpochRewardTermsSporkEnforced(context)
+	splits := make(map[string]rewardSplit, len(pillarInfos))
 
 	// set pillar percentages in DB for historic reasons
 	for _, pillar := range pillarInfos {
@@ -440,11 +513,17 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 			continue
 		}
 
+		split, err := epochRewardSplit(context, termsEnforced, pillar, epoch)
+		if err != nil {
+			return err
+		}
+		splits[pillar.Name] = split
+
 		err = (&definition.PillarEpochHistory{
 			Epoch:                        epoch,
 			Name:                         pillar.Name,
-			GiveBlockRewardPercentage:    pillar.GiveBlockRewardPercentage,
-			GiveDelegateRewardPercentage: pillar.GiveDelegateRewardPercentage,
+			GiveBlockRewardPercentage:    split.giveBlock,
+			GiveDelegateRewardPercentage: split.giveDelegate,
 			ProducedBlockNum:             reward.ProducedBlockNum,
 			ExpectedBlockNum:             reward.ExpectedBlockNum,
 			Weight:                       reward.Weight,
@@ -461,13 +540,14 @@ func computeDetailedPillarReward(context vm_context.AccountVmContext, epoch uint
 			continue
 		}
 
+		split := splits[pillar.Name]
 		toGiveN := big.NewInt(0)
-		// toGive = (pillar.GiveBlockRewardPercentage * reward.BlockReward + pillar.GiveDelegateRewardPercentage * reward.DelegationReward) / 100
-		tmp := big.NewInt(int64(pillar.GiveBlockRewardPercentage))
+		// toGive = (split.giveBlock * reward.BlockReward + split.giveDelegate * reward.DelegationReward) / 100
+		tmp := big.NewInt(int64(split.giveBlock))
 		tmp.Mul(tmp, reward.BlockReward)
 		toGiveN.Add(toGiveN, tmp)
 
-		tmp.SetInt64(int64(pillar.GiveDelegateRewardPercentage))
+		tmp.SetInt64(int64(split.giveDelegate))
 		tmp.Mul(tmp, reward.DelegationReward)
 		toGiveN.Add(toGiveN, tmp)
 
@@ -639,6 +719,82 @@ func updatePillarRewards(context vm_context.AccountVmContext) error {
 	return nil
 }
 
+// scheduleRewardTerms records, for a pillar whose give-percentages
+// UpdatePillar is about to change from those in pillar to those in
+// param, the definition.PillarEpochTerms records that keep the change
+// out of every epoch up to and including the current one.
+//
+//   - The current epoch E is the epoch of the context's frontier
+//     momentum, and the new split is stored at EffectiveEpoch E+1. A
+//     second change during E overwrites that record.
+//   - A pillar's first record is preceded by one at EffectiveEpoch 0
+//     holding the split in pillar, which is the split every epoch
+//     before E+1 is settled with.
+//   - Records that can no longer govern an unsettled epoch are
+//     deleted: of those with EffectiveEpoch at or below the first
+//     unsettled epoch, only the highest is kept. Settlement prunes the
+//     same way each time it resolves the pillar's split
+//     (epochRewardSplit). A pillar that earns no reward in an epoch is
+//     not resolved for it, so its older records stay until its split is
+//     next resolved or changed; they are not scanned in the meantime.
+//
+// Any read, put or delete error is returned so the VM rolls the whole
+// receive back rather than settle with a partial record set.
+func scheduleRewardTerms(context vm_context.AccountVmContext, pillar *definition.PillarInfo, param *definition.RegisterParam) error {
+	momentum, err := context.GetFrontierMomentum()
+	if err != nil {
+		return err
+	}
+	effectiveEpoch := context.EpochTicker().ToTick(*momentum.Timestamp) + 1
+
+	lastEpoch, err := definition.GetLastEpochUpdate(context.Storage())
+	if err != nil {
+		return err
+	}
+	// LastEpoch is -1 before any epoch has been settled
+	firstUnsettled := uint64(lastEpoch.LastEpoch + 1)
+
+	records, err := definition.GetPillarEpochTermsList(context.Storage(), pillar.Name)
+	if err != nil {
+		return err
+	}
+
+	if len(records) == 0 {
+		baseline := &definition.PillarEpochTerms{
+			Name:                         pillar.Name,
+			EffectiveEpoch:               0,
+			GiveBlockRewardPercentage:    pillar.GiveBlockRewardPercentage,
+			GiveDelegateRewardPercentage: pillar.GiveDelegateRewardPercentage,
+		}
+		if err := baseline.Save(context.Storage()); err != nil {
+			return err
+		}
+	} else {
+		// records are in ascending EffectiveEpoch order; keep the last
+		// one at or below firstUnsettled and every one above it
+		governing := -1
+		for i, record := range records {
+			if record.EffectiveEpoch > firstUnsettled {
+				break
+			}
+			governing = i
+		}
+		for i := 0; i < governing; i++ {
+			if err := records[i].Delete(context.Storage()); err != nil {
+				return err
+			}
+		}
+	}
+
+	pillarLog.Info("scheduling pillar reward terms", "pillar-name", pillar.Name, "effective-epoch", effectiveEpoch, "give-block", param.GiveBlockRewardPercentage, "give-delegate", param.GiveDelegateRewardPercentage)
+	return (&definition.PillarEpochTerms{
+		Name:                         pillar.Name,
+		EffectiveEpoch:               effectiveEpoch,
+		GiveBlockRewardPercentage:    param.GiveBlockRewardPercentage,
+		GiveDelegateRewardPercentage: param.GiveDelegateRewardPercentage,
+	}).Save(context.Storage())
+}
+
 // UpdatePillarMethod (UpdatePillar) lets a pillar's stake address
 // change its producing address, reward-withdraw address and
 // give-percentages; the name and the locked deposit cannot change.
@@ -684,6 +840,13 @@ func (p *UpdatePillarMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 // same reuse rule as at registration
 // (checkAvailableProducingAddress) and is bound to the pillar on top
 // of its earlier bindings.
+//
+// Once types.EpochRewardTermsSpork is enforced, a change of the
+// give-percentages applies to reward settlement from the epoch after
+// the one in which the update executes (scheduleRewardTerms); the
+// epoch in progress and every earlier unsettled epoch keep the split
+// they ran under. PillarInfo is still updated at once, so it reports
+// the newest split, which may not have taken effect yet.
 func (p *UpdatePillarMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -725,6 +888,14 @@ func (p *UpdatePillarMethod) ReceiveBlock(context vm_context.AccountVmContext, s
 	if param.RewardAddress != pillar.RewardWithdrawAddress {
 		pillarLog.Info("Updating pillar reward address", "pillar-name", param.Name, "old-address", pillar.RewardWithdrawAddress, "new-address", param.RewardAddress)
 		pillar.RewardWithdrawAddress = param.RewardAddress
+	}
+
+	percentagesChanged := param.GiveBlockRewardPercentage != pillar.GiveBlockRewardPercentage ||
+		param.GiveDelegateRewardPercentage != pillar.GiveDelegateRewardPercentage
+	if percentagesChanged && isEpochRewardTermsSporkEnforced(context) {
+		if err := scheduleRewardTerms(context, pillar, param); err != nil {
+			return nil, err
+		}
 	}
 
 	if param.GiveBlockRewardPercentage != pillar.GiveBlockRewardPercentage {

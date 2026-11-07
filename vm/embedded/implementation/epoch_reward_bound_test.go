@@ -26,6 +26,21 @@ type testEpochBoundContext struct {
 	dynPlasmaEnforced bool
 	epochStats        map[uint64]*api.EpochStats
 	pillarDelegations map[uint64]map[string]*types.PillarDelegationDetail
+	// activeSporks answers CacheStore().IsSporkActive; a nil map
+	// reports every spork inactive.
+	activeSporks map[types.Hash]bool
+}
+
+// testSporkCache answers IsSporkActive from a fixed set of spork ids;
+// every other store.Cache method panics through the nil embedded
+// interface.
+type testSporkCache struct {
+	store.Cache
+	active map[types.Hash]bool
+}
+
+func (c *testSporkCache) IsSporkActive(spork *types.ImplementedSpork) (bool, error) {
+	return c.active[spork.SporkId], nil
 }
 
 func newTestEpochBoundContext(t *testing.T, frontierTime time.Time) *testEpochBoundContext {
@@ -41,7 +56,9 @@ func newTestEpochBoundContext(t *testing.T, frontierTime time.Time) *testEpochBo
 	}
 }
 
-func (ctx *testEpochBoundContext) CacheStore() store.Cache       { return nil }
+func (ctx *testEpochBoundContext) CacheStore() store.Cache {
+	return &testSporkCache{active: ctx.activeSporks}
+}
 func (ctx *testEpochBoundContext) MomentumStore() store.Momentum { return nil }
 
 func (ctx *testEpochBoundContext) GetFrontierMomentum() (*nom.Momentum, error) {
