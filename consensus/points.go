@@ -175,6 +175,7 @@ func (compound *compoundPoints) getPointAt(momentumStore store.Momentum, tick ui
 	if err != nil {
 		return nil, err
 	}
+	finished := compound.isFinishedAt(momentumStore, tick)
 
 	dbPoint, err := compound.db.GetPointByHeight(compound.prefix, tick)
 	if err != nil {
@@ -187,9 +188,15 @@ func (compound *compoundPoints) getPointAt(momentumStore store.Momentum, tick ui
 			if err != nil {
 				return nil, err
 			}
-		} else {
+		} else if finished {
 			return dbPoint, nil
 		}
+		// Only finished points are stored, so a matching entry that this
+		// store has not finished is the completed point of a later view
+		// whose tail ticks were empty: same end block, but it counts the
+		// expected slots of lower ticks that have not started here. It is
+		// still valid for finished views, so keep it and generate this
+		// store's in-progress point instead.
 	}
 
 	point, err := compound.generatePointFromLower(momentumStore, tick, endBlock)
@@ -198,7 +205,7 @@ func (compound *compoundPoints) getPointAt(momentumStore store.Momentum, tick ui
 	}
 
 	// Store point in DB if finished
-	if compound.isFinishedAt(momentumStore, tick) {
+	if finished {
 		err := compound.db.StorePointByHeight(compound.prefix, tick, point)
 		if err != nil {
 			return nil, err

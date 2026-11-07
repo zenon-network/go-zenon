@@ -15,6 +15,7 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/consensus/api"
 	"github.com/zenon-network/go-zenon/consensus/storage"
 )
 
@@ -411,16 +412,7 @@ func TestFixedReader_EpochStatsAnswerFromOlderMomentum(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("EpochStats(1) fixed at h5 with h7 live = %v, %v", got, err)
 	}
-	if got.TotalBlocks != wantStats.TotalBlocks || got.TotalWeight.Cmp(wantStats.TotalWeight) != 0 || len(got.Pillars) != len(wantStats.Pillars) {
-		t.Fatalf("EpochStats(1) fixed at h5 with h7 live: blocks %v weight %v pillars %v, want blocks %v weight %v pillars %v (point %s)",
-			got.TotalBlocks, got.TotalWeight, len(got.Pillars), wantStats.TotalBlocks, wantStats.TotalWeight, len(wantStats.Pillars), describePoint(wantPoint))
-	}
-	for name, w := range wantStats.Pillars {
-		g := got.Pillars[name]
-		if g == nil || g.BlockNum != w.BlockNum || g.ExpectedBlockNum != w.ExpectedBlockNum || g.Weight.Cmp(w.Weight) != 0 {
-			t.Fatalf("EpochStats(1) fixed at h5, pillar %q = %+v, want %+v", name, g, w)
-		}
-	}
+	assertSameEpochStats(t, fmt.Sprintf("EpochStats(1) fixed at h5 with h7 live (want point %s)", describePoint(wantPoint)), got, wantStats)
 }
 
 // GetPillarDelegationsByEpoch through a reader fixed at branch A must
@@ -470,4 +462,62 @@ func TestChainTicker_EmptyRangeBetweenDifferentHeightsIsAnError(t *testing.T) {
 		t.Fatalf("GetContent(5) returned %d momentums alongside the error %v; want nil", len(blocks), err)
 	}
 	t.Logf("GetContent(5) returned the expected error: %v", err)
+}
+
+// A completed epoch point in the cache must not answer for a reader
+// pinned at a momentum where that epoch has not finished, even when
+// both resolve the same end block. Here the reader's frontier is h5
+// (tick 4, T0+45s) and the live chain's next momentum lands at T0+85s,
+// after epoch 1 (ticks 4..7) ends: epoch 1 ends at h5 in both views,
+// but at h5 only tick 4 has started, while the cached completed point
+// also counts the expected slots of the empty ticks 5..7.
+func TestFixedReader_EpochStatsIgnoreCompletedCacheBeyondMomentum(t *testing.T) {
+	older := pinTestBranch(0xa, pinTestBranchA, 5)
+	live := pinTestBranch(0xa, pinTestBranchA, 5)
+	next := pinTestMomentum(0xa, 6, pinTestBranchA)
+	ts := pinTestGenesisTime.Add(85 * time.Second)
+	next.Timestamp, next.TimestampUnix = &ts, uint64(ts.Unix())
+	next.PreviousHash = live.momentums[4].Hash
+	live.momentums = append(live.momentums, next)
+
+	wantStats, err := newPinTestFixture(older).reader(older).EpochStats(1)
+	if err != nil || wantStats == nil {
+		t.Fatalf("EpochStats(1) with h5 live = %v, %v", wantStats, err)
+	}
+
+	f := newPinTestFixture(live)
+	// The live chain finishes epoch 1 and caches its completed point.
+	completed, err := f.epoch.GetPoint(1)
+	if err != nil || completed == nil {
+		t.Fatalf("epoch GetPoint(1) on the live chain = %v, %v", completed, err)
+	}
+	if completed.EndHash != older.momentums[4].Hash {
+		t.Fatalf("completed epoch 1 ends at %x, want h5 so both views share the end block", completed.EndHash[:2])
+	}
+
+	got, err := f.reader(older).EpochStats(1)
+	if err != nil || got == nil {
+		t.Fatalf("EpochStats(1) fixed at h5 with the completed epoch cached = %v, %v", got, err)
+	}
+	assertSameEpochStats(t, "EpochStats(1) fixed at h5 with the completed epoch cached", got, wantStats)
+
+	// The completed entry stays cached for the views that finished it.
+	again, err := f.epoch.GetPoint(1)
+	if err != nil || describePoint(again) != describePoint(completed) {
+		t.Fatalf("epoch GetPoint(1) on the live chain after the pinned read = %s, %v; want %s", describePoint(again), err, describePoint(completed))
+	}
+}
+
+func assertSameEpochStats(t *testing.T, what string, got, want *api.EpochStats) {
+	t.Helper()
+	if got.TotalBlocks != want.TotalBlocks || got.TotalWeight.Cmp(want.TotalWeight) != 0 || len(got.Pillars) != len(want.Pillars) {
+		t.Fatalf("%s: blocks %v weight %v pillars %v, want blocks %v weight %v pillars %v",
+			what, got.TotalBlocks, got.TotalWeight, len(got.Pillars), want.TotalBlocks, want.TotalWeight, len(want.Pillars))
+	}
+	for name, w := range want.Pillars {
+		g := got.Pillars[name]
+		if g == nil || g.BlockNum != w.BlockNum || g.ExpectedBlockNum != w.ExpectedBlockNum || g.Weight.Cmp(w.Weight) != 0 {
+			t.Fatalf("%s: pillar %q = %+v, want %+v", what, name, g, w)
+		}
+	}
 }
