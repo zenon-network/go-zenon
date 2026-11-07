@@ -521,3 +521,41 @@ func assertSameEpochStats(t *testing.T, what string, got, want *api.EpochStats) 
 		}
 	}
 }
+
+// A view that has not finished a tick must not evict the finished entry
+// a later view of the same chain cached for it. The pinned reader's
+// frontier is h5 (T0+45s, tick 4); the live chain adds h6 at T0+48s
+// (still tick 4) and h7 at T0+55s, so it finishes tick 4 at h6 while
+// the pinned view, unfinished, ends it at h5.
+func TestPeriodPoint_UnfinishedViewKeepsFinishedCacheEntry(t *testing.T) {
+	older := pinTestBranch(0xa, pinTestBranchA, 5)
+	live := pinTestBranch(0xa, pinTestBranchA, 5)
+	for i, offset := range []time.Duration{48, 55} {
+		m := pinTestMomentum(0xa, uint64(6+i), pinTestBranchA)
+		ts := pinTestGenesisTime.Add(offset * time.Second)
+		m.Timestamp, m.TimestampUnix = &ts, uint64(ts.Unix())
+		m.PreviousHash = live.momentums[len(live.momentums)-1].Hash
+		live.momentums = append(live.momentums, m)
+	}
+
+	want, err := newPinTestFixture(older).period.GetPoint(4)
+	if err != nil || want == nil {
+		t.Fatalf("GetPoint(4) with h5 live = %v, %v", want, err)
+	}
+
+	f := newPinTestFixture(live)
+	completed, err := f.period.GetPoint(4)
+	if err != nil || completed == nil || completed.EndHash != live.momentums[5].Hash {
+		t.Fatalf("GetPoint(4) on the live chain = %s, %v; want a point ending at h6", describePoint(completed), err)
+	}
+
+	got, err := f.period.getPointAt(older, 4)
+	if err != nil || describePoint(got) != describePoint(want) {
+		t.Fatalf("period point 4 pinned at h5 = %s, %v; want %s", describePoint(got), err, describePoint(want))
+	}
+
+	stored, err := f.db.GetPointByHeight(storage.PrefixPeriodPoint, 4)
+	if err != nil || describePoint(stored) != describePoint(completed) {
+		t.Fatalf("stored period point 4 after the pinned read = %s, %v; want the live chain's %s", describePoint(stored), err, describePoint(completed))
+	}
+}

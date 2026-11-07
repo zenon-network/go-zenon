@@ -181,22 +181,24 @@ func (compound *compoundPoints) getPointAt(momentumStore store.Momentum, tick ui
 	if err != nil {
 		return nil, err
 	}
-	if dbPoint != nil {
+	// Only finished points are stored, so the entry is the completed point
+	// of some view. A view that has not finished the tick can neither use
+	// it nor judge it stale: with a matching end hash it may be the
+	// completed point of a later view whose tail ticks were empty, which
+	// counts the expected slots of lower ticks that have not started
+	// here; with a different end hash it may belong to a later view of
+	// the same chain. Such a view keeps the entry and generates its own
+	// in-progress point.
+	if dbPoint != nil && finished {
 		if dbPoint.EndHash != endBlock.Hash {
 			// invalidate DB & cache
 			err := compound.db.DeletePointByHeight(compound.prefix, tick)
 			if err != nil {
 				return nil, err
 			}
-		} else if finished {
+		} else {
 			return dbPoint, nil
 		}
-		// Only finished points are stored, so a matching entry that this
-		// store has not finished is the completed point of a later view
-		// whose tail ticks were empty: same end block, but it counts the
-		// expected slots of lower ticks that have not started here. It is
-		// still valid for finished views, so keep it and generate this
-		// store's in-progress point instead.
 	}
 
 	point, err := compound.generatePointFromLower(momentumStore, tick, endBlock)
@@ -309,20 +311,29 @@ func (period *periodPoints) getPointAt(momentumStore store.Momentum, tick uint64
 	if err != nil {
 		return nil, err
 	}
+	finished := period.isFinishedAt(momentumStore, tick)
 
 	dbPoint, err := period.db.GetPointByHeight(storage.PrefixPeriodPoint, tick)
 	if err != nil {
 		return nil, err
 	}
 	if dbPoint != nil {
-		if dbPoint.EndHash != endBlock.Hash {
+		if dbPoint.EndHash == endBlock.Hash {
+			// A period point does not depend on whether its tick has
+			// finished (every slot of the election is expected), so a
+			// matching entry serves finished and unfinished views alike.
+			return dbPoint, nil
+		}
+		// Only finished points are stored. A view that has not finished
+		// the tick cannot judge a finished entry stale (it may belong to
+		// a later view of the same chain), so only a finished view
+		// replaces it.
+		if finished {
 			// invalidate DB & cache
 			err := period.db.DeletePointByHeight(storage.PrefixPeriodPoint, tick)
 			if err != nil {
 				return nil, err
 			}
-		} else {
-			return dbPoint, nil
 		}
 	}
 
@@ -332,7 +343,7 @@ func (period *periodPoints) getPointAt(momentumStore store.Momentum, tick uint64
 	}
 
 	// Store point in DB if finished
-	if period.isFinishedAt(momentumStore, tick) {
+	if finished {
 		err := period.db.StorePointByHeight(storage.PrefixPeriodPoint, tick, point)
 		if err != nil {
 			return nil, err
