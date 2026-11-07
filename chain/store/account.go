@@ -91,7 +91,7 @@ type Account interface {
 // permanent index and in the pending set; MarkAsReceived removes the
 // hash from the pending set only. GetUnreceivedAccountBlockHashes
 // returns up to atMost pending hashes in ascending byte order — the
-// ledger RPC scans at most 500 per call. MarkBlockThatReceives maps a
+// ledger RPC examines at most 10000 per call. MarkBlockThatReceives maps a
 // send-block hash to the header of the receive block that consumed it
 // and GetBlockWhichReceives reads the mapping back (nil if none).
 //

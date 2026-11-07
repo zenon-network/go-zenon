@@ -13,6 +13,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm"
@@ -46,13 +47,19 @@ type LedgerApi struct {
 	log   log15.Logger
 }
 
-// Limits specific to GetUnreceivedBlocksByAddress: at most
-// unreceivedQuerySize (500) pending hashes are scanned per call, browsable
-// as pages 0..9 of at most 50 entries each.
+// Limits specific to GetUnreceivedBlocksByAddress. A page holds at most
+// unreceivedMaxPageSize (50) blocks. Each call examines the pending
+// entries of the mailbox in key order: at least the first
+// unreceivedQuerySize (500), which was once the whole scan, so a page
+// whose blocks all lie among those entries keeps the Count and More it
+// had then; beyond them only as many as the requested page needs, never
+// more than unreceivedMaxScan (10000). Examining an entry is a key read
+// and an IsReceived lookup; only the blocks of the returned page are
+// read.
 const (
-	unreceivedMaxPageIndex = 10
-	unreceivedMaxPageSize  = 50
-	unreceivedQuerySize    = unreceivedMaxPageIndex * unreceivedMaxPageSize
+	unreceivedMaxPageSize = 50
+	unreceivedQuerySize   = 500
+	unreceivedMaxScan     = 10000
 )
 
 // String returns the constant identifier "LedgerApi", which exists as a
@@ -350,15 +357,28 @@ func (l *LedgerApi) GetAccountInfoByAddress(address types.Address) (*AccountInfo
 
 // GetUnreceivedBlocksByAddress returns committed send blocks addressed
 // to the given account for which the account has not yet generated a
-// receive block.
+// receive block, in ascending block-hash order.
 //
-// This method uses stricter limits than the other paginated calls:
-// pageSize must be at most 50 (ErrPageSizeParamTooBig) and pageIndex,
-// 0-based, must be less than 10 (ErrPageIndexParamTooBig). Each call
-// scans at most 500 pending hashes; in the result, Count is the number
-// of unreceived blocks found within that window and More is true when
-// the window was full, meaning additional unreceived blocks may exist
-// beyond it.
+// The unreceived set is read from one frontier: the momentum store and
+// the account store are each taken once per call, the mailbox's pending
+// hashes come from that momentum store, a hash is dropped when that
+// account store already holds a receive for it (an unconfirmed receive),
+// and the blocks and their extra information are read from the same
+// momentum store. Pages are numbered over the hashes that survive this
+// filter, so at a fixed frontier the pages of a given pageSize are
+// disjoint, in order, and together list every unreceived block once.
+//
+// pageSize must be at most 50 (ErrPageSizeParamTooBig) and pageIndex is
+// 0-based. Each call examines the pending entries in key order: at least
+// the first 500, and beyond them only as far as the requested page
+// needs, up to 10000 entries. In the result, Count is the number of
+// unreceived blocks among the examined entries and More is true when
+// pending entries remain past them, meaning additional unreceived blocks
+// may exist; when More is false, Count is the total. A page past Count
+// with More false is empty. The page that reaches the 10000-entry bound
+// may be short, and a page that would start past it returns
+// ErrPageIndexParamTooBig; the blocks beyond the bound become reachable
+// as earlier ones are received.
 //
 // JSON-RPC: ledger.getUnreceivedBlocksByAddress
 func (l *LedgerApi) GetUnreceivedBlocksByAddress(address types.Address, pageIndex, pageSize uint32) (*AccountBlockList, error) {
@@ -366,48 +386,110 @@ func (l *LedgerApi) GetUnreceivedBlocksByAddress(address types.Address, pageInde
 	if pageSize > unreceivedMaxPageSize {
 		return nil, ErrPageSizeParamTooBig
 	}
-	if pageIndex >= unreceivedMaxPageIndex {
+	// The first survivor of the page has at least this many survivors,
+	// and so at least this many pending entries, before it.
+	offset := uint64(pageIndex) * uint64(pageSize)
+	if offset >= unreceivedMaxScan {
 		return nil, ErrPageIndexParamTooBig
 	}
 
+	// Pin the frontier: every read below goes through these two
+	// snapshots, so the filter, the paging and the block reads agree.
+	momentumStore := l.chain.GetFrontierMomentumStore()
 	accountStore := l.chain.GetFrontierAccountStore(address)
-	hashList, err := l.chain.GetFrontierMomentumStore().GetAccountMailbox(address).GetUnreceivedAccountBlockHashes(unreceivedQuerySize)
+
+	unreceived, more, err := scanUnreceived(momentumStore.GetAccountMailbox(address), accountStore, offset+uint64(pageSize))
 	if err != nil {
 		return nil, err
 	}
+	if pageSize > 0 && uint64(len(unreceived)) <= offset && more {
+		// The scan bound was reached before the page started.
+		return nil, ErrPageIndexParamTooBig
+	}
 
-	ledgerFrontier := l.chain.GetFrontierMomentumStore()
-	blockList := make([]*nom.AccountBlock, 0, len(hashList))
-	for _, hash := range hashList {
-		if accountStore.IsReceived(hash) {
-			continue
-		}
-		block, err := ledgerFrontier.GetAccountBlockByHash(hash)
-
+	start, end := GetRange(pageIndex, pageSize, uint32(len(unreceived)))
+	blockList := make([]*nom.AccountBlock, 0, end-start)
+	for _, hash := range unreceived[start:end] {
+		block, err := momentumStore.GetAccountBlockByHash(hash)
 		if err != nil {
 			return nil, err
 		}
 		blockList = append(blockList, block)
 	}
 
-	// Check if there are 100% more blocks that could've been returned
-	isMore := false
-	if len(hashList) == unreceivedQuerySize {
-		isMore = true
-	}
-
-	start, end := GetRange(pageIndex, pageSize, uint32(len(blockList)))
-	a, err := ledgerAccountBlocksToRpc(l.chain, blockList[start:end])
-
+	a, err := ledgerAccountBlocksToRpc(pinnedMomentumChain{Chain: l.chain, momentumStore: momentumStore}, blockList)
 	if err != nil {
 		return nil, err
 	}
 
 	return &AccountBlockList{
 		List:  a,
-		Count: len(blockList),
-		More:  isMore,
+		Count: len(unreceived),
+		More:  more,
 	}, nil
+}
+
+// scanUnreceived examines the mailbox's pending hashes in key order and
+// returns, in that order, those the account store has not received. It
+// examines at least unreceivedQuerySize entries and continues until need
+// unreceived hashes are found, the pending set ends, or unreceivedMaxScan
+// entries have been examined. more reports whether pending entries remain
+// past the examined ones.
+//
+// The mailbox only lists a prefix of its pending set, so the scan reads a
+// prefix of the expected length and reads a longer one when filtered
+// entries left it short. The mailbox must be a snapshot, so every prefix
+// extends the previous one and each entry is filtered once.
+func scanUnreceived(mailbox store.AccountMailbox, accountStore store.Account, need uint64) ([]types.Hash, bool, error) {
+	window := uint64(unreceivedQuerySize)
+	if need > window {
+		window = need
+	}
+	if window > unreceivedMaxScan {
+		window = unreceivedMaxScan
+	}
+
+	unreceived := make([]types.Hash, 0)
+	examined := uint64(0)
+	for {
+		// One entry past the window tells whether pending entries remain.
+		pending, err := mailbox.GetUnreceivedAccountBlockHashes(window + 1)
+		if err != nil {
+			return nil, false, err
+		}
+		for ; examined < window && examined < uint64(len(pending)); examined++ {
+			if !accountStore.IsReceived(pending[examined]) {
+				unreceived = append(unreceived, pending[examined])
+			}
+		}
+		more := uint64(len(pending)) > window
+		if !more || uint64(len(unreceived)) >= need || window == unreceivedMaxScan {
+			return unreceived, more, nil
+		}
+		// Received entries made the window short of the page: widen it by
+		// the shortfall, at least doubling it so the number of rescans
+		// stays logarithmic in unreceivedMaxScan.
+		next := window + (need - uint64(len(unreceived)))
+		if next < 2*window {
+			next = 2 * window
+		}
+		if next > unreceivedMaxScan {
+			next = unreceivedMaxScan
+		}
+		window = next
+	}
+}
+
+// pinnedMomentumChain serves one momentum-store snapshot as the frontier,
+// so the extra information attached to a page of blocks is read from the
+// same frontier as the page itself.
+type pinnedMomentumChain struct {
+	chain.Chain
+	momentumStore store.Momentum
+}
+
+func (c pinnedMomentumChain) GetFrontierMomentumStore() store.Momentum {
+	return c.momentumStore
 }
 
 // GetFrontierMomentum returns the momentum at the head of the momentum
