@@ -317,7 +317,7 @@ func TestPeerDBSeedsDiversifyAcrossSubnets(t *testing.T) {
 
 // TestSubnetKeyGroups verifies the granularity subnetKey buckets origin
 // IPs at (IPv4 by /16, IPv6 by /48, no IP as the unobserved group) and
-// what originIP takes from a connection's remote multiaddr.
+// what observedOrigin takes from a connection's remote multiaddr.
 func TestSubnetKeyGroups(t *testing.T) {
 	a := subnetKey(net.ParseIP("10.0.0.1"))
 	if b := subnetKey(net.ParseIP("10.0.5.9")); a != b {
@@ -349,16 +349,16 @@ func TestSubnetKeyGroups(t *testing.T) {
 	}{
 		{"/ip4/198.51.100.7/tcp/51234", "198.51.100.7"},
 		{"/ip6/2001:db8::7/udp/4001/quic-v1", "2001:db8::7"},
-		{"/ip4/192.0.2.1/tcp/4001/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC/p2p-circuit", "192.0.2.1"},
+		{"/ip4/192.0.2.1/tcp/4001/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC/p2p-circuit", relayedOrigin},
+		{"/ip6/2001:db8:9::1/udp/4001/quic-v1/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC/p2p-circuit", relayedOrigin},
 		{"/dns4/seed.example.com/tcp/35995", ""},
 	} {
-		got := originIP(mustAddr(t, tc.addr))
-		if (got == nil && tc.want != "") || (got != nil && got.String() != tc.want) {
-			t.Fatalf("originIP(%s) = %v, want %q", tc.addr, got, tc.want)
+		if got := observedOrigin(mustAddr(t, tc.addr)); got != tc.want {
+			t.Fatalf("observedOrigin(%s) = %q, want %q", tc.addr, got, tc.want)
 		}
 	}
-	if originIP(nil) != nil {
-		t.Fatal("originIP(nil) != nil")
+	if got := observedOrigin(nil); got != "" {
+		t.Fatalf("observedOrigin(nil) = %q", got)
 	}
 }
 
@@ -412,6 +412,41 @@ func TestPeerDBDiversityKeyedOnObservedOrigin(t *testing.T) {
 		seeds := d.seeds(2)
 		if len(seeds) != 2 || (seeds[0].ID != far && seeds[1].ID != far) {
 			t.Fatalf("seeds(2) = %v; the peer from the other origin must get a slot", seeds)
+		}
+	})
+
+	t.Run("relays in many prefixes, one group", func(t *testing.T) {
+		// A relayed connection's remote multiaddr starts with the relay's
+		// address, which the peer chooses; identities routed through
+		// relays in different IPv4 /16s and IPv6 /48s still share a group.
+		d, clock := openTestPeerDB(t)
+		honest := syntheticPeer(9, 0)
+		d.recordDirect(honest, []ma.Multiaddr{mustAddr(t, "/ip4/203.0.113.1/tcp/35995")})
+		const relay = "QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+		var relayed []peer.ID
+		for i := 0; i < 10; i++ {
+			*clock = clock.Add(time.Minute)
+			via := fmt.Sprintf("/ip4/%d.%d.0.1/tcp/4001/p2p/%s/p2p-circuit", 20+i, i, relay)
+			if i%2 == 1 {
+				via = fmt.Sprintf("/ip6/2001:db8:%x::1/udp/4001/quic-v1/p2p/%s/p2p-circuit", i, relay)
+			}
+			id := syntheticPeer(1, i)
+			d.recordConnected(id, wideAddr(t, i), mustAddr(t, via))
+			relayed = append(relayed, id)
+		}
+		for _, id := range relayed {
+			if g := recordGroup(d.record(id)); g != relayedOrigin {
+				t.Fatalf("relayed identity %s in group %q, want %q", id, g, relayedOrigin)
+			}
+		}
+		seeds := d.seeds(2)
+		if len(seeds) != 2 || (seeds[0].ID != honest && seeds[1].ID != honest) {
+			t.Fatalf("seeds(2) = %v; the older honest peer must get the second slot", seeds)
+		}
+		// A later direct connection moves the peer out of the relayed group.
+		d.recordConnected(relayed[0], nil, mustAddr(t, "/ip4/198.51.100.20/tcp/51234"))
+		if g := recordGroup(d.record(relayed[0])); g == relayedOrigin || g == unobservedGroup {
+			t.Fatalf("directly reconnected peer still in group %q", g)
 		}
 	})
 

@@ -56,8 +56,8 @@ const (
 	// of the observed connection origin) first, oldest lastSeen first: a
 	// long-lived squatter concentrated in one source loses records before
 	// established peers elsewhere, and a genuinely large group loses its
-	// oldest first. Peers sharing one origin (a NAT, a relay) form one
-	// group too, so over the cap they lose records before peers with
+	// oldest first. Peers sharing one origin (a NAT) form one group too,
+	// as do all relayed peers, so over the cap they lose records before peers with
 	// origins of their own; that is accepted for a best-effort bootstrap
 	// aid.
 	peerDBMaxRecords = 2000
@@ -117,8 +117,9 @@ type peerDBRecord struct {
 	FirstSeen int64 `json:"firstSeen,omitempty"`
 	// Origin is the IP address this node observed the peer's connection
 	// come from: the transport's remote address, which the peer cannot
-	// choose the way it chooses the Addrs it advertises. It is refreshed
-	// on every recordConnected that carries one and keys the diversity
+	// choose the way it chooses the Addrs it advertises; relayedOrigin
+	// for a relayed connection (see observedOrigin). It is refreshed on
+	// every recordConnected that carries one and keys the diversity
 	// grouping (see recordGroup). Records written before the field
 	// existed carry none until the peer's next connection and share the
 	// unobserved group meanwhile.
@@ -152,9 +153,9 @@ func (d *peerDB) Close() error {
 // is provided. An empty addrs set keeps any previously stored
 // addresses — identify may not have completed when the first adoption
 // hook fires, and the disconnect-time refresh fills them in later.
-// origin is the connection's remote multiaddr; its leading IP replaces
-// the stored origin, and an origin with no leading IP (nil, or a
-// non-IP transport) keeps the stored one. A new record is stamped
+// origin is the connection's remote multiaddr; what observedOrigin
+// makes of it replaces the stored origin, and an origin it makes nothing
+// of (nil, or a non-IP transport) keeps the stored one. A new record is stamped
 // firstSeen and counted; the peerDBMaxRecords-th new record since the
 // last expire pass runs one inline, so the cap holds between the
 // hourly passes.
@@ -171,8 +172,8 @@ func (d *peerDB) recordConnected(id peer.ID, addrs []ma.Multiaddr, origin ma.Mul
 	if dialable := dedupAddrStrings(addrs); len(dialable) > 0 {
 		rec.Addrs = dialable
 	}
-	if ip := originIP(origin); ip != nil {
-		rec.Origin = ip.String()
+	if o := observedOrigin(origin); o != "" {
+		rec.Origin = o
 	}
 	rec.LastSeen = now
 	rec.FailCount = 0
@@ -213,6 +214,14 @@ func (d *peerDB) recordDialFail(id peer.ID) {
 // peers not seen since the upgrade go before peers that have reconnected.
 const unobservedGroup = "unobserved"
 
+// relayedOrigin is the stored origin, and the diversity group, of a peer
+// last seen over a relayed (/p2p-circuit) connection. Such a connection's
+// remote multiaddr starts with the relay's address, which the peer picks
+// when it picks the relay, and public relays sit in many prefixes; one
+// shared group keeps a source that routes identities through relays in
+// different /16s to one slot per round.
+const relayedOrigin = "relayed"
+
 // subnetKey buckets an observed origin IP into a diversity group so
 // seeds can spread candidates across sources rather than let one source
 // dominate a round, and so over-cap eviction can take from the largest
@@ -230,35 +239,49 @@ func subnetKey(ip net.IP) string {
 }
 
 // recordGroup is the diversity group of a stored record, keyed on its
-// observed origin. The advertised Addrs are deliberately not consulted:
+// observed origin (relayed peers share relayedOrigin's group, origin-less
+// records unobservedGroup). The advertised Addrs are deliberately not
+// consulted:
 // they are self-reported via identify, so keying on them let one source
 // complete N handshakes with N identities, advertise N different /16s,
 // and claim N groups.
 func recordGroup(rec *peerDBRecord) string {
+	if rec.Origin == relayedOrigin {
+		return relayedOrigin
+	}
 	return subnetKey(net.ParseIP(rec.Origin))
 }
 
-// originIP returns the IP a connection's remote multiaddr starts with,
-// or nil if it does not start with a literal IP. For a relayed
-// connection that is the relay's address, so peers reached through one
-// relay share its group.
-func originIP(a ma.Multiaddr) net.IP {
+// observedOrigin reduces a connection's remote multiaddr to the origin
+// stored in a record: relayedOrigin if the connection is relayed (the
+// address contains /p2p-circuit anywhere), otherwise the literal IP the
+// address starts with, as a string; "" if it starts with no literal IP.
+func observedOrigin(a ma.Multiaddr) string {
 	if a == nil {
-		return nil
+		return ""
 	}
 	protos := a.Protocols()
 	if len(protos) == 0 {
-		return nil
+		return ""
+	}
+	for _, p := range protos {
+		if p.Code == ma.P_CIRCUIT {
+			return relayedOrigin
+		}
 	}
 	code := protos[0].Code
 	if code != ma.P_IP4 && code != ma.P_IP6 {
-		return nil
+		return ""
 	}
 	v, err := a.ValueForProtocol(code)
 	if err != nil {
-		return nil
+		return ""
 	}
-	return net.ParseIP(v)
+	ip := net.ParseIP(v)
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
 }
 
 // seeds returns up to n warm-bootstrap candidates, skipping records
