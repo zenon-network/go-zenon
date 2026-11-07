@@ -33,6 +33,7 @@ type unreceivedMomentumStore struct {
 	frontier   *nom.Momentum
 	blockReads int
 	keyReads   int
+	nexts      int
 }
 
 func (s *unreceivedMomentumStore) GetAccountMailbox(address types.Address) store.AccountMailbox {
@@ -53,6 +54,28 @@ func (s *unreceivedMomentumStore) GetBlockWhichReceives(hash types.Hash) (*nom.A
 		return nil, err
 	}
 	return nil, nil
+}
+
+// nextCountingDB counts the Next calls made on its iterators. Wrapped
+// around the mailbox's database it counts every advance a scan asks for,
+// including one that would step over tombstones to find no further entry.
+type nextCountingDB struct {
+	db.DB
+	nexts *int
+}
+
+func (d nextCountingDB) NewIterator(prefix []byte) db.StorageIterator {
+	return nextCountingIterator{StorageIterator: d.DB.NewIterator(prefix), nexts: d.nexts}
+}
+
+type nextCountingIterator struct {
+	db.StorageIterator
+	nexts *int
+}
+
+func (i nextCountingIterator) Next() bool {
+	*i.nexts++
+	return i.StorageIterator.Next()
 }
 
 // countingMailbox counts the pending keys a scan reads.
@@ -119,7 +142,7 @@ func (c *unreceivedChain) GetFrontierAccountStore(types.Address) store.Account {
 
 func (c *unreceivedChain) resetCounters() {
 	c.momentumPins, c.accountPins, c.pins = 0, 0, ""
-	c.momentum.blockReads, c.momentum.keyReads, c.account.lookups = 0, 0, 0
+	c.momentum.blockReads, c.momentum.keyReads, c.momentum.nexts, c.account.lookups = 0, 0, 0, 0
 }
 
 type unreceivedFixture struct {
@@ -149,7 +172,8 @@ func (f *unreceivedFixture) unreceived(pending []types.Hash) []types.Hash {
 // unreceived ones wherever the test wants them.
 func newUnreceivedFixture(t *testing.T, n int, isReceived func(position int) bool) *unreceivedFixture {
 	t.Helper()
-	box := mailbox.NewAccountMailbox(unreceivedRecipient, db.NewMemDB())
+	momentum := &unreceivedMomentumStore{}
+	box := mailbox.NewAccountMailbox(unreceivedRecipient, nextCountingDB{DB: db.NewMemDB(), nexts: &momentum.nexts})
 	accountStore := account.NewAccountStore(unreceivedRecipient, db.NewMemDB())
 	now := common.Clock.Now()
 	frontier := &nom.Momentum{Height: 7, Hash: types.NewHash([]byte("frontier")), Timestamp: &now}
@@ -187,8 +211,9 @@ func newUnreceivedFixture(t *testing.T, n int, isReceived func(position int) boo
 		}
 	}
 
+	momentum.mailbox, momentum.blocks, momentum.frontier = box, blocks, frontier
 	c := &unreceivedChain{
-		momentum: &unreceivedMomentumStore{mailbox: box, blocks: blocks, frontier: frontier},
+		momentum: momentum,
 		account:  &countingAccountStore{Account: accountStore},
 	}
 	return &unreceivedFixture{
@@ -203,7 +228,7 @@ func newUnreceivedFixture(t *testing.T, n int, isReceived func(position int) boo
 // stores are taken once, account store first; only the returned page's
 // blocks are read (twice each: once for the page and once when the
 // conversion looks for the receive); and at most unreceivedMaxScan
-// entries are examined, reading at most one key more.
+// entries are examined, reading no key past the last one examined.
 func (f *unreceivedFixture) get(t *testing.T, pageIndex, pageSize uint32) *AccountBlockList {
 	t.Helper()
 	f.c.resetCounters()
@@ -220,8 +245,13 @@ func (f *unreceivedFixture) get(t *testing.T, pageIndex, pageSize uint32) *Accou
 	if f.c.momentum.blockReads != 2*len(res.List) {
 		t.Fatalf("page %d size %d: read %d blocks for a page of %d", pageIndex, pageSize, f.c.momentum.blockReads, len(res.List))
 	}
-	if f.c.account.lookups > unreceivedMaxScan || f.c.momentum.keyReads > f.c.account.lookups+1 {
+	if f.c.account.lookups > unreceivedMaxScan || f.c.momentum.keyReads != f.c.account.lookups {
 		t.Fatalf("page %d size %d: examined %d entries reading %d keys, bound is %d", pageIndex, pageSize, f.c.account.lookups, f.c.momentum.keyReads, unreceivedMaxScan)
+	}
+	// A scan that stopped early advanced the iterator once per examined
+	// entry; only a scan that reached the end advanced it once more.
+	if wantNexts := f.c.account.lookups; res.More && f.c.momentum.nexts != wantNexts || !res.More && f.c.momentum.nexts != wantNexts+1 {
+		t.Fatalf("page %d size %d: %d iterator advances for %d entries with more %v", pageIndex, pageSize, f.c.momentum.nexts, f.c.account.lookups, res.More)
 	}
 	return res
 }
@@ -328,7 +358,8 @@ func TestGetUnreceivedBlocksByAddress_WidensPastReceivedEntries(t *testing.T) {
 
 // Below the 500-entry window nothing changes for current clients: Count is
 // the total, More is false and a page past the end is empty. Exactly 500
-// pending entries no longer report More.
+// pending entries report More, as before, and the page after them is empty
+// with More false.
 func TestGetUnreceivedBlocksByAddress_SmallMailboxUnchanged(t *testing.T) {
 	f := newUnreceivedFixture(t, 30, func(position int) bool { return position%6 == 0 })
 	want := f.unreceived(f.pending)
@@ -351,8 +382,28 @@ func TestGetUnreceivedBlocksByAddress_SmallMailboxUnchanged(t *testing.T) {
 	}
 
 	full := newUnreceivedFixture(t, unreceivedQuerySize, func(int) bool { return false })
-	if res := full.get(t, 0, 50); res.Count != unreceivedQuerySize || res.More {
-		t.Fatalf("exactly %d pending: count %d more %v, want count %d more false", unreceivedQuerySize, res.Count, res.More, unreceivedQuerySize)
+	if res := full.get(t, 0, 50); res.Count != unreceivedQuerySize || !res.More {
+		t.Fatalf("exactly %d pending: count %d more %v, want count %d more true", unreceivedQuerySize, res.Count, res.More, unreceivedQuerySize)
+	}
+	if res := full.get(t, 10, 50); len(res.List) != 0 || res.Count != unreceivedQuerySize || res.More {
+		t.Fatalf("page after %d pending: %d blocks count %d more %v, want empty count %d more false", unreceivedQuerySize, len(res.List), res.Count, res.More, unreceivedQuerySize)
+	}
+}
+
+// Confirmed receives leave tombstones under the mailbox's pending prefix.
+// A scan that stops at its 500th entry must not advance the iterator again,
+// since that advance would step over every tombstone after it.
+func TestGetUnreceivedBlocksByAddress_StopsBeforeTrailingTombstones(t *testing.T) {
+	f := newUnreceivedFixture(t, 2000, func(int) bool { return false })
+	for _, hash := range f.pending[unreceivedQuerySize:] {
+		if err := f.c.momentum.mailbox.MarkAsReceived(hash); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res := f.get(t, 0, 50)
+	expectHashes(t, "page 0", hashesOf(res.List), f.pending[:50])
+	if res.Count != unreceivedQuerySize || !res.More || f.c.momentum.nexts != unreceivedQuerySize {
+		t.Fatalf("page 0: count %d more %v after %d advances, want count %d more true after %d", res.Count, res.More, f.c.momentum.nexts, unreceivedQuerySize, unreceivedQuerySize)
 	}
 }
 
@@ -373,8 +424,8 @@ func TestGetUnreceivedBlocksByAddress_ScanBound(t *testing.T) {
 	if last.Count != 9900 || !last.More {
 		t.Fatalf("page 197: count %d more %v, want count 9900 more true", last.Count, last.More)
 	}
-	if f.c.account.lookups != unreceivedMaxScan || f.c.momentum.keyReads != unreceivedMaxScan+1 {
-		t.Fatalf("page 197 examined %d entries reading %d keys, want %d and %d", f.c.account.lookups, f.c.momentum.keyReads, unreceivedMaxScan, unreceivedMaxScan+1)
+	if f.c.account.lookups != unreceivedMaxScan || f.c.momentum.keyReads != unreceivedMaxScan {
+		t.Fatalf("page 197 examined %d entries reading %d keys, want %d", f.c.account.lookups, f.c.momentum.keyReads, unreceivedMaxScan)
 	}
 
 	// A page that starts past the unreceived blocks within the bound.
@@ -382,7 +433,7 @@ func TestGetUnreceivedBlocksByAddress_ScanBound(t *testing.T) {
 	if _, err := f.api.GetUnreceivedBlocksByAddress(unreceivedRecipient, 198, 50); err != ErrPageIndexParamTooBig {
 		t.Fatalf("page 198: got %v, want ErrPageIndexParamTooBig", err)
 	}
-	if f.c.account.lookups > unreceivedMaxScan || f.c.momentum.keyReads > unreceivedMaxScan+1 || f.c.momentum.blockReads != 0 {
+	if f.c.account.lookups > unreceivedMaxScan || f.c.momentum.keyReads > unreceivedMaxScan || f.c.momentum.blockReads != 0 {
 		t.Fatalf("page 198: examined %d entries, read %d keys and %d blocks", f.c.account.lookups, f.c.momentum.keyReads, f.c.momentum.blockReads)
 	}
 

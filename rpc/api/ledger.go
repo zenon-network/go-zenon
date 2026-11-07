@@ -52,16 +52,17 @@ type LedgerApi struct {
 // entries of the mailbox in key order, one key read and one IsReceived
 // lookup each: at least the first unreceivedQuerySize (500), which was
 // once the whole scan, so a page whose blocks all lie among the
-// unreceived ones of those entries keeps the Count and More it had then,
-// except that exactly 500 pending entries no longer report More; beyond
-// them only as many as the requested page needs, never more than
+// unreceived ones of those entries keeps the Count and More it had then;
+// beyond them only as many as the requested page needs, never more than
 // unreceivedMaxScan (10000). Blocks are read for the returned page only.
 //
 // The bound counts pending entries. A send received by a confirmed
 // receive leaves a tombstone under the mailbox's pending prefix, and the
 // iterator steps over those inside each key read, so a mailbox with many
-// received sends costs more per entry; the 500-entry scan this replaces
-// paid the same.
+// received sends costs more per entry. The scan stops on its last
+// examined entry without reading another key, so it steps over only the
+// tombstones that lie before that entry, as the 500-entry scan this
+// replaces did.
 const (
 	unreceivedMaxPageSize = 50
 	unreceivedQuerySize   = 500
@@ -380,10 +381,11 @@ func (l *LedgerApi) GetAccountInfoByAddress(address types.Address) (*AccountInfo
 // 0-based. Each call examines the pending entries in key order: at least
 // the first 500, and beyond them only as far as the requested page
 // needs, up to 10000 entries. In the result, Count is the number of
-// unreceived blocks among the examined entries and More is true when
-// pending entries remain past them, meaning additional unreceived blocks
-// may exist; when More is false, Count is the total. A page past Count
-// with More false is empty. The page that reaches the 10000-entry bound
+// unreceived blocks among the examined entries and More is true when the
+// scan stopped before the end of the pending set, meaning additional
+// unreceived blocks may exist; when More is false, Count is the total.
+// More can be true with nothing left, in which case the next page comes
+// back empty with More false. A page past Count with More false is empty. The page that reaches the 10000-entry bound
 // may be short, and a page that would start past it returns
 // ErrPageIndexParamTooBig; the blocks beyond the bound are not listed
 // until earlier ones are received.
@@ -445,23 +447,25 @@ func (l *LedgerApi) GetUnreceivedBlocksByAddress(address types.Address, pageInde
 // returns, in that order, those the account store has not received. It
 // examines at least unreceivedQuerySize entries and continues until need
 // unreceived hashes are found, the pending set ends, or unreceivedMaxScan
-// entries have been examined; more reports whether pending entries
-// remain past the examined ones. It makes one pass, reading at most
-// unreceivedMaxScan+1 keys and calling IsReceived at most
-// unreceivedMaxScan times.
+// entries have been examined. more is false when the pass reached the
+// end of the pending set and true when it stopped earlier, whether or not
+// an entry follows. It makes one pass, reading at most unreceivedMaxScan
+// keys and calling IsReceived once per key.
 func scanUnreceived(mailbox store.AccountMailbox, accountStore store.Account, need uint64) ([]types.Hash, bool, error) {
 	unreceived := make([]types.Hash, 0)
 	examined := uint64(0)
 	more := false
 	err := mailbox.ForEachUnreceivedAccountBlockHash(func(hash types.Hash) (bool, error) {
-		if examined == unreceivedMaxScan || (examined >= unreceivedQuerySize && uint64(len(unreceived)) >= need) {
-			// A pending entry past the examined ones.
-			more = true
-			return false, nil
-		}
 		examined++
 		if !accountStore.IsReceived(hash) {
 			unreceived = append(unreceived, hash)
+		}
+		if examined == unreceivedMaxScan || (examined >= unreceivedQuerySize && uint64(len(unreceived)) >= need) {
+			// Stop on this entry rather than read the next key to see
+			// whether one exists: that read can step over any number of
+			// tombstones.
+			more = true
+			return false, nil
 		}
 		return true, nil
 	})
