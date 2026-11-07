@@ -41,6 +41,18 @@ var (
 	inserterLog = common.ChainLogger.New("submodule", "chain-insert-mutex")
 )
 
+// ErrSporkAddressMismatch is returned by Init when the genesis config
+// names a different spork address than the one this database was
+// first started with. The genesis momentum hash does not commit to the
+// spork address, so without this check a node could reopen its
+// database under a new spork authority and only split from the
+// network at the first spork transaction.
+var ErrSporkAddressMismatch = errors.New("the genesis spork address differs from the one this database was initialized with")
+
+// sporkAddressMetadataKey is the db.MetadataStore key under which the
+// chain database records the spork address it was first started with.
+var sporkAddressMetadataKey = []byte("genesis-spork-address")
+
 type chain struct {
 	log common.Logger
 
@@ -83,6 +95,9 @@ func (c *chain) Init() error {
 
 	// check if the configured genesis matches the existent chain
 	if err := c.checkGenesisCompatibility(); err != nil {
+		return err
+	}
+	if err := c.checkSporkAddressBinding(); err != nil {
 		return err
 	}
 	types.SporkAddress = c.genesis.GetSporkAddress()
@@ -162,6 +177,52 @@ func (c *chain) checkGenesisCompatibility() error {
 				"You can fix the problem by removing the database manually.")
 		}
 		c.log.Info("found momentums in DB. genesis-hash matches")
+	}
+	return nil
+}
+
+// checkSporkAddressBinding binds the chain database to the genesis
+// spork address. The first start of a database (and the first start of
+// an existing database on a binary that has this check) records the
+// configured address; every later start must configure the same one or
+// fails with ErrSporkAddressMismatch. The record is node-local metadata
+// outside the versioned state, so it changes no hash and is not shared
+// with peers: it keeps one node from silently switching spork
+// authority under an existing database, but two nodes started from
+// genesis files that differ only in SporkAddress still accept the same
+// chain until the first spork transaction. Managers that do not
+// implement db.MetadataStore are not bound; the persistent LevelDB
+// manager the node runs on does implement it.
+func (c *chain) checkSporkAddressBinding() error {
+	metadata, ok := c.chainManager.(db.MetadataStore)
+	if !ok {
+		return nil
+	}
+	configured := c.genesis.GetSporkAddress()
+	if configured == nil {
+		return errors.Errorf("the genesis config has no spork address")
+	}
+
+	stored, err := metadata.GetMetadata(sporkAddressMetadataKey)
+	if err != nil {
+		return err
+	}
+	if stored == nil {
+		c.log.Info("binding chain database to genesis spork address", "spork-address", configured)
+		return metadata.PutMetadata(sporkAddressMetadataKey, configured.Bytes())
+	}
+
+	bound, err := types.BytesToAddress(stored)
+	if err != nil {
+		return errors.Wrapf(err, "corrupt spork-address record in chain database")
+	}
+	if bound != *configured {
+		c.log.Crit("genesis spork address does not match the chain database",
+			"configured", configured, "database", bound)
+		return errors.Wrapf(ErrSporkAddressMismatch,
+			"database was initialized with %v but the genesis config has %v. "+
+				"Restore SporkAddress %v in the genesis config, or remove the database manually to start a new chain",
+			bound, configured, bound)
 	}
 	return nil
 }
