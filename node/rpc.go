@@ -24,6 +24,8 @@ func (node *Node) startRPC() error {
 			Vhosts:                  node.config.RPC.HTTPVirtualHosts,
 			Modules:                 node.config.RPC.Endpoints,
 			MaxSubscriptionsPerConn: node.config.RPC.MaxSubscriptionsPerConn,
+			MaxConcurrentRequests:   node.config.RPC.MaxConcurrentHTTPRequests,
+			MaxConnections:          node.config.RPC.MaxHTTPConnections,
 			prefix:                  "",
 		}
 		if err := node.http.setListenAddr(node.config.RPC.HTTPHost, node.config.RPC.HTTPPort); err != nil {
