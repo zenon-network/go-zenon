@@ -1,6 +1,7 @@
 package embedded
 
 import (
+	"bytes"
 	"encoding/json"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
@@ -444,36 +446,13 @@ func (a *BridgeApi) GetAllWrapTokenRequests(pageIndex, pageSize uint32) (*WrapTo
 		return nil, err
 	}
 
-	requests, err := definition.GetWrapTokenRequests(context.Storage())
+	// Storage order is the response order, so only the page is decoded;
+	// the rest is counted by key.
+	page, count, err := scanWrapRequests(context.Storage(), nil, nil, pageIndex, pageSize)
 	if err != nil {
 		return nil, err
 	}
-
-	result := &WrapTokenRequestList{
-		Count: len(requests),
-		List:  make([]*WrapTokenRequest, 0),
-	}
-
-	momentum, err := context.GetFrontierMomentum()
-	if err != nil {
-		return nil, err
-	}
-	orchestratorInfo, err := definition.GetOrchestratorInfoVariable(context.Storage())
-	if err != nil {
-		return nil, err
-	}
-
-	start, end := api.GetRange(pageIndex, pageSize, uint32(len(requests)))
-	for i := start; i < end; i++ {
-		token, err := a.getToken(requests[i].TokenStandard)
-		if err != nil {
-			return nil, err
-		}
-		confirmationsToFinality := a.getConfirmationsToFinality(*requests[i], orchestratorInfo.ConfirmationsToFinality, *momentum)
-		wrapReqest := &WrapTokenRequest{requests[i], token, confirmationsToFinality}
-		result.List = append(result.List, wrapReqest)
-	}
-	return result, nil
+	return a.wrapRequestList(context, page, count)
 }
 
 // GetAllWrapTokenRequestsByToAddress pages over the wrap requests whose
@@ -495,46 +474,19 @@ func (a *BridgeApi) GetAllWrapTokenRequestsByToAddress(toAddress string, pageInd
 		return nil, err
 	}
 
-	requests, err := definition.GetWrapTokenRequests(context.Storage())
-	if err != nil {
-		return nil, err
-	}
-
-	result := &WrapTokenRequestList{
-		List: make([]*WrapTokenRequest, 0),
-	}
-
-	specificRequests := make([]*definition.WrapTokenRequest, 0)
-	if toAddress == "" {
-		specificRequests = append(specificRequests, requests...)
-	} else {
-		for _, request := range requests {
-			if request.ToAddress == toAddress {
-				specificRequests = append(specificRequests, request)
-			}
+	var candidate func([]byte) bool
+	var match func(*definition.WrapTokenRequest) bool
+	if toAddress != "" {
+		candidate = containsBytes([]byte(toAddress))
+		match = func(request *definition.WrapTokenRequest) bool {
+			return request.ToAddress == toAddress
 		}
 	}
-	result.Count = len(specificRequests)
-	start, end := api.GetRange(pageIndex, pageSize, uint32(len(specificRequests)))
-
-	momentum, err := context.GetFrontierMomentum()
+	page, count, err := scanWrapRequests(context.Storage(), candidate, match, pageIndex, pageSize)
 	if err != nil {
 		return nil, err
 	}
-	orchestratorInfo, err := definition.GetOrchestratorInfoVariable(context.Storage())
-	if err != nil {
-		return nil, err
-	}
-	for i := start; i < end; i++ {
-		token, err := a.getToken(specificRequests[i].TokenStandard)
-		if err != nil {
-			return nil, err
-		}
-		confirmationsToFinality := a.getConfirmationsToFinality(*specificRequests[i], orchestratorInfo.ConfirmationsToFinality, *momentum)
-		wrapRequest := &WrapTokenRequest{specificRequests[i], token, confirmationsToFinality}
-		result.List = append(result.List, wrapRequest)
-	}
-	return result, nil
+	return a.wrapRequestList(context, page, count)
 }
 
 // GetAllWrapTokenRequestsByToAddressNetworkClassAndChainId pages over
@@ -556,43 +508,21 @@ func (a *BridgeApi) GetAllWrapTokenRequestsByToAddressNetworkClassAndChainId(toA
 		return nil, err
 	}
 
-	requests, err := definition.GetWrapTokenRequests(context.Storage())
+	// The network is only known after decoding, so without a destination
+	// address every request is decoded; with one, only the requests whose
+	// packed value contains it.
+	var candidate func([]byte) bool
+	if toAddress != "" {
+		candidate = containsBytes([]byte(toAddress))
+	}
+	match := func(request *definition.WrapTokenRequest) bool {
+		return request.NetworkClass == networkClass && request.ChainId == chainId && (toAddress == "" || request.ToAddress == toAddress)
+	}
+	page, count, err := scanWrapRequests(context.Storage(), candidate, match, pageIndex, pageSize)
 	if err != nil {
 		return nil, err
 	}
-
-	result := &WrapTokenRequestList{
-		List: make([]*WrapTokenRequest, 0),
-	}
-
-	specificRequests := make([]*definition.WrapTokenRequest, 0)
-	for _, request := range requests {
-		if request.NetworkClass == networkClass && request.ChainId == chainId && (toAddress == "" || request.ToAddress == toAddress) {
-			specificRequests = append(specificRequests, request)
-		}
-	}
-	result.Count = len(specificRequests)
-	start, end := api.GetRange(pageIndex, pageSize, uint32(len(specificRequests)))
-
-	momentum, err := context.GetFrontierMomentum()
-	if err != nil {
-		return nil, err
-	}
-	orchestratorInfo, err := definition.GetOrchestratorInfoVariable(context.Storage())
-	if err != nil {
-		return nil, err
-	}
-
-	for i := start; i < end; i++ {
-		token, err := a.getToken(specificRequests[i].TokenStandard)
-		if err != nil {
-			return nil, err
-		}
-		confirmationsToFinality := a.getConfirmationsToFinality(*specificRequests[i], orchestratorInfo.ConfirmationsToFinality, *momentum)
-		wrapRequest := &WrapTokenRequest{specificRequests[i], token, confirmationsToFinality}
-		result.List = append(result.List, wrapRequest)
-	}
-	return result, nil
+	return a.wrapRequestList(context, page, count)
 }
 
 // GetAllUnsignedWrapTokenRequests pages over the wrap requests the
@@ -610,7 +540,19 @@ func (a *BridgeApi) GetAllUnsignedWrapTokenRequests(pageIndex, pageSize uint32) 
 		return nil, err
 	}
 
-	requests, err := definition.GetWrapTokenRequests(context.Storage())
+	// The signature is only known after decoding, so every request is
+	// decoded, but only the unsigned ones are kept for the selection.
+	requests := make([]*definition.WrapTokenRequest, 0)
+	err = definition.ScanWrapTokenRequests(context.Storage(), func(key, value []byte) error {
+		request, err := definition.ParseWrapTokenRequest(key, value)
+		if err != nil {
+			return err
+		}
+		if request.Signature == "" {
+			requests = append(requests, request)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -667,6 +609,98 @@ func selectUnsignedWrapRequests(requests []*definition.WrapTokenRequest, pageInd
 		seen++
 	}
 	return page, count
+}
+
+// pageWindow is the [start, end) window api.GetRange selects for a page,
+// computed before the length of the list is known: positions at or past
+// the end of the list never occur, so the clamping GetRange applies is
+// implied, and the 64-bit product cannot wrap.
+type pageWindow struct{ start, end uint64 }
+
+func newPageWindow(pageIndex, pageSize uint32) pageWindow {
+	start := uint64(pageIndex) * uint64(pageSize)
+	return pageWindow{start, start + uint64(pageSize)}
+}
+
+func (w pageWindow) contains(position int) bool {
+	return uint64(position) >= w.start && uint64(position) < w.end
+}
+
+// containsBytes returns a candidate check that passes the packed values
+// containing needle. A request field stored as an ABI string or address
+// is copied verbatim into the packed value, so a value without the bytes
+// cannot decode to a request whose field equals them, and skipping it
+// without decoding changes no result.
+func containsBytes(needle []byte) func([]byte) bool {
+	return func(value []byte) bool {
+		return bytes.Contains(value, needle)
+	}
+}
+
+// scanWrapRequests walks the wrap requests in storage order (newest first)
+// and returns those on page pageIndex of size pageSize among the ones
+// match accepts, together with how many it accepts. A nil match accepts
+// every request; then only the page is decoded and the rest is counted by
+// key. Otherwise each request is decoded to test it, except that entries
+// a non-nil candidate rejects are skipped undecoded; candidate must pass
+// every value whose request match accepts.
+func scanWrapRequests(storage db.DB, candidate func([]byte) bool, match func(*definition.WrapTokenRequest) bool, pageIndex, pageSize uint32) ([]*definition.WrapTokenRequest, int, error) {
+	window := newPageWindow(pageIndex, pageSize)
+	page := make([]*definition.WrapTokenRequest, 0)
+	count := 0
+	err := definition.ScanWrapTokenRequests(storage, func(key, value []byte) error {
+		if candidate != nil && !candidate(value) {
+			return nil
+		}
+		onPage := window.contains(count)
+		if match == nil && !onPage {
+			count++
+			return nil
+		}
+		request, err := definition.ParseWrapTokenRequest(key, value)
+		if err != nil {
+			return err
+		}
+		if match != nil && !match(request) {
+			return nil
+		}
+		if onPage {
+			page = append(page, request)
+		}
+		count++
+		return nil
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return page, count, nil
+}
+
+// wrapRequestList builds the response for one page of wrap requests out
+// of count matching ones, adding token info and confirmations to finality
+// to the requests on the page only.
+func (a *BridgeApi) wrapRequestList(context vm_context.AccountVmContext, page []*definition.WrapTokenRequest, count int) (*WrapTokenRequestList, error) {
+	momentum, err := context.GetFrontierMomentum()
+	if err != nil {
+		return nil, err
+	}
+	orchestratorInfo, err := definition.GetOrchestratorInfoVariable(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+	result := &WrapTokenRequestList{
+		Count: count,
+		List:  make([]*WrapTokenRequest, 0, len(page)),
+	}
+	for _, request := range page {
+		token, err := a.getToken(request.TokenStandard)
+		if err != nil {
+			return nil, err
+		}
+		confirmationsToFinality := a.getConfirmationsToFinality(*request, orchestratorInfo.ConfirmationsToFinality, *momentum)
+		result.List = append(result.List, &WrapTokenRequest{request, token, confirmationsToFinality})
+	}
+	return result, nil
 }
 
 // UnwrapTokenRequest is a contract unwrap request augmented with
@@ -847,39 +881,7 @@ func (a *BridgeApi) GetAllUnwrapTokenRequests(pageIndex, pageSize uint32) (*Unwr
 		return nil, err
 	}
 
-	requests, err := definition.GetUnwrapTokenRequests(context.Storage())
-	if err != nil {
-		return nil, err
-	}
-	requests, pairs, err := filterActiveUnwrapRequests(context, requests)
-	if err != nil {
-		return nil, err
-	}
-
-	sort.SliceStable(requests, func(i, j int) bool {
-		return requests[i].RegistrationMomentumHeight > requests[j].RegistrationMomentumHeight
-	})
-
-	result := &UnwrapTokenRequestList{
-		Count: len(requests),
-		List:  make([]*UnwrapTokenRequest, 0),
-	}
-
-	start, end := api.GetRange(pageIndex, pageSize, uint32(len(requests)))
-	momentum, err := context.GetFrontierMomentum()
-	if err != nil {
-		return nil, err
-	}
-	for i := start; i < end; i++ {
-		token, err := a.getToken(requests[i].TokenStandard)
-		if err != nil {
-			return nil, err
-		}
-		tokenPair := pairs[unwrapPairKey{requests[i].NetworkClass, requests[i].ChainId, requests[i].TokenAddress}]
-		redeemableIn := a.getRedeemableIn(*requests[i], *tokenPair, *momentum)
-		result.List = append(result.List, &UnwrapTokenRequest{requests[i], token, redeemableIn})
-	}
-	return result, nil
+	return a.unwrapRequestList(context, nil, nil, pageIndex, pageSize)
 }
 
 // GetAllUnwrapTokenRequestsByToAddress pages over the unwrap requests
@@ -902,45 +904,74 @@ func (a *BridgeApi) GetAllUnwrapTokenRequestsByToAddress(toAddress string, pageI
 		return nil, err
 	}
 
-	requests, err := definition.GetUnwrapTokenRequests(context.Storage())
+	if toAddress == "" {
+		return a.unwrapRequestList(context, nil, nil, pageIndex, pageSize)
+	}
+	match := func(request *definition.UnwrapTokenRequest) bool {
+		return request.ToAddress.String() == toAddress
+	}
+	// A stored address that prints as toAddress has the bytes toAddress
+	// parses to, so when it parses only the values holding those bytes are
+	// decoded. When it does not parse no request can match, but every
+	// request is still decoded and compared, as before.
+	var candidate func([]byte) bool
+	if address, err := types.ParseAddress(toAddress); err == nil {
+		candidate = containsBytes(address.Bytes())
+	}
+	return a.unwrapRequestList(context, candidate, match, pageIndex, pageSize)
+}
+
+// unwrapRequestList builds the response for one page of the unwrap
+// requests match accepts (all of them for a nil match) whose network and
+// token pair still exist, sorted newest first with a stable sort over
+// storage order. Ordering by registration height needs every matching
+// request decoded, so the work is linear in the number of matching
+// requests; entries a non-nil candidate rejects are skipped undecoded, and
+// candidate must pass every value whose request match accepts. Token info
+// and redeem countdowns are added to the requests on the page only.
+func (a *BridgeApi) unwrapRequestList(context vm_context.AccountVmContext, candidate func([]byte) bool, match func(*definition.UnwrapTokenRequest) bool, pageIndex, pageSize uint32) (*UnwrapTokenRequestList, error) {
+	requests := make([]*definition.UnwrapTokenRequest, 0)
+	err := definition.ScanUnwrapTokenRequests(context.Storage(), func(key, value []byte) error {
+		if candidate != nil && !candidate(value) {
+			return nil
+		}
+		request, err := definition.ParseUnwrapTokenRequest(key, value)
+		if err != nil {
+			return err
+		}
+		if match == nil || match(request) {
+			requests = append(requests, request)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
+	requests, pairs, err := filterActiveUnwrapRequests(context, requests)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(requests, func(i, j int) bool {
+		return requests[i].RegistrationMomentumHeight > requests[j].RegistrationMomentumHeight
+	})
 
 	result := &UnwrapTokenRequestList{
-		List: make([]*UnwrapTokenRequest, 0),
+		Count: len(requests),
+		List:  make([]*UnwrapTokenRequest, 0),
 	}
-	specificRequests := make([]*definition.UnwrapTokenRequest, 0)
-	if toAddress == "" {
-		specificRequests = append(specificRequests, requests...)
-	} else {
-		for _, request := range requests {
-			if request.ToAddress.String() == toAddress {
-				specificRequests = append(specificRequests, request)
-			}
-		}
-	}
-	specificRequests, pairs, err := filterActiveUnwrapRequests(context, specificRequests)
-	if err != nil {
-		return nil, err
-	}
-	sort.SliceStable(specificRequests, func(i, j int) bool {
-		return specificRequests[i].RegistrationMomentumHeight > specificRequests[j].RegistrationMomentumHeight
-	})
-	result.Count = len(specificRequests)
-	start, end := api.GetRange(pageIndex, pageSize, uint32(len(specificRequests)))
+	start, end := api.GetRange(pageIndex, pageSize, uint32(len(requests)))
 	momentum, err := context.GetFrontierMomentum()
 	if err != nil {
 		return nil, err
 	}
 	for i := start; i < end; i++ {
-		token, err := a.getToken(specificRequests[i].TokenStandard)
+		token, err := a.getToken(requests[i].TokenStandard)
 		if err != nil {
 			return nil, err
 		}
-		tokenPair := pairs[unwrapPairKey{specificRequests[i].NetworkClass, specificRequests[i].ChainId, specificRequests[i].TokenAddress}]
-		redeemableIn := a.getRedeemableIn(*specificRequests[i], *tokenPair, *momentum)
-		result.List = append(result.List, &UnwrapTokenRequest{specificRequests[i], token, redeemableIn})
+		tokenPair := pairs[unwrapPairKey{requests[i].NetworkClass, requests[i].ChainId, requests[i].TokenAddress}]
+		redeemableIn := a.getRedeemableIn(*requests[i], *tokenPair, *momentum)
+		result.List = append(result.List, &UnwrapTokenRequest{requests[i], token, redeemableIn})
 	}
 	return result, nil
 }
