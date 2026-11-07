@@ -21,8 +21,9 @@ type chainBridge struct {
 	consensus  consensus.Consensus
 	verifier   verifier.Verifier
 	supervisor *vm.Supervisor
-	// rejected remembers side-chain momentums refused on a consensus check
-	// so a later batch carrying one is refused before any rollback.
+	// rejected remembers momentums refused on a consensus check, on the
+	// side-chain or the extension path, so a later batch carrying one is
+	// refused before any rollback and before any content is applied.
 	rejected *rejectedCandidates
 }
 
@@ -234,6 +235,18 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 	}
 	momentums = momentums[start:]
 
+	// A candidate this node already rejected on a consensus check fails the
+	// same way again, since that verdict is deterministic for the state at
+	// its previous momentum, which its bytes name. Refuse the batch before
+	// anything is removed or applied, whichever peer served it this time
+	// and whichever path the batch takes below: a side-chain, an extension
+	// of the frontier, or a batch refused for its shape (not longer, too
+	// deep, not linking), so the serving peer is held to account in every
+	// case and a retry costs nothing.
+	if index, known := c.firstRemembered(momentums); known {
+		return index + start, c.reject(momentums[index], ErrSideChainKnownInvalid)
+	}
+
 	head := momentums[0].Momentum
 	tail := momentums[len(momentums)-1].Momentum
 	ourFrontier, err := store.GetFrontierMomentum()
@@ -268,14 +281,6 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 		// check that current tail is longer than frontier
 		if tail.Height <= ourFrontier.Height {
 			return 0, errors.Errorf("won't insert side-chain which is not longer")
-		}
-
-		// A candidate this node already rejected on a consensus check fails
-		// the same way again, since that verdict is deterministic for the
-		// state at the fork point. Refuse the batch before anything is
-		// removed, whichever peer served it this time.
-		if index, known := c.firstRemembered(momentums); known {
-			return index + start, c.reject(momentums[index], ErrSideChainKnownInvalid)
 		}
 
 		// Everything that can be checked before any canonical momentum is
@@ -364,18 +369,21 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 		return 0, nil
 	}
 
-	// The extension path has no rollback to protect, but a candidate
-	// rejected earlier can land here: after a replacement prefix longer
-	// than the removed branch was kept, the candidate that failed on top of
-	// it now extends the frontier, and a retry skips the known prefix.
-	// Refuse it before applying its content, so the retry costs nothing and
-	// the serving peer is still held to account.
-	if index, known := c.firstRemembered(momentums); known {
-		return index + start, c.reject(momentums[index], ErrSideChainKnownInvalid)
-	}
+	// The extension path has no rollback to protect, but a consensus
+	// verdict on a candidate here is the same verdict the side-chain path
+	// reaches: the candidate's content fails against the state at its
+	// previous momentum, which is the frontier. Classify it the same way,
+	// so the bytes are remembered and the serving peer is quarantined;
+	// otherwise a peer on a branch this node refuses is merely dropped and
+	// restarts the download on its next contact, and once this node has a
+	// momentum of its own at that height, the same branch arrives as a
+	// side-chain and costs a rollback and restore before it is refused.
+	// Store errors, failed commits and verdicts that depend on the batch or
+	// the state rather than on the candidate's bytes stay unclassified
+	// (see validationFailure and reject).
 	failed, _, err := c.insertMomentums(insert, momentums)
 	if err != nil {
-		return failed + start, err
+		return failed + start, c.rejectIfValidation(momentums[failed], err)
 	}
 	return 0, nil
 }
