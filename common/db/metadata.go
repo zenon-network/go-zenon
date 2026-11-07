@@ -43,6 +43,9 @@ func (m *ldbManager) GetMetadata(key []byte) ([]byte, error) {
 }
 
 // PutMetadata stores value under key, outside the versioned state.
+// The write is synced: when PutMetadata returns nil the value is on
+// stable storage, so a crash right after it cannot lose a record that
+// the caller has already acted on.
 func (m *ldbManager) PutMetadata(key, value []byte) error {
 	m.changes.Lock()
 	defer m.changes.Unlock()
@@ -51,7 +54,7 @@ func (m *ldbManager) PutMetadata(key, value []byte) error {
 	}
 	batch := new(leveldb.Batch)
 	batch.Put(common.JoinBytes(metadataByte, key), value)
-	if err := m.write(batch); err != nil {
+	if err := m.writeSync(batch); err != nil {
 		return errors.Wrapf(err, "write metadata %q", key)
 	}
 	return nil

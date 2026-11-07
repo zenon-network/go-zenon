@@ -2,7 +2,12 @@ package db
 
 import (
 	"bytes"
+	"errors"
+	"sync/atomic"
 	"testing"
+
+	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/storage"
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -90,5 +95,72 @@ func TestLevelDBManagerMetadataOutsideVersions(t *testing.T) {
 	common.FailIfErr(t, err)
 	if !bytes.Equal(value, []byte("value")) {
 		t.Fatalf("expected metadata to survive Pop, got %q", value)
+	}
+}
+
+// syncCountingStorage counts Sync calls on the LevelDB journal, which is
+// how a synced write reaches stable storage.
+type syncCountingStorage struct {
+	storage.Storage
+	journalSyncs *int64
+}
+
+func (s syncCountingStorage) Create(fd storage.FileDesc) (storage.Writer, error) {
+	w, err := s.Storage.Create(fd)
+	if err != nil || fd.Type != storage.TypeJournal {
+		return w, err
+	}
+	return syncCountingWriter{Writer: w, syncs: s.journalSyncs}, nil
+}
+
+type syncCountingWriter struct {
+	storage.Writer
+	syncs *int64
+}
+
+func (w syncCountingWriter) Sync() error {
+	atomic.AddInt64(w.syncs, 1)
+	return w.Writer.Sync()
+}
+
+// PutMetadata fsyncs the journal before it returns, so a crash after a
+// successful call cannot lose the record. An ordinary versioned Add is
+// the control: it does not sync, which shows the counter tells the two
+// apart.
+func TestLevelDBManagerMetadataWriteIsSynced(t *testing.T) {
+	var syncs int64
+	ldb, err := leveldb.Open(syncCountingStorage{Storage: storage.NewMemStorage(), journalSyncs: &syncs}, nil)
+	common.FailIfErr(t, err)
+	m, err := newLDBManager("mem", ldb)
+	common.FailIfErr(t, err)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+
+	before := atomic.LoadInt64(&syncs)
+	common.FailIfErr(t, m.Add(newMockTransaction(1, m.Frontier())))
+	if got := atomic.LoadInt64(&syncs); got != before {
+		t.Fatalf("control: an unsynced Add synced the journal %d times", got-before)
+	}
+
+	common.FailIfErr(t, m.PutMetadata([]byte("key"), []byte("value")))
+	if got := atomic.LoadInt64(&syncs); got <= before {
+		t.Fatal("PutMetadata returned without syncing the journal")
+	}
+}
+
+// A failed synced write is returned to the caller and leaves no record.
+func TestLevelDBManagerMetadataWriteFailure(t *testing.T) {
+	manager := mustNewLevelDBManager(t, t.TempDir())
+	t.Cleanup(func() { common.FailIfErr(t, manager.Stop()) })
+	m := manager.(*ldbManager)
+	writeErr := errors.New("injected sync failure")
+	m.writeSync = func(*leveldb.Batch) error { return writeErr }
+
+	if err := m.PutMetadata([]byte("key"), []byte("value")); !errors.Is(err, writeErr) {
+		t.Fatalf("PutMetadata with a failing synced write = %v, want the write error", err)
+	}
+	value, err := m.GetMetadata([]byte("key"))
+	common.FailIfErr(t, err)
+	if value != nil {
+		t.Fatalf("a failed write left a record: %q", value)
 	}
 }

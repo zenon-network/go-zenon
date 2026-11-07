@@ -498,6 +498,9 @@ type ldbManager struct {
 	l2Cache  *lru.Cache
 	ldb      *leveldb.DB
 	write    func(*leveldb.Batch) error
+	// writeSync writes a batch and fsyncs the journal before returning;
+	// PutMetadata uses it. Replaceable by tests like write.
+	writeSync func(*leveldb.Batch) error
 	// rollbackPatch builds the inverse in Add; RollbackPatch in production,
 	// replaceable by tests like write.
 	rollbackPatch func(DB, Patch) (Patch, error)
@@ -515,6 +518,12 @@ func NewLevelDBManager(dir string) (Manager, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "open leveldb at %s", dir)
 	}
+	return newLDBManager(dir, ldb)
+}
+
+// newLDBManager wraps an open LevelDB in an ldbManager, closing it if
+// the caches cannot be created.
+func newLDBManager(location string, ldb *leveldb.DB) (*ldbManager, error) {
 	l1Cache, err := lru.New(l1CacheSize)
 	if err != nil {
 		ldb.Close()
@@ -526,12 +535,15 @@ func NewLevelDBManager(dir string) (Manager, error) {
 		return nil, errors.Wrap(err, "create l2 cache")
 	}
 	return &ldbManager{
-		location: dir,
+		location: location,
 		l1Cache:  l1Cache,
 		l2Cache:  l2Cache,
 		ldb:      ldb,
 		write: func(batch *leveldb.Batch) error {
 			return ldb.Write(batch, nil)
+		},
+		writeSync: func(batch *leveldb.Batch) error {
+			return ldb.Write(batch, &opt.WriteOptions{Sync: true})
 		},
 		rollbackPatch: RollbackPatch,
 	}, nil

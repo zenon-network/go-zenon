@@ -124,3 +124,41 @@ func TestChainInitBindsExistingDatabaseOnFirstStart(t *testing.T) {
 		t.Fatalf("expected ErrSporkAddressMismatch, got %v", err)
 	}
 }
+
+// failingMetadataManager is a chain database whose metadata writes
+// fail, as a full disk or a failed fsync would.
+type failingMetadataManager struct {
+	db.Manager
+	err error
+}
+
+func (m failingMetadataManager) GetMetadata(key []byte) ([]byte, error) {
+	return m.Manager.(db.MetadataStore).GetMetadata(key)
+}
+
+func (m failingMetadataManager) PutMetadata([]byte, []byte) error { return m.err }
+
+// If the binding cannot be persisted, Init fails before it installs the
+// spork authority, so a node never runs under an address it has not
+// durably recorded.
+func TestChainInitFailsWhenSporkAddressBindingIsNotPersisted(t *testing.T) {
+	saved := types.SporkAddress
+	defer func() { types.SporkAddress = saved }()
+	types.SporkAddress = nil
+
+	chainManager, err := db.NewLevelDBManager(t.TempDir())
+	common.FailIfErr(t, err)
+	cacheManager, err := cache.NewCacheDBManager(t.TempDir())
+	common.FailIfErr(t, err)
+	putErr := errors.New("injected metadata write failure")
+	c := chain.NewChain(failingMetadataManager{Manager: chainManager, err: putErr}, cacheManager, genesis.NewGenesis(g.EmbeddedGenesis))
+	initErr := c.Init()
+	common.FailIfErr(t, c.Stop())
+
+	if !errors.Is(initErr, putErr) {
+		t.Fatalf("expected the metadata write error, got %v", initErr)
+	}
+	if types.SporkAddress != nil {
+		t.Fatalf("expected types.SporkAddress to stay unset when the binding is not persisted, got %v", types.SporkAddress)
+	}
+}
