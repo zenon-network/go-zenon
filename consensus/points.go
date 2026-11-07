@@ -7,6 +7,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus/storage"
@@ -117,7 +118,19 @@ type PointsReader interface {
 	common.Ticker
 	// Returns nil, nil for points which are in the future
 	GetPoint(tick uint64) (*storage.Point, error)
+
+	// getPointAt is GetPoint answered entirely from momentumStore: the
+	// started and finished checks, the end block that validates a
+	// cached point, the election and the content of a generated point,
+	// and, for a compound point, every lower point it merges. GetPoint
+	// is getPointAt on one snapshot of the frontier store.
+	getPointAt(momentumStore store.Momentum, tick uint64) (*storage.Point, error)
 }
+
+// errNoMomentumStore is returned when a point is requested from a
+// missing momentum store, such as the frontier store of a stopped
+// chain or a fixed store whose momentum is no longer in the chain.
+var errNoMomentumStore = errors.New("consensus: no momentum store to read from")
 
 func newCompoundPoints(lower PointsReader, chainTicker ChainTicker, db *storage.DB, prefix byte) PointsReader {
 	lowerMultiplier, err := lower.TickMultiplier(chainTicker)
@@ -147,11 +160,18 @@ type compoundPoints struct {
 }
 
 func (compound *compoundPoints) GetPoint(tick uint64) (*storage.Point, error) {
-	if !compound.HasStarted(tick) {
+	return compound.getPointAt(compound.frontierStore(), tick)
+}
+
+func (compound *compoundPoints) getPointAt(momentumStore store.Momentum, tick uint64) (*storage.Point, error) {
+	if momentumStore == nil {
+		return nil, errNoMomentumStore
+	}
+	if !compound.hasStartedAt(momentumStore, tick) {
 		return nil, nil
 	}
 
-	endBlock, err := compound.GetEndBlock(tick)
+	endBlock, err := compound.getEndBlockAt(momentumStore, tick)
 	if err != nil {
 		return nil, err
 	}
@@ -172,13 +192,13 @@ func (compound *compoundPoints) GetPoint(tick uint64) (*storage.Point, error) {
 		}
 	}
 
-	point, err := compound.generatePointFromLower(tick, endBlock)
+	point, err := compound.generatePointFromLower(momentumStore, tick, endBlock)
 	if err != nil {
 		return nil, err
 	}
 
 	// Store point in DB if finished
-	if compound.IsFinished(tick) {
+	if compound.isFinishedAt(momentumStore, tick) {
 		err := compound.db.StorePointByHeight(compound.prefix, tick, point)
 		if err != nil {
 			return nil, err
@@ -194,23 +214,23 @@ func (compound *compoundPoints) GetPoint(tick uint64) (*storage.Point, error) {
 // is how the still-empty tail of a tick in progress is handled.
 //
 // The walk is bounded by the range: it stops at start whether or not
-// that tick holds a point. The frontier is read anew by every lower
-// GetPoint, so a frontier that moves backwards while the walk is in
-// flight (a rollback racing an epoch read) can make ticks read as not
-// started that a stable frontier would have served. Both shapes are
-// errors rather than a point: a nil tick below one already merged (the
-// range would be reported with its first ticks missing), and a range
-// with no tick present at all (the weights are averaged over the ticks
-// present, so this would also divide by zero). Neither can occur on a
-// stable frontier: a started tick's lower ticks have all started.
-func (compound *compoundPoints) generatePointFromLower(tick uint64, endBlock *nom.Momentum) (*storage.Point, error) {
+// that tick holds a point. Every lower point is read from momentumStore,
+// the store the compound point itself was resolved against, so the walk
+// sees one frontier. Two shapes are still errors rather than a point,
+// as a guard against a store that is not consistent with itself: a nil
+// tick below one already merged (the range would be reported with its
+// first ticks missing), and a range with no tick present at all (the
+// weights are averaged over the ticks present, so this would also
+// divide by zero). Neither can occur on a consistent store: a started
+// tick's lower ticks have all started.
+func (compound *compoundPoints) generatePointFromLower(momentumStore store.Momentum, tick uint64, endBlock *nom.Momentum) (*storage.Point, error) {
 	result := storage.NewEmptyPoint(endBlock.Hash)
 	start := tick * compound.lowerMultiplier
 	end := start + compound.lowerMultiplier
 	var numPresent int64 = 0
 
 	for i := end - 1; ; i-- {
-		p, err := compound.lower.GetPoint(i)
+		p, err := compound.lower.getPointAt(momentumStore, i)
 		if err != nil {
 			return nil, err
 		}
@@ -267,11 +287,18 @@ func newPeriodPoints(electionReader ElectionReader, ticker ChainTicker, db *stor
 }
 
 func (period *periodPoints) GetPoint(tick uint64) (*storage.Point, error) {
-	if !period.HasStarted(tick) {
+	return period.getPointAt(period.frontierStore(), tick)
+}
+
+func (period *periodPoints) getPointAt(momentumStore store.Momentum, tick uint64) (*storage.Point, error) {
+	if momentumStore == nil {
+		return nil, errNoMomentumStore
+	}
+	if !period.hasStartedAt(momentumStore, tick) {
 		return nil, nil
 	}
 
-	endBlock, err := period.GetEndBlock(tick)
+	endBlock, err := period.getEndBlockAt(momentumStore, tick)
 	if err != nil {
 		return nil, err
 	}
@@ -292,13 +319,13 @@ func (period *periodPoints) GetPoint(tick uint64) (*storage.Point, error) {
 		}
 	}
 
-	point, err := period.generatePointFromChain(tick)
+	point, err := period.generatePointFromChain(momentumStore, tick, endBlock)
 	if err != nil {
 		return nil, err
 	}
 
 	// Store point in DB if finished
-	if period.IsFinished(tick) {
+	if period.isFinishedAt(momentumStore, tick) {
 		err := period.db.StorePointByHeight(storage.PrefixPeriodPoint, tick, point)
 		if err != nil {
 			return nil, err
@@ -307,19 +334,22 @@ func (period *periodPoints) GetPoint(tick uint64) (*storage.Point, error) {
 
 	return point, nil
 }
-func (period *periodPoints) generatePointFromChain(tick uint64) (*storage.Point, error) {
-	election, err := period.electionReader.ElectionByTick(tick)
+
+// generatePointFromChain builds the period point of tick from
+// momentumStore alone: the election (expected slots and weights), the
+// content (produced momentums) and endBlock, which the caller resolved
+// from the same store. Reading all three from one store is what keeps
+// the weights and expected slots of one branch from being combined with
+// the produced momentums and end hash of another.
+func (period *periodPoints) generatePointFromChain(momentumStore store.Momentum, tick uint64, endBlock *nom.Momentum) (*storage.Point, error) {
+	election, err := period.electionReader.electionByTickAt(momentumStore, tick)
 	if err != nil {
 		return nil, err
 	}
 
-	endBlock, err := period.GetEndBlock(tick)
-	if err != nil {
-		return nil, err
-	}
 	point := storage.NewEmptyPoint(endBlock.Hash)
 
-	blocks, err := period.GetContent(tick)
+	blocks, err := period.getContentAt(momentumStore, tick)
 	if err != nil {
 		return nil, err
 	}
