@@ -342,6 +342,8 @@ func TestGenerateEmbeddedReceive_UpdateEpochHistoryFailureRollsBack(t *testing.T
 		common.FailIfErr(t, err)
 		h.expectStatus(block, resultSuccess)
 		h.expectLastEpoch(2)
+		// settling epoch 2 pruned the record that governed epoch 1
+		h.expectTerms([3]uint64{2, 50, 50})
 		h.expectHistory(1, 0, 100)
 		h.expectHistory(2, 50, 50)
 		// each epoch: 833333330 momentum + 400000000 delegation reward;
@@ -351,6 +353,18 @@ func TestGenerateEmbeddedReceive_UpdateEpochHistoryFailureRollsBack(t *testing.T
 		common.Expect(t, h.epochCreditOf(2, termsVMBacker).String(), "616666665")
 		common.Expect(t, h.depositOf(termsVMBacker).String(), "1016666665")
 		common.Expect(t, h.depositOf(termsVMReward).String(), "1449999995")
+	})
+	t.Run("settlement prune delete fails after a credited epoch", func(t *testing.T) {
+		h := newTermsVMHarness(t, frontier, 0, records...)
+		h.failure.delete = definition.GetPillarEpochTermsKey(termsVMPillar, 0)
+		block, err := h.update()
+		expectInjectedTermsWrite(t, err)
+		h.expectStatus(block, resultFail)
+		h.expectLastEpoch(0)
+		h.expectTerms([3]uint64{0, 0, 100}, [3]uint64{2, 50, 50})
+		common.Expect(t, h.epochCreditOf(1, termsVMBacker).Sign(), 0)
+		common.Expect(t, h.depositOf(termsVMBacker).Sign(), 0)
+		common.Expect(t, h.depositOf(termsVMReward).Sign(), 0)
 	})
 	t.Run("history write fails after a credited epoch", func(t *testing.T) {
 		h := newTermsVMHarness(t, frontier, 0, records...)
@@ -367,6 +381,7 @@ func TestGenerateEmbeddedReceive_UpdateEpochHistoryFailureRollsBack(t *testing.T
 		expectInjectedTermsWrite(t, err)
 		h.expectStatus(block, resultFail)
 		h.expectLastEpoch(0)
+		h.expectTerms([3]uint64{0, 0, 100}, [3]uint64{2, 50, 50})
 		for _, epoch := range []uint64{1, 2} {
 			history, err := definition.GetPillarEpochHistoryList(h.ctx.Storage(), epoch)
 			common.FailIfErr(t, err)

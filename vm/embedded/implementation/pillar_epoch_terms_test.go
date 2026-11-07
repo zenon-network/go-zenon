@@ -464,15 +464,19 @@ func TestEpochRewardTerms_ActivationTransition(t *testing.T) {
 	h.expectDeposits(want)
 }
 
-// A change prunes the records that can no longer govern an unsettled
-// epoch, keeping the one that governs the first unsettled epoch.
+// Settlement and changes prune the records that can no longer govern an
+// unsettled epoch, keeping the one that governs the next epoch to settle.
 func TestEpochRewardTerms_PruneKeepsGoverningRecord(t *testing.T) {
 	h := newTermsHarness(t, true, 0, 100, 6)
 
 	h.mustUpdate(2, 10, 10)
 	h.expectTerms([3]uint64{0, 0, 100}, [3]uint64{3, 10, 10})
 
-	h.settle(settleTime(4), 4) // first unsettled epoch is now 5
+	h.settle(settleTime(2), 2) // record 0 still governs epoch 2
+	h.expectTerms([3]uint64{0, 0, 100}, [3]uint64{3, 10, 10})
+	h.settle(settleTime(4), 4) // settling epoch 3 drops record 0 without a change
+	h.expectTerms([3]uint64{3, 10, 10})
+
 	h.mustUpdate(settleTime(4), 20, 20)
 	h.expectTerms([3]uint64{3, 10, 10}, [3]uint64{uint64(settleTime(4)) + 1, 20, 20})
 
@@ -597,12 +601,22 @@ func TestEpochRewardTerms_WriteFailuresAreReturned(t *testing.T) {
 		h.ctx.momentum = &nom.Momentum{Timestamp: timePtr(2)}
 		expectInjected(t, updateWith(fc, 0, 0))
 	})
-	t.Run("prune delete", func(t *testing.T) {
-		h := newTermsHarness(t, true, 0, 100, 4)
+	t.Run("update prune delete", func(t *testing.T) {
+		// settling epoch 2 keeps record 0 (it governs epoch 2); the
+		// change then prunes it because record 3 governs epoch 3
+		h := newTermsHarness(t, true, 0, 100, 2)
 		h.mustUpdate(2, 10, 10)
-		h.settle(settleTime(4), 4)
+		h.settle(settleTime(2), 2)
+		h.expectTerms([3]uint64{0, 0, 100}, [3]uint64{3, 10, 10})
 		fc := &failingStorageContext{testEpochBoundContext: h.ctx, failDelete: definition.GetPillarEpochTermsKey(termsPillarName, 0)}
 		expectInjected(t, updateWith(fc, 20, 20))
+	})
+	t.Run("settlement prune delete", func(t *testing.T) {
+		h := newTermsHarness(t, true, 0, 100, 3)
+		h.mustUpdate(2, 10, 10)
+		fc := &failingStorageContext{testEpochBoundContext: h.ctx, failDelete: definition.GetPillarEpochTermsKey(termsPillarName, 0)}
+		h.setFrontier(settleTime(3))
+		expectInjected(t, updatePillarRewards(fc))
 	})
 	t.Run("epoch history", func(t *testing.T) {
 		h := newTermsHarness(t, true, 0, 100, 1)

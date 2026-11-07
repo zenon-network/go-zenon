@@ -444,6 +444,13 @@ type rewardSplit struct {
 // back to PillarInfo only for a pillar that has no record covering
 // epoch, which means its give-percentages have not changed since the
 // spork activated.
+//
+// Epochs settle in order, so once epoch is settled no later epoch can
+// be governed by a record below the one governing epoch; those records
+// are deleted here. Settlement therefore never rescans records left
+// over from a backlog that has since drained, whether or not the
+// pillar changes its split again. A delete error is returned so the VM
+// rolls the receive back.
 func epochRewardSplit(context vm_context.AccountVmContext, termsEnforced bool, pillar *definition.PillarInfo, epoch uint64) (rewardSplit, error) {
 	split := rewardSplit{
 		giveBlock:    pillar.GiveBlockRewardPercentage,
@@ -452,15 +459,29 @@ func epochRewardSplit(context vm_context.AccountVmContext, termsEnforced bool, p
 	if !termsEnforced {
 		return split, nil
 	}
-	terms, err := definition.GetPillarEpochTermsForEpoch(context.Storage(), pillar.Name, epoch)
-	if err == constants.ErrDataNonExistent {
-		return split, nil
-	} else if err != nil {
+	records, err := definition.GetPillarEpochTermsList(context.Storage(), pillar.Name)
+	if err != nil {
 		return rewardSplit{}, err
 	}
+	// records are in ascending EffectiveEpoch order
+	governing := -1
+	for i, record := range records {
+		if record.EffectiveEpoch > epoch {
+			break
+		}
+		governing = i
+	}
+	if governing < 0 {
+		return split, nil
+	}
+	for i := 0; i < governing; i++ {
+		if err := records[i].Delete(context.Storage()); err != nil {
+			return rewardSplit{}, err
+		}
+	}
 	return rewardSplit{
-		giveBlock:    terms.GiveBlockRewardPercentage,
-		giveDelegate: terms.GiveDelegateRewardPercentage,
+		giveBlock:    records[governing].GiveBlockRewardPercentage,
+		giveDelegate: records[governing].GiveDelegateRewardPercentage,
 	}, nil
 }
 
@@ -711,8 +732,9 @@ func updatePillarRewards(context vm_context.AccountVmContext) error {
 //     before E+1 is settled with.
 //   - Records that can no longer govern an unsettled epoch are
 //     deleted: of those with EffectiveEpoch at or below the first
-//     unsettled epoch, only the highest is kept. This bounds the
-//     records a settlement scans by the number of unsettled epochs.
+//     unsettled epoch, only the highest is kept. Settlement prunes the
+//     same way as it advances (epochRewardSplit), so a pillar keeps at
+//     most one record per unsettled epoch, plus one.
 //
 // Any read, put or delete error is returned so the VM rolls the whole
 // receive back rather than settle with a partial record set.
