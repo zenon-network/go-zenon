@@ -52,9 +52,16 @@ type LedgerApi struct {
 // entries of the mailbox in key order, one key read and one IsReceived
 // lookup each: at least the first unreceivedQuerySize (500), which was
 // once the whole scan, so a page whose blocks all lie among the
-// unreceived ones of those entries keeps the Count and More it had then;
-// beyond them only as many as the requested page needs, never more than
+// unreceived ones of those entries keeps the Count and More it had then,
+// except that exactly 500 pending entries no longer report More; beyond
+// them only as many as the requested page needs, never more than
 // unreceivedMaxScan (10000). Blocks are read for the returned page only.
+//
+// The bound counts pending entries. A send received by a confirmed
+// receive leaves a tombstone under the mailbox's pending prefix, and the
+// iterator steps over those inside each key read, so a mailbox with many
+// received sends costs more per entry; the 500-entry scan this replaces
+// paid the same.
 const (
 	unreceivedMaxPageSize = 50
 	unreceivedQuerySize   = 500
@@ -364,9 +371,10 @@ func (l *LedgerApi) GetAccountInfoByAddress(address types.Address) (*AccountInfo
 // that account store already holds a receive for it (an unconfirmed
 // receive), and the blocks and their extra information are read from the
 // same momentum store. Pages are numbered over the hashes that survive
-// this filter, so at a fixed frontier the pages of a given pageSize are
-// disjoint, in order, and together list every unreceived block among the
-// first 10000 pending entries exactly once.
+// this filter, so at a fixed frontier the pages of a given non-zero
+// pageSize are disjoint, in order, and together list every unreceived
+// block among the first 10000 pending entries exactly once. With
+// pageSize 0 the list is always empty.
 //
 // pageSize must be at most 50 (ErrPageSizeParamTooBig) and pageIndex is
 // 0-based. Each call examines the pending entries in key order: at least

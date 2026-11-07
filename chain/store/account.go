@@ -94,7 +94,8 @@ type Account interface {
 // ForEachUnreceivedAccountBlockHash calls fn on the pending hashes in
 // the same order, reading each key once, and stops when fn returns false
 // or an error, which it returns; the ledger RPC uses it to examine at
-// most 10000 per call. MarkBlockThatReceives maps a
+// most 10000 per call. Both skip the tombstones MarkAsReceived leaves
+// in the pending set without counting them. MarkBlockThatReceives maps a
 // send-block hash to the header of the receive block that consumed it
 // and GetBlockWhichReceives reads the mapping back (nil if none).
 //
