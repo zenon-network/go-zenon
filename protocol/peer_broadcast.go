@@ -15,6 +15,16 @@ import (
 // a slow reader, not hold a dead peer's backlog.
 const maxQueuedBroadcasts = 1024
 
+// maxQueuedBroadcastBytes bounds the encoded bytes of the broadcasts
+// queued for one peer, counting the one being written, so a slow peer
+// cannot pin maxQueuedBroadcasts large messages (account blocks with
+// large data, or momentums carrying them). A message is admitted past
+// the budget only when nothing else is queued, so one larger than the
+// budget still goes out; the transports cap a message at 10 MiB. Peers
+// share a broadcast's encoding, so the heap the queues pin is bounded by
+// the broadcasts the slowest peer holds, not by the number of peers.
+const maxQueuedBroadcastBytes = 16 << 20
+
 // broadcastMsg is one encoded broadcast waiting in a peer's queue. The
 // payload is encoded once by the broadcaster and shared, read-only, by
 // every peer it is queued for.
@@ -38,7 +48,8 @@ const (
 	// enqueued: the broadcast is in the queue and the writer sends it
 	// after everything queued before it.
 	enqueued enqueueResult = iota
-	// queueFull: the queue was full and the broadcast was not queued.
+	// queueFull: the queue was full, by count or by bytes, and the
+	// broadcast was not queued.
 	queueFull
 	// queueClosed: the peer's writer has stopped (or never started) and
 	// the broadcast was not queued.
@@ -57,6 +68,10 @@ const (
 // broadcasts, which came from another goroutine.
 type broadcastQueue struct {
 	queue chan broadcastMsg
+	// bytes is the encoded size of what is queued or being written;
+	// maxBytes bounds it (see maxQueuedBroadcastBytes).
+	bytes    atomic.Int64
+	maxBytes int64
 	// term is closed by stop; done is closed when the writer has returned.
 	term chan struct{}
 	done chan struct{}
@@ -72,11 +87,12 @@ type broadcastQueue struct {
 	disconnecting atomic.Bool
 }
 
-func newBroadcastQueue(size int) *broadcastQueue {
+func newBroadcastQueue(size int, maxBytes int64) *broadcastQueue {
 	return &broadcastQueue{
-		queue: make(chan broadcastMsg, size),
-		term:  make(chan struct{}),
-		done:  make(chan struct{}),
+		queue:    make(chan broadcastMsg, size),
+		maxBytes: maxBytes,
+		term:     make(chan struct{}),
+		done:     make(chan struct{}),
 	}
 }
 
@@ -90,10 +106,23 @@ func (q *broadcastQueue) enqueue(m broadcastMsg) enqueueResult {
 		return queueClosed
 	default:
 	}
+	// Reserve the bytes first, so concurrent broadcasters cannot both
+	// pass the budget check; give them back if the queue is full by count.
+	n := int64(len(m.payload))
+	for {
+		cur := q.bytes.Load()
+		if cur > 0 && cur+n > q.maxBytes {
+			return queueFull
+		}
+		if q.bytes.CompareAndSwap(cur, cur+n) {
+			break
+		}
+	}
 	select {
 	case q.queue <- m:
 		return enqueued
 	default:
+		q.bytes.Add(-n)
 		return queueFull
 	}
 }
@@ -173,12 +202,13 @@ func (p *peer) broadcastLoop(q *broadcastQueue) {
 		case <-q.term:
 			return
 		case m := <-q.queue:
-			if q.disconnecting.Load() {
-				continue
+			if !q.disconnecting.Load() {
+				if err := p.rw.WriteMsg(m.msg()); err != nil {
+					log.Debug("failed to write broadcast", "peer-id", p.id, "code", m.code, "reason", err)
+				}
 			}
-			if err := p.rw.WriteMsg(m.msg()); err != nil {
-				log.Debug("failed to write broadcast", "peer-id", p.id, "code", m.code, "reason", err)
-			}
+			// Released once written, so the budget covers the write too.
+			q.bytes.Add(-int64(len(m.payload)))
 		}
 	}
 }

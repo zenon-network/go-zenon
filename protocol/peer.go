@@ -97,7 +97,7 @@ func newPeer(version, network int, p p2p.Peer, rw p2p.MsgReadWriter) *peer {
 		id:          fmt.Sprintf("%x", id[:]),
 		knownTxs:    knownTxs,
 		knownBlocks: knownBlocks,
-		broadcasts:  newBroadcastQueue(maxQueuedBroadcasts),
+		broadcasts:  newBroadcastQueue(maxQueuedBroadcasts, maxQueuedBroadcastBytes),
 	}
 }
 

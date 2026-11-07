@@ -130,10 +130,20 @@ func newBroadcastTestManager() *ProtocolManager {
 // (closing rw) and joins the writer.
 func addBroadcastPeer(t *testing.T, pm *ProtocolManager, n byte, rw p2p.MsgReadWriter, closeRW func(), queueSize int) (*peer, *broadcastNetPeer) {
 	t.Helper()
-	np := newBroadcastNetPeer(n, closeRW)
-	p := newPeer(1, 1, np, rw)
+	var q *broadcastQueue
 	if queueSize > 0 {
-		p.broadcasts = newBroadcastQueue(queueSize)
+		q = newBroadcastQueue(queueSize, maxQueuedBroadcastBytes)
+	}
+	return addBroadcastPeerWithQueue(t, pm, newBroadcastNetPeer(n, closeRW), rw, q)
+}
+
+// addBroadcastPeerWithQueue is addBroadcastPeer with the transport peer
+// and the queue (the default when nil) given.
+func addBroadcastPeerWithQueue(t *testing.T, pm *ProtocolManager, np *broadcastNetPeer, rw p2p.MsgReadWriter, q *broadcastQueue) (*peer, *broadcastNetPeer) {
+	t.Helper()
+	p := newPeer(1, 1, np, rw)
+	if q != nil {
+		p.broadcasts = q
 	}
 	if err := pm.peers.Register(p); err != nil {
 		t.Fatal(err)
@@ -311,6 +321,93 @@ func TestBroadcastMomentumQueueFullDrops(t *testing.T) {
 	expectNoMsg(t, "healthy peer", healthy.got) // already known there
 }
 
+// A hash announcement that finds the queue full is dropped the same way:
+// not marked known, no disconnect, and a later announcement reaches the
+// peer once its queue drains.
+func TestBroadcastAnnouncementQueueFullDrops(t *testing.T) {
+	pm := newBroadcastTestManager()
+	stalled := newStallingRW()
+	sp, np := addBroadcastPeer(t, pm, 1, stalled, stalled.close, 1)
+
+	m0, m1, dropped := testMomentum(1), testMomentum(2), testMomentum(3)
+	pm.BroadcastMomentum(m0, false)
+	waitEntered(t, stalled) // m0 in the stalled write
+	pm.BroadcastMomentum(m1, false)
+	returnsPromptly(t, "BroadcastMomentum", func() { pm.BroadcastMomentum(dropped, false) })
+
+	if sp.knownBlocks.Contains(dropped.Momentum.Hash) {
+		t.Fatal("a dropped announcement was marked known to the peer")
+	}
+	if !sp.knownBlocks.Contains(m1.Momentum.Hash) {
+		t.Fatal("a queued announcement was not marked known to the peer")
+	}
+	select {
+	case r := <-np.discs:
+		t.Fatalf("peer disconnected (%v) for a dropped announcement", r)
+	default:
+	}
+	announce := func(m *nom.DetailedMomentum) sentMsg {
+		return sentMsg{NewBlockHashesMsg, encodeTest(t, []types.Hash{m.Momentum.Hash})}
+	}
+	stalled.unblock()
+	expectMsgs(t, "stalled peer", stalled.got, []sentMsg{announce(m0), announce(m1)})
+	expectNoMsg(t, "stalled peer", stalled.got)
+	pm.BroadcastMomentum(dropped, false)
+	expectMsgs(t, "stalled peer", stalled.got, []sentMsg{announce(dropped)})
+}
+
+// The queue is also bounded by bytes: a broadcast that would take the
+// queued bytes (including the one being written) past the budget is
+// treated as a full queue, the bytes are released as messages are
+// written, and a message larger than the budget still goes out when
+// nothing else is queued.
+func TestBroadcastQueueByteBudget(t *testing.T) {
+	pm := newBroadcastTestManager()
+	announceSize := int64(len(encodeTest(t, []types.Hash{{}})))
+	stalled := newStallingRW()
+	q := newBroadcastQueue(100, 2*announceSize)
+	sp, np := addBroadcastPeerWithQueue(t, pm, newBroadcastNetPeer(1, stalled.close), stalled, q)
+
+	m0, m1, dropped := testMomentum(1), testMomentum(2), testMomentum(3)
+	pm.BroadcastMomentum(m0, false)
+	waitEntered(t, stalled) // m0 being written still counts
+	pm.BroadcastMomentum(m1, false)
+	returnsPromptly(t, "BroadcastMomentum", func() { pm.BroadcastMomentum(dropped, false) })
+	if sp.knownBlocks.Contains(dropped.Momentum.Hash) {
+		t.Fatal("an announcement over the byte budget was queued")
+	}
+	if got := q.bytes.Load(); got != 2*announceSize {
+		t.Fatalf("queued bytes %d, want %d", got, 2*announceSize)
+	}
+	// Over the byte budget an account block disconnects, as on a full
+	// count.
+	pm.BroadcastAccountBlock(testAccountBlock(1))
+	select {
+	case r := <-np.discs:
+		if r != p2p.DiscUselessPeer {
+			t.Fatalf("disconnect reason %v, want %v", r, p2p.DiscUselessPeer)
+		}
+	case <-time.After(broadcastTestWait):
+		t.Fatal("account block over the byte budget did not disconnect the peer")
+	}
+	// The disconnect ended the write and the writer discards the rest;
+	// every reserved byte is released.
+	deadline := time.Now().Add(broadcastTestWait)
+	for q.bytes.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("queued bytes %d after the queue drained, want 0", q.bytes.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// A message larger than the whole budget goes out on an empty queue.
+	small := newRecordingRW()
+	addBroadcastPeerWithQueue(t, pm, newBroadcastNetPeer(2, nil), small, newBroadcastQueue(100, 1))
+	big := testMomentum(9)
+	pm.BroadcastMomentum(big, false)
+	expectMsgs(t, "peer with a tiny budget", small.got, []sentMsg{{NewBlockHashesMsg, encodeTest(t, []types.Hash{big.Momentum.Hash})}})
+}
+
 // An account block that finds the queue full disconnects the peer, since
 // nothing offers it the block again while it stays connected. The
 // disconnect does not wait for the stalled write, and the broadcast does
@@ -392,6 +489,52 @@ func TestStopBroadcastJoinsWriter(t *testing.T) {
 		t.Fatal("a broadcast refused after stop was marked known")
 	}
 	returnsPromptly(t, "stopBroadcast", sp.stopBroadcast) // idempotent
+}
+
+// stopBroadcast joins an overflow disconnect still in progress, not only
+// the writer: it returns only once the transport's Disconnect has.
+func TestStopBroadcastJoinsOverflowDisconnect(t *testing.T) {
+	pm := newBroadcastTestManager()
+	stalled := newStallingRW()
+	discEntered, holdDisc := make(chan struct{}), make(chan struct{})
+	np := newBroadcastNetPeer(1, func() {
+		close(discEntered)
+		<-holdDisc
+	})
+	sp, _ := addBroadcastPeerWithQueue(t, pm, np, stalled, newBroadcastQueue(1, maxQueuedBroadcastBytes))
+	// Registered after the peer's cleanup, so it runs first: a failure
+	// below must not leave the cleanup's Disconnect waiting on the hold.
+	var release sync.Once
+	releaseDisc := func() { release.Do(func() { close(holdDisc) }) }
+	t.Cleanup(releaseDisc)
+
+	pm.BroadcastAccountBlock(testAccountBlock(1))
+	waitEntered(t, stalled)
+	pm.BroadcastAccountBlock(testAccountBlock(2)) // fills the queue
+	returnsPromptly(t, "BroadcastAccountBlock", func() { pm.BroadcastAccountBlock(testAccountBlock(3)) })
+	select {
+	case <-discEntered:
+	case <-time.After(broadcastTestWait):
+		t.Fatal("overflow did not start a disconnect")
+	}
+	stalled.close() // the writer is released on its own
+
+	stopped := make(chan struct{})
+	go func() {
+		sp.stopBroadcast()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("stopBroadcast returned while the overflow disconnect was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseDisc()
+	select {
+	case <-stopped:
+	case <-time.After(broadcastTestWait):
+		t.Fatal("stopBroadcast did not return after the disconnect did")
+	}
 }
 
 // End to end through handle: a connected peer that stops reading does not
