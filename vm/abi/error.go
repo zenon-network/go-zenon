@@ -121,8 +121,8 @@ func errBigLengthOverflow(totalSize *big.Int) error {
 func errInsufficientBigLength(outputLength, totalSize *big.Int) error {
 	return fmt.Errorf("abi: cannot marshal in to go type: length insufficient %v require %v", outputLength, totalSize)
 }
-func errAliasedDynamicElements(decoded, outputLength int) error {
-	return fmt.Errorf("abi: dynamic array elements span %d bytes, more than the %d bytes of input: offsets alias one payload", decoded, outputLength)
+func errAliasedDynamicElements(decoded, length, outputLength int) error {
+	return fmt.Errorf("abi: aliased dynamic elements exceed the input byte budget: %d bytes decoded, next element %d bytes, input %d bytes", decoded, length, outputLength)
 }
 
 // formatSliceString formats the reflection kind with the given slice size

@@ -129,10 +129,10 @@ func forEachUnpack(t Type, output []byte, start, size int) (interface{}, error) 
 			if err != nil {
 				return nil, err
 			}
-			decoded += length
-			if decoded > len(output) {
-				return nil, errAliasedDynamicElements(decoded, len(output))
+			if length > len(output)-decoded {
+				return nil, errAliasedDynamicElements(decoded, length, len(output))
 			}
+			decoded += length
 		}
 
 		inter, err := toGoType(i, *t.Elem, output)

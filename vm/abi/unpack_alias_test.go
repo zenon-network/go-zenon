@@ -72,10 +72,12 @@ func TestUnpack_AliasedFixtureMatchesPackerForOneElement(t *testing.T) {
 	}
 }
 
-// n offsets onto one payload of P bytes used to decode into n copies, n*P
-// bytes from an input of about n*32+P (issue #269). The decoder now stops
-// as soon as the lengths it has decoded exceed the input, so the aliased
-// message is rejected having allocated a small multiple of its own size.
+// n offsets onto one payload of P bytes used to decode into n strings of
+// P bytes each, n*P bytes copied from an input of about n*32+P (issue
+// #269); bytes elements are views, not copies, but share the bound. The
+// decoder now stops as soon as the lengths it has decoded exceed the
+// input, so the aliased message is rejected having allocated a small
+// multiple of its own size.
 func TestUnpack_AliasedDynamicElementsAreRejected(t *testing.T) {
 	contract := JSONToABIContract(strings.NewReader(aliasABI))
 	const n, p = 1000, 32000
