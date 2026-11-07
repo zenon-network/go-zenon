@@ -766,8 +766,32 @@ type VoteBreakdown struct {
 
 // GetVoteBreakdown tallies all votes recorded for id via
 // GetAllPillarVotes; an id nobody voted on yields all-zero counts.
+// Every stored vote counts, including those cast by pillars that
+// have since been revoked (a revoke never deletes votes), so this is
+// the stored record of a poll rather than the tally the accelerator
+// applies post-spork; see GetVoteBreakdownForPillars.
 func GetVoteBreakdown(context db.DB, id types.Hash) *VoteBreakdown {
-	votes := GetAllPillarVotes(context, id)
+	return tallyVotes(id, GetAllPillarVotes(context, id), nil)
+}
+
+// GetVoteBreakdownForPillars tallies the votes recorded for id that
+// were cast by a pillar named in eligible, skipping the rest. The
+// accelerator passes the active-pillar names so that a revoked
+// pillar's vote no longer counts toward a tally whose turnout is
+// measured against the active pillar count. Pillar names stay unique
+// across revocations, so a name identifies one registration. A nil
+// or empty eligible set yields all-zero counts.
+func GetVoteBreakdownForPillars(context db.DB, id types.Hash, eligible map[string]struct{}) *VoteBreakdown {
+	if eligible == nil {
+		eligible = map[string]struct{}{}
+	}
+	return tallyVotes(id, GetAllPillarVotes(context, id), eligible)
+}
+
+// tallyVotes counts votes into a VoteBreakdown for id. With a nil
+// eligible set every vote counts; otherwise only votes whose pillar
+// name is in the set do.
+func tallyVotes(id types.Hash, votes []*PillarVote, eligible map[string]struct{}) *VoteBreakdown {
 	voteBreakdown := &VoteBreakdown{
 		Id:    id,
 		Total: 0,
@@ -775,6 +799,11 @@ func GetVoteBreakdown(context db.DB, id types.Hash) *VoteBreakdown {
 		No:    0,
 	}
 	for _, vote := range votes {
+		if eligible != nil {
+			if _, ok := eligible[vote.Name]; !ok {
+				continue
+			}
+		}
 		voteBreakdown.Total += 1
 		if vote.Vote == VoteYes {
 			voteBreakdown.Yes += 1
