@@ -261,8 +261,15 @@ func (t *httpServerConn) RemoteAddr() string {
 // SetWriteDeadline does nothing and always returns nil.
 func (t *httpServerConn) SetWriteDeadline(time.Time) error { return nil }
 
-// ServeHTTP serves JSON-RPC requests over HTTP.
+// ServeHTTP serves JSON-RPC requests over HTTP. Every request, whatever it
+// turns out to be, is admitted against the server's HTTP request limit
+// first; see AdmitHTTP.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.AdmitHTTP(http.HandlerFunc(s.serveAdmittedHTTP)).ServeHTTP(w, r)
+}
+
+// serveAdmittedHTTP serves a request that holds its admission slot.
+func (s *Server) serveAdmittedHTTP(w http.ResponseWriter, r *http.Request) {
 	// Permit dumb empty requests for remote health-checks (AWS)
 	if r.Method == http.MethodGet && r.ContentLength == 0 && r.URL.RawQuery == "" {
 		w.WriteHeader(http.StatusOK)
@@ -297,6 +304,63 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	codec := newHTTPServerConn(r, w)
 	defer codec.close()
 	s.serveSingleRequest(ctx, codec)
+}
+
+// refuseOverloaded answers a request refused by the HTTP request limit with
+// HTTP 503 and a JSON-RPC error with code -32005 and a null id. The request
+// body is never read, and the connection is closed once the answer is out:
+// the read deadline set here makes the drain net/http would otherwise run
+// on the unread body, for up to ReadTimeout and without a slot, fail at
+// once. A ResponseWriter that cannot set deadlines still gets
+// Connection: close.
+func refuseOverloaded(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+	w.Header().Set("content-type", contentType)
+	w.Header().Set("Connection", "close")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(errorMessage(&serverOverloadedError{}))
+}
+
+// httpAdmittedKey marks the context of a request admitted by AdmitHTTP; its
+// value is the Server whose limit holds the request's slot.
+type httpAdmittedKey struct{}
+
+// admittedHTTP reports whether r already holds a slot of s's HTTP request
+// limit.
+func (s *Server) admittedHTTP(r *http.Request) bool {
+	admitted, _ := r.Context().Value(httpAdmittedKey{}).(*Server)
+	return admitted == s
+}
+
+// AdmitHTTP returns a handler that admits each request against the server's
+// HTTP request limit (see SetMaxConcurrentHTTPRequests) before passing it to
+// next, and holds the slot until next has returned and the request body has
+// been closed. A transport that wraps the server's ServeHTTP in handlers of
+// its own, such as a compressing writer that finishes its output after the
+// inner handler returns, puts AdmitHTTP outermost so that output counts as
+// well; ServeHTTP then serves the request on the slot taken here instead of
+// taking a second one.
+//
+// Admission comes before the body is read, so a refused request costs
+// neither parsing nor a reply that echoes it; see refuseOverloaded. An
+// admitted request's body is closed before its slot is released, so the
+// bounded drain net/http performs on a body that was not read to the end
+// happens while the slot is held.
+func (s *Server) AdmitHTTP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.admittedHTTP(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.httpRequests.tryAcquire() {
+			overloadedHTTPCounter.Inc(1)
+			refuseOverloaded(w)
+			return
+		}
+		defer s.httpRequests.release()
+		defer r.Body.Close()
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), httpAdmittedKey{}, s)))
+	})
 }
 
 // validateRequest returns a non-zero response code and error message if the
