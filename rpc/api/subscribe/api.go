@@ -3,7 +3,7 @@
 // blocks as they are committed to the chain.
 //
 // Subscriptions are only available on connection-oriented transports.
-// Websocket and ipc connections are served by the rpc/server package
+// Websocket connections are served by the rpc/server package
 // with subscription support enabled, while plain HTTP requests are
 // handled in single-request mode with subscriptions disabled, so a
 // subscribe call over HTTP fails with ErrNotificationsUnsupported from
