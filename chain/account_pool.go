@@ -155,6 +155,11 @@ type accountPool struct {
 	// oldest entries are evicted and their blocks are reported again.
 	oversizedReported     *lru.Cache
 	oversizedReportedOnce sync.Once
+
+	// cacheAt gives the acknowledgement recency rule its view of the
+	// chain cache (see evictStaleAcknowledgements). NewChain sets it; a
+	// pool without it cannot read the rule and evicts nothing for it.
+	cacheAt CacheStoreAt
 }
 
 func (ap *accountPool) getAccountManager(address types.Address) *accountManager {
@@ -548,6 +553,89 @@ func (ap *accountPool) InsertMomentum(detailed *nom.DetailedMomentum) {
 
 	if err := ap.rebuild(detailed); err != nil {
 		common.ChainLogger.Error("failed to handle InsertMomentum in AccountPool", "reason", err)
+	}
+	ap.evictStaleAcknowledgements()
+}
+
+// evictStaleAcknowledgements drops every pending user block that the
+// momentum after the new frontier could not confirm under the
+// acknowledgement recency rule, together with the account's pending
+// blocks above it, which chain onto it. It runs on every InsertMomentum,
+// after the chain cache and the momentum pool have both moved to the new
+// frontier, and reads the requirement once for that frontier; while
+// AcknowledgementRecencySpork is not enforced there it is a single spork
+// enumeration and evicts nothing. A block whose acknowledgement cannot be
+// read is kept and logged: eviction is housekeeping, and content
+// selection and the momentum verifier fail closed on the same block.
+//
+// A rollback only shrinks the enforced set, so DeleteMomentum needs no
+// counterpart: whatever survived here still passes after it.
+func (ap *accountPool) evictStaleAcknowledgements() {
+	if ap.cacheAt == nil {
+		return
+	}
+	frontier := ap.stable.GetFrontierMomentumStore()
+	if frontier == nil {
+		return
+	}
+	requirement, err := NewAcknowledgementRequirement(frontier, ap.cacheAt)
+	if err != nil {
+		ap.log.Warn("not evicting stale momentum-acknowledged blocks", "reason", err)
+		return
+	}
+	ap.evictFailingAcknowledgements(requirement)
+}
+
+// evictFailingAcknowledgements is evictStaleAcknowledgements for a given
+// requirement. Must be called with ap.changes held.
+func (ap *accountPool) evictFailingAcknowledgements(requirement *AcknowledgementRequirement) {
+	if requirement == nil {
+		return
+	}
+	for address, manager := range ap.managers {
+		if types.IsEmbeddedAddress(address) {
+			continue
+		}
+		cutoff := uint64(0)
+		var reason error
+		for height, block := range manager.blocks {
+			err := requirement.Check(block)
+			if err == nil {
+				continue
+			}
+			if !IsAcknowledgementRejection(err) {
+				ap.log.Warn("keeping block whose momentum-acknowledged can't be checked", "block", block.Header(), "reason", err)
+				continue
+			}
+			if cutoff == 0 || height < cutoff {
+				cutoff = height
+				reason = err
+			}
+		}
+		if cutoff == 0 {
+			continue
+		}
+		ap.log.Info("evicting stale momentum-acknowledged suffix",
+			"address", address,
+			"cutoff-height", cutoff,
+			"reason", reason)
+		for {
+			frontier := db.GetFrontierIdentifier(manager.db.Frontier())
+			if frontier.Height < cutoff {
+				break
+			}
+			if err := manager.Pop(); err != nil {
+				ap.log.Error("failed to pop stale momentum-acknowledged block",
+					"address", address,
+					"frontier", frontier,
+					"reason", err)
+				delete(ap.managers, address)
+				break
+			}
+		}
+		if len(manager.blocks) == 0 {
+			delete(ap.managers, address)
+		}
 	}
 }
 func (ap *accountPool) DeleteMomentum(detailed *nom.DetailedMomentum) {

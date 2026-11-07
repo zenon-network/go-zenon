@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -110,10 +111,25 @@ type ContentSelector interface {
 
 type contentSelector struct {
 	plasma dp.DynamicPlasma
+	// acknowledgement is the acknowledgement recency rule at the
+	// momentum's parent, or nil when it does not apply there.
+	acknowledgement *chain.AcknowledgementRequirement
 }
 
 func (cs *contentSelector) Content(blocks []*nom.AccountBlock) []*nom.AccountBlock {
+	blocks = cs.acknowledgement.Filter(blocks, reportStaleAcknowledgement)
 	return cs.filterBlocksToCommit(cs.sortBlocksByPriority(blocks))
+}
+
+// reportStaleAcknowledgement logs a pending account chain the producer
+// leaves out of the momentum because its lowest block fails, or cannot be
+// checked against, the acknowledgement recency rule.
+func reportStaleAcknowledgement(block *nom.AccountBlock, err error) {
+	if chain.IsAcknowledgementRejection(err) {
+		log.Info("skipping account-blocks with stale momentum-acknowledged", "from", block.Header(), "reason", err)
+		return
+	}
+	log.Warn("skipping account-blocks whose momentum-acknowledged can't be checked", "from", block.Header(), "reason", err)
 }
 
 // sortBlocksByPriority orders blocks by grouping them by address first
@@ -388,5 +404,16 @@ func (cs *contentSelector) compareBlockPriority(a, b *nom.AccountBlock) int {
 func NewMomentumContentSelector(plasma dp.DynamicPlasma) ContentSelector {
 	return &contentSelector{
 		plasma: plasma,
+	}
+}
+
+// NewMomentumContentSelectorWithAcknowledgement is NewMomentumContentSelector
+// that also leaves out every user block failing acknowledgement, together
+// with the account's blocks above it, before ordering the rest. A nil
+// acknowledgement selects exactly what NewMomentumContentSelector does.
+func NewMomentumContentSelectorWithAcknowledgement(plasma dp.DynamicPlasma, acknowledgement *chain.AcknowledgementRequirement) ContentSelector {
+	return &contentSelector{
+		plasma:          plasma,
+		acknowledgement: acknowledgement,
 	}
 }

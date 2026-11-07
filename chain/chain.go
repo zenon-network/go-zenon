@@ -63,10 +63,12 @@ type chain struct {
 func NewChain(chainManager db.Manager, cacheManager storage.CacheManager, genesis store.Genesis) *chain {
 	momentumPool := NewMomentumPool(chainManager, genesis)
 	cache := NewChainCache(cacheManager)
+	accountPool := newAccountPool(momentumPool)
+	accountPool.cacheAt = cache.GetCacheStore
 	return &chain{
 		log:                  common.ChainLogger,
 		Genesis:              genesis,
-		accountPool:          newAccountPool(momentumPool),
+		accountPool:          accountPool,
 		momentumPool:         momentumPool,
 		momentumEventManager: momentumPool.momentumEventManager,
 		chainCache:           cache,
