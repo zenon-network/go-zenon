@@ -417,9 +417,16 @@ type MomentumList struct {
 // DetailedMomentumList is a paginated list of momentums paired with the
 // account blocks they confirm. Count has the same meaning as in
 // MomentumList.
+//
+// More is true when the list stopped at the response byte budget
+// (detailedMomentumsByteBudget) before the end of the requested range;
+// the caller continues from the height after the last momentum in List.
+// It is omitted when false, so a list that covers the whole requested
+// range encodes exactly as it did before the budget existed.
 type DetailedMomentumList struct {
 	List  []*DetailedMomentum `json:"list"`
 	Count int                 `json:"count"`
+	More  bool                `json:"more,omitempty"`
 }
 
 // ToLedgerBlock returns a copy of the embedded nom.AccountBlock,
@@ -535,12 +542,29 @@ func (block *AccountBlock) addAllExtraInfo(chain chain.Chain) error {
 	return nil
 }
 
-func momentumListToDetailedList(chain chain.Chain, list *MomentumList) (*DetailedMomentumList, error) {
+// detailedMomentumsByteBudget bounds the encoded size of the list one
+// GetDetailedMomentumsByHeight call returns: 10 MB, two fifths of the
+// 25 MB maxBatchResponseBytes in rpc/server, so one budget-sized answer
+// never trips the batch limit by itself and two fit in one batch. It is
+// a variable so tests can lower it.
+var detailedMomentumsByteBudget = 10 * 1000 * 1000
+
+// momentumListToDetailedList pairs each momentum of list with its
+// account blocks, in order, and stops before the encoded list would
+// exceed byteBudget bytes. Each momentum is encoded once after it is
+// built to measure it; the momentum that would cross the budget is
+// dropped, nothing after it is read, and More is set. The first
+// momentum is always kept, whatever its size, so a caller always
+// advances; its size is bounded by the verifier's per-momentum content
+// limit.
+func momentumListToDetailedList(chain chain.Chain, list *MomentumList, byteBudget int) (*DetailedMomentumList, error) {
 	ans := &DetailedMomentumList{
 		Count: list.Count,
-		List:  make([]*DetailedMomentum, len(list.List)),
+		List:  make([]*DetailedMomentum, 0, len(list.List)),
 	}
-	for index, momentum := range list.List {
+	// the encoded list is "[" + elements joined by "," + "]"
+	size := len("[]")
+	for _, momentum := range list.List {
 		store := chain.GetFrontierMomentumStore()
 		m, err := store.PrefetchMomentum(momentum.Momentum)
 		if err != nil {
@@ -550,10 +574,24 @@ func momentumListToDetailedList(chain chain.Chain, list *MomentumList) (*Detaile
 		if err != nil {
 			return nil, err
 		}
-		ans.List[index] = &DetailedMomentum{
+		detailed := &DetailedMomentum{
 			Momentum:      momentum,
 			AccountBlocks: accountBlocks,
 		}
+		encoded, err := json.Marshal(detailed)
+		if err != nil {
+			return nil, err
+		}
+		next := size + len(encoded)
+		if len(ans.List) > 0 {
+			next += len(",")
+			if next > byteBudget {
+				ans.More = true
+				break
+			}
+		}
+		ans.List = append(ans.List, detailed)
+		size = next
 	}
 
 	return ans, nil
