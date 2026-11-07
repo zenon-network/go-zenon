@@ -220,6 +220,12 @@ func (vm *VM) applySend(block *nom.AccountBlock) error {
 		}
 	}
 
+	return vm.applyTransfer(block)
+}
+
+// applyTransfer debits the send's amount from the sending account. It
+// is the balance half of applySend, without the embedded-method checks.
+func (vm *VM) applyTransfer(block *nom.AccountBlock) error {
 	// affect balance
 	if !enoughFunds(vm.context, block) {
 		return constants.ErrInsufficientBalance
@@ -228,6 +234,28 @@ func (vm *VM) applySend(block *nom.AccountBlock) error {
 	vm.context.SubBalance(&block.TokenStandard, block.Amount)
 
 	return nil
+}
+
+// isEmbeddedRefundSporkEnforced reports whether EmbeddedRefundSpork is
+// active at the context's momentum. It reads the cache store directly,
+// like the vm_context Is*SporkEnforced methods do, so that the
+// AccountVmContext interface and its test doubles stay unchanged.
+func isEmbeddedRefundSporkEnforced(context vm_context.AccountVmContext) bool {
+	active, err := context.CacheStore().IsSporkActive(types.EmbeddedRefundSpork)
+	common.DealWithErr(err)
+	return active
+}
+
+// isEmbeddedDeposit reports whether sendBlock is a data-less send from
+// one embedded contract to another. Such a send can only be cemented as
+// the refund rollbackEmbedded builds when a contract-to-contract send
+// fails (issue #271): a method may build a data-less descendant towards
+// a caller-chosen embedded address (an HTLC unlock, say), but applySend
+// rejects it on the method lookup, so that receive fails instead.
+func isEmbeddedDeposit(sendBlock *nom.AccountBlock) bool {
+	return types.IsEmbeddedAddress(sendBlock.Address) &&
+		types.IsEmbeddedAddress(sendBlock.ToAddress) &&
+		len(sendBlock.Data) == 0
 }
 
 // checkSporkGatedSendRules applies the per-method send rules that are
@@ -312,6 +340,18 @@ func (vm *VM) generateEmbeddedReceive(fromBlockHash types.Hash) (*nom.AccountBlo
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// A data-less send from another embedded contract is a refund of a
+	// failed contract-to-contract send (see isEmbeddedDeposit). It
+	// selects no method, so once
+	// EmbeddedRefundSpork is enforced the contract accepts it as a
+	// deposit and the receive succeeds. Before the spork such a send is
+	// never created: the refund fails in rollbackEmbedded instead.
+	if isEmbeddedDeposit(sendBlock) && isEmbeddedRefundSporkEnforced(vm.context) {
+		vm.context.AddBalance(&sendBlock.TokenStandard, sendBlock.Amount)
+		return vm.finalizeEmbedded(fromBlockHash, nil, nil)
+	}
+
 	method, err := embedded.GetEmbeddedMethod(vm.context, sendBlock.ToAddress, sendBlock.Data)
 
 	// can happen when a method is deleted in a spork (height 100) and someone calls it before the spork (height 95)
@@ -360,7 +400,19 @@ func (vm *VM) rollbackEmbedded(fromBlockHash types.Hash, methodErr error) (*nom.
 			TokenStandard: sendBlock.TokenStandard,
 		}
 
-		err := vm.applySend(dBlock)
+		// A refund to an embedded contract carries no data, so the
+		// method lookup in applySend cannot resolve it and the refund
+		// fails as an internal error: the receive is never generated
+		// and the send stays at the head of the queue (issue #271).
+		// Once EmbeddedRefundSpork is enforced the refund only moves
+		// the balance, and the sending contract takes it back as a
+		// deposit (see generateEmbeddedReceive).
+		var err error
+		if types.IsEmbeddedAddress(dBlock.ToAddress) && isEmbeddedRefundSporkEnforced(vm.context) {
+			err = vm.applyTransfer(dBlock)
+		} else {
+			err = vm.applySend(dBlock)
+		}
 		if err != nil {
 			log.Error("Unable to apply descendant blocks for refund", "reason", err, "send-block-hash", sendBlock.Hash)
 			return nil, nil, err
