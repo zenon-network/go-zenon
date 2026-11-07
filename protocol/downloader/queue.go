@@ -106,12 +106,31 @@ func (q *queue) Pending() int {
 	return q.hashQueue.Size()
 }
 
+// BlockOffset retrieves the height of the first cached block: it advances
+// only when TakeBlocks hands a contiguous run over to the import worker.
+func (q *queue) BlockOffset() uint64 {
+	q.lock.RLock()
+	defer q.lock.RUnlock()
+
+	return q.blockOffset
+}
+
 // InFlight retrieves the number of fetch requests currently in flight.
 func (q *queue) InFlight() int {
 	q.lock.RLock()
 	defer q.lock.RUnlock()
 
 	return len(q.pendPool)
+}
+
+// ReserveSpace returns how many more blocks fit into the cache before
+// Reserve starts returning nil: half the cache minus the blocks already
+// downloaded. It is the same quantity Reserve uses to throttle itself.
+func (q *queue) ReserveSpace() int {
+	q.lock.RLock()
+	defer q.lock.RUnlock()
+
+	return (len(q.blockCache) / 2) - len(q.blockPool)
 }
 
 // Throttle checks if the download should be throttled (active block fetches
