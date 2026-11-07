@@ -602,17 +602,28 @@ func TestWarmBootstrapAcrossRestart(t *testing.T) {
 	waitForPeers(t, srvB, 1, 10*time.Second)
 
 	// Both ends record the observed connection origin (#263): A the
-	// address it dialled, B the inbound source address.
+	// address it dialled, B the inbound source address. The record is
+	// written just after adoption, so poll rather than read once.
 	pidA, err := PeerIDFromECDSA(keyA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec := srvA.peerdb.Load().record(pidB); rec == nil || rec.Origin != "127.0.0.1" {
-		t.Fatalf("A's record of B (outbound) = %+v, want origin 127.0.0.1", rec)
+	waitForOrigin := func(srv *Server, pid peer.ID, side string) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			rec := srv.peerdb.Load().record(pid)
+			if rec != nil && rec.Origin == "127.0.0.1" {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s record = %+v, want origin 127.0.0.1", side, rec)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
-	if rec := srvB.peerdb.Load().record(pidA); rec == nil || rec.Origin != "127.0.0.1" {
-		t.Fatalf("B's record of A (inbound) = %+v, want origin 127.0.0.1", rec)
-	}
+	waitForOrigin(srvA, pidB, "A's record of B (outbound)")
+	waitForOrigin(srvB, pidA, "B's record of A (inbound)")
 	srvA.Stop()
 
 	// Second run of A: no bootstrap entries at all. Only the peer
