@@ -5,8 +5,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/p2p/netutil"
-
 	"github.com/zenon-network/go-zenon/p2p/discover"
 )
 
@@ -76,23 +74,64 @@ func TestDefaultSeedersAreValidAndUnique(t *testing.T) {
 	}
 }
 
-// sharedAddressSpace is RFC 6598 carrier-grade NAT space, which
-// netutil's special-use lists do not cover.
-var sharedAddressSpace = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+// nonGlobal lists the address blocks that the IANA special-purpose
+// registries mark as not globally reachable, or that are otherwise
+// never a valid public endpoint. Blocks that mix global and non-global
+// assignments (192.0.0.0/24, 2001::/23) are excluded whole, which is
+// conservative for a seeder list. IPv6 outside 2000::/3 is rejected
+// separately, which covers ::/128, ::1, ::ffff:0:0/96, 64:ff9b::/96,
+// 64:ff9b:1::/48, 100::/64, 5f00::/16, fc00::/7 and fe80::/10.
+var nonGlobal = func() []*net.IPNet {
+	var out []*net.IPNet
+	for _, cidr := range []string{
+		"0.0.0.0/8",          // "this" network
+		"10.0.0.0/8",         // private use
+		"100.64.0.0/10",      // shared address space
+		"127.0.0.0/8",        // loopback
+		"169.254.0.0/16",     // link local
+		"172.16.0.0/12",      // private use
+		"192.0.0.0/24",       // IETF protocol assignments
+		"192.0.2.0/24",       // TEST-NET-1
+		"192.88.99.0/24",     // deprecated 6to4 relay anycast
+		"192.168.0.0/16",     // private use
+		"198.18.0.0/15",      // benchmarking
+		"198.51.100.0/24",    // TEST-NET-2
+		"203.0.113.0/24",     // TEST-NET-3
+		"224.0.0.0/4",        // multicast
+		"240.0.0.0/4",        // reserved
+		"255.255.255.255/32", // limited broadcast
+		"2001::/23",          // IETF protocol assignments
+		"2001:db8::/32",      // documentation
+		"2002::/16",          // 6to4
+		"3fff::/20",          // documentation
+	} {
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(err)
+		}
+		out = append(out, n)
+	}
+	return out
+}()
 
-// isPublicUnicast reports whether ip is a globally routable unicast
-// address, which a mainnet seeder must have: not private, loopback,
-// link-local, carrier-grade NAT, or an IANA special-use range such as
-// documentation or benchmarking space.
+// globalUnicast6 is the IPv6 global unicast allocation.
+var _, globalUnicast6, _ = net.ParseCIDR("2000::/3")
+
+// isPublicUnicast reports whether ip is a globally reachable unicast
+// address, which a mainnet seeder must have.
 func isPublicUnicast(ip net.IP) bool {
-	return ip != nil &&
-		ip.IsGlobalUnicast() &&
-		!ip.IsPrivate() &&
-		!ip.IsLoopback() &&
-		!ip.IsLinkLocalUnicast() &&
-		!netutil.IsLAN(ip) &&
-		!netutil.IsSpecialNetwork(ip) &&
-		!sharedAddressSpace.Contains(ip)
+	if ip == nil || !ip.IsGlobalUnicast() {
+		return false
+	}
+	if ip.To4() == nil && !globalUnicast6.Contains(ip) {
+		return false
+	}
+	for _, n := range nonGlobal {
+		if n.Contains(ip) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestIsPublicUnicast(t *testing.T) {
@@ -120,6 +159,18 @@ func TestIsPublicUnicast(t *testing.T) {
 		{"fe80::1", false},
 		{"fc00::1", false},
 		{"2001:db8::1", false}, // documentation
+		{"192.0.0.8", false},   // IETF protocol assignments
+		{"240.0.0.1", false},   // reserved
+		{"192.88.99.1", false}, // 6to4 relay anycast
+		{"::ffff:10.0.0.1", false},
+		{"64:ff9b::1", false},   // NAT64
+		{"64:ff9b:1::1", false}, // local-use NAT64
+		{"100::1", false},       // discard-only
+		{"5f00::1", false},      // SRv6 SIDs
+		{"2001::1", false},      // Teredo
+		{"2002::1", false},      // 6to4
+		{"3fff::1", false},      // documentation
+		{"2606:4700::1", true},
 	} {
 		if got := isPublicUnicast(net.ParseIP(tc.ip)); got != tc.public {
 			t.Errorf("isPublicUnicast(%s) = %v, want %v", tc.ip, got, tc.public)
