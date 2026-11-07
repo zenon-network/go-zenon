@@ -3,6 +3,8 @@ package consensus
 import (
 	"math/big"
 
+	"github.com/pkg/errors"
+
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -12,9 +14,12 @@ import (
 // API implements api.PillarReader on top of a momentum store — the
 // frontier or a fixed snapshot, depending on whether it came from
 // FrontierPillarReader or FixedPillarReader — combined with the
-// election reader and the points system. The rpc embedded pillar API
-// serves its results through a consensus cache refreshed at most
-// every five minutes.
+// election reader and the points system. Every read is answered from
+// momentumStore: the points and delegations are resolved against its
+// chain, not against the live frontier, so a reader fixed at a momentum
+// answers for that momentum even after the frontier has moved on or
+// rolled back. The rpc embedded pillar API serves its results through
+// a consensus cache refreshed at most every five minutes.
 type API struct {
 	momentumStore store.Momentum
 	er            ElectionReader
@@ -27,6 +32,9 @@ type API struct {
 // the very first tick, which has no completed predecessor, it reads
 // the current tick instead.
 func (obj *API) GetPillarWeights() (map[string]*big.Int, error) {
+	if obj.momentumStore == nil {
+		return nil, errNoMomentumStore
+	}
 	m, err := obj.momentumStore.GetFrontierMomentum()
 	if err != nil {
 		return nil, err
@@ -35,9 +43,12 @@ func (obj *API) GetPillarWeights() (map[string]*big.Int, error) {
 	if consensusTick != 0 {
 		consensusTick = consensusTick - 1
 	}
-	point, err := obj.points.GetPeriodPoints().GetPoint(consensusTick)
+	point, err := obj.points.GetPeriodPoints().getPointAt(obj.momentumStore, consensusTick)
 	if err != nil {
 		return nil, err
+	}
+	if point == nil {
+		return nil, errors.Errorf("no period point for tick %v at momentum %v", consensusTick, m.Identifier())
 	}
 	weights := make(map[string]*big.Int)
 	for name, pillar := range point.Pillars {
@@ -57,7 +68,7 @@ func (obj *API) EpochTicker() common.Ticker {
 // the average delegated weight, plus epoch-wide totals. It returns
 // nil, nil for an epoch that has not started.
 func (obj *API) EpochStats(epoch uint64) (*api.EpochStats, error) {
-	point, err := obj.points.GetEpochPoints().GetPoint(epoch)
+	point, err := obj.points.GetEpochPoints().getPointAt(obj.momentumStore, epoch)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +107,7 @@ func (obj *API) GetPillarDelegationsByEpoch(epoch uint64) (map[string]*types.Pil
 	result := make(map[string]*types.PillarDelegationDetail, 0)
 
 	for i := uint64(0); i < multiplier; i += 1 {
-		current, err := obj.er.DelegationsByTick(i + (epoch)*multiplier)
+		current, err := obj.er.delegationsByTickAt(obj.momentumStore, i+(epoch)*multiplier)
 		if err != nil {
 			return nil, err
 		}
