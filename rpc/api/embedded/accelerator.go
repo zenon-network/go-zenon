@@ -281,6 +281,14 @@ func (a *AcceleratorApi) GetPhaseById(id types.Hash) (*Phase, error) {
 // only those choices. The id itself is not validated, so an id with no
 // votes yields zero tallies rather than an error.
 //
+// This is the stored record of the poll: every stored vote counts,
+// including votes cast by pillars that have since revoked. Post-spork
+// (Dynamic Plasma) the contract tallies only the votes of pillars
+// active at update time, so these counts can differ from the tally
+// that decided an item, for settled items as well as for items still
+// in voting. They are left unfiltered so that a later revoke does not
+// rewrite the numbers shown for a settled item.
+//
 // JSON-RPC: embedded.accelerator.getVoteBreakdown
 func (a *AcceleratorApi) GetVoteBreakdown(id types.Hash) (*definition.VoteBreakdown, error) {
 	_, context, err := api.GetFrontierContext(a.chain, types.AcceleratorContract)
