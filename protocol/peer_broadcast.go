@@ -81,7 +81,7 @@ type broadcastQueue struct {
 	done chan struct{}
 
 	// mu guards stopped, started and the start of the disconnect
-	// goroutine, which wg joins.
+	// goroutine, which wg joins, and serializes enqueue with stop.
 	mu      sync.Mutex
 	stopped bool
 	started bool
@@ -104,27 +104,31 @@ func newBroadcastQueue(size int, maxBytes int64) *broadcastQueue {
 }
 
 // enqueue queues m for the writer without blocking.
+//
+// It holds q.mu, which stopBroadcast takes to mark the queue stopped, so
+// teardown cannot finish between the stopped check and the insertion: a
+// broadcast is either queued before the writer is told to stop, or
+// refused. Without that, one could land in the queue after the writer had
+// returned and be reported as queued (and its hash marked known) with
+// nothing left to write it. The lock is held only for non-blocking work.
 func (q *broadcastQueue) enqueue(m broadcastMsg) enqueueResult {
 	if q == nil {
 		return queueClosed
 	}
-	select {
-	case <-q.term:
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.stopped {
 		return queueClosed
-	default:
 	}
-	// Reserve the bytes first, so concurrent broadcasters cannot both
-	// pass the budget check; give them back if the queue is full by count.
+	// Broadcasters are serialized by q.mu and the writer only ever lowers
+	// q.bytes, so a stale read can only make this check stricter.
 	n := int64(len(m.payload))
-	for {
-		cur := q.bytes.Load()
-		if cur > 0 && cur+n > q.maxBytes {
-			return queueFull
-		}
-		if q.bytes.CompareAndSwap(cur, cur+n) {
-			break
-		}
+	if cur := q.bytes.Load(); cur > 0 && cur+n > q.maxBytes {
+		return queueFull
 	}
+	// Counted before the send, since the writer may dequeue and release
+	// m's bytes as soon as it is in the channel.
+	q.bytes.Add(n)
 	select {
 	case q.queue <- m:
 		return enqueued
