@@ -2,6 +2,7 @@ package node
 
 import (
 	"bufio"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -322,4 +323,88 @@ func TestHTTPMaxConnectionsZeroSelectsDefault(t *testing.T) {
 		t.Fatalf("second connection after the first closed: %v", err)
 	}
 	resp.Body.Close()
+}
+
+// A refusal goes through the node's CORS policy: a browser client from an
+// allowed origin gets the CORS headers it needs to read the 503 and its
+// -32005 error, a preflight is answered by the policy as usual, and an
+// origin outside the policy gets no CORS headers.
+func TestHTTPAdmissionRefusalAppliesCors(t *testing.T) {
+	const allowed = "https://allowed.example"
+	h := newHTTPServer(rpc.DefaultHTTPTimeouts)
+	if err := h.enableRPC(nil, httpConfig{MaxConcurrentRequests: 1, CorsAllowedOrigins: []string{allowed}}); err != nil {
+		t.Fatal(err)
+	}
+	defer h.stop()
+	handler := h.httpHandler.Load().(*rpcHandler).Handler
+
+	// Hold the only slot with a request whose body has not arrived yet.
+	bodyReader, bodyWriter := io.Pipe()
+	defer bodyWriter.Close()
+	held := httptest.NewRequest(http.MethodPost, "/", bodyReader)
+	held.Host = "127.0.0.1"
+	held.Header.Set("Content-Type", "application/json")
+	held.Header.Set("Origin", allowed)
+	heldRec := httptest.NewRecorder()
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		handler.ServeHTTP(heldRec, held)
+	}()
+	// A pipe write returns only once the handler reads it, so the held
+	// request is inside the stack, on its slot, once this returns.
+	if _, err := io.WriteString(bodyWriter, `{"jsonrpc":"2.0",`); err != nil {
+		t.Fatal(err)
+	}
+
+	request := func(method, origin string, preflight bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"rpc.modules","params":[]}`))
+		req.Host = "127.0.0.1"
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", origin)
+		if preflight {
+			req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := request(http.MethodPost, allowed, false)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "-32005") {
+		t.Fatalf("allowed origin: status %d body %q, want 503 with -32005", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != allowed {
+		t.Fatalf("allowed origin: Access-Control-Allow-Origin %q, want %q", got, allowed)
+	}
+	if got := rec.Header().Get("Connection"); got != "close" {
+		t.Fatalf("allowed origin: Connection %q, want close", got)
+	}
+
+	rec = request(http.MethodOptions, allowed, true)
+	if rec.Code >= 300 || rec.Header().Get("Access-Control-Allow-Origin") != allowed {
+		t.Fatalf("preflight: status %d Access-Control-Allow-Origin %q, want a 2xx allowing %q",
+			rec.Code, rec.Header().Get("Access-Control-Allow-Origin"), allowed)
+	}
+
+	rec = request(http.MethodPost, "https://other.example", false)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "-32005") {
+		t.Fatalf("other origin: status %d body %q, want 503 with -32005", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("other origin: Access-Control-Allow-Origin %q, want none", got)
+	}
+
+	if _, err := io.WriteString(bodyWriter, `"id":1,"method":"rpc.modules","params":[]}`); err != nil {
+		t.Fatal(err)
+	}
+	bodyWriter.Close()
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("held request did not finish")
+	}
+	if heldRec.Code != http.StatusOK || heldRec.Header().Get("Access-Control-Allow-Origin") != allowed {
+		t.Fatalf("held request: status %d Access-Control-Allow-Origin %q", heldRec.Code, heldRec.Header().Get("Access-Control-Allow-Origin"))
+	}
 }

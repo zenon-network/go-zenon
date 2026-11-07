@@ -344,10 +344,15 @@ func (h *httpServer) enableRPC(apis []rpc.API, config httpConfig) error {
 	h.httpConfig = config
 	// Admission is outermost so a request's slot is held until the gzip
 	// writer has finished its output, not only until the RPC server has
-	// returned.
+	// returned. A refusal goes through the same CORS policy, so a browser
+	// client from an allowed origin can read the 503 and its -32005 error;
+	// a refused preflight is answered by that policy as usual.
 	h.httpHandler.Store(&rpcHandler{
-		Handler: srv.AdmitHTTP(NewHTTPHandlerStack(srv, config.CorsAllowedOrigins, config.Vhosts)),
-		server:  srv,
+		Handler: srv.AdmitHTTPRefusingWith(
+			NewHTTPHandlerStack(srv, config.CorsAllowedOrigins, config.Vhosts),
+			newCorsHandler(http.HandlerFunc(rpc.OverloadedHTTP), config.CorsAllowedOrigins),
+		),
+		server: srv,
 	})
 	return nil
 }

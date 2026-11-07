@@ -725,3 +725,113 @@ func TestHTTPAdmissionCoversEarlyAnswers(t *testing.T) {
 		})
 	}
 }
+
+// sendExpectContinue sends a request with Expect: 100-continue and a
+// declared body, and sends none of the body: like a client that waits for
+// the go-ahead before sending it.
+func sendExpectContinue(t *testing.T, addr, method, contentType string, length int) (net.Conn, *bufio.Reader) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	req := fmt.Sprintf("%s / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: %s\r\nContent-Length: %d\r\nExpect: 100-continue\r\n\r\n",
+		method, contentType, length)
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+	return conn, bufio.NewReader(conn)
+}
+
+// A request sent with Expect: 100-continue that is answered without reading
+// its body gets that answer at once, its connection is closed, and its slot
+// is released. Draining the body would wait for bytes the client only sends
+// after a 100 Continue that never comes, holding the answer and the slot.
+func TestHTTPAdmissionExpectContinueEarlyAnswer(t *testing.T) {
+	cases := []struct {
+		name, method, contentType string
+		status                    int
+	}{
+		{"invalid content type", http.MethodPost, "text/plain", http.StatusUnsupportedMediaType},
+		{"options", http.MethodOptions, "application/json", http.StatusNoContent},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _, hs := newAdmissionTestServer(t, 1)
+			conn, reader := sendExpectContinue(t, hs.Listener.Addr().String(), tc.method, tc.contentType, 64)
+			conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			resp, err := http.ReadResponse(reader, nil)
+			if err != nil {
+				t.Fatalf("early answer: %v", err)
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != tc.status {
+				t.Fatalf("early answer: status %d, want %d", resp.StatusCode, tc.status)
+			}
+			if _, err := reader.ReadByte(); err != io.EOF {
+				t.Fatalf("after the early answer: read returned %v, want io.EOF (connection closed by the server)", err)
+			}
+			waitUntil(t, "the slot to be released", func() bool { return srv.httpRequests.inFlight() == 0 })
+			status, reply := post(t, hs.URL, callBody("test.signal", 2))
+			requireServed(t, "request after the early answer", status, reply)
+		})
+	}
+}
+
+// A request sent with Expect: 100-continue whose body is read gets the
+// go-ahead, and is served on its slot as usual.
+func TestHTTPAdmissionExpectContinueServed(t *testing.T) {
+	srv, svc, hs := newAdmissionTestServer(t, 1)
+	body := callBody("test.signal", 1)
+	conn, reader := sendExpectContinue(t, hs.Listener.Addr().String(), http.MethodPost, "application/json", len(body))
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	cont, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatalf("go-ahead: %v", err)
+	}
+	if cont.StatusCode != http.StatusContinue {
+		t.Fatalf("go-ahead: status %d, want 100", cont.StatusCode)
+	}
+	if _, err := conn.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	var reply admissionReply
+	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	resp.Body.Close()
+	requireServed(t, "expect-continue call", resp.StatusCode, reply)
+	if n := atomic.LoadInt32(&svc.signaled); n != 1 {
+		t.Fatalf("%d calls ran, want 1", n)
+	}
+	waitUntil(t, "the slot to be released", func() bool { return srv.httpRequests.inFlight() == 0 })
+}
+
+// A refused request sent with Expect: 100-continue gets its 503 at once and
+// its connection is closed.
+func TestHTTPAdmissionExpectContinueRefused(t *testing.T) {
+	_, svc, hs := newAdmissionTestServer(t, 1)
+	startBlockingCalls(t, hs.URL, svc, 1)
+
+	conn, reader := sendExpectContinue(t, hs.Listener.Addr().String(), http.MethodPost, "application/json", 64)
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	resp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatalf("refusal: %v", err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(raw), "-32005") {
+		t.Fatalf("refusal: status %d body %q, want 503 with -32005", resp.StatusCode, raw)
+	}
+	if _, err := reader.ReadByte(); err != io.EOF {
+		t.Fatalf("after the refusal: read returned %v, want io.EOF (connection closed by the server)", err)
+	}
+	svc.releaseOnce()
+}
