@@ -192,6 +192,9 @@ func (abv *accountBlockVerifier) all() error {
 	if err := abv.momentumAcknowledged(); err != nil {
 		return err
 	}
+	if err := abv.acknowledgementRecency(); err != nil {
+		return err
+	}
 	if err := abv.fromHash(); err != nil {
 		return err
 	}
@@ -379,6 +382,35 @@ func (abv *accountBlockVerifier) momentumAcknowledged() error {
 		}
 	}
 
+	return nil
+}
+
+// acknowledgementRecency is the admission side of the acknowledgement
+// recency rule (chain.AcknowledgementRequirement): once
+// AcknowledgementRecencySpork is enforced at the frontier, a user block
+// must acknowledge a momentum at which every spork enforced at the
+// frontier is already enforced, since the next momentum, whose parent is
+// the frontier, could not confirm it otherwise. Embedded blocks are
+// exempt. A block admitted here can still become stale when a later
+// spork is enforced; the account pool evicts it then.
+func (abv *accountBlockVerifier) acknowledgementRecency() error {
+	if types.IsEmbeddedAddress(abv.block.Address) {
+		return nil
+	}
+	var cacheAt chain.CacheStoreAt
+	if abv.chain != nil {
+		cacheAt = abv.chain.GetCacheStore
+	}
+	requirement, err := chain.NewAcknowledgementRequirement(abv.frontierStore, cacheAt)
+	if err != nil {
+		return InternalError(err)
+	}
+	if err := requirement.Check(abv.block); err != nil {
+		if chain.IsAcknowledgementRejection(err) {
+			return fmt.Errorf("%w - %v", ErrABMAStale, err)
+		}
+		return InternalError(err)
+	}
 	return nil
 }
 func (abv *accountBlockVerifier) fromHash() error {

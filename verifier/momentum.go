@@ -129,6 +129,9 @@ func (rmv *rawMomentumVerifier) all() error {
 	if err := rmv.content(isDynamicPlasmaActive); err != nil {
 		return err
 	}
+	if err := rmv.acknowledgementRecency(rmv.accountBlocks); err != nil {
+		return err
+	}
 	return nil
 }
 func (rmv *rawMomentumVerifier) chainIdentifier() error {
@@ -408,6 +411,36 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 		heads[header.Address] = block.Identifier()
 	}
 
+	return nil
+}
+
+// acknowledgementRecency applies the acknowledgement recency rule
+// (chain.AcknowledgementRequirement) to the momentum's user blocks, which
+// content has already matched one to one against the momentum's content
+// headers: once
+// AcknowledgementRecencySpork is enforced at the parent, each must
+// acknowledge a momentum at which every spork enforced at the parent is
+// already enforced. Both the parent and every acknowledgement are fixed by
+// canonical identifiers, so the answer does not depend on the verifying
+// node's own frontier. Embedded blocks are exempt. A store that cannot be
+// read fails the momentum.
+func (rmv *rawMomentumVerifier) acknowledgementRecency(blocks []*nom.AccountBlock) error {
+	var cacheAt chain.CacheStoreAt
+	if rmv.chain != nil {
+		cacheAt = rmv.chain.GetCacheStore
+	}
+	requirement, err := chain.NewAcknowledgementRequirement(rmv.momentumStore, cacheAt)
+	if err != nil {
+		return InternalError(err)
+	}
+	for _, block := range blocks {
+		if err := requirement.Check(block); err != nil {
+			if chain.IsAcknowledgementRejection(err) {
+				return fmt.Errorf("%w - account-block %v: %v", ErrMStaleAcknowledgement, block.Header(), err)
+			}
+			return InternalError(err)
+		}
+	}
 	return nil
 }
 

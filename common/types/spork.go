@@ -46,18 +46,28 @@ var (
 	// to version 2 with adaptive fusion/work prices.
 	DynamicPlasmaSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000002")
 
+	// AcknowledgementRecencySpork gates the acknowledgement recency rule.
+	// Until this spork's EnforcementHeight is reached, a user account
+	// block may acknowledge any canonical momentum no older than its
+	// account's previous acknowledgement; once it is enforced at a
+	// momentum's parent, every user account block in that momentum must
+	// acknowledge a momentum at which every spork enforced at the parent
+	// is already enforced (see chain.AcknowledgementRequirement).
+	AcknowledgementRecencySpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000005")
+
 	// ImplementedSporksMap is the set of spork IDs this build knows
 	// how to enforce. After every momentum insertion the momentum pool
 	// checks each activated spork that has reached its enforcement
 	// height against this map; if any is missing, the node terminates
 	// and asks for a binary upgrade (see chain/momentum_pool.go).
 	ImplementedSporksMap = map[Hash]bool{
-		AcceleratorSpork.SporkId:        true,
-		HtlcSpork.SporkId:               true,
-		PtlcSpork.SporkId:               true,
-		BridgeAndLiquiditySpork.SporkId: true,
-		Libp2pSpork.SporkId:             true,
-		DynamicPlasmaSpork.SporkId:      true,
+		AcceleratorSpork.SporkId:            true,
+		HtlcSpork.SporkId:                   true,
+		PtlcSpork.SporkId:                   true,
+		BridgeAndLiquiditySpork.SporkId:     true,
+		Libp2pSpork.SporkId:                 true,
+		DynamicPlasmaSpork.SporkId:          true,
+		AcknowledgementRecencySpork.SporkId: true,
 	}
 )
 

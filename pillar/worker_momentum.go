@@ -1,6 +1,7 @@
 package pillar
 
 import (
+	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
@@ -22,6 +23,14 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 		return nil, nil, err
 	}
 
+	// The acknowledgement recency rule at this parent, read once for the
+	// whole selection; nil while AcknowledgementRecencySpork is not
+	// enforced, which leaves both selections below unchanged.
+	acknowledgement, err := chain.NewAcknowledgementRequirement(store, w.chain.GetCacheStore)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	var (
 		m      *nom.Momentum
 		blocks []*nom.AccountBlock
@@ -33,7 +42,7 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 			return nil, nil, err
 		}
 		plasma := dp.NewDynamicPlasma(previousMomentum, config)
-		blocks = NewMomentumContentSelector(plasma).Content(w.chain.GetAllUncommittedAccountBlocks())
+		blocks = NewMomentumContentSelectorWithAcknowledgement(plasma, acknowledgement).Content(w.chain.GetAllUncommittedAccountBlocks())
 		basePlasma := plasma.ComputeTotalBasePlasma(blocks)
 		m = &nom.Momentum{
 			ChainIdentifier: w.chain.ChainIdentifier(),
@@ -46,7 +55,9 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 			NextWorkPrice:   plasma.NextWorkPrice(basePlasma.Pow),
 		}
 	} else {
-		blocks = w.chain.GetNewMomentumContent()
+		// Removing an account's failing block and everything above it from
+		// the pool's selection keeps it gap-free and within its budgets.
+		blocks = acknowledgement.Filter(w.chain.GetNewMomentumContent(), reportStaleAcknowledgement)
 		m = &nom.Momentum{
 			ChainIdentifier: w.chain.ChainIdentifier(),
 			PreviousHash:    previousMomentum.Hash,
