@@ -46,6 +46,15 @@ var (
 	// to version 2 with adaptive fusion/work prices.
 	DynamicPlasmaSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000002")
 
+	// EmbeddedRefundSpork gates the refund of a failed contract-to-contract
+	// send (issue #271). Until this spork's EnforcementHeight is reached, a
+	// failed receive refunds through the ordinary send path, whose method
+	// lookup cannot resolve a data-less send to an embedded contract, so the
+	// receive is never generated. At activation the refund to an embedded
+	// sender skips that lookup, and an embedded contract accepts a
+	// data-less send from another embedded contract as a plain deposit.
+	EmbeddedRefundSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000004")
+
 	// ImplementedSporksMap is the set of spork IDs this build knows
 	// how to enforce. After every momentum insertion the momentum pool
 	// checks each activated spork that has reached its enforcement
@@ -58,6 +67,7 @@ var (
 		BridgeAndLiquiditySpork.SporkId: true,
 		Libp2pSpork.SporkId:             true,
 		DynamicPlasmaSpork.SporkId:      true,
+		EmbeddedRefundSpork.SporkId:     true,
 	}
 )
 
