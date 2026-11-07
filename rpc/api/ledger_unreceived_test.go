@@ -450,3 +450,18 @@ func TestGetUnreceivedBlocksByAddress_ScanBound(t *testing.T) {
 		t.Fatalf("largest page index: got %v, want ErrPageIndexParamTooBig", err)
 	}
 }
+
+// With exactly unreceivedMaxScan unreceived entries the last page is full
+// and still reports More, since the scan stopped on the bound without
+// looking further; the page after it is rejected rather than empty.
+func TestGetUnreceivedBlocksByAddress_ExactlyAtScanBound(t *testing.T) {
+	f := newUnreceivedFixture(t, unreceivedMaxScan, func(int) bool { return false })
+	last := f.get(t, unreceivedMaxScan/50-1, 50)
+	expectHashes(t, "last page", hashesOf(last.List), f.pending[unreceivedMaxScan-50:])
+	if last.Count != unreceivedMaxScan || !last.More {
+		t.Fatalf("last page: count %d more %v, want count %d more true", last.Count, last.More, unreceivedMaxScan)
+	}
+	if _, err := f.api.GetUnreceivedBlocksByAddress(unreceivedRecipient, unreceivedMaxScan/50, 50); err != ErrPageIndexParamTooBig {
+		t.Fatalf("page after the bound: got %v, want ErrPageIndexParamTooBig", err)
+	}
+}

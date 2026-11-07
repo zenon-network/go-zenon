@@ -51,18 +51,20 @@ type LedgerApi struct {
 // unreceivedMaxPageSize (50) blocks. Each call examines the pending
 // entries of the mailbox in key order, one key read and one IsReceived
 // lookup each: at least the first unreceivedQuerySize (500), which was
-// once the whole scan, so a page whose blocks all lie among the
-// unreceived ones of those entries keeps the Count and More it had then;
-// beyond them only as many as the requested page needs, never more than
-// unreceivedMaxScan (10000). Blocks are read for the returned page only.
+// once the whole scan, and beyond them only as many as the requested page
+// needs, never more than unreceivedMaxScan (10000). A request whose page
+// is filled by the unreceived blocks of the first 500 entries examines
+// exactly those and keeps the Count and More it had then. Blocks are read
+// for the returned page only.
 //
 // The bound counts pending entries. A send received by a confirmed
 // receive leaves a tombstone under the mailbox's pending prefix, and the
 // iterator steps over those inside each key read, so a mailbox with many
-// received sends costs more per entry. The scan stops on its last
-// examined entry without reading another key, so it steps over only the
-// tombstones that lie before that entry, as the 500-entry scan this
-// replaces did.
+// received sends costs more per entry. A scan stopped by its threshold or
+// by the bound stops on its last examined entry without reading another
+// key, so it steps over only the tombstones before that entry. A scan
+// that reaches the end of the pending set steps over the trailing ones
+// to find that end, as the 500-entry scan this replaces did.
 const (
 	unreceivedMaxPageSize = 50
 	unreceivedQuerySize   = 500
@@ -381,14 +383,16 @@ func (l *LedgerApi) GetAccountInfoByAddress(address types.Address) (*AccountInfo
 // 0-based. Each call examines the pending entries in key order: at least
 // the first 500, and beyond them only as far as the requested page
 // needs, up to 10000 entries. In the result, Count is the number of
-// unreceived blocks among the examined entries and More is true when the
-// scan stopped before the end of the pending set, meaning additional
-// unreceived blocks may exist; when More is false, Count is the total.
-// More can be true with nothing left, in which case the next page comes
-// back empty with More false. A page past Count with More false is empty. The page that reaches the 10000-entry bound
-// may be short, and a page that would start past it returns
-// ErrPageIndexParamTooBig; the blocks beyond the bound are not listed
-// until earlier ones are received.
+// unreceived blocks among the examined entries. More is true when the
+// scan stopped without reaching the end of the pending set, meaning
+// additional unreceived blocks may exist; when More is false, Count is
+// the total. More can be true with nothing left: below the 10000-entry
+// bound the next page then comes back empty with More false. A page past
+// Count with More false is empty. The page that reaches the bound may be
+// short and reports More, and a page that would start past the bound
+// returns ErrPageIndexParamTooBig, even when no entry lies beyond it; the
+// blocks beyond the bound are not listed until earlier ones are
+// received.
 //
 // JSON-RPC: ledger.getUnreceivedBlocksByAddress
 func (l *LedgerApi) GetUnreceivedBlocksByAddress(address types.Address, pageIndex, pageSize uint32) (*AccountBlockList, error) {
