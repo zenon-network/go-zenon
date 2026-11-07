@@ -58,12 +58,41 @@ func TestChainInitBindsSporkAddress(t *testing.T) {
 		t.Fatalf("expected spork address %v, got %v", g.Spork.Address, types.SporkAddress)
 	}
 
+	// A refused start must not have installed the other spork
+	// authority.
+	types.SporkAddress = nil
 	err := startChain(t, chainDir, cacheDir, other)
 	if !errors.Is(err, chain.ErrSporkAddressMismatch) {
 		t.Fatalf("expected ErrSporkAddressMismatch, got %v", err)
 	}
+	if types.SporkAddress != nil {
+		t.Fatalf("expected types.SporkAddress to stay unset after a refused start, got %v", types.SporkAddress)
+	}
 
 	common.FailIfErr(t, startChain(t, chainDir, cacheDir, original))
+}
+
+// A malformed record is reported instead of being overwritten or
+// treated as a match.
+func TestChainInitRejectsCorruptSporkAddressRecord(t *testing.T) {
+	saved := types.SporkAddress
+	defer func() { types.SporkAddress = saved }()
+
+	chainDir, cacheDir := t.TempDir(), t.TempDir()
+	common.FailIfErr(t, startChain(t, chainDir, cacheDir, g.EmbeddedGenesis))
+
+	raw, err := leveldb.OpenFile(chainDir, nil)
+	common.FailIfErr(t, err)
+	common.FailIfErr(t, raw.Put([]byte("mgenesis-spork-address"), []byte{1, 2, 3}, nil))
+	common.FailIfErr(t, raw.Close())
+
+	types.SporkAddress = nil
+	if err := startChain(t, chainDir, cacheDir, g.EmbeddedGenesis); err == nil {
+		t.Fatal("expected an error for a corrupt spork-address record")
+	}
+	if types.SporkAddress != nil {
+		t.Fatalf("expected types.SporkAddress to stay unset, got %v", types.SporkAddress)
+	}
 }
 
 // A database created before the binding existed has no record yet: its
