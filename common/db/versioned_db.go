@@ -24,6 +24,8 @@ const (
 // current (frontier) state lives under frontierByte, while patchByte
 // and rollbackByte hold, per height, the serialized patch that
 // produced that version and its precomputed inverse.
+// metadataByte (metadata.go) holds node-local values outside the
+// versioned state.
 var (
 	frontierByte = []byte{85}
 	patchByte    = []byte{102}

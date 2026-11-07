@@ -20,10 +20,16 @@
 // existing one must hold a momentum at height 1 with the same hash.
 // Since the momentum hash commits to the ChangesHash of the full
 // genesis state, any difference in the seeded state yields an
-// incompatible database. The spork address is not part of that state:
-// chain.Init copies it from the config into types.SporkAddress after
-// the hash check, so it can differ between two nodes on the same
-// chain.
+// incompatible database. The spork address is not part of that state,
+// and committing to it would change the alphanet genesis hash.
+// Instead chain.Init records the configured spork address in the chain
+// database's node-local metadata on first start and refuses to reopen
+// that database under a different one (chain.ErrSporkAddressMismatch)
+// before copying it into types.SporkAddress. The record is not shared
+// with peers, so two nodes started from genesis files that differ only
+// in SporkAddress still accept the same chain until the first spork
+// transaction splits them; the spork address is part of a network's
+// genesis file and must be distributed with it.
 package genesis
 
 import (
