@@ -65,9 +65,10 @@ func TestInsertChain_ExtensionRejectionIsRememberedAndQuarantinesThePeer(t *test
 	expectChainEquals(t, z.Chain(), before)
 }
 
-// A momentum that commits after a valid prefix of the same extension batch
-// is judged against the state the prefix left, which is its own previous
-// momentum, so its rejection is classified too and the prefix stays.
+// A candidate following a committed valid prefix of the same extension
+// batch is judged against the state the prefix left, which is its own
+// previous momentum, so its rejection is classified too and the prefix
+// stays.
 func TestInsertChain_ExtensionRejectionAfterValidPrefixKeepsThePrefix(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
