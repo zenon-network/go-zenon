@@ -67,6 +67,11 @@ type peer struct {
 	// time; see RequestLookupRate. newPeer sets the default; a peer built
 	// without one gets it on first use (requestBudget).
 	budget *requestBudget
+
+	// broadcasts queues momentum and account-block broadcasts for the
+	// peer's writer goroutine (see peer_broadcast.go). handle starts the
+	// writer once the peer is admitted and joins it on the way out.
+	broadcasts *broadcastQueue
 }
 
 func newPeer(version, network int, p p2p.Peer, rw p2p.MsgReadWriter) *peer {
@@ -92,6 +97,7 @@ func newPeer(version, network int, p p2p.Peer, rw p2p.MsgReadWriter) *peer {
 		id:          fmt.Sprintf("%x", id[:]),
 		knownTxs:    knownTxs,
 		knownBlocks: knownBlocks,
+		broadcasts:  newBroadcastQueue(maxQueuedBroadcasts),
 	}
 }
 
@@ -181,20 +187,47 @@ func (p *peer) SendBlocks(blocks []*nom.DetailedMomentum) error {
 	return err
 }
 
-// SendNewBlockHashes announces the availability of a number of blocks through
-// a hash notification.
-func (p *peer) SendNewBlockHashes(hashes []types.Hash) error {
-	for _, hash := range hashes {
-		p.knownBlocks.Add(hash, nil)
+// QueueNewBlockHashes queues an announcement of the availability of one
+// or more blocks, encoded as a NewBlockHashesMsg in m. The hashes are
+// marked as known to the peer only if the announcement was queued, so one
+// dropped on a full queue can be made again by a later broadcast.
+func (p *peer) QueueNewBlockHashes(hashes []types.Hash, m broadcastMsg) enqueueResult {
+	r := p.broadcasts.enqueue(m)
+	if r == enqueued {
+		for _, hash := range hashes {
+			p.knownBlocks.Add(hash, nil)
+		}
 	}
-	return p2p.Send(p.rw, NewBlockHashesMsg, hashes)
+	return r
 }
 
-// SendNewMomentum propagates an entire block to a remote peer.
-func (p *peer) SendNewMomentum(detailed *nom.DetailedMomentum) error {
-	detailed.Momentum.EnsureCache()
-	p.knownBlocks.Add(detailed.Momentum.Hash, nil)
-	return p2p.Send(p.rw, NewBlockMsg, detailed)
+// QueueNewMomentum queues the propagation of a full momentum, encoded as
+// a NewBlockMsg in m. The momentum is marked as known to the peer only if
+// the propagation was queued.
+func (p *peer) QueueNewMomentum(hash types.Hash, m broadcastMsg) enqueueResult {
+	r := p.broadcasts.enqueue(m)
+	if r == enqueued {
+		p.knownBlocks.Add(hash, nil)
+	}
+	return r
+}
+
+// QueueTransactions queues the propagation of account blocks, encoded as
+// a TxMsg in m. They are marked as known to the peer only if the
+// propagation was queued. A full queue disconnects the peer: nothing
+// offers an account block to a peer again while it stays connected, and
+// a reconnection is sent the pending ones (syncTransactions).
+func (p *peer) QueueTransactions(txs []*nom.AccountBlock, m broadcastMsg) enqueueResult {
+	r := p.broadcasts.enqueue(m)
+	switch r {
+	case enqueued:
+		for _, tx := range txs {
+			p.knownTxs.Add(tx.Hash, nil)
+		}
+	case queueFull:
+		p.requestDisconnect()
+	}
+	return r
 }
 
 // RequestHashes fetches a batch of hashes from a peer, starting at from, going

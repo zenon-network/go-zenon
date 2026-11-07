@@ -315,6 +315,12 @@ func (pm *ProtocolManager) handle(p *peer) error {
 		}
 		return err
 	}
+	// Start the peer's broadcast writer. The deferred calls run in
+	// reverse: removePeer unregisters the peer, so no broadcast picks it
+	// again, and disconnects it, which ends a write the writer may be
+	// stalled in; stopBroadcast then joins the writer.
+	p.startBroadcast()
+	defer p.stopBroadcast()
 	defer pm.removePeer(p.id)
 	// Propagate existing transactions. new transactions appearing
 	// after this will be sent via broadcasts.
@@ -668,6 +674,13 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 
 // BroadcastMomentum will  propagate a block to a subset of it's peers, or
 // will only announce it's availability (depending what's requested).
+//
+// It does not wait on any peer: each message is queued for the peer's
+// broadcast writer, which sends a peer's broadcasts in the order they were
+// queued. A peer whose queue is full skips the message and the block is
+// not marked as known to it, so the later announcement (the fetcher
+// broadcasts again after import) can still reach it; the peer can also
+// fetch the momentum from another peer or through sync.
 func (pm *ProtocolManager) BroadcastMomentum(detailed *nom.DetailedMomentum, propagate bool) {
 	hash := detailed.Momentum.Hash
 	peers := pm.peers.PeersWithoutBlock(hash)
@@ -684,37 +697,80 @@ func (pm *ProtocolManager) BroadcastMomentum(detailed *nom.DetailedMomentum, pro
 		}
 		// Send the block to a subset of our peers
 		transfer := peers[:numPeers]
-		for _, p := range transfer {
-			if err := p.SendNewMomentum(detailed); err != nil {
-				log.Debug("failed to propagated momentum", "peer-id", p.id, "reason", err)
+		if len(transfer) > 0 {
+			detailed.Momentum.EnsureCache()
+			payload, err := rlp.EncodeToBytes(detailed)
+			if err != nil {
+				log.Error("failed to encode momentum for propagation", "momentum-identifier", detailed.Momentum.Identifier(), "reason", err)
+				return
 			}
+			queued, dropped := 0, 0
+			for _, p := range transfer {
+				switch p.QueueNewMomentum(hash, newBroadcastMsg(NewBlockMsg, payload)) {
+				case enqueued:
+					queued++
+				case queueFull:
+					dropped++
+					log.Debug("dropped momentum propagation, broadcast queue full", "peer-id", p.id, "momentum-identifier", detailed.Momentum.Identifier())
+				}
+			}
+			log.Info("propagated momentum to peers", "num-peers", queued, "dropped", dropped, "momentum-identifier", detailed.Momentum.Identifier())
 		}
-		log.Info("propagated momentum to peers", "num-peers", len(transfer), "momentum-identifier", detailed.Momentum.Identifier())
 		announce = peers[numPeers:]
 	}
 
 	// Otherwise if the block is indeed in out own chain, announce it
 	if pm.chainman.HasBlock(hash) {
+		hashes := []types.Hash{hash}
+		payload, err := rlp.EncodeToBytes(hashes)
+		if err != nil {
+			log.Error("failed to encode momentum announcement", "momentum-identifier", detailed.Momentum.Identifier(), "reason", err)
+			return
+		}
+		queued, dropped := 0, 0
 		for _, p := range announce {
-			if err := p.SendNewBlockHashes([]types.Hash{hash}); err != nil {
-				log.Debug("failed to announce momentum", "peer-id", p.id, "reason", err)
+			switch p.QueueNewBlockHashes(hashes, newBroadcastMsg(NewBlockHashesMsg, payload)) {
+			case enqueued:
+				queued++
+			case queueFull:
+				dropped++
+				log.Debug("dropped momentum announcement, broadcast queue full", "peer-id", p.id, "momentum-identifier", detailed.Momentum.Identifier())
 			}
 		}
-		log.Info("announced momentum to peers", "num-peers", len(announce), "momentum-identifier", detailed.Momentum.Identifier())
+		log.Info("announced momentum to peers", "num-peers", queued, "dropped", dropped, "momentum-identifier", detailed.Momentum.Identifier())
 	}
 }
 
 // BroadcastAccountBlock will propagate a transaction to all peers which are not known to
 // already have the given transaction.
+//
+// Like BroadcastMomentum it only queues the message for each peer's
+// writer. An account block is not offered to a connected peer again, so a
+// peer whose queue is full is disconnected rather than skipped: a
+// reconnection is sent the pending account blocks (syncTransactions).
 func (pm *ProtocolManager) BroadcastAccountBlock(tx *nom.AccountBlock) {
 	// Broadcast transaction to a batch of peers not knowing about it
 	peers := pm.peers.PeersWithoutTx(tx.Hash)
+	if len(peers) == 0 {
+		return
+	}
+	txs := []*nom.AccountBlock{tx}
+	payload, err := rlp.EncodeToBytes(txs)
+	if err != nil {
+		log.Error("failed to encode account-block for propagation", "account-block-header", tx.Header(), "reason", err)
+		return
+	}
+	queued, overflowed := 0, 0
 	for _, p := range peers {
-		if err := p.SendTransactions([]*nom.AccountBlock{tx}); err != nil {
-			log.Debug("failed to propagated account-block", "peer-id", p.id, "reason", err)
+		switch p.QueueTransactions(txs, newBroadcastMsg(TxMsg, payload)) {
+		case enqueued:
+			queued++
+		case queueFull:
+			overflowed++
+			log.Debug("broadcast queue full, disconnecting peer", "peer-id", p.id, "account-block-header", tx.Header())
 		}
 	}
-	log.Info("propagated account-block to peers", "num-peers", len(peers), "account-block-header", tx.Header())
+	log.Info("propagated account-block to peers", "num-peers", queued, "overflowed", overflowed, "account-block-header", tx.Header())
 }
 
 // SyncInfo reports the current sync state together with the local
