@@ -78,9 +78,9 @@ func (termsSporkCache) IsSporkActive(spork *types.ImplementedSpork) (bool, error
 	return spork.SporkId == types.EpochRewardTermsSpork.SporkId, nil
 }
 
-// termsPillarReader has 1-second epochs from unix 0 and, for epoch 1
-// only, statistics in which termsVMPillar produced 10 of 10 momentums
-// with the whole weight delegated by termsVMBacker.
+// termsPillarReader has 1-second epochs from unix 0 and, for epochs 1
+// and 2 only, statistics in which termsVMPillar produced 10 of 10
+// momentums with the whole weight delegated by termsVMBacker.
 type termsPillarReader struct{}
 
 func (termsPillarReader) GetPillarWeights() (map[string]*big.Int, error) { return nil, nil }
@@ -88,13 +88,13 @@ func (termsPillarReader) EpochTicker() common.Ticker {
 	return common.NewTicker(time.Unix(0, 0), time.Second)
 }
 func (termsPillarReader) EpochStats(epoch uint64) (*api.EpochStats, error) {
-	if epoch != 1 {
+	if epoch != 1 && epoch != 2 {
 		return nil, errors.New("unexpected epoch")
 	}
 	return &api.EpochStats{
-		Epoch: 1,
+		Epoch: epoch,
 		Pillars: map[string]*api.EpochPillarStats{
-			termsVMPillar: {Epoch: 1, Name: termsVMPillar, BlockNum: 10, ExpectedBlockNum: 10, Weight: big.NewInt(1000)},
+			termsVMPillar: {Epoch: epoch, Name: termsVMPillar, BlockNum: 10, ExpectedBlockNum: 10, Weight: big.NewInt(1000)},
 		},
 		TotalWeight: big.NewInt(1000),
 		TotalBlocks: 10,
@@ -324,35 +324,38 @@ func TestGenerateEmbeddedReceive_UpdatePillarPruneFailureRollsBack(t *testing.T)
 	})
 }
 
-// Update at unix 3602 settles epoch 1, which the record at 0 governs
-// (0/100, while PillarInfo says 50/50). A failure of the epoch history
-// write rolls back the epoch marker and every credit.
+// Update at unix 3603 settles epochs 1 and 2 in one receive. The
+// record at 0 governs epoch 1 (0/100) and the record at 2 governs epoch
+// 2 (50/50, while PillarInfo says 50/50 too). A failure of the epoch 2
+// history write, after epoch 1 has been fully credited, rolls back both
+// epoch markers and every credit.
 func TestGenerateEmbeddedReceive_UpdateEpochHistoryFailureRollsBack(t *testing.T) {
 	records := []definition.PillarEpochTerms{
 		{Name: termsVMPillar, EffectiveEpoch: 0, GiveBlockRewardPercentage: 0, GiveDelegateRewardPercentage: 100},
 		{Name: termsVMPillar, EffectiveEpoch: 2, GiveBlockRewardPercentage: 50, GiveDelegateRewardPercentage: 50},
 	}
-	frontier := int64(1 + 1 + constants.RewardTimeLimit)
+	frontier := int64(2 + 1 + constants.RewardTimeLimit)
 
 	t.Run("success control", func(t *testing.T) {
 		h := newTermsVMHarness(t, frontier, 0, records...)
 		block, err := h.update()
 		common.FailIfErr(t, err)
 		h.expectStatus(block, resultSuccess)
-		h.expectLastEpoch(1)
-		history, err := definition.GetPillarEpochHistoryList(h.ctx.Storage(), 1)
-		common.FailIfErr(t, err)
-		if len(history) != 1 || history[0].GiveBlockRewardPercentage != 0 || history[0].GiveDelegateRewardPercentage != 100 {
-			t.Fatalf("epoch 1 history %+v, want one 0/100 entry", history)
-		}
-		// 10 momentums of epoch 1: 833333330 momentum + 400000000 delegation reward
-		common.Expect(t, h.depositOf(termsVMBacker).String(), "400000000")
-		common.Expect(t, h.depositOf(termsVMReward).String(), "833333330")
+		h.expectLastEpoch(2)
+		h.expectHistory(1, 0, 100)
+		h.expectHistory(2, 50, 50)
+		// each epoch: 833333330 momentum + 400000000 delegation reward;
+		// epoch 1 at 0/100 gives the delegator 400000000, epoch 2 at
+		// 50/50 gives it 616666665
+		common.Expect(t, h.epochCreditOf(1, termsVMBacker).String(), "400000000")
+		common.Expect(t, h.epochCreditOf(2, termsVMBacker).String(), "616666665")
+		common.Expect(t, h.depositOf(termsVMBacker).String(), "1016666665")
+		common.Expect(t, h.depositOf(termsVMReward).String(), "1449999995")
 	})
-	t.Run("history write fails", func(t *testing.T) {
+	t.Run("history write fails after a credited epoch", func(t *testing.T) {
 		h := newTermsVMHarness(t, frontier, 0, records...)
 		scratch := db.NewMemDB()
-		common.FailIfErr(t, (&definition.PillarEpochHistory{Name: termsVMPillar, Epoch: 1, Weight: big.NewInt(0)}).Save(scratch))
+		common.FailIfErr(t, (&definition.PillarEpochHistory{Name: termsVMPillar, Epoch: 2, Weight: big.NewInt(0)}).Save(scratch))
 		it := scratch.NewIterator(nil)
 		if !it.Next() {
 			t.Fatal("no history key")
@@ -364,10 +367,14 @@ func TestGenerateEmbeddedReceive_UpdateEpochHistoryFailureRollsBack(t *testing.T
 		expectInjectedTermsWrite(t, err)
 		h.expectStatus(block, resultFail)
 		h.expectLastEpoch(0)
-		history, err := definition.GetPillarEpochHistoryList(h.ctx.Storage(), 1)
-		common.FailIfErr(t, err)
-		if len(history) != 0 {
-			t.Fatalf("epoch 1 history %+v survived the rollback", history)
+		for _, epoch := range []uint64{1, 2} {
+			history, err := definition.GetPillarEpochHistoryList(h.ctx.Storage(), epoch)
+			common.FailIfErr(t, err)
+			if len(history) != 0 {
+				t.Fatalf("epoch %d history %+v survived the rollback", epoch, history)
+			}
+			common.Expect(t, h.epochCreditOf(epoch, termsVMBacker).Sign(), 0)
+			common.Expect(t, h.epochCreditOf(epoch, termsVMReward).Sign(), 0)
 		}
 		common.Expect(t, h.depositOf(termsVMBacker).Sign(), 0)
 		common.Expect(t, h.depositOf(termsVMReward).Sign(), 0)
@@ -375,4 +382,20 @@ func TestGenerateEmbeddedReceive_UpdateEpochHistoryFailureRollsBack(t *testing.T
 		common.FailIfErr(t, err)
 		common.Expect(t, last.Height, uint64(0))
 	})
+}
+
+func (h *termsVMHarness) expectHistory(epoch uint64, giveBlock, giveDelegate uint8) {
+	h.t.Helper()
+	history, err := definition.GetPillarEpochHistoryList(h.ctx.Storage(), epoch)
+	common.FailIfErr(h.t, err)
+	if len(history) != 1 || history[0].GiveBlockRewardPercentage != giveBlock || history[0].GiveDelegateRewardPercentage != giveDelegate {
+		h.t.Fatalf("epoch %d history %+v, want one %d/%d entry", epoch, history, giveBlock, giveDelegate)
+	}
+}
+
+func (h *termsVMHarness) epochCreditOf(epoch uint64, addr types.Address) *big.Int {
+	h.t.Helper()
+	credit, err := definition.GetRewardDepositHistory(h.ctx.Storage(), epoch, &addr)
+	common.FailIfErr(h.t, err)
+	return credit.Znn
 }
