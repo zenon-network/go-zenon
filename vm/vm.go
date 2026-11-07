@@ -247,9 +247,11 @@ func isEmbeddedRefundSporkEnforced(context vm_context.AccountVmContext) bool {
 }
 
 // isEmbeddedDeposit reports whether sendBlock is a data-less send from
-// one embedded contract to another. No contract method emits such a
-// send; the only source is the refund rollbackEmbedded builds when a
-// contract-to-contract send fails (issue #271).
+// one embedded contract to another. Such a send can only be cemented as
+// the refund rollbackEmbedded builds when a contract-to-contract send
+// fails (issue #271): a method may build a data-less descendant towards
+// a caller-chosen embedded address (an HTLC unlock, say), but applySend
+// rejects it on the method lookup, so that receive fails instead.
 func isEmbeddedDeposit(sendBlock *nom.AccountBlock) bool {
 	return types.IsEmbeddedAddress(sendBlock.Address) &&
 		types.IsEmbeddedAddress(sendBlock.ToAddress) &&
@@ -340,7 +342,8 @@ func (vm *VM) generateEmbeddedReceive(fromBlockHash types.Hash) (*nom.AccountBlo
 	}
 
 	// A data-less send from another embedded contract is a refund of a
-	// failed contract-to-contract send. It selects no method, so once
+	// failed contract-to-contract send (see isEmbeddedDeposit). It
+	// selects no method, so once
 	// EmbeddedRefundSpork is enforced the contract accepts it as a
 	// deposit and the receive succeeds. Before the spork such a send is
 	// never created: the refund fails in rollbackEmbedded instead.

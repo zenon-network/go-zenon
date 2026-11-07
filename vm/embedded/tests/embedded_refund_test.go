@@ -248,17 +248,16 @@ func TestEmbeddedRefund_AfterSporkRefundsAndAdvances(t *testing.T) {
 	activateEmbeddedRefundSpork(t, z)
 
 	burn := wrapUnburnable(t, z, zts)
-	defer z.CallContract(&nom.AccountBlock{
-		Address:       g.User2.Address,
-		ToAddress:     types.TokenContract,
-		TokenStandard: types.ZnnTokenStandard,
-		Amount:        constants.TokenIssueAmount,
-		Data: definition.ABIToken.PackMethodPanic(definition.IssueMethodName,
-			"queued", "QUEUED", "", big.NewInt(100), big.NewInt(100), uint8(1), false, true, false),
-	}).Error(t, nil)
+	queued := issueAfterBurn(z)
 	insertMomentums(z, 6)
 
 	expectReceived(t, z, types.TokenContract, burn, true)
+	expectReceived(t, z, types.TokenContract, queued, true)
+	issued, err := embedded.NewTokenApi(z).GetByOwner(g.User2.Address, 0, 10)
+	common.FailIfErr(t, err)
+	if issued.Count != 1 {
+		t.Fatalf("queued Issue created %d tokens, want 1", issued.Count)
+	}
 
 	// The Token contract's chain ends with the refund of the failed Burn,
 	// followed by the queued Issue's receive and its mint.
