@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"sort"
 	"sync"
 	"time"
@@ -51,12 +52,14 @@ const (
 	// the cap, expire evicts newcomers (first seen within peerDBTenure)
 	// first, newest first, whatever their subnet, so a burst of fresh
 	// identities evicts itself before any established peer; established
-	// records are then evicted from the largest subnet group (subnetKey)
-	// first, oldest lastSeen first, which balances the advertised groups:
-	// a long-lived squatter concentrated in one source loses records
-	// before established peers elsewhere, and a genuinely large group
-	// loses its oldest first. Subnet labels are self-advertised, so among
-	// established peers this is a heuristic, not a guarantee.
+	// records are then evicted from the largest origin group (subnetKey
+	// of the observed connection origin) first, oldest lastSeen first: a
+	// long-lived squatter concentrated in one source loses records before
+	// established peers elsewhere, and a genuinely large group loses its
+	// oldest first. Peers sharing one origin (a NAT) form one group too,
+	// as do all relayed peers, so over the cap they lose records before peers with
+	// origins of their own; that is accepted for a best-effort bootstrap
+	// aid.
 	peerDBMaxRecords = 2000
 
 	// peerDBTenure is how long a record must have existed to count as
@@ -112,6 +115,15 @@ type peerDBRecord struct {
 	// written before the field existed carry zero and count as
 	// established: they necessarily predate it.
 	FirstSeen int64 `json:"firstSeen,omitempty"`
+	// Origin is the IP address this node observed the peer's connection
+	// come from: the transport's remote address, which the peer cannot
+	// choose the way it chooses the Addrs it advertises; relayedOrigin
+	// for a relayed connection (see observedOrigin). It is refreshed on
+	// every recordConnected that carries one and keys the diversity
+	// grouping (see recordGroup). Records written before the field
+	// existed carry none until the peer's next connection and share the
+	// unobserved group meanwhile.
+	Origin string `json:"origin,omitempty"`
 }
 
 // openPeerDB opens (creating if needed) the peer database at path and
@@ -140,11 +152,14 @@ func (d *peerDB) Close() error {
 // fail counter, and replaces the stored addresses when a non-empty set
 // is provided. An empty addrs set keeps any previously stored
 // addresses — identify may not have completed when the first adoption
-// hook fires, and the disconnect-time refresh fills them in later. A
-// new record is stamped firstSeen and counted; the peerDBMaxRecords-th
-// new record since the last expire pass runs one inline, so the cap
-// holds between the hourly passes.
-func (d *peerDB) recordConnected(id peer.ID, addrs []ma.Multiaddr) {
+// hook fires, and the disconnect-time refresh fills them in later.
+// origin is the connection's remote multiaddr; what observedOrigin
+// makes of it replaces the stored origin, and an origin it makes nothing
+// of (nil, or a non-IP transport) keeps the stored one. A new record is stamped
+// firstSeen and counted; the peerDBMaxRecords-th new record since the
+// last expire pass runs one inline, so the cap holds between the
+// hourly passes.
+func (d *peerDB) recordConnected(id peer.ID, addrs []ma.Multiaddr, origin ma.Multiaddr) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -156,6 +171,9 @@ func (d *peerDB) recordConnected(id peer.ID, addrs []ma.Multiaddr) {
 	}
 	if dialable := dedupAddrStrings(addrs); len(dialable) > 0 {
 		rec.Addrs = dialable
+	}
+	if o := observedOrigin(origin); o != "" {
+		rec.Origin = o
 	}
 	rec.LastSeen = now
 	rec.FailCount = 0
@@ -184,40 +202,89 @@ func (d *peerDB) recordDialFail(id peer.ID) {
 	d.put(id, rec)
 }
 
-// subnetKey buckets a peer's addresses into a group so seeds() can spread
-// candidates across sources rather than let one source dominate a round:
-// IPv4 by /16 prefix (the granularity libp2p's own peerdiversity filter
-// uses), IPv6 by /48 prefix, and every peer whose addresses carry no
-// literal IP into one shared DNS group. Peers with no address information
-// at all share the empty key and form a group of their own.
-func subnetKey(addrs []ma.Multiaddr) string {
-	for _, a := range addrs {
-		ip, _, err := parseMultiaddrIPPort(a)
-		if err != nil || ip == nil {
-			continue
-		}
-		if ip4 := ip.To4(); ip4 != nil {
-			return fmt.Sprintf("4:%d.%d", ip4[0], ip4[1])
-		}
-		if ip16 := ip.To16(); ip16 != nil {
-			return fmt.Sprintf("6:%x", ip16[:6])
+// unobservedGroup is the diversity group of every record with no
+// observed origin: records written before the origin was recorded,
+// until the peer's next connection fills it in. They share one group
+// rather than fall back to their advertised addresses, which the peer
+// chooses and which would let a stored identity claim a group of its
+// choice. In seeds they get one slot per round between them (on the
+// first restart after an upgrade, when every record is unobserved, that
+// is the plain recency order). Over the cap, eviction still takes
+// newcomers (by firstSeen, whatever their group) first; among
+// established records the unobserved ones count as one group, which is
+// typically the largest right after an upgrade, so established peers
+// not seen since the upgrade tend to go before established peers that
+// have reconnected.
+const unobservedGroup = "unobserved"
+
+// relayedOrigin is the stored origin, and the diversity group, of a peer
+// last seen over a relayed (/p2p-circuit) connection. Such a connection's
+// remote multiaddr starts with the relay's address, which the peer picks
+// when it picks the relay, and public relays sit in many prefixes; one
+// shared group keeps a source that routes identities through relays in
+// different /16s to one slot per round.
+const relayedOrigin = "relayed"
+
+// subnetKey buckets an observed origin IP into a diversity group so
+// seeds can spread candidates across sources rather than let one source
+// dominate a round, and so over-cap eviction can take from the largest
+// source first: IPv4 by /16 prefix (the granularity libp2p's own
+// peerdiversity filter uses), IPv6 by /48 prefix. A nil IP is
+// unobservedGroup.
+func subnetKey(ip net.IP) string {
+	if ip4 := ip.To4(); ip4 != nil {
+		return fmt.Sprintf("4:%d.%d", ip4[0], ip4[1])
+	}
+	if ip16 := ip.To16(); ip16 != nil {
+		return fmt.Sprintf("6:%x", ip16[:6])
+	}
+	return unobservedGroup
+}
+
+// recordGroup is the diversity group of a stored record, keyed on its
+// observed origin (relayed peers share relayedOrigin's group, origin-less
+// records unobservedGroup). The advertised Addrs are deliberately not
+// consulted:
+// they are self-reported via identify, so keying on them let one source
+// complete N handshakes with N identities, advertise N different /16s,
+// and claim N groups.
+func recordGroup(rec *peerDBRecord) string {
+	if rec.Origin == relayedOrigin {
+		return relayedOrigin
+	}
+	return subnetKey(net.ParseIP(rec.Origin))
+}
+
+// observedOrigin reduces a connection's remote multiaddr to the origin
+// stored in a record: relayedOrigin if the connection is relayed (the
+// address contains /p2p-circuit anywhere), otherwise the literal IP the
+// address starts with, as a string; "" if it starts with no literal IP.
+func observedOrigin(a ma.Multiaddr) string {
+	if a == nil {
+		return ""
+	}
+	protos := a.Protocols()
+	if len(protos) == 0 {
+		return ""
+	}
+	for _, p := range protos {
+		if p.Code == ma.P_CIRCUIT {
+			return relayedOrigin
 		}
 	}
-	// DNS-only peers all share one key rather than being keyed by their
-	// hostname: the stored addresses are self-advertised (identify), so a
-	// hostname-derived key would let one source mint a fresh group — and
-	// therefore a fresh slot per round — for every identity it cycles
-	// through the handshake. One shared key caps all of them at one slot
-	// per round, while still keeping them out of the "no address
-	// information at all" group.
-	for _, a := range addrs {
-		for _, proto := range []int{ma.P_DNS, ma.P_DNS4, ma.P_DNS6, ma.P_DNSADDR} {
-			if _, err := a.ValueForProtocol(proto); err == nil {
-				return "dns"
-			}
-		}
+	code := protos[0].Code
+	if code != ma.P_IP4 && code != ma.P_IP6 {
+		return ""
 	}
-	return ""
+	v, err := a.ValueForProtocol(code)
+	if err != nil {
+		return ""
+	}
+	ip := net.ParseIP(v)
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
 }
 
 // seeds returns up to n warm-bootstrap candidates, skipping records
@@ -226,11 +293,12 @@ func subnetKey(addrs []ma.Multiaddr) string {
 // this database replaced) are deleted on sight, so a pre-existing
 // directory self-cleans.
 //
-// Candidates are grouped by subnet (see subnetKey) and selected
-// round-robin across groups, most-recently-seen group first, rather
-// than taking a pure recency-ranked prefix — so a source that cycles
-// many identities through the handshake can occupy at most one slot per
-// round instead of owning the whole seed list.
+// Candidates are grouped by observed origin (see recordGroup) and
+// selected round-robin across groups, most-recently-seen group first,
+// rather than taking a pure recency-ranked prefix — so a source that
+// cycles many identities through the handshake can occupy at most one
+// slot per round instead of owning the whole seed list, whatever
+// addresses those identities advertise.
 func (d *peerDB) seeds(n int) []peer.AddrInfo {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -238,6 +306,7 @@ func (d *peerDB) seeds(n int) []peer.AddrInfo {
 	type candidate struct {
 		info     peer.AddrInfo
 		lastSeen int64
+		group    string
 	}
 	var cands []candidate
 	cutoff := d.now().Add(-peerDBMaxAge).Unix()
@@ -263,18 +332,18 @@ func (d *peerDB) seeds(n int) []peer.AddrInfo {
 		if len(info.Addrs) == 0 {
 			continue
 		}
-		cands = append(cands, candidate{info: info, lastSeen: rec.LastSeen})
+		cands = append(cands, candidate{info: info, lastSeen: rec.LastSeen, group: recordGroup(&rec)})
 	}
 
 	sort.Slice(cands, func(i, j int) bool { return cands[i].lastSeen > cands[j].lastSeen })
 
-	// Group by subnet, preserving each group's most-recently-seen-first
+	// Group by origin, preserving each group's most-recently-seen-first
 	// order and the recency order of groups themselves (first sighting
 	// in the already-sorted cands slice).
 	groups := make(map[string][]candidate)
 	var groupOrder []string
 	for _, c := range cands {
-		key := subnetKey(c.info.Addrs)
+		key := c.group
 		if _, ok := groups[key]; !ok {
 			groupOrder = append(groupOrder, key)
 		}
@@ -313,12 +382,11 @@ func (d *peerDB) seeds(n int) []peer.AddrInfo {
 // a burst of fresh identities, from one source or spread across spoofed
 // subnets, evicts itself before any established peer. Only when no
 // newcomer remains are established records evicted, from the largest
-// subnet group first and, within a group, the oldest lastSeen first.
-// That balances the advertised groups: a long-lived squatter
-// concentrated in one source loses records before established peers
-// elsewhere, and a genuinely large group loses its oldest first; the
-// labels are self-advertised, so among established peers this is a
-// heuristic, not a guarantee. Ties fall back to the record key, so a
+// origin group (recordGroup) first and, within a group, the oldest
+// lastSeen first. That balances the observed sources: a long-lived
+// squatter concentrated in one source loses records before established
+// peers elsewhere, and a genuinely large group loses its oldest first.
+// Ties fall back to the record key, so a
 // pass over the same records always deletes the same ones. Called once
 // at open, on the server's peerDBCleanupCycle ticker, and by
 // recordConnected once peerDBMaxRecords new records have accumulated.
@@ -349,15 +417,9 @@ func (d *peerDB) expireLocked() {
 			rec.Version == peerDBVersion &&
 			rec.LastSeen >= cutoff &&
 			rec.FailCount <= peerDBMaxFailCount {
-			addrs := make([]ma.Multiaddr, 0, len(rec.Addrs))
-			for _, a := range rec.Addrs {
-				if m, err := ma.NewMultiaddr(a); err == nil {
-					addrs = append(addrs, m)
-				}
-			}
 			survivors = append(survivors, kept{
 				key:       append([]byte(nil), iter.Key()...),
-				group:     subnetKey(addrs),
+				group:     recordGroup(&rec),
 				firstSeen: rec.FirstSeen,
 				lastSeen:  rec.LastSeen,
 			})
@@ -401,7 +463,7 @@ func (d *peerDB) expireLocked() {
 		excess--
 	}
 
-	// Tier 2: established records, from the largest subnet group, the
+	// Tier 2: established records, from the largest origin group, the
 	// oldest lastSeen within it; among equal-sized groups the one whose
 	// next victim is the oldest, then the lower key.
 	evictsBefore := func(a, b kept) bool {
