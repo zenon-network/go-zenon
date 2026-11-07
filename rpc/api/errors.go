@@ -28,6 +28,13 @@ var (
 	// through the latter GetDetailedMomentumsByHeight) when the height
 	// parameter is 0; account-chain and momentum heights are 1-based.
 	ErrHeightParamIsZero = common.NewErrorWCode(-32000, "height parameter must be strictly greater than zero")
+	// ErrDetailedMomentumTooLarge is returned by
+	// LedgerApi.GetDetailedMomentumsByHeight when the first momentum of
+	// the range, with its account blocks, alone encodes to more than the
+	// method's response byte budget. The caller reads that momentum
+	// through GetMomentumsByHeight and its blocks one by one, then
+	// continues from the next height.
+	ErrDetailedMomentumTooLarge = common.NewErrorWCode(-32000, "detailed momentum exceeds the response size limit")
 	// ErrParamIsNull is returned by LedgerApi.PublishRawTransaction
 	// when the block parameter is null. No other handler currently
 	// returns it.

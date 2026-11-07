@@ -631,6 +631,13 @@ func (l *LedgerApi) GetMomentumsByPage(pageIndex, pageSize uint32) (*MomentumLis
 // each momentum with the full account blocks it confirms instead of
 // only their references.
 //
+// The encoded list is bounded by a 10 MB byte budget: when the next
+// momentum would take it past the budget the list stops there and More
+// is set, and the caller continues from the height after the last
+// returned momentum. If the first momentum of the range alone exceeds
+// the budget, ErrDetailedMomentumTooLarge is returned. A range that
+// fits encodes exactly as before, without a "more" key.
+//
 // JSON-RPC: ledger.getDetailedMomentumsByHeight
 func (l *LedgerApi) GetDetailedMomentumsByHeight(height, count uint64) (*DetailedMomentumList, error) {
 	l.log.Info("GetDetailedMomentumsByHeight", "height", height, "count", count)
@@ -638,9 +645,13 @@ func (l *LedgerApi) GetDetailedMomentumsByHeight(height, count uint64) (*Detaile
 		return nil, ErrCountParamTooBig
 	}
 
-	ans, err := l.GetMomentumsByHeight(height, count)
-	if err != nil {
-		return nil, err
+	if height == 0 {
+		return nil, ErrHeightParamIsZero
 	}
-	return momentumListToDetailedList(l.chain, ans)
+
+	ans, err := detailedMomentumsByHeight(l.chain, height, count, detailedMomentumsByteBudget)
+	if err != nil && err != ErrDetailedMomentumTooLarge {
+		l.log.Error("GetDetailedMomentumsByHeight failed", "reason", err, "method-called", "detailedMomentumsByHeight")
+	}
+	return ans, err
 }

@@ -417,9 +417,16 @@ type MomentumList struct {
 // DetailedMomentumList is a paginated list of momentums paired with the
 // account blocks they confirm. Count has the same meaning as in
 // MomentumList.
+//
+// More is true when the list stopped at the response byte budget
+// (detailedMomentumsByteBudget) before the end of the requested range;
+// the caller continues from the height after the last momentum in List.
+// It is omitted when false, so a list that covers the whole requested
+// range encodes exactly as it did before the budget existed.
 type DetailedMomentumList struct {
 	List  []*DetailedMomentum `json:"list"`
 	Count int                 `json:"count"`
+	More  bool                `json:"more,omitempty"`
 }
 
 // ToLedgerBlock returns a copy of the embedded nom.AccountBlock,
@@ -535,29 +542,130 @@ func (block *AccountBlock) addAllExtraInfo(chain chain.Chain) error {
 	return nil
 }
 
-func momentumListToDetailedList(chain chain.Chain, list *MomentumList) (*DetailedMomentumList, error) {
-	ans := &DetailedMomentumList{
-		Count: list.Count,
-		List:  make([]*DetailedMomentum, len(list.List)),
+// detailedMomentumsByteBudget bounds the encoded size of the list one
+// GetDetailedMomentumsByHeight call returns: 10 MB, two fifths of the
+// 25 MB maxBatchResponseBytes in rpc/server, so one budget-sized answer
+// never trips the batch limit by itself and two fit in one batch. It is
+// a variable so tests can lower it.
+var detailedMomentumsByteBudget = 10 * 1000 * 1000
+
+// detailedMomentumsByHeight returns the momentums from height upwards,
+// at most count of them and none above the frontier, each paired with
+// its account blocks, and stops before the encoded list would exceed
+// byteBudget bytes. Count is the frontier height, as in MomentumList.
+//
+// Momentums are read one height at a time from a single store, so the
+// range is the one GetMomentumsByHeight would return, and each account
+// block is read, converted and encoded once as it is built to measure
+// it. Work past the budget is therefore bounded by one momentum header
+// and one block (with its paired block): the momentum that would cross
+// the budget is abandoned at that block, nothing after it is read, and
+// More is set. When the first momentum alone does not fit,
+// ErrDetailedMomentumTooLarge is returned: a receive block's paired send
+// block, data included, is embedded in the answer, so a momentum's
+// expanded size is not bounded by the verifier's content limit and no
+// exemption would bound the response.
+func detailedMomentumsByHeight(chain chain.Chain, height, count uint64, byteBudget int) (*DetailedMomentumList, error) {
+	store := chain.GetFrontierMomentumStore()
+	frontier, err := store.GetFrontierMomentum()
+	if err != nil {
+		return nil, err
 	}
-	for index, momentum := range list.List {
-		store := chain.GetFrontierMomentumStore()
-		m, err := store.PrefetchMomentum(momentum.Momentum)
+	ans := &DetailedMomentumList{
+		Count: int(frontier.Height),
+		List:  []*DetailedMomentum{},
+	}
+	// the encoded list is "[" + elements joined by "," + "]"
+	size := len("[]")
+	for i := uint64(0); i < count; i++ {
+		// one momentum per call; past the frontier, or where height+i
+		// wraps, the store returns none
+		momentums, err := store.GetMomentumsByHeight(height+i, true, 1)
 		if err != nil {
 			return nil, err
 		}
-		accountBlocks, err := ledgerAccountBlocksToRpc(chain, m.AccountBlocks)
+		if len(momentums) == 0 {
+			break
+		}
+		list, err := ledgerMomentumsToRpc(momentums)
 		if err != nil {
 			return nil, err
 		}
-		ans.List[index] = &DetailedMomentum{
-			Momentum:      momentum,
-			AccountBlocks: accountBlocks,
+		if len(list) == 0 {
+			break
 		}
+		separator := 0
+		if len(ans.List) > 0 {
+			separator = len(",")
+		}
+		detailed, encodedSize, err := detailedMomentumWithin(chain, list[0], byteBudget-size-separator)
+		if err != nil {
+			return nil, err
+		}
+		if detailed == nil {
+			if len(ans.List) == 0 {
+				return nil, ErrDetailedMomentumTooLarge
+			}
+			ans.More = true
+			break
+		}
+		ans.List = append(ans.List, detailed)
+		size += separator + encodedSize
 	}
 
 	return ans, nil
 }
+
+// detailedMomentumWithin builds the detailed form of momentum and its
+// encoded size, reading, converting and measuring one account block at
+// a time. It returns a nil DetailedMomentum, without error, as soon as
+// the encoding would exceed limit bytes; no block after the one that
+// crosses is read. Blocks are read as PrefetchMomentum reads them, one
+// GetAccountBlock per content header, with the same error.
+func detailedMomentumWithin(chain chain.Chain, momentum *Momentum, limit int) (*DetailedMomentum, int, error) {
+	// the momentum with an empty block list; each block then adds its
+	// encoding, and every block after the first a ","
+	shell, err := json.Marshal(&DetailedMomentum{Momentum: momentum, AccountBlocks: []*AccountBlock{}})
+	if err != nil {
+		return nil, 0, err
+	}
+	size := len(shell)
+	if size > limit {
+		return nil, 0, nil
+	}
+	store := chain.GetFrontierMomentumStore()
+	accountBlocks := make([]*AccountBlock, 0, len(momentum.Content))
+	for _, header := range momentum.Content {
+		block, err := store.GetAccountBlock(*header)
+		if err != nil {
+			return nil, 0, fmt.Errorf("error while prefetching account-blocks for insert-momentum event. %w", err)
+		}
+		if block == nil {
+			continue
+		}
+		rpcBlock, err := ledgerAccountBlockToRpc(chain, block)
+		if err != nil {
+			return nil, 0, err
+		}
+		encoded, err := json.Marshal(rpcBlock)
+		if err != nil {
+			return nil, 0, err
+		}
+		size += len(encoded)
+		if len(accountBlocks) > 0 {
+			size += len(",")
+		}
+		if size > limit {
+			return nil, 0, nil
+		}
+		accountBlocks = append(accountBlocks, rpcBlock)
+	}
+	return &DetailedMomentum{
+		Momentum:      momentum,
+		AccountBlocks: accountBlocks,
+	}, size, nil
+}
+
 func ledgerMomentumToRpc(m *nom.Momentum) (*Momentum, error) {
 	if m == nil {
 		return nil, nil
