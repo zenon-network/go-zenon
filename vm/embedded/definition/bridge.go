@@ -957,6 +957,38 @@ func GetWrapTokenRequests(context db.DB) ([]*WrapTokenRequest, error) {
 	return list, nil
 }
 
+// ScanWrapTokenRequests calls visit with the storage key and packed value
+// of every stored wrap request, in the order GetWrapTokenRequests returns
+// them (newest first), without decoding them, so a reader that needs only
+// some of the requests decodes only those with ParseWrapTokenRequest. An
+// entry with an empty value fails the scan with
+// constants.ErrDataNonExistent, as it fails GetWrapTokenRequests. key and
+// value are only valid during the call; the scan stops at the first error
+// visit returns and returns it.
+func ScanWrapTokenRequests(context db.DB, visit func(key, value []byte) error) error {
+	return scanEntries(context, wrapTokenRequestKeyPrefix, visit)
+}
+
+// ParseWrapTokenRequest decodes one entry handed out by
+// ScanWrapTokenRequests, exactly as GetWrapTokenRequests decodes it.
+func ParseWrapTokenRequest(key, value []byte) (*WrapTokenRequest, error) {
+	return parseWrapTokenRequest(value, key)
+}
+
+func scanEntries(context db.DB, prefix []byte, visit func(key, value []byte) error) error {
+	iterator := context.NewIterator(prefix)
+	defer iterator.Release()
+	for iterator.Next() {
+		if len(iterator.Value()) == 0 {
+			return constants.ErrDataNonExistent
+		}
+		if err := visit(iterator.Key(), iterator.Value()); err != nil {
+			return err
+		}
+	}
+	return iterator.Error()
+}
+
 // WrapTokenRequestMarshal is the JSON form of WrapTokenRequest, with
 // the amount and fee rendered as base-10 strings to survive clients
 // that parse numbers as 64-bit floats.
@@ -1129,6 +1161,22 @@ func GetUnwrapTokenRequests(context db.DB) ([]*UnwrapTokenRequest, error) {
 	}
 
 	return list, nil
+}
+
+// ScanUnwrapTokenRequests calls visit with the storage key and packed
+// value of every stored unwrap request, in the order
+// GetUnwrapTokenRequests returns them (transaction hash, then log index),
+// without decoding them; decode the ones needed with
+// ParseUnwrapTokenRequest. Empty values, the validity of key and value and
+// errors from visit are handled as in ScanWrapTokenRequests.
+func ScanUnwrapTokenRequests(context db.DB, visit func(key, value []byte) error) error {
+	return scanEntries(context, unwrapTokenRequestKeyPrefix, visit)
+}
+
+// ParseUnwrapTokenRequest decodes one entry handed out by
+// ScanUnwrapTokenRequests, exactly as GetUnwrapTokenRequests decodes it.
+func ParseUnwrapTokenRequest(key, value []byte) (*UnwrapTokenRequest, error) {
+	return parseUnwrapTokenRequest(value, key)
 }
 
 // UnwrapTokenRequestMarshal is the JSON form of UnwrapTokenRequest,
