@@ -27,6 +27,7 @@ var (
 // a user balance in both tokens.
 func validCheckConfig() *GenesisConfig {
 	stake := new(big.Int).Set(constants.PillarStakeAmount)
+	fused := new(big.Int).Set(constants.FuseMinAmount)
 	return &GenesisConfig{
 		ChainIdentifier:     100,
 		GenesisTimestampSec: 1000000000,
@@ -62,7 +63,7 @@ func validCheckConfig() *GenesisConfig {
 					Owner:         types.StakeContract,
 					TokenName:     "QSR",
 					TokenSymbol:   "QSR",
-					TotalSupply:   big.NewInt(60),
+					TotalSupply:   new(big.Int).Add(fused, big.NewInt(50)),
 					MaxSupply:     big.NewInt(4611686018427387903),
 					Decimals:      8,
 					TokenStandard: types.QsrTokenStandard,
@@ -73,7 +74,7 @@ func validCheckConfig() *GenesisConfig {
 			Fusions: []*definition.FusionInfo{{
 				Owner:       checkUserA,
 				Id:          types.HexToHashPanic("85b559d52ef7e23b358cbceb12aeadcf5397bad860d8d50c4cd348246379e913"),
-				Amount:      big.NewInt(10),
+				Amount:      new(big.Int).Set(fused),
 				Beneficiary: checkUserA,
 			}},
 		},
@@ -92,7 +93,7 @@ func validCheckConfig() *GenesisConfig {
 				},
 				{
 					Address:     types.PlasmaContract,
-					BalanceList: map[types.ZenonTokenStandard]*big.Int{types.QsrTokenStandard: big.NewInt(10)},
+					BalanceList: map[types.ZenonTokenStandard]*big.Int{types.QsrTokenStandard: new(big.Int).Set(fused)},
 				},
 				{
 					Address: checkUserA,
@@ -104,6 +105,15 @@ func validCheckConfig() *GenesisConfig {
 			},
 		},
 	}
+}
+
+// setFusion gives the single baseline fusion the given amount and keeps
+// the plasma balance and QSR supply in step, so the aggregate checks
+// still pass.
+func setFusion(g *GenesisConfig, amount *big.Int) {
+	g.PlasmaConfig.Fusions[0].Amount = amount
+	g.GenesisBlocks.Blocks[1].BalanceList[types.QsrTokenStandard] = new(big.Int).Set(amount)
+	g.TokenConfig.Tokens[1].TotalSupply = new(big.Int).Add(amount, big.NewInt(50))
 }
 
 // aggregateChecks are the checks CheckGenesis ran before the per-entry
@@ -160,14 +170,16 @@ func TestCheckGenesisRejectsInvalidEntries(t *testing.T) {
 			want: ErrGenesisNegativeBalance,
 		},
 		{
-			// 11 and -1 sum to the plasma balance of 10.
+			// One unit more and one unit less sum to the plasma
+			// balance.
 			name: "negative fusion",
 			mutate: func(g *GenesisConfig) {
-				g.PlasmaConfig.Fusions[0].Amount = big.NewInt(11)
+				unit := big.NewInt(constants.CostPerFusionUnit)
+				g.PlasmaConfig.Fusions[0].Amount = new(big.Int).Add(constants.FuseMinAmount, unit)
 				g.PlasmaConfig.Fusions = append(g.PlasmaConfig.Fusions, &definition.FusionInfo{
 					Owner:       checkUserB,
 					Id:          types.HexToHashPanic("8d3a261582f0f7d01b0a7c6024da87e5637b5929cb71bc0f954cf14093e3059e"),
-					Amount:      big.NewInt(-1),
+					Amount:      new(big.Int).Neg(unit),
 					Beneficiary: checkUserB,
 				})
 			},
@@ -181,20 +193,17 @@ func TestCheckGenesisRejectsInvalidEntries(t *testing.T) {
 			want: ErrGenesisNegativeSwapAmount,
 		},
 		{
-			// The supply check counts both entries; state keeps
-			// only the second.
-			name: "duplicate address",
+			// The supply check counts both ZNN entries; state
+			// keeps only the second.
+			name: "duplicate address and token",
 			mutate: func(g *GenesisConfig) {
 				g.GenesisBlocks.Blocks[2].BalanceList = map[types.ZenonTokenStandard]*big.Int{
 					types.ZnnTokenStandard: big.NewInt(50),
-					types.QsrTokenStandard: big.NewInt(25),
+					types.QsrTokenStandard: big.NewInt(50),
 				}
 				g.GenesisBlocks.Blocks = append(g.GenesisBlocks.Blocks, &GenesisBlockConfig{
-					Address: checkUserA,
-					BalanceList: map[types.ZenonTokenStandard]*big.Int{
-						types.ZnnTokenStandard: big.NewInt(50),
-						types.QsrTokenStandard: big.NewInt(25),
-					},
+					Address:     checkUserA,
+					BalanceList: map[types.ZenonTokenStandard]*big.Int{types.ZnnTokenStandard: big.NewInt(50)},
 				})
 			},
 			want: ErrGenesisDuplicateAddress,
@@ -226,6 +235,64 @@ func TestCheckGenesisRejectsInvalidEntries(t *testing.T) {
 				g.TokenConfig.Tokens[0].TotalSupply = new(big.Int).Add(more, big.NewInt(100))
 			},
 			want: ErrGenesisPillarStakeAmount,
+		},
+		{
+			name:   "zero fusion",
+			mutate: func(g *GenesisConfig) { setFusion(g, big.NewInt(0)) },
+			want:   ErrGenesisInvalidFusionAmount,
+		},
+		{
+			name: "fusion below the fuse minimum",
+			mutate: func(g *GenesisConfig) {
+				setFusion(g, new(big.Int).Sub(constants.FuseMinAmount, big.NewInt(constants.CostPerFusionUnit)))
+			},
+			want: ErrGenesisInvalidFusionAmount,
+		},
+		{
+			name: "fusion not a whole fusion unit",
+			mutate: func(g *GenesisConfig) {
+				setFusion(g, new(big.Int).Add(constants.FuseMinAmount, big.NewInt(1)))
+			},
+			want: ErrGenesisInvalidFusionAmount,
+		},
+		{
+			// Contract storage would truncate the fused amount to
+			// 256 bits; the plasma balance keeps the full value.
+			name: "fusion wider than uint256",
+			mutate: func(g *GenesisConfig) {
+				setFusion(g, new(big.Int).Mul(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(constants.CostPerFusionUnit)))
+			},
+			want: ErrGenesisAmountOverflow,
+		},
+		{
+			name: "balance wider than uint256",
+			mutate: func(g *GenesisConfig) {
+				huge := new(big.Int).Lsh(big.NewInt(1), 256)
+				g.GenesisBlocks.Blocks[2].BalanceList[types.ZnnTokenStandard] = huge
+				g.TokenConfig.Tokens[0].TotalSupply = new(big.Int).Add(constants.PillarStakeAmount, huge)
+			},
+			want: ErrGenesisAmountOverflow,
+		},
+		{
+			name: "swap amount wider than uint256",
+			mutate: func(g *GenesisConfig) {
+				g.SwapConfig.Entries[0].Znn = new(big.Int).Lsh(big.NewInt(1), 256)
+			},
+			want: ErrGenesisAmountOverflow,
+		},
+		{
+			name: "max supply wider than uint256",
+			mutate: func(g *GenesisConfig) {
+				g.TokenConfig.Tokens[0].MaxSupply = new(big.Int).Lsh(big.NewInt(1), 256)
+			},
+			want: ErrGenesisAmountOverflow,
+		},
+		{
+			name: "negative max supply",
+			mutate: func(g *GenesisConfig) {
+				g.TokenConfig.Tokens[0].MaxSupply = big.NewInt(-1)
+			},
+			want: ErrGenesisNegativeSupply,
 		},
 	}
 
@@ -266,8 +333,18 @@ func TestCheckGenesisRejectsNilEntries(t *testing.T) {
 		{"nil legacy entry", func(g *GenesisConfig) { g.PillarConfig.LegacyEntries[0] = nil }, ErrGenesisNilEntry},
 		{"nil pillar", func(g *GenesisConfig) { g.PillarConfig.Pillars[0] = nil }, ErrGenesisNilEntry},
 		{"nil pillar amount", func(g *GenesisConfig) { g.PillarConfig.Pillars[0].Amount = nil }, ErrGenesisPillarStakeAmount},
+		{"nil max supply", func(g *GenesisConfig) { g.TokenConfig.Tokens[0].MaxSupply = nil }, ErrGenesisNilAmount},
+		{"nil delegation", func(g *GenesisConfig) {
+			g.PillarConfig.Delegations = []*definition.DelegationInfo{nil}
+		}, ErrGenesisNilEntry},
+		{"nil spork", func(g *GenesisConfig) {
+			g.SporkConfig = &SporkConfig{Sporks: []*definition.Spork{nil}}
+		}, ErrGenesisNilEntry},
 	}
 
+	if err := CheckGenesis(nil); !errors.Is(err, ErrGenesisNilEntry) {
+		t.Fatalf("CheckGenesis(nil): expected %v, got %v", ErrGenesisNilEntry, err)
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			g := validCheckConfig()
@@ -277,6 +354,21 @@ func TestCheckGenesisRejectsNilEntries(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Splitting one address's different tokens over several GenesisBlocks
+// entries builds exactly the same genesis as one merged entry, so it
+// stays allowed.
+func TestCheckGenesisAllowsSplitTokenEntries(t *testing.T) {
+	merged := validCheckConfig()
+	split := validCheckConfig()
+	split.GenesisBlocks.Blocks[2].BalanceList = map[types.ZenonTokenStandard]*big.Int{types.ZnnTokenStandard: big.NewInt(100)}
+	split.GenesisBlocks.Blocks = append(split.GenesisBlocks.Blocks, &GenesisBlockConfig{
+		Address:     checkUserA,
+		BalanceList: map[types.ZenonTokenStandard]*big.Int{types.QsrTokenStandard: big.NewInt(50)},
+	})
+	common.FailIfErr(t, CheckGenesis(split))
+	common.ExpectString(t, NewGenesis(split).GetGenesisMomentum().Hash.String(), NewGenesis(merged).GetGenesisMomentum().Hash.String())
 }
 
 // The devnet genesis shipped under docker/devnet must keep loading.

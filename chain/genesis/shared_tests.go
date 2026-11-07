@@ -1,6 +1,7 @@
 package genesis
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/pkg/errors"
@@ -90,6 +91,9 @@ func CheckGenesis(g *GenesisConfig) error {
 // CheckFieldsExist verifies that every mandatory section of the
 // config is present; only SporkConfig and ExtraData are optional.
 func CheckFieldsExist(g *GenesisConfig) error {
+	if g == nil {
+		return errors.Wrapf(ErrGenesisNilEntry, "genesis config")
+	}
 	if g.GenesisBlocks == nil {
 		return errors.Errorf("GenesisBlocks is nil")
 	}
@@ -111,72 +115,117 @@ func CheckFieldsExist(g *GenesisConfig) error {
 	return nil
 }
 
+// maxUint256 is the largest amount the embedded contracts can store:
+// contract fields are packed as ABI uint256, so a wider value would be
+// truncated in contract storage while the aggregate checks and account
+// balances still see its full width.
+var maxUint256 = new(big.Int).Sub(new(big.Int).Lsh(common.Big1, 256), common.Big1)
+
+// checkAmount rejects a nil, negative or wider-than-uint256 amount,
+// reporting a negative one as the given sentinel.
+func checkAmount(amount *big.Int, negative error, format string, args ...interface{}) error {
+	if amount == nil {
+		return errors.Wrapf(ErrGenesisNilAmount, format, args...)
+	}
+	if amount.Sign() < 0 {
+		return errors.Wrapf(negative, "%v for %v", amount, fmt.Sprintf(format, args...))
+	}
+	if amount.Cmp(maxUint256) > 0 {
+		return errors.Wrapf(ErrGenesisAmountOverflow, "%v for %v", amount, fmt.Sprintf(format, args...))
+	}
+	return nil
+}
+
 // CheckEntryAmounts verifies that no list in the config holds a nil
-// entry and that every per-entry amount is present and non-negative:
-// genesis balances, fusion amounts, swap ZNN and QSR, and token total
-// supplies. Pillar amounts are checked by CheckPillarStakes. Balances
-// and fused amounts are stored unsigned, so a negative entry would
-// pass the signed aggregate checks and materialise as a different,
-// positive value.
+// entry and that every per-entry amount is present, non-negative and
+// fits in a uint256: genesis balances, fusion amounts, swap ZNN and
+// QSR, and token TotalSupply and MaxSupply. Fusions must also follow
+// the runtime Fuse rules: at least constants.FuseMinAmount and a whole
+// multiple of constants.CostPerFusionUnit. Pillar amounts are checked
+// by CheckPillarStakes. Balances and fused amounts are stored
+// unsigned, so a negative entry would pass the signed aggregate checks
+// and materialise as a different, positive value.
 func CheckEntryAmounts(g *GenesisConfig) error {
 	for i, block := range g.GenesisBlocks.Blocks {
 		if block == nil {
 			return errors.Wrapf(ErrGenesisNilEntry, "GenesisBlocks.Blocks[%d]", i)
 		}
 		for zts, amount := range block.BalanceList {
-			if amount == nil {
-				return errors.Wrapf(ErrGenesisNilAmount, "balance of %v for %v", zts, block.Address)
-			}
-			if amount.Sign() < 0 {
-				return errors.Wrapf(ErrGenesisNegativeBalance, "%v %v for %v", amount, zts, block.Address)
+			if err := checkAmount(amount, ErrGenesisNegativeBalance, "balance of %v for %v", zts, block.Address); err != nil {
+				return err
 			}
 		}
 	}
+	costPerFusionUnit := big.NewInt(constants.CostPerFusionUnit)
 	for i, fusion := range g.PlasmaConfig.Fusions {
 		if fusion == nil {
 			return errors.Wrapf(ErrGenesisNilEntry, "PlasmaConfig.Fusions[%d]", i)
 		}
-		if fusion.Amount == nil {
-			return errors.Wrapf(ErrGenesisNilAmount, "fusion %v", fusion.Id)
+		if err := checkAmount(fusion.Amount, ErrGenesisNegativeFusion, "fusion %v", fusion.Id); err != nil {
+			return err
 		}
-		if fusion.Amount.Sign() < 0 {
-			return errors.Wrapf(ErrGenesisNegativeFusion, "%v for fusion %v", fusion.Amount, fusion.Id)
+		if fusion.Amount.Cmp(constants.FuseMinAmount) < 0 || new(big.Int).Mod(fusion.Amount, costPerFusionUnit).Sign() != 0 {
+			return errors.Wrapf(ErrGenesisInvalidFusionAmount, "%v for fusion %v", fusion.Amount, fusion.Id)
 		}
 	}
 	for i, entry := range g.SwapConfig.Entries {
 		if entry == nil {
 			return errors.Wrapf(ErrGenesisNilEntry, "SwapConfig.Entries[%d]", i)
 		}
-		if entry.Znn == nil || entry.Qsr == nil {
-			return errors.Wrapf(ErrGenesisNilAmount, "swap entry %v", entry.KeyIdHash)
+		if err := checkAmount(entry.Znn, ErrGenesisNegativeSwapAmount, "znn of swap entry %v", entry.KeyIdHash); err != nil {
+			return err
 		}
-		if entry.Znn.Sign() < 0 || entry.Qsr.Sign() < 0 {
-			return errors.Wrapf(ErrGenesisNegativeSwapAmount, "znn %v qsr %v for swap entry %v", entry.Znn, entry.Qsr, entry.KeyIdHash)
+		if err := checkAmount(entry.Qsr, ErrGenesisNegativeSwapAmount, "qsr of swap entry %v", entry.KeyIdHash); err != nil {
+			return err
 		}
 	}
 	for i, token := range g.TokenConfig.Tokens {
 		if token == nil {
 			return errors.Wrapf(ErrGenesisNilEntry, "TokenConfig.Tokens[%d]", i)
 		}
-		if token.TotalSupply == nil {
-			return errors.Wrapf(ErrGenesisNilAmount, "TotalSupply of %v", token.TokenStandard)
+		if err := checkAmount(token.TotalSupply, ErrGenesisNegativeSupply, "TotalSupply of %v", token.TokenStandard); err != nil {
+			return err
+		}
+		if err := checkAmount(token.MaxSupply, ErrGenesisNegativeSupply, "MaxSupply of %v", token.TokenStandard); err != nil {
+			return err
+		}
+	}
+	for i, delegation := range g.PillarConfig.Delegations {
+		if delegation == nil {
+			return errors.Wrapf(ErrGenesisNilEntry, "PillarConfig.Delegations[%d]", i)
+		}
+	}
+	if g.SporkConfig != nil {
+		for i, spork := range g.SporkConfig.Sporks {
+			if spork == nil {
+				return errors.Wrapf(ErrGenesisNilEntry, "SporkConfig.Sporks[%d]", i)
+			}
 		}
 	}
 	return nil
 }
 
-// CheckUniqueGenesisAddresses verifies that every GenesisBlocks entry
-// names a different address. The supply check counts every entry,
-// while state construction keeps only the last entry per address and
-// token, so a duplicate would silently drop balances that the supply
-// check counted.
+// CheckUniqueGenesisAddresses verifies that no address is given the
+// same token by two GenesisBlocks entries. The supply check counts
+// every entry, while state construction keeps only the last balance
+// per address and token, so such a duplicate would silently drop
+// balances that the supply check counted. Splitting one address's
+// different tokens over several entries builds the same state as one
+// merged entry and stays allowed.
 func CheckUniqueGenesisAddresses(g *GenesisConfig) error {
-	seen := make(map[types.Address]struct{}, len(g.GenesisBlocks.Blocks))
+	type addressToken struct {
+		address types.Address
+		zts     types.ZenonTokenStandard
+	}
+	seen := make(map[addressToken]struct{}, len(g.GenesisBlocks.Blocks))
 	for _, block := range g.GenesisBlocks.Blocks {
-		if _, ok := seen[block.Address]; ok {
-			return errors.Wrapf(ErrGenesisDuplicateAddress, "%v", block.Address)
+		for zts := range block.BalanceList {
+			key := addressToken{block.Address, zts}
+			if _, ok := seen[key]; ok {
+				return errors.Wrapf(ErrGenesisDuplicateAddress, "%v given %v more than once", block.Address, zts)
+			}
+			seen[key] = struct{}{}
 		}
-		seen[block.Address] = struct{}{}
 	}
 	return nil
 }

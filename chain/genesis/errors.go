@@ -19,7 +19,8 @@ var (
 	// mid-document (decoder reported EOF).
 	ErrIncompleteGenesisJson = errors.New("incomplete genesis json")
 	// ErrInvalidGenesisConfig signals that the decoded config failed
-	// the CheckGenesis consistency checks.
+	// the CheckGenesis consistency checks, or that building the
+	// genesis state from it panicked.
 	ErrInvalidGenesisConfig = errors.New("invalid genesis config. Failed to pass tests")
 
 	// ErrNoEmbeddedGenesis signals that this build carries no
@@ -33,13 +34,13 @@ var (
 // match them with errors.Is; ReadGenesisConfigFromFile still reports
 // every CheckGenesis failure as ErrInvalidGenesisConfig.
 var (
-	// ErrGenesisNilEntry signals a null element in one of the
-	// config's lists (genesis blocks, pillars, legacy entries, swap
-	// entries, tokens or fusions).
+	// ErrGenesisNilEntry signals a null config or a null element in
+	// one of its lists (genesis blocks, pillars, delegations, legacy
+	// entries, swap entries, tokens, fusions or sporks).
 	ErrGenesisNilEntry = errors.New("genesis config has a nil entry")
 	// ErrGenesisNilAmount signals a missing amount where one is
 	// required: a genesis balance, a fusion, a swap entry's ZNN or
-	// QSR, or a token's TotalSupply.
+	// QSR, or a token's TotalSupply or MaxSupply.
 	ErrGenesisNilAmount = errors.New("genesis config has a nil amount")
 	// ErrGenesisNegativeBalance signals a negative genesis balance.
 	// Balances are stored unsigned, so a negative entry would pass
@@ -52,10 +53,22 @@ var (
 	// ErrGenesisNegativeSwapAmount signals a negative ZNN or QSR
 	// amount in a swap entry.
 	ErrGenesisNegativeSwapAmount = errors.New("genesis swap amount is negative")
-	// ErrGenesisDuplicateAddress signals two GenesisBlocks entries for
-	// one address. The supply check counts both, but only the last
-	// one would be kept in state.
-	ErrGenesisDuplicateAddress = errors.New("genesis blocks list an address more than once")
+	// ErrGenesisNegativeSupply signals a negative token TotalSupply
+	// or MaxSupply.
+	ErrGenesisNegativeSupply = errors.New("genesis token supply is negative")
+	// ErrGenesisAmountOverflow signals an amount wider than 256 bits.
+	// Contract storage packs amounts as uint256 and would truncate
+	// it, while the aggregate checks and balances see the full value.
+	ErrGenesisAmountOverflow = errors.New("genesis amount does not fit in uint256")
+	// ErrGenesisInvalidFusionAmount signals a fusion below
+	// constants.FuseMinAmount or not a whole multiple of
+	// constants.CostPerFusionUnit, which the Fuse method would never
+	// accept.
+	ErrGenesisInvalidFusionAmount = errors.New("genesis fusion amount is not a valid fuse amount")
+	// ErrGenesisDuplicateAddress signals two GenesisBlocks entries
+	// giving one address the same token. The supply check counts
+	// both, but only the last one would be kept in state.
+	ErrGenesisDuplicateAddress = errors.New("genesis blocks give an address the same token more than once")
 	// ErrGenesisZeroLegacySlots signals a legacy pillar entry with a
 	// PillarCount of zero; legacy registration would decrement it to
 	// 255.
