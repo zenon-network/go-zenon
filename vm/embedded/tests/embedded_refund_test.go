@@ -35,10 +35,21 @@ const (
 )
 
 // activateEmbeddedRefundSpork creates and activates a spork on the mock
-// chain, points EmbeddedRefundSpork at it and advances to its enforcement
-// height. The spork id and the implemented-spork map are restored when
-// the test ends.
-func activateEmbeddedRefundSpork(t *testing.T, z mock.MockZenon) {
+// chain, points EmbeddedRefundSpork at it, advances past its enforcement
+// height and returns that height. The spork id and the implemented-spork
+// map are restored when the test ends.
+func activateEmbeddedRefundSpork(t *testing.T, z mock.MockZenon) uint64 {
+	enforcementHeight, _ := activateEmbeddedRefundSporkHeld(t, z, 0)
+	return enforcementHeight
+}
+
+// activateEmbeddedRefundSporkHeld is activateEmbeddedRefundSpork with the
+// Spork contract's receive of the activation held back for hold momentums
+// after the one that confirms it. It returns the enforcement height and
+// the first height at which the spork is in force, which is later than the
+// enforcement height when the activation receive is confirmed after it.
+func activateEmbeddedRefundSporkHeld(t *testing.T, z mock.MockZenon, hold int) (uint64, uint64) {
+	t.Helper()
 	saveSporkState(t)
 	savedId := types.EmbeddedRefundSpork.SporkId
 	t.Cleanup(func() { types.EmbeddedRefundSpork.SporkId = savedId })
@@ -54,33 +65,63 @@ func activateEmbeddedRefundSpork(t *testing.T, z mock.MockZenon) {
 	z.InsertNewMomentum()
 	id := createSend.Hash
 
-	z.InsertSendBlock(&nom.AccountBlock{
+	activateSend := z.InsertSendBlock(&nom.AccountBlock{
 		Address:   g.Spork.Address,
 		ToAddress: types.SporkContract,
 		Data:      definition.ABISpork.PackMethodPanic(definition.SporkActivateMethodName, id),
 	}, nil, mock.SkipVmChanges)
-	z.InsertNewMomentum()
 	types.EmbeddedRefundSpork.SporkId = id
 	types.ImplementedSporksMap[id] = true
+	if hold > 0 {
+		held := types.SporkContract
+		holder := z.(interface{ HoldInsertsFor(*types.Address) })
+		holder.HoldInsertsFor(&held)
+		insertMomentums(z, hold+1)
+		holder.HoldInsertsFor(nil)
+	}
+	z.InsertNewMomentum()
 
 	sporkList, err := embedded.NewSporkApi(z).GetAll(0, 10)
 	common.FailIfErr(t, err)
 	var enforcementHeight uint64
 	for _, s := range sporkList.List {
-		if s.Id == id {
+		if s.Id == id && s.Activated {
 			enforcementHeight = s.EnforcementHeight
 		}
 	}
 	if enforcementHeight == 0 {
-		t.Fatal("embedded refund spork not found in spork list")
+		t.Fatal("embedded refund spork is not activated")
 	}
-	z.InsertMomentumsTo(enforcementHeight + 1)
+	// The activation receive is confirmed by the momentum after the one it
+	// was generated in.
+	var activationConfirmation uint64
+	for i := 0; i < 3 && activationConfirmation == 0; i++ {
+		z.InsertNewMomentum()
+		momentumStore := z.Chain().GetFrontierMomentumStore()
+		activation, err := momentumStore.GetBlockWhichReceives(activateSend.Hash)
+		if err != nil && err != constants.ErrDataNonExistent {
+			common.FailIfErr(t, err)
+		}
+		if activation != nil {
+			activationConfirmation, err = momentumStore.GetBlockConfirmationHeight(activation.Hash)
+			common.FailIfErr(t, err)
+		}
+	}
+	if activationConfirmation == 0 {
+		t.Fatal("the activation receive was not confirmed")
+	}
+	inForceHeight := enforcementHeight
+	if activationConfirmation > inForceHeight {
+		inForceHeight = activationConfirmation
+	}
+	z.InsertMomentumsTo(inForceHeight + 1)
 
 	active, err := z.Chain().GetFrontierMomentumStore().IsSporkActive(types.EmbeddedRefundSpork)
 	common.FailIfErr(t, err)
 	if !active {
 		t.Fatal("embedded refund spork is not active after its enforcement height")
 	}
+	return enforcementHeight, inForceHeight
 }
 
 // setupUnburnableOwnedPair initializes the bridge, issues a token owned by
@@ -197,6 +238,17 @@ func expectReceived(t *testing.T, z mock.MockZenon, address types.Address, send 
 	}
 }
 
+// expectReceivedAt checks that send was received and that its receive
+// acknowledges the momentum at height.
+func expectReceivedAt(t *testing.T, z mock.MockZenon, send *nom.AccountBlock, height uint64) {
+	t.Helper()
+	receive, err := z.Chain().GetFrontierMomentumStore().GetBlockWhichReceives(send.Hash)
+	common.FailIfErr(t, err)
+	if receive.MomentumAcknowledged.Height != height {
+		t.Fatalf("receive of %v acknowledges momentum %d, want %d", send.Hash, receive.MomentumAcknowledged.Height, height)
+	}
+}
+
 func expectTotalSupply(t *testing.T, z mock.MockZenon, zts types.ZenonTokenStandard, expected int64) {
 	t.Helper()
 	token, err := embedded.NewTokenApi(z).GetByZts(zts)
@@ -272,6 +324,76 @@ func TestEmbeddedRefund_AfterSporkRefundsAndAdvances(t *testing.T) {
 	// The Bridge accepts the refund as a deposit: it holds the whole wrap
 	// amount, the Token contract holds nothing and no supply was burned.
 	expectReceived(t, z, types.BridgeContract, refund, true)
+	z.ExpectBalance(types.BridgeContract, zts, refundWrapAmount)
+	z.ExpectBalance(types.TokenContract, zts, 0)
+	expectTotalSupply(t, z, zts, 100000)
+}
+
+// A queue that stalled before the spork recovers once it is enforced. The
+// stalled Burn was confirmed before the enforcement height, so its receive
+// acknowledges the enforcement momentum, where the spork is in force,
+// instead of the one that confirmed it. The Issue queued behind it is a
+// user send and keeps its confirmation momentum.
+func TestEmbeddedRefund_SporkRecoversStalledQueue(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+
+	zts := setupUnburnableOwnedPair(t, z)
+	burn := wrapUnburnable(t, z, zts)
+	queued := issueAfterBurn(z)
+	insertMomentums(z, 4)
+	expectReceived(t, z, types.TokenContract, burn, false)
+	expectReceived(t, z, types.TokenContract, queued, false)
+
+	enforcementHeight := activateEmbeddedRefundSpork(t, z)
+	insertMomentums(z, 6)
+
+	expectReceived(t, z, types.TokenContract, burn, true)
+	expectReceived(t, z, types.TokenContract, queued, true)
+	expectReceivedAt(t, z, burn, enforcementHeight)
+	queuedConfirmation, err := z.Chain().GetFrontierMomentumStore().GetBlockConfirmationHeight(queued.Hash)
+	common.FailIfErr(t, err)
+	if queuedConfirmation >= enforcementHeight {
+		t.Fatalf("queued Issue confirmed at %d, want before the enforcement height %d", queuedConfirmation, enforcementHeight)
+	}
+	expectReceivedAt(t, z, queued, queuedConfirmation)
+	issued, err := embedded.NewTokenApi(z).GetByOwner(g.User2.Address, 0, 10)
+	common.FailIfErr(t, err)
+	if issued.Count != 1 {
+		t.Fatalf("queued Issue created %d tokens, want 1", issued.Count)
+	}
+
+	refund := lastSend(t, z, types.TokenContract, types.BridgeContract)
+	if refund == nil || refund.TokenStandard != zts || refund.Amount.Cmp(burn.Amount) != 0 || len(refund.Data) != 0 {
+		t.Fatalf("refund = %v, want %v %v with no data", refund, burn.Amount, zts)
+	}
+	expectReceived(t, z, types.BridgeContract, refund, true)
+	z.ExpectBalance(types.BridgeContract, zts, refundWrapAmount)
+	z.ExpectBalance(types.TokenContract, zts, 0)
+	expectTotalSupply(t, z, zts, 100000)
+}
+
+// The activation receive may be confirmed after the enforcement height it
+// records. The stalled Burn is then received at the first momentum where
+// the spork is in force, not at the enforcement height, where the VM would
+// still see it inactive.
+func TestEmbeddedRefund_LateActivationRecoversStalledQueue(t *testing.T) {
+	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
+	defer z.StopPanic()
+
+	zts := setupUnburnableOwnedPair(t, z)
+	burn := wrapUnburnable(t, z, zts)
+	insertMomentums(z, 2)
+	expectReceived(t, z, types.TokenContract, burn, false)
+
+	enforcementHeight, inForceHeight := activateEmbeddedRefundSporkHeld(t, z, int(constants.SporkMinHeightDelay)+3)
+	if inForceHeight <= enforcementHeight {
+		t.Fatalf("activation receive confirmed at %d, want after the enforcement height %d", inForceHeight, enforcementHeight)
+	}
+	insertMomentums(z, 6)
+
+	expectReceived(t, z, types.TokenContract, burn, true)
+	expectReceivedAt(t, z, burn, inForceHeight)
 	z.ExpectBalance(types.BridgeContract, zts, refundWrapAmount)
 	z.ExpectBalance(types.TokenContract, zts, 0)
 	expectTotalSupply(t, z, zts, 100000)
