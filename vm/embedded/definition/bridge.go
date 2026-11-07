@@ -3,6 +3,7 @@ package definition
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/zenon-network/go-zenon/common/crypto"
 	"math"
@@ -907,7 +908,7 @@ func parseWrapTokenRequest(data, key []byte) (*WrapTokenRequest, error) {
 		if err := ABIBridge.UnpackVariable(dataVar, wrapRequestVariableName, data); err != nil {
 			return nil, err
 		}
-		if err := dataVar.Id.SetBytes(key[20:]); err != nil {
+		if err := dataVar.Id.SetBytes(key[wrapTokenRequestIdOffset:]); err != nil {
 			return nil, err
 		}
 		return dataVar, nil
@@ -962,11 +963,22 @@ func GetWrapTokenRequests(context db.DB) ([]*WrapTokenRequest, error) {
 // them (newest first), without decoding them, so a reader that needs only
 // some of the requests decodes only those with ParseWrapTokenRequest. An
 // entry with an empty value fails the scan with
-// constants.ErrDataNonExistent, as it fails GetWrapTokenRequests. key and
-// value are only valid during the call; the scan stops at the first error
-// visit returns and returns it.
+// constants.ErrDataNonExistent, as it fails GetWrapTokenRequests, and so
+// does a key whose request id could not be recovered. key and value are
+// only valid during the call; the scan stops at the first error visit
+// returns and returns it.
 func ScanWrapTokenRequests(context db.DB, visit func(key, value []byte) error) error {
-	return scanEntries(context, wrapTokenRequestKeyPrefix, visit)
+	return scanEntries(context, wrapTokenRequestKeyPrefix, checkWrapTokenRequestKey, visit)
+}
+
+// checkWrapTokenRequestKey fails a key parseWrapTokenRequest could not
+// recover the id from, with the error that parse returns.
+func checkWrapTokenRequestKey(key []byte) error {
+	if len(key) < wrapTokenRequestIdOffset {
+		return errMalformedRequestKey
+	}
+	var id types.Hash
+	return id.SetBytes(key[wrapTokenRequestIdOffset:])
 }
 
 // ParseWrapTokenRequest decodes one entry handed out by
@@ -975,12 +987,24 @@ func ParseWrapTokenRequest(key, value []byte) (*WrapTokenRequest, error) {
 	return parseWrapTokenRequest(value, key)
 }
 
-func scanEntries(context db.DB, prefix []byte, visit func(key, value []byte) error) error {
+// wrapTokenRequestIdOffset is where the request id starts in a wrap
+// request key: the prefix byte and the 19 decimal digits of the
+// complemented height precede it.
+const wrapTokenRequestIdOffset = 20
+
+// errMalformedRequestKey fails a request key too short to hold the fields
+// parsing recovers from it.
+var errMalformedRequestKey = errors.New("malformed bridge request key")
+
+func scanEntries(context db.DB, prefix []byte, checkKey func([]byte) error, visit func(key, value []byte) error) error {
 	iterator := context.NewIterator(prefix)
 	defer iterator.Release()
 	for iterator.Next() {
 		if len(iterator.Value()) == 0 {
 			return constants.ErrDataNonExistent
+		}
+		if err := checkKey(iterator.Key()); err != nil {
+			return err
 		}
 		if err := visit(iterator.Key(), iterator.Value()); err != nil {
 			return err
@@ -1167,10 +1191,20 @@ func GetUnwrapTokenRequests(context db.DB) ([]*UnwrapTokenRequest, error) {
 // value of every stored unwrap request, in the order
 // GetUnwrapTokenRequests returns them (transaction hash, then log index),
 // without decoding them; decode the ones needed with
-// ParseUnwrapTokenRequest. Empty values, the validity of key and value and
-// errors from visit are handled as in ScanWrapTokenRequests.
+// ParseUnwrapTokenRequest. A key too short for the transaction hash and
+// log index fails the scan; empty values, the validity of key and value
+// and errors from visit are handled as in ScanWrapTokenRequests.
 func ScanUnwrapTokenRequests(context db.DB, visit func(key, value []byte) error) error {
-	return scanEntries(context, unwrapTokenRequestKeyPrefix, visit)
+	return scanEntries(context, unwrapTokenRequestKeyPrefix, checkUnwrapTokenRequestKey, visit)
+}
+
+// checkUnwrapTokenRequestKey fails a key too short to hold the
+// transaction hash and log index parseUnwrapTokenRequest reads from it.
+func checkUnwrapTokenRequestKey(key []byte) error {
+	if len(key) < 1+types.HashSize+4 {
+		return errMalformedRequestKey
+	}
+	return nil
 }
 
 // ParseUnwrapTokenRequest decodes one entry handed out by

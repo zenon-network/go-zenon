@@ -331,6 +331,62 @@ func TestBridgeRequestPagesDecodeOnlyWhatTheyNeed(t *testing.T) {
 	}
 }
 
+// A request key the getters could not recover the request's identity from
+// still fails every getter, even where the entry is not decoded: the
+// previous implementation failed (wrap) or panicked (unwrap) on it, and a
+// bounded page must not count it silently.
+func TestBridgeRequestPagesRejectMalformedKeys(t *testing.T) {
+	// A well-formed packed value of each kind, to store under a bad key.
+	source := newPagingStorage()
+	stagePagingFixture(t, source, 1, 1)
+	var wrapValue, unwrapValue []byte
+	if err := definition.ScanWrapTokenRequests(source, func(_, value []byte) error {
+		wrapValue = append([]byte(nil), value...)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := definition.ScanUnwrapTokenRequests(source, func(_, value []byte) error {
+		unwrapValue = append([]byte(nil), value...)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, short := range []int{0, 5, types.HashSize - 1} {
+		storage := newPagingStorage()
+		stagePagingFixture(t, storage, 20, 0)
+		// sorts after every real request, so it is never on the first page
+		key := common.JoinBytes([]byte{1}, []byte("9999999999999999999"), make([]byte, types.HashSize-1))[:20+short]
+		if err := storage.Put(key, wrapValue); err != nil {
+			t.Fatal(err)
+		}
+		b := newPagingBridgeApi(t, storage)
+		if _, err := b.legacyGetAllWrapTokenRequests(0, 1); err == nil {
+			t.Fatalf("id of %d bytes: the previous implementation accepted it", short)
+		}
+		if _, err := b.GetAllWrapTokenRequests(0, 1); err == nil {
+			t.Fatalf("id of %d bytes: counted without failing", short)
+		}
+		if _, err := b.GetAllWrapTokenRequestsByToAddress(pagingEvmAddresses[0], 0, 1); err == nil {
+			t.Fatalf("id of %d bytes: skipped by the destination filter without failing", short)
+		}
+	}
+
+	for _, length := range []int{1, 33, 36} {
+		storage := newPagingStorage()
+		stagePagingFixture(t, storage, 0, 20)
+		key := common.JoinBytes([]byte{2}, make([]byte, 36))[:length]
+		if err := storage.Put(key, unwrapValue); err != nil {
+			t.Fatal(err)
+		}
+		b := newPagingBridgeApi(t, storage)
+		if _, err := b.GetAllUnwrapTokenRequestsByToAddress(g.User5.Address.String(), 0, 1); err == nil {
+			t.Fatalf("unwrap key of %d bytes: skipped by the destination filter without failing", length)
+		}
+	}
+}
+
 // legacy getters: the implementations before bounded paging.
 
 func (a *BridgeApi) legacyGetAllWrapTokenRequests(pageIndex, pageSize uint32) (*WrapTokenRequestList, error) {
