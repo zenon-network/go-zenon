@@ -633,7 +633,7 @@ func TestStartIsolationGuardrail(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr := mustAddr(t, fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", freePortTCP(t)))
-	pdb.recordConnected(testPeerID(t), []ma.Multiaddr{addr})
+	pdb.recordDirect(testPeerID(t), []ma.Multiaddr{addr})
 	if err := pdb.Close(); err != nil {
 		t.Fatal(err)
 	}
