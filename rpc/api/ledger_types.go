@@ -555,6 +555,8 @@ var detailedMomentumsByteBudget = 10 * 1000 * 1000
 // built to measure it, so work past the budget is bounded by one block
 // (with its paired block): the momentum that would cross the budget is
 // abandoned at that block, nothing after it is read, and More is set.
+// Blocks are read one content header at a time rather than through
+// PrefetchMomentum, which would read a whole momentum up front.
 // When the first momentum alone does not fit, ErrDetailedMomentumTooLarge
 // is returned: a receive block's paired send block, data included, is
 // embedded in the answer, so a momentum's expanded size is not bounded by
@@ -590,15 +592,12 @@ func momentumListToDetailedList(chain chain.Chain, list *MomentumList, byteBudge
 }
 
 // detailedMomentumWithin builds the detailed form of momentum and its
-// encoded size, converting and measuring one account block at a time.
-// It returns a nil DetailedMomentum, without error, as soon as the
-// encoding would exceed limit bytes.
+// encoded size, reading, converting and measuring one account block at
+// a time. It returns a nil DetailedMomentum, without error, as soon as
+// the encoding would exceed limit bytes; no block after the one that
+// crosses is read. Blocks are read as PrefetchMomentum reads them, one
+// GetAccountBlock per content header, with the same error.
 func detailedMomentumWithin(chain chain.Chain, momentum *Momentum, limit int) (*DetailedMomentum, int, error) {
-	store := chain.GetFrontierMomentumStore()
-	m, err := store.PrefetchMomentum(momentum.Momentum)
-	if err != nil {
-		return nil, 0, err
-	}
 	// the momentum with an empty block list; each block then adds its
 	// encoding, and every block after the first a ","
 	shell, err := json.Marshal(&DetailedMomentum{Momentum: momentum, AccountBlocks: []*AccountBlock{}})
@@ -609,8 +608,13 @@ func detailedMomentumWithin(chain chain.Chain, momentum *Momentum, limit int) (*
 	if size > limit {
 		return nil, 0, nil
 	}
-	accountBlocks := make([]*AccountBlock, 0, len(m.AccountBlocks))
-	for _, block := range m.AccountBlocks {
+	store := chain.GetFrontierMomentumStore()
+	accountBlocks := make([]*AccountBlock, 0, len(momentum.Content))
+	for _, header := range momentum.Content {
+		block, err := store.GetAccountBlock(*header)
+		if err != nil {
+			return nil, 0, fmt.Errorf("error while prefetching account-blocks for insert-momentum event. %w", err)
+		}
 		if block == nil {
 			continue
 		}

@@ -15,10 +15,12 @@ import (
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
-// counts records the work done building detailed momentums: momentums
-// expanded through PrefetchMomentum, and account blocks converted, each
-// of which looks up its paired block exactly once.
+// counts records the work done building detailed momentums: account
+// blocks read from the store, momentums prefetched whole (which the
+// budgeted path must never do), and account blocks converted, each of
+// which looks up its paired block exactly once.
 type counts struct {
+	read       int
 	prefetched int
 	paired     int
 }
@@ -40,6 +42,11 @@ type countingStore struct {
 func (s countingStore) PrefetchMomentum(m *nom.Momentum) (*nom.DetailedMomentum, error) {
 	s.n.prefetched++
 	return s.Momentum.PrefetchMomentum(m)
+}
+
+func (s countingStore) GetAccountBlock(header types.AccountHeader) (*nom.AccountBlock, error) {
+	s.n.read++
+	return s.Momentum.GetAccountBlock(header)
 }
 
 func (s countingStore) GetBlockWhichReceives(hash types.Hash) (*nom.AccountBlock, error) {
@@ -232,9 +239,6 @@ func TestMomentumListToDetailedList_StopsAtByteBudget(t *testing.T) {
 			if len(got.List) != tc.want || !got.More {
 				t.Fatalf("budget %d: got %d momentums more=%v, want %d more=true", tc.budget, len(got.List), got.More, tc.want)
 			}
-			if n.prefetched != tc.want+1 {
-				t.Fatalf("budget %d: expanded %d momentums for a %d-momentum answer; the rest of the range must not be built", tc.budget, n.prefetched, tc.want)
-			}
 			// at the exact budget nothing is left for the next momentum,
 			// which is dropped before any of its blocks is built; one
 			// byte short, it is dropped at its last block
@@ -242,8 +246,9 @@ func TestMomentumListToDetailedList_StopsAtByteBudget(t *testing.T) {
 			if tc.budget == encodedListSize(sizes, tc.want+1)-1 {
 				wantPaired += budgetFixtureBlocksPerMom
 			}
-			if n.paired != wantPaired {
-				t.Fatalf("budget %d: built %d blocks for a %d-momentum answer, want %d", tc.budget, n.paired, tc.want, wantPaired)
+			if n.read != wantPaired || n.paired != wantPaired || n.prefetched != 0 {
+				t.Fatalf("budget %d: read %d and built %d blocks (prefetched %d momentums) for a %d-momentum answer, want %d",
+					tc.budget, n.read, n.paired, n.prefetched, tc.want, wantPaired)
 			}
 			encoded := mustMarshal(t, got.List)
 			if len(encoded) > tc.budget {
@@ -264,8 +269,8 @@ func TestMomentumListToDetailedList_StopsAtByteBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.List) != count || got.More || n.prefetched != count {
-		t.Fatalf("exact budget: got %d momentums more=%v expanded=%d", len(got.List), got.More, n.prefetched)
+	if len(got.List) != count || got.More || n.read != count*budgetFixtureBlocksPerMom || n.prefetched != 0 {
+		t.Fatalf("exact budget: got %d momentums more=%v read=%d prefetched=%d", len(got.List), got.More, n.read, n.prefetched)
 	}
 }
 
@@ -308,8 +313,8 @@ func TestMomentumListToDetailedList_OversizedFirstMomentumIsAnError(t *testing.T
 		if err != ErrDetailedMomentumTooLarge || got != nil {
 			t.Fatalf("height %d: got %v, %v; want ErrDetailedMomentumTooLarge", height, got, err)
 		}
-		if n.prefetched != 1 || n.paired != 0 {
-			t.Fatalf("height %d: expanded %d momentums and built %d blocks under a 1-byte budget", height, n.prefetched, n.paired)
+		if n.read != 0 || n.paired != 0 || n.prefetched != 0 {
+			t.Fatalf("height %d: read %d and built %d blocks (prefetched %d) under a 1-byte budget", height, n.read, n.paired, n.prefetched)
 		}
 	}
 
@@ -325,8 +330,8 @@ func TestMomentumListToDetailedList_OversizedFirstMomentumIsAnError(t *testing.T
 	if _, err := momentumListToDetailedList(l.chain, headers, budget); err != ErrDetailedMomentumTooLarge {
 		t.Fatalf("got %v, want ErrDetailedMomentumTooLarge", err)
 	}
-	if n.paired != 2 {
-		t.Fatalf("built %d of %d blocks; want 2", n.paired, len(receives))
+	if n.read != 2 || n.paired != 2 || n.prefetched != 0 {
+		t.Fatalf("read %d and built %d of %d blocks (prefetched %d); want 2", n.read, n.paired, len(receives), n.prefetched)
 	}
 
 	// Behind a momentum that fits, the oversized one ends the list with
@@ -383,8 +388,8 @@ func TestGetDetailedMomentumsByHeight_ContinuesAcrossBudget(t *testing.T) {
 		if len(got.List) == 0 {
 			t.Fatalf("call %d returned no momentums", calls)
 		}
-		if n.prefetched > len(got.List)+1 {
-			t.Fatalf("call %d expanded %d momentums for %d returned", calls, n.prefetched, len(got.List))
+		if n.prefetched != 0 || n.read > (len(got.List)+1)*budgetFixtureBlocksPerMom {
+			t.Fatalf("call %d read %d blocks (prefetched %d) for %d momentums returned", calls, n.read, n.prefetched, len(got.List))
 		}
 		raw := mustMarshal(t, got)
 		if got.More != bytes.Contains(raw, []byte(`"more":true`)) {
