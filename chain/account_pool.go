@@ -955,19 +955,7 @@ func (ap *accountPool) RestoreUncommitted(insertLocker sync.Locker, snapshot *Un
 }
 
 func (ap *accountPool) GetNewMomentumContent() []*nom.AccountBlock {
-	return ap.SelectNewMomentumContent(ap.GetAllUncommittedAccountBlocks())
-}
-
-// SelectNewMomentumContent applies GetNewMomentumContent's selection to
-// candidates instead of to every uncommitted block. candidates must keep
-// the order GetAllUncommittedAccountBlocks gives (see
-// filterBlocksToCommit); dropping an account's block together with every
-// block of that account above it keeps it valid. The producer uses this to
-// remove the blocks it cannot confirm before the block-count cap and the
-// byte budget are applied, so that they cannot use up the room that
-// eligible blocks behind them would take.
-func (ap *accountPool) SelectNewMomentumContent(candidates []*nom.AccountBlock) []*nom.AccountBlock {
-	return ap.filterBlocksToCommit(candidates)
+	return ap.filterBlocksToCommit(ap.GetAllUncommittedAccountBlocks())
 }
 
 // filterBlocksToCommit is the pre-spork content selection: it walks the

@@ -349,39 +349,6 @@ func TestAcknowledgementRequirement_FilterDropsFailingSuffix(t *testing.T) {
 	}
 }
 
-// TestAcknowledgementRequirement_FilterBeforeLegacyLimits shows why the
-// pre-dynamic-plasma producer filters the candidates before the legacy
-// selection rather than after it: blocks the pool keeps because their
-// acknowledgement could not be read must not use up the block-count cap.
-func TestAcknowledgementRequirement_FilterBeforeLegacyLimits(t *testing.T) {
-	gate := withDynamicPlasmaSporkId(t)
-	setMaxAccountBlocksInMomentum(t, 2)
-	unreadable := ackAt(60)
-	cacheAt := func(identifier types.HashHeight) store.Cache {
-		if identifier == unreadable {
-			return nil
-		}
-		return scriptedCacheAt(map[types.Hash]uint64{gate: 100})(identifier)
-	}
-	newRequirement := func() *AcknowledgementRequirement {
-		return mustRequirement(t, 150, sporkList(enforcedSpork(gate, 100)), cacheAt)
-	}
-
-	stuck1 := userBlock(ackUser, 1, unreadable)
-	stuck2 := userBlock(ackUser, 2, ackAt(150))
-	eligible := userBlock(ackOtherUser, 1, ackAt(140))
-	candidates := []*nom.AccountBlock{stuck1, stuck2, eligible}
-	ap := &accountPool{}
-
-	if got := newRequirement().Filter(ap.SelectNewMomentumContent(candidates), nil); len(got) != 0 {
-		t.Fatalf("selecting first kept %d blocks; the test no longer shows the crowding", len(got))
-	}
-	got := ap.SelectNewMomentumContent(newRequirement().Filter(candidates, nil))
-	if len(got) != 1 || got[0] != eligible {
-		t.Fatalf("got %d blocks, want only the eligible one", len(got))
-	}
-}
-
 // recencyParentStore is the part of store.Momentum the requirement reads at
 // the parent, plus what InsertMomentum's pricing refresh asks of it.
 type recencyParentStore struct {

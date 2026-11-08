@@ -23,14 +23,6 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 		return nil, nil, err
 	}
 
-	// The acknowledgement recency rule at this parent, read once for the
-	// whole selection; nil while DynamicPlasmaSpork is not enforced,
-	// which leaves the pre-dynamic-plasma selection below unchanged.
-	acknowledgement, err := chain.NewAcknowledgementRequirement(store, w.chain.GetCacheStore)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	var (
 		m      *nom.Momentum
 		blocks []*nom.AccountBlock
@@ -42,6 +34,13 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 			return nil, nil, err
 		}
 		plasma := dp.NewDynamicPlasma(previousMomentum, config)
+		// The acknowledgement recency rule at this parent, read once for
+		// the whole selection. It is gated on DynamicPlasmaSpork, so the
+		// pre-dynamic-plasma selection below never has one to apply.
+		acknowledgement, err := chain.NewAcknowledgementRequirement(store, w.chain.GetCacheStore)
+		if err != nil {
+			return nil, nil, err
+		}
 		blocks = NewMomentumContentSelectorWithAcknowledgement(plasma, acknowledgement).Content(w.chain.GetAllUncommittedAccountBlocks())
 		basePlasma := plasma.ComputeTotalBasePlasma(blocks)
 		m = &nom.Momentum{
@@ -55,12 +54,7 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 			NextWorkPrice:   plasma.NextWorkPrice(basePlasma.Pow),
 		}
 	} else {
-		// Blocks that cannot be confirmed are removed, with everything above
-		// them in their account, before the block-count cap and byte budget
-		// are applied, so they cannot take the room of eligible blocks.
-		// Without an enforced requirement this is GetNewMomentumContent.
-		candidates := acknowledgement.Filter(w.chain.GetAllUncommittedAccountBlocks(), reportStaleAcknowledgement)
-		blocks = w.chain.SelectNewMomentumContent(candidates)
+		blocks = w.chain.GetNewMomentumContent()
 		m = &nom.Momentum{
 			ChainIdentifier: w.chain.ChainIdentifier(),
 			PreviousHash:    previousMomentum.Hash,
