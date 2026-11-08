@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
@@ -107,9 +108,17 @@ func TestSporkGated_EmbeddedSendNoTrailingBytesAcceptedAfterSpork(t *testing.T) 
 }
 
 // Test 5: A receive block whose MomentumAcknowledged is before the spork
-// activation height is still valid even after the spork is active. This
-// verifies the spork check uses the block's MA, not the chain tip.
-func TestSporkGated_PreEnforcementBlockReplayedAfterSpork(t *testing.T) {
+// activation height is rejected once the spork is enforced at the frontier.
+// The receive-data rule still reads the spork state at the block's MA, not
+// at the chain tip, and on its own would accept the block; this test used
+// to assert that acceptance. That was the bypass of issue #227: Dynamic
+// Plasma also gates the acknowledgement recency rule, which requires the
+// MA to enforce every spork the frontier enforces, so the block is
+// rejected for its stale MA (ErrABMAStale) before the receive-data rule is
+// reached. With the recency rule in force the spork state at the MA and at
+// the frontier agree, so the two readings can no longer differ for an
+// admitted block.
+func TestSporkGated_PreEnforcementBlockRejectedAfterSpork(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
 	saveSporkState(t)
@@ -132,8 +141,7 @@ func TestSporkGated_PreEnforcementBlockReplayedAfterSpork(t *testing.T) {
 	activateDynamicPlasma(t, z)
 
 	// Construct a receive block for User3 with the PRE-SPORK MA and non-empty
-	// Data. The verifier must accept it because receiveData() looks up the
-	// spork state at the block's MA, which predates enforcement.
+	// Data. The acknowledgement recency rule rejects it for that MA.
 	user3Store := z.Chain().GetFrontierAccountStore(g.User3.Address)
 	user3Frontier, err := user3Store.Frontier()
 	common.FailIfErr(t, err)
@@ -159,8 +167,9 @@ func TestSporkGated_PreEnforcementBlockReplayedAfterSpork(t *testing.T) {
 	receiveBlock.PublicKey = publicKey
 
 	v := newTestVerifier(z)
-	if err := v.AccountBlock(receiveBlock); err != nil {
-		t.Fatalf("pre-spork MA receive with Data rejected after spork: %v", err)
+	err = v.AccountBlock(receiveBlock)
+	if !errors.Is(err, verifier.ErrABMAStale) {
+		t.Fatalf("pre-spork MA receive with Data after spork: want %v, got %v", verifier.ErrABMAStale, err)
 	}
 }
 

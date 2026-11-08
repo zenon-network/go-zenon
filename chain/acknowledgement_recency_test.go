@@ -78,13 +78,14 @@ var (
 	otherSporkId = types.Hash{0x0b}
 )
 
-// withRecencySporkId gives the gate a test id for the duration of t, as the
-// release flow does when the placeholder is replaced.
-func withRecencySporkId(t *testing.T) types.Hash {
-	saved := types.AcknowledgementRecencySpork.SporkId
+// withDynamicPlasmaSporkId gives the gate, DynamicPlasmaSpork, a test id
+// for the duration of t, as the release flow does when the placeholder is
+// replaced.
+func withDynamicPlasmaSporkId(t *testing.T) types.Hash {
+	saved := types.DynamicPlasmaSpork.SporkId
 	id := types.Hash{0x0a}
-	types.AcknowledgementRecencySpork.SporkId = id
-	t.Cleanup(func() { types.AcknowledgementRecencySpork.SporkId = saved })
+	types.DynamicPlasmaSpork.SporkId = id
+	t.Cleanup(func() { types.DynamicPlasmaSpork.SporkId = saved })
 	return id
 }
 
@@ -103,7 +104,7 @@ func mustRequirement(t *testing.T, parent uint64, sporks func() ([]*definition.S
 // of H-1 and accepts one of H; the momentum at H (parent H-1) is not
 // subject to the rule at all.
 func TestAcknowledgementRequirement_StaleAcknowledgementRejectedAfterEnforcement(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	const H = 100
 	cache := scriptedCacheAt(map[types.Hash]uint64{gate: H})
 	sporks := sporkList(enforcedSpork(gate, H))
@@ -132,7 +133,7 @@ func TestAcknowledgementRequirement_StaleAcknowledgementRejectedAfterEnforcement
 // first is rejected, one that has both passes, whichever order the
 // records are enumerated in.
 func TestAcknowledgementRequirement_TwoSporksEnforced(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	cache := scriptedCacheAt(map[types.Hash]uint64{gate: 100, otherSporkId: 200})
 	orders := [][]*definition.Spork{
 		{enforcedSpork(gate, 100), enforcedSpork(otherSporkId, 200)},
@@ -150,7 +151,7 @@ func TestAcknowledgementRequirement_TwoSporksEnforced(t *testing.T) {
 // A defined but inactive spork and one activated but not yet enforced at
 // the parent do not enter E(P).
 func TestAcknowledgementRequirement_InactiveAndScheduledSporksImposeNothing(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	inactive := types.Hash{0x0c}
 	cache := scriptedCacheAt(map[types.Hash]uint64{gate: 100})
 	requirement := mustRequirement(t, 150, sporkList(
@@ -174,7 +175,7 @@ func TestAcknowledgementRequirement_InactiveAndScheduledSporksImposeNothing(t *t
 // acknowledgement in [A+6, R) clears the height but not the set, and is
 // rejected; one in [R, P] passes.
 func TestAcknowledgementRequirement_DelayedActivationReceive(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	const A, R, P = 100, 120, 130
 	requirement := mustRequirement(t, P, sporkList(enforcedSpork(gate, A+6)),
 		scriptedCacheAt(map[types.Hash]uint64{gate: R}))
@@ -191,7 +192,7 @@ func TestAcknowledgementRequirement_DelayedActivationReceive(t *testing.T) {
 // A parent without the gate enforced builds no requirement, and a nil
 // requirement passes every block and filters nothing.
 func TestAcknowledgementRequirement_PreActivationParentUnaffected(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	for _, sporks := range [][]*definition.Spork{
 		nil,
 		{enforcedSpork(otherSporkId, 10)},
@@ -225,7 +226,7 @@ func TestAcknowledgementRequirement_PreActivationParentUnaffected(t *testing.T) 
 // Embedded account blocks are exempt: contract receives, their batched
 // sends, whatever they acknowledge.
 func TestAcknowledgementRequirement_EmbeddedBlocksExempt(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	requirement := mustRequirement(t, 150, sporkList(enforcedSpork(gate, 100)), nil)
 	for _, blockType := range []uint64{nom.BlockTypeContractReceive, nom.BlockTypeContractSend} {
 		block := &nom.AccountBlock{Address: types.PlasmaContract, BlockType: blockType, Height: 5, MomentumAcknowledged: ackAt(3)}
@@ -236,7 +237,7 @@ func TestAcknowledgementRequirement_EmbeddedBlocksExempt(t *testing.T) {
 // An acknowledgement that is not the canonical momentum at its height, or
 // is above the parent, fails the rule.
 func TestAcknowledgementRequirement_NonCanonicalAcknowledgementRejected(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	requirement := mustRequirement(t, 150, sporkList(enforcedSpork(gate, 100)),
 		scriptedCacheAt(map[types.Hash]uint64{gate: 100}))
 	for _, acknowledged := range []types.HashHeight{
@@ -252,7 +253,7 @@ func TestAcknowledgementRequirement_NonCanonicalAcknowledgementRejected(t *testi
 // A store that cannot be read, while computing either set, is an error,
 // never a pass and never a rejection.
 func TestAcknowledgementRequirement_SporkReadFailureIsError(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	readErr := errors.New("injected read failure")
 
 	// E(P) unreadable.
@@ -289,7 +290,7 @@ func TestAcknowledgementRequirement_SporkReadFailureIsError(t *testing.T) {
 // NewAcknowledgementRequirement reads E(P) from the spork contract's
 // storage at the parent store and fails on an unreadable store.
 func TestNewAcknowledgementRequirement_ReadsSporkContractStorage(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	storage := db.NewMemDB()
 	enforcedSpork(gate, 100).Save(storage)
 	parent := &recencyParentStore{identifier: ackAt(150), storage: storage}
@@ -312,7 +313,7 @@ func TestNewAcknowledgementRequirement_ReadsSporkContractStorage(t *testing.T) {
 // including a dependent block whose own acknowledgement passes, keeps the
 // other accounts in their original order, and reports each cut once.
 func TestAcknowledgementRequirement_FilterDropsFailingSuffix(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	requirement := mustRequirement(t, 150, sporkList(enforcedSpork(gate, 100)),
 		scriptedCacheAt(map[types.Hash]uint64{gate: 100}))
 
@@ -353,7 +354,7 @@ func TestAcknowledgementRequirement_FilterDropsFailingSuffix(t *testing.T) {
 // selection rather than after it: blocks the pool keeps because their
 // acknowledgement could not be read must not use up the block-count cap.
 func TestAcknowledgementRequirement_FilterBeforeLegacyLimits(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	setMaxAccountBlocksInMomentum(t, 2)
 	unreadable := ackAt(60)
 	cacheAt := func(identifier types.HashHeight) store.Cache {
@@ -443,7 +444,7 @@ func pendingHeights(ap *accountPool, address types.Address) int {
 // whose own acknowledgement passes; other accounts are untouched. One
 // momentum earlier, the same blocks stay queued.
 func TestAccountPool_StaleAcknowledgementEvictedWithSuffix(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	const H = 100
 	storage := db.NewMemDB()
 	enforcedSpork(gate, H).Save(storage)
@@ -492,7 +493,7 @@ func TestAccountPool_StaleAcknowledgementEvictedWithSuffix(t *testing.T) {
 // A block whose acknowledgement cannot be read is kept by the eviction
 // pass; only a rule failure evicts.
 func TestAccountPool_UnreadableAcknowledgementKept(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	storage := db.NewMemDB()
 	enforcedSpork(gate, 100).Save(storage)
 	ap := newAccountPool(&recencyStable{frontier: &recencyParentStore{identifier: ackAt(100), storage: storage}})
@@ -509,7 +510,7 @@ func TestAccountPool_UnreadableAcknowledgementKept(t *testing.T) {
 // not re-checked, and a rollback below the enforcement height lifts the
 // rule again.
 func TestAccountPool_StaleAcknowledgementRejectedAtAdmission(t *testing.T) {
-	gate := withRecencySporkId(t)
+	gate := withDynamicPlasmaSporkId(t)
 	const H = 100
 	storage := db.NewMemDB()
 	enforcedSpork(gate, H).Save(storage)

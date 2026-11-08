@@ -418,7 +418,7 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 // (chain.AcknowledgementRequirement) to the momentum's user blocks, which
 // content has already matched one to one against the momentum's content
 // headers: once
-// AcknowledgementRecencySpork is enforced at the parent, each must
+// DynamicPlasmaSpork is enforced at the parent, each must
 // acknowledge a momentum at which every spork enforced at the parent is
 // already enforced. Both the parent and every acknowledgement are fixed by
 // canonical identifiers, so the answer does not depend on the verifying

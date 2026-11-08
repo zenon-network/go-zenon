@@ -11,29 +11,30 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/rpc/api/embedded"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/wallet"
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
-// activateAcknowledgementRecency creates and activates the acknowledgement
-// recency spork on z, points AcknowledgementRecencySpork at it for the
-// duration of t, and returns its EnforcementHeight H without advancing to
-// it. The spork id is the hash of the CreateSpork send.
+// activateAcknowledgementRecency creates and activates DynamicPlasmaSpork,
+// which gates the acknowledgement recency rule, on z, points
+// DynamicPlasmaSpork at it for the duration of t, and returns its
+// EnforcementHeight H without advancing to it. The spork id is the hash of
+// the CreateSpork send.
 func activateAcknowledgementRecency(t *testing.T, z mock.MockZenon) uint64 {
 	saveSporkState(t)
-	saved := types.AcknowledgementRecencySpork.SporkId
-	t.Cleanup(func() { types.AcknowledgementRecencySpork.SporkId = saved })
 
 	createSend := z.InsertSendBlock(&nom.AccountBlock{
 		Address:   g.Spork.Address,
 		ToAddress: types.SporkContract,
 		Data: definition.ABISpork.PackMethodPanic(definition.SporkCreateMethodName,
-			"acknowledgement-recency",
-			"Requires user blocks to acknowledge every enforced spork",
+			"dynamic-plasma",
+			"Activates Dynamic Plasma",
 		),
 	}, nil, mock.SkipVmChanges)
 	z.InsertNewMomentum()
@@ -46,7 +47,7 @@ func activateAcknowledgementRecency(t *testing.T, z mock.MockZenon) uint64 {
 	}, nil, mock.SkipVmChanges)
 	z.InsertNewMomentum()
 	z.InsertNewMomentum() // the spork contract receives the activation
-	types.AcknowledgementRecencySpork.SporkId = id
+	types.DynamicPlasmaSpork.SporkId = id
 	types.ImplementedSporksMap[id] = true
 
 	sporks, err := embedded.NewSporkApi(z).GetAll(0, 10)
@@ -56,7 +57,7 @@ func activateAcknowledgementRecency(t *testing.T, z mock.MockZenon) uint64 {
 			return spork.EnforcementHeight
 		}
 	}
-	t.Fatal("acknowledgement recency spork is not activated")
+	t.Fatal("dynamic plasma spork is not activated")
 	return 0
 }
 
@@ -84,6 +85,9 @@ func signedUserBlock(t *testing.T, z mock.MockZenon, key *wallet.KeyPair, templa
 	if block.Amount == nil {
 		block.Amount = big.NewInt(0)
 	}
+	// Enough fused plasma to meet the price once Dynamic Plasma is active;
+	// nothing here applies the block, so the account's fusion is not read.
+	block.FusedPlasma = 100 * constants.AccountBlockBasePlasma
 	block.Hash = block.ComputeHash()
 	signature, _, publicKey, err := key.Signer(block.Hash.Bytes())
 	common.FailIfErr(t, err)
@@ -101,10 +105,11 @@ func userSend(t *testing.T, z mock.MockZenon, acknowledged types.HashHeight) *no
 	}, acknowledged)
 }
 
-// momentumOn is a version 1 momentum on parent confirming blocks; enough
-// for the momentum verifier's Momentum, which does not check the hash or
-// the producer.
-func momentumOn(z mock.MockZenon, parent *nom.Momentum, blocks ...*nom.AccountBlock) *nom.DetailedMomentum {
+// momentumOn is a momentum on parent confirming blocks, enough for the
+// momentum verifier's Momentum, which does not check the hash or the
+// producer: version 1 while DynamicPlasmaSpork is not active at parent,
+// otherwise version 2 with the resource prices the blocks set.
+func momentumOn(t *testing.T, z mock.MockZenon, parent *nom.Momentum, blocks ...*nom.AccountBlock) *nom.DetailedMomentum {
 	m := &nom.Momentum{
 		Version:         1,
 		ChainIdentifier: z.Chain().ChainIdentifier(),
@@ -112,6 +117,27 @@ func momentumOn(z mock.MockZenon, parent *nom.Momentum, blocks ...*nom.AccountBl
 		Height:          parent.Height + 1,
 		TimestampUnix:   parent.TimestampUnix + 10,
 		Content:         nom.NewMomentumContent(blocks),
+	}
+	store := z.Chain().GetMomentumStore(parent.Identifier())
+	active, err := store.IsSporkActive(types.DynamicPlasmaSpork)
+	common.FailIfErr(t, err)
+	if active {
+		config, err := store.GetPlasmaVariables()
+		common.FailIfErr(t, err)
+		plasma := dp.NewDynamicPlasma(parent, config)
+		priced := make([]*nom.AccountBlock, 0, len(blocks))
+		for _, block := range blocks {
+			copied := *block
+			if !types.IsEmbeddedAddress(block.Address) {
+				copied.BasePlasma, err = vm.CanonicalBasePlasma(z.Chain(), block)
+				common.FailIfErr(t, err)
+			}
+			priced = append(priced, &copied)
+		}
+		base := plasma.ComputeTotalBasePlasma(priced)
+		m.Version = nom.DynamicPlasmaMomentumVersion
+		m.NextFusionPrice = plasma.NextFusionPrice(base.Fusion)
+		m.NextWorkPrice = plasma.NextWorkPrice(base.Pow)
 	}
 	m.EnsureCache()
 	return &nom.DetailedMomentum{Momentum: m, AccountBlocks: blocks}
@@ -141,33 +167,35 @@ func TestMomentumContent_StaleAcknowledgementRejectedAfterEnforcement(t *testing
 	// Frontier H-1: not enforced at the parent yet.
 	common.FailIfErr(t, v.AccountBlock(stale))
 	parentBefore := frontierMomentum(t, z)
-	common.FailIfErr(t, v.Momentum(momentumOn(z, parentBefore, stale)))
+	common.FailIfErr(t, v.Momentum(momentumOn(t, z, parentBefore, stale)))
 
 	z.InsertMomentumsTo(H)
-	active, err := z.Chain().GetFrontierMomentumStore().IsSporkActive(types.AcknowledgementRecencySpork)
+	active, err := z.Chain().GetFrontierMomentumStore().IsSporkActive(types.DynamicPlasmaSpork)
 	common.FailIfErr(t, err)
 	common.ExpectTrue(t, active)
 
 	parent := frontierMomentum(t, z)
 	expectIs(t, "admission at H", v.AccountBlock(stale), verifier.ErrABMAStale)
-	expectIs(t, "momentum H+1", v.Momentum(momentumOn(z, parent, stale)), verifier.ErrMStaleAcknowledgement)
+	expectIs(t, "momentum H+1", v.Momentum(momentumOn(t, z, parent, stale)), verifier.ErrMStaleAcknowledgement)
 	// Momentum H, on parent H-1, still accepts it.
-	common.FailIfErr(t, v.Momentum(momentumOn(z, parentBefore, stale)))
+	common.FailIfErr(t, v.Momentum(momentumOn(t, z, parentBefore, stale)))
 
 	fresh := userSend(t, z, parent.Identifier())
 	common.FailIfErr(t, v.AccountBlock(fresh))
-	common.FailIfErr(t, v.Momentum(momentumOn(z, parent, fresh)))
+	common.FailIfErr(t, v.Momentum(momentumOn(t, z, parent, fresh)))
 
 	// An acknowledgement of H-1 is stale at parent H as well.
 	staleByOne := userSend(t, z, parentBefore.Identifier())
 	expectIs(t, "admission of H-1", v.AccountBlock(staleByOne), verifier.ErrABMAStale)
 }
 
-// The bypass the issue describes: a user receive carrying data and
-// acknowledging a momentum from before the Dynamic Plasma spork passes the
-// account verifier on current dev (TestSporkGated_PreEnforcementBlockReplayedAfterSpork).
-// Once the recency gate is enforced it is rejected, and an acknowledgement
-// recent enough to pass the gate makes the receive-data rule apply.
+// The bypass the issue describes: a user receive carrying data whose
+// acknowledged momentum predates the Dynamic Plasma spork runs under the
+// pre-spork receive-data rule, which reads the spork state at that
+// acknowledgement. Until the spork is enforced at the frontier it is
+// accepted, as before; once it is enforced the recency rule rejects it, and
+// an acknowledgement recent enough to pass makes the receive-data rule
+// apply.
 func TestMomentumContent_StaleAcknowledgementReceiveWithDataRejected(t *testing.T) {
 	z := mock.NewMockZenon(t)
 	defer z.StopPanic()
@@ -182,7 +210,6 @@ func TestMomentumContent_StaleAcknowledgementReceiveWithDataRejected(t *testing.
 	z.InsertNewMomentum()
 	preSpork := frontierMomentum(t, z).Identifier()
 
-	activateDynamicPlasma(t, z)
 	receive := func(acknowledged types.HashHeight) *nom.AccountBlock {
 		return signedUserBlock(t, z, g.User3, &nom.AccountBlock{
 			BlockType:     nom.BlockTypeUserReceive,
@@ -190,10 +217,12 @@ func TestMomentumContent_StaleAcknowledgementReceiveWithDataRejected(t *testing.
 			Data:          []byte("pre-spork data"),
 		}, acknowledged)
 	}
-	// Without the gate: accepted, the pre-spork answer.
-	common.FailIfErr(t, v.AccountBlock(receive(preSpork)))
 
 	H := activateAcknowledgementRecency(t, z)
+	z.InsertMomentumsTo(H - 1)
+	// Not enforced at the frontier yet: accepted, the pre-spork answer.
+	common.FailIfErr(t, v.AccountBlock(receive(preSpork)))
+
 	z.InsertMomentumsTo(H)
 	expectIs(t, "stale receive with data", v.AccountBlock(receive(preSpork)), verifier.ErrABMAStale)
 	expectIs(t, "fresh receive with data", v.AccountBlock(receive(frontierMomentum(t, z).Identifier())), verifier.ErrABDataMustBeEmpty)

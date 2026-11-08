@@ -36,9 +36,12 @@ func IsAcknowledgementRejection(err error) bool {
 // cache cannot answer for it. ChainCache.GetCacheStore has this shape.
 type CacheStoreAt func(types.HashHeight) store.Cache
 
-// AcknowledgementRequirement is the acknowledgement recency rule
-// (AcknowledgementRecencySpork) as it applies to the momentum built on
-// one parent momentum P.
+// AcknowledgementRequirement is the acknowledgement recency rule as it
+// applies to the momentum built on one parent momentum P. The rule is in
+// force from the momentum whose parent enforces DynamicPlasmaSpork (issue
+// #227): the spork-gated rules a block runs under are read at its own
+// acknowledged momentum, so without this rule a block acknowledging a
+// momentum from before an activation could keep the rules from before it.
 //
 // Let E(P) be the ids of the sporks defined at P that are activated with
 // EnforcementHeight <= P.Height. A user account block confirmed by the
@@ -69,7 +72,7 @@ type AcknowledgementRequirement struct {
 
 // NewAcknowledgementRequirement builds the requirement for the momentum
 // that extends parent. It returns nil, and no error, when the rule does
-// not apply there: AcknowledgementRecencySpork is not enforced at parent.
+// not apply there: DynamicPlasmaSpork is not enforced at parent.
 // A nil requirement passes every block. A spork state that cannot be read
 // is an error, never an empty set.
 func NewAcknowledgementRequirement(parent store.Momentum, cacheAt CacheStoreAt) (*AcknowledgementRequirement, error) {
@@ -107,7 +110,7 @@ func newAcknowledgementRequirement(parent types.HashHeight, sporks func() ([]*de
 			continue
 		}
 		enforced = append(enforced, spork.Id)
-		if spork.Id == types.AcknowledgementRecencySpork.SporkId {
+		if spork.Id == types.DynamicPlasmaSpork.SporkId {
 			gated = true
 		}
 	}

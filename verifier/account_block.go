@@ -387,7 +387,7 @@ func (abv *accountBlockVerifier) momentumAcknowledged() error {
 
 // acknowledgementRecency is the admission side of the acknowledgement
 // recency rule (chain.AcknowledgementRequirement): once
-// AcknowledgementRecencySpork is enforced at the frontier, a user block
+// DynamicPlasmaSpork is enforced at the frontier, a user block
 // must acknowledge a momentum at which every spork enforced at the
 // frontier is already enforced, since the next momentum, whose parent is
 // the frontier, could not confirm it otherwise. Embedded blocks are

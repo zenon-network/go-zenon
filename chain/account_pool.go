@@ -589,7 +589,7 @@ func (ap *accountPool) primeAcknowledgement() {
 // refreshAcknowledgement rebuilds ap.acknowledgement for the committed
 // frontier. It runs on every InsertMomentum and DeleteMomentum, after the
 // chain cache and the momentum pool have both moved to the new frontier;
-// while AcknowledgementRecencySpork is not enforced there it costs a
+// while DynamicPlasmaSpork is not enforced there it costs a
 // single spork enumeration and leaves the rule off. A spork state that
 // cannot be read also leaves it off, logged: the pool's use of the rule
 // is admission hygiene and housekeeping, and the account verifier,

@@ -60,10 +60,10 @@ func (c *recencyCache) IsSporkActive(spork *types.ImplementedSpork) (bool, error
 // the rule the selector includes neither of the first two; without it
 // (the plain selector) it includes all three.
 func TestContentSelector_SkipsStaleAcknowledgementAndSuffix(t *testing.T) {
-	saved := types.AcknowledgementRecencySpork.SporkId
+	saved := types.DynamicPlasmaSpork.SporkId
 	gate := types.Hash{0x0a}
-	types.AcknowledgementRecencySpork.SporkId = gate
-	t.Cleanup(func() { types.AcknowledgementRecencySpork.SporkId = saved })
+	types.DynamicPlasmaSpork.SporkId = gate
+	t.Cleanup(func() { types.DynamicPlasmaSpork.SporkId = saved })
 
 	const H = 100
 	storage := db.NewMemDB()

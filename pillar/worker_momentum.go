@@ -24,8 +24,8 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 	}
 
 	// The acknowledgement recency rule at this parent, read once for the
-	// whole selection; nil while AcknowledgementRecencySpork is not
-	// enforced, which leaves both selections below unchanged.
+	// whole selection; nil while DynamicPlasmaSpork is not enforced,
+	// which leaves the pre-dynamic-plasma selection below unchanged.
 	acknowledgement, err := chain.NewAcknowledgementRequirement(store, w.chain.GetCacheStore)
 	if err != nil {
 		return nil, nil, err
