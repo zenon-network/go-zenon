@@ -437,6 +437,22 @@ type rewardSplit struct {
 	giveDelegate uint8
 }
 
+// governingTermsIndex returns the index of the record that governs
+// epoch: the one with the highest EffectiveEpoch not above epoch.
+// records must be in ascending EffectiveEpoch order, as
+// GetPillarEpochTermsList returns them. It returns -1 when no record
+// governs epoch.
+func governingTermsIndex(records []*definition.PillarEpochTerms, epoch uint64) int {
+	governing := -1
+	for i, record := range records {
+		if record.EffectiveEpoch > epoch {
+			break
+		}
+		governing = i
+	}
+	return governing
+}
+
 // epochRewardSplit returns the split that settles the pillar's reward
 // for epoch. Before types.EpochRewardTermsSpork it is the percentages
 // in the pillar's PillarInfo at settlement time. After the spork it is
@@ -463,14 +479,7 @@ func epochRewardSplit(context vm_context.AccountVmContext, termsEnforced bool, p
 	if err != nil {
 		return rewardSplit{}, err
 	}
-	// records are in ascending EffectiveEpoch order
-	governing := -1
-	for i, record := range records {
-		if record.EffectiveEpoch > epoch {
-			break
-		}
-		governing = i
-	}
+	governing := governingTermsIndex(records, epoch)
 	if governing < 0 {
 		return split, nil
 	}

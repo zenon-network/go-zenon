@@ -769,36 +769,3 @@ func GetPillarEpochTermsList(context db.DB, name string) ([]*PillarEpochTerms, e
 	}
 	return list, nil
 }
-
-// GetPillarEpochTermsForEpoch returns the record that governs epoch
-// for the named pillar: the one with the highest EffectiveEpoch not
-// above epoch. It returns constants.ErrDataNonExistent when the
-// pillar has no such record, in which case the PillarInfo percentages
-// apply.
-func GetPillarEpochTermsForEpoch(context db.DB, name string, epoch uint64) (*PillarEpochTerms, error) {
-	iterator := context.NewIterator(getPillarEpochTermsPrefixKey(name))
-	defer iterator.Release()
-	var found *PillarEpochTerms
-	for {
-		if !iterator.Next() {
-			if iterator.Error() != nil {
-				return nil, iterator.Error()
-			}
-			break
-		}
-		entry, err := parsePillarEpochTermsEntry(name, iterator.Key(), iterator.Value())
-		if err != nil {
-			return nil, err
-		}
-		// keys are in ascending EffectiveEpoch order, so no later
-		// record can govern epoch either
-		if entry.EffectiveEpoch > epoch {
-			break
-		}
-		found = entry
-	}
-	if found == nil {
-		return nil, constants.ErrDataNonExistent
-	}
-	return found, nil
-}

@@ -533,20 +533,26 @@ func TestPillarEpochTerms_OrderAcrossByteBoundaries(t *testing.T) {
 		{65534, 256}, {65535, 65535}, {65536, 65536}, {65537, 65536},
 		{1<<32 - 2, 65536}, {1<<32 - 1, 1<<32 - 1}, {1 << 32, 1 << 32}, {1<<64 - 1, 1 << 32},
 	} {
-		r, err := definition.GetPillarEpochTermsForEpoch(storage, termsPillarName, q.epoch)
-		common.FailIfErr(t, err)
-		if r.EffectiveEpoch != q.governing {
-			t.Fatalf("epoch %d governed by %d, want %d", q.epoch, r.EffectiveEpoch, q.governing)
+		i := governingTermsIndex(list, q.epoch)
+		if i < 0 {
+			t.Fatalf("epoch %d: no governing record, want %d", q.epoch, q.governing)
+		}
+		if list[i].EffectiveEpoch != q.governing {
+			t.Fatalf("epoch %d governed by %d, want %d", q.epoch, list[i].EffectiveEpoch, q.governing)
 		}
 	}
 
-	if _, err := definition.GetPillarEpochTermsForEpoch(storage, "missing", 5); err != constants.ErrDataNonExistent {
-		t.Fatalf("pillar without records: err %v, want ErrDataNonExistent", err)
+	missing, err := definition.GetPillarEpochTermsList(storage, "missing")
+	common.FailIfErr(t, err)
+	if i := governingTermsIndex(missing, 5); i != -1 {
+		t.Fatalf("pillar without records: index %d, want -1", i)
 	}
 	late := db.NewMemDB()
 	common.FailIfErr(t, (&definition.PillarEpochTerms{Name: termsPillarName, EffectiveEpoch: 10}).Save(late))
-	if _, err := definition.GetPillarEpochTermsForEpoch(late, termsPillarName, 9); err != constants.ErrDataNonExistent {
-		t.Fatalf("epoch before the first record: err %v, want ErrDataNonExistent", err)
+	lateList, err := definition.GetPillarEpochTermsList(late, termsPillarName)
+	common.FailIfErr(t, err)
+	if i := governingTermsIndex(lateList, 9); i != -1 {
+		t.Fatalf("epoch before the first record: index %d, want -1", i)
 	}
 }
 
