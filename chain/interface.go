@@ -93,7 +93,8 @@ type MomentumPool interface {
 // confirm — at most MaxAccountBlocksInMomentum and within the detailed
 // momentum's wire-size budget, keeping contract-send batches whole and
 // skipping a batch that does not fit along with the rest of its
-// account's chain. SnapshotUncommitted and
+// account's chain. SelectNewMomentumContent applies that selection to
+// a given subset of the uncommitted blocks. SnapshotUncommitted and
 // RestoreUncommitted save and put back the pending state of given
 // addresses across a rollback.
 type AccountPool interface {
@@ -113,6 +114,7 @@ type AccountPool interface {
 	GetFrontierAccountStore(address types.Address) store.Account
 
 	GetNewMomentumContent() []*nom.AccountBlock
+	SelectNewMomentumContent(candidates []*nom.AccountBlock) []*nom.AccountBlock
 	GetAllUncommittedAccountBlocks() []*nom.AccountBlock
 	GetUncommittedAccountBlocksByAddress(address types.Address) []*nom.AccountBlock
 

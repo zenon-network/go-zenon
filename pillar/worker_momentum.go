@@ -55,9 +55,12 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 			NextWorkPrice:   plasma.NextWorkPrice(basePlasma.Pow),
 		}
 	} else {
-		// Removing an account's failing block and everything above it from
-		// the pool's selection keeps it gap-free and within its budgets.
-		blocks = acknowledgement.Filter(w.chain.GetNewMomentumContent(), reportStaleAcknowledgement)
+		// Blocks that cannot be confirmed are removed, with everything above
+		// them in their account, before the block-count cap and byte budget
+		// are applied, so they cannot take the room of eligible blocks.
+		// Without an enforced requirement this is GetNewMomentumContent.
+		candidates := acknowledgement.Filter(w.chain.GetAllUncommittedAccountBlocks(), reportStaleAcknowledgement)
+		blocks = w.chain.SelectNewMomentumContent(candidates)
 		m = &nom.Momentum{
 			ChainIdentifier: w.chain.ChainIdentifier(),
 			PreviousHash:    previousMomentum.Hash,
