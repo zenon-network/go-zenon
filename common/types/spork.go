@@ -46,6 +46,15 @@ var (
 	// to version 2 with adaptive fusion/work prices.
 	DynamicPlasmaSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000002")
 
+	// EpochRewardTermsSpork gates per-epoch pillar reward-sharing terms
+	// (issue #228). Until this spork's EnforcementHeight is reached, an
+	// epoch's pillar rewards are split with the give-percentages stored
+	// in PillarInfo when the epoch is settled; at activation,
+	// UpdatePillar schedules a give-percentage change from the epoch
+	// after the one in which it executes, and settlement uses the terms
+	// that were in force during the settled epoch.
+	EpochRewardTermsSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000007")
+
 	// ImplementedSporksMap is the set of spork IDs this build knows
 	// how to enforce. After every momentum insertion the momentum pool
 	// checks each activated spork that has reached its enforcement
@@ -58,6 +67,7 @@ var (
 		BridgeAndLiquiditySpork.SporkId: true,
 		Libp2pSpork.SporkId:             true,
 		DynamicPlasmaSpork.SporkId:      true,
+		EpochRewardTermsSpork.SporkId:   true,
 	}
 )
 
