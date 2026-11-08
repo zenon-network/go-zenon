@@ -42,13 +42,22 @@ func stallHeight(h types.Hash) uint64 {
 // backwards hash walk), and fetchHashes inserts the hashes as they arrive,
 // so the window head is reserved FIRST. The production shape of a missing
 // head is a hash no peer actually has (the origin advertised something it
-// cannot serve): every peer that reserves it holds the request until
-// blockHardTTL, and the expiry sidelines that peer for the rest of the
-// session. With one peer holding the head and another serving the tail, the
-// cache fills to exactly half behind the never-delivered head; when the
-// head request expires, space is zero, nothing is in flight, no import can
-// run — the issue #247 dead state, reached purely through the delivery
-// path. No ignored hashes and no injected empty packs are involved.
+// cannot serve): whichever peer reserves it holds the request until
+// blockHardTTL. Expire re-pushes the hash but does not SetIdle the peer,
+// so each expiry sidelines that peer for the rest of the session. With two
+// peers and a 16-slot cache, the tail peer fills 7 of the 8 reserve slots
+// behind the never-delivered head (the in-flight head reservation caps the
+// tail fill); once both peers have held and expired on the head, no idle
+// peer remains to re-reserve it, reserve space is still 1, and the
+// space > 0 arm of the guard (space available, nothing reservable) ends
+// the session with errPeersUnavailable. Verified by instrumenting
+// queue.NoProgress in this fixture: spaceAtLoop=1, space=1, ARM 1.
+//
+// The zero-space state (errStallCacheFull) is not reachable through this
+// delivery path — the only route to it runs through peer-ignored hashes,
+// which only fill on an empty delivery, and the wire handler drops empty
+// BlocksMsg replies — so it is seeded directly in
+// TestBlockFetchDeadStateGuard instead.
 func TestBlockFetchStallTimeout(t *testing.T) {
 	origTimeout := stallTimeout
 	stallTimeout = 5 * time.Second
@@ -492,6 +501,22 @@ func TestSynchroniseStallDropGatedOnInFlight(t *testing.T) {
 	}
 }
 
+// TestSynchroniseCacheFullStallNoDrop verifies that the zero-space stall
+// error aborts the session without dropping the origin: a cache full
+// behind a missing head does not identify the origin as a withholder the
+// way errPeersUnavailable does.
+func TestSynchroniseCacheFullStallNoDrop(t *testing.T) {
+	var dropped []string
+	d := newIdleDownloader()
+	d.dropPeer = func(id string) { dropped = append(dropped, id) }
+	d.synchroniseMock = func(string, types.Hash) error { return errStallCacheFull }
+
+	d.Synchronise("origin", types.Hash{}, 100)
+	if len(dropped) != 0 {
+		t.Fatalf("origin must not be dropped on a cache-full stall, got %v", dropped)
+	}
+}
+
 // TestBlockFetchStallCapturesInFlight verifies that the stall deadline
 // captures the number of requests in flight at the moment it fires, and
 // that a request in flight counts as outstanding work even after the
@@ -544,12 +569,14 @@ func TestBlockFetchStallCapturesInFlight(t *testing.T) {
 	}
 }
 
-// TestBlockFetchDeadStateGuard verifies the extended peers-unavailable
-// guard: when the head block of the window was never delivered, the cache
-// is exactly half full and nothing is in flight, no reservation can ever
-// succeed and no import can ever run, so the session can never make
-// progress again — the guard ends it on the spot instead of waiting for
-// the stall deadline (issue #247).
+// TestBlockFetchDeadStateGuard verifies the zero-space arm of the
+// no-progress guard: when the head block of the window was never delivered
+// and the cache is exactly half full, no reservation can ever succeed and
+// no import can ever run, so the session can never make progress again —
+// the guard ends it on the spot with errStallCacheFull instead of waiting
+// for the stall deadline (issue #247). The error is distinct from
+// errPeersUnavailable because a full cache behind a missing head does not
+// identify the origin as the withholder.
 func TestBlockFetchDeadStateGuard(t *testing.T) {
 	origTimeout := stallTimeout
 	stallTimeout = 500 * time.Millisecond
@@ -596,7 +623,7 @@ func TestBlockFetchDeadStateGuard(t *testing.T) {
 	start := time.Now()
 	blockErr := make(chan error, 1)
 	go func() { blockErr <- d.fetchBlocks(1) }()
-	expectReturn(t, "fetchBlocks", blockErr, errPeersUnavailable, 15*time.Second)
+	expectReturn(t, "fetchBlocks", blockErr, errStallCacheFull, 15*time.Second)
 	// The guard must fire on the spot, not via the stall deadline backstop.
 	if elapsed := time.Since(start); elapsed > stallTimeout {
 		t.Fatalf("peers-unavailable guard did not fire on the spot; the %.0fs stall deadline ended the session instead (took %v)", stallTimeout.Seconds(), elapsed)
@@ -717,13 +744,13 @@ func TestQueueNoProgress(t *testing.T) {
 		dead.blockPool[h[i]] = uint64(i + 1)
 	}
 	dead.lock.Unlock()
-	if !dead.NoProgress(0, false) {
-		t.Fatal("dead state not detected")
+	if err := dead.NoProgress(0, false); err != errStallCacheFull {
+		t.Fatalf("dead state: NoProgress = %v, want errStallCacheFull", err)
 	}
-	if dead.NoProgress(0, true) {
+	if err := dead.NoProgress(0, true); err != nil {
 		t.Fatal("dead-state arm fired while an import is running")
 	}
-	if !dead.NoProgress(0, false) {
+	if err := dead.NoProgress(0, false); err != errStallCacheFull {
 		t.Fatal("dead state not stable across ticks")
 	}
 
@@ -736,7 +763,7 @@ func TestQueueNoProgress(t *testing.T) {
 	freed.lock.Lock()
 	freed.blockOffset = 9
 	freed.lock.Unlock()
-	if freed.NoProgress(0, false) {
+	if err := freed.NoProgress(0, false); err != nil {
 		t.Fatal("guard fired although an import freed space during the pass")
 	}
 
@@ -744,10 +771,10 @@ func TestQueueNoProgress(t *testing.T) {
 	room := newQueue()
 	room.Prepare(1)
 	room.Insert(h, true)
-	if !room.NoProgress(8, false) {
-		t.Fatal("guard did not fire with room before and after the pass")
+	if err := room.NoProgress(8, false); err != errPeersUnavailable {
+		t.Fatalf("guard did not fire with room before and after the pass: %v", err)
 	}
-	if room.NoProgress(0, false) {
+	if err := room.NoProgress(0, false); err != nil {
 		t.Fatal("guard fired although the pass had no room to reserve anything")
 	}
 }

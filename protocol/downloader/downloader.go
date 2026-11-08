@@ -93,6 +93,12 @@ var (
 	errCancelBlockFetch = errors.New("block downloading canceled (requested)")
 	errNoSyncActive     = errors.New("no sync active")
 	errStallNoProgress  = errors.New("block download stalled: no progress")
+	// errStallCacheFull ends a session whose block cache is exactly half
+	// full behind a missing window head: no reservation can ever succeed
+	// and no import can ever run. Unlike errPeersUnavailable it does not
+	// identify the origin as a withholder, so Synchronise aborts without
+	// dropping the peer.
+	errStallCacheFull = errors.New("block download stalled: cache full behind a missing head")
 )
 
 // hashCheckFn is a callback type for verifying a hash's presence in the local chain.
@@ -321,7 +327,9 @@ func (d *Downloader) Synchronise(id string, head types.Hash, td uint64) {
 		log.Info("Removing peer", "peer-id", id, "reason", err)
 		d.dropPeer(id)
 
-	case errPendingQueue:
+	case errPendingQueue, errStallCacheFull:
+		// The session ended because the local cache is full behind a head
+		// no peer served; that does not identify the origin as malicious.
 		log.Debug("Synchronisation aborted", "reason", err)
 
 	default:
@@ -843,7 +851,11 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 			// the frontier. The captured in-flight count travels with the
 			// error because cancelling the session resets the queue before
 			// Synchronise can read it.
-			if offset := d.queue.BlockOffset(); offset != lastOffset || d.Processing() {
+			// Sample Processing() before the offset read: process() sets the
+			// flag before TakeBlocks and clears it after the import, so a
+			// handover that lands between the two reads still shows up as busy.
+			busy := d.Processing()
+			if offset := d.queue.BlockOffset(); offset != lastOffset || busy {
 				lastOffset = offset
 				lastHandover = time.Now()
 			} else if d.queue.Pending() > 0 || d.queue.InFlight() > 0 {
@@ -892,8 +904,8 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 			// flight, no import can run and no reservation can ever succeed, so the session
 			// can never make progress again — the guard can fire on the spot instead of
 			// waiting for the stall deadline (issue #247).
-			if d.queue.NoProgress(spaceAtLoop, d.Processing()) {
-				return errPeersUnavailable
+			if err := d.queue.NoProgress(spaceAtLoop, d.Processing()); err != nil {
+				return err
 			}
 		}
 	}
