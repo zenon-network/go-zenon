@@ -40,12 +40,16 @@ const (
 
 // ErrSideChainKnownInvalid is the cause carried by SideChainRejected when a
 // batch is refused because it contains a candidate this node already
-// rejected, before any canonical momentum is removed.
+// rejected, before any canonical momentum is removed and before any
+// content is applied.
 var ErrSideChainKnownInvalid = errors.New("side-chain momentum was already rejected")
 
-// SideChainRejected is returned by InsertChain when a side-chain candidate
-// fails a consensus check: the static or state checks of the verifier, the
-// producer election, or the VM while applying its content. The protocol
+// SideChainRejected is returned by InsertChain when a candidate fails a
+// consensus check: the static or state checks of the verifier, the
+// producer election, or the VM while applying its content. Despite the
+// name it covers both insert paths, a side-chain that would replace part
+// of the local chain and a batch that extends the local frontier, since
+// the verdict and the peer's part in it are the same on both. The protocol
 // layer quarantines the peer that served it. When the verdict is one the
 // candidate's own bytes reproduce, the bridge also remembers those bytes
 // and refuses any later batch that carries them before rolling anything

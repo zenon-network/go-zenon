@@ -18,6 +18,15 @@ var (
 	// not the length the cipher expects, so the file cannot have been
 	// written by this code and decrypting it is refused up front.
 	ErrKeyFileInvalidNonce = errors.New("unable to read KeyFile. Invalid nonce length")
+	// ErrKeyFileAddressMismatch is returned by Decrypt when the base
+	// address a KeyFile advertises in the clear is not the address its
+	// decrypted seed derives, so the file has been edited.
+	ErrKeyFileAddressMismatch = errors.New("unable to open KeyFile. Its base address does not match its key")
+	// ErrKeyFileNotDurable is returned by Write when the key file is in
+	// place at its Path but its directory could not be synced, so a
+	// crash may still lose or roll back the new file. Writing again is
+	// safe.
+	ErrKeyFileNotDurable = errors.New("key file written, but its directory could not be synced: the rename may not survive a crash")
 
 	// === keyStore errors ===
 
