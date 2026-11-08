@@ -43,17 +43,11 @@ var (
 	// DynamicPlasmaSpork gates the activation of the dynamic plasma pricing
 	// model. Until this spork's EnforcementHeight is reached, the legacy
 	// fixed-price plasma model is in use; at activation, momentums switch
-	// to version 2 with adaptive fusion/work prices.
+	// to version 2 with adaptive fusion/work prices. Once it is enforced at
+	// a momentum's parent, the user account blocks in that momentum must
+	// also acknowledge a momentum that enforces every spork the parent
+	// enforces (issue #227, see chain.AcknowledgementRequirement).
 	DynamicPlasmaSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000002")
-
-	// AcknowledgementRecencySpork gates the acknowledgement recency rule.
-	// Until this spork's EnforcementHeight is reached, a user account
-	// block may acknowledge any canonical momentum no older than its
-	// account's previous acknowledgement; once it is enforced at a
-	// momentum's parent, every user account block in that momentum must
-	// acknowledge a momentum at which every spork enforced at the parent
-	// is already enforced (see chain.AcknowledgementRequirement).
-	AcknowledgementRecencySpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000005")
 
 	// EpochRewardTermsSpork gates per-epoch pillar reward-sharing terms
 	// (issue #228). Until this spork's EnforcementHeight is reached, an
@@ -70,14 +64,13 @@ var (
 	// height against this map; if any is missing, the node terminates
 	// and asks for a binary upgrade (see chain/momentum_pool.go).
 	ImplementedSporksMap = map[Hash]bool{
-		AcceleratorSpork.SporkId:            true,
-		HtlcSpork.SporkId:                   true,
-		PtlcSpork.SporkId:                   true,
-		BridgeAndLiquiditySpork.SporkId:     true,
-		Libp2pSpork.SporkId:                 true,
-		DynamicPlasmaSpork.SporkId:          true,
-		AcknowledgementRecencySpork.SporkId: true,
-		EpochRewardTermsSpork.SporkId:       true,
+		AcceleratorSpork.SporkId:        true,
+		HtlcSpork.SporkId:               true,
+		PtlcSpork.SporkId:               true,
+		BridgeAndLiquiditySpork.SporkId: true,
+		Libp2pSpork.SporkId:             true,
+		DynamicPlasmaSpork.SporkId:      true,
+		EpochRewardTermsSpork.SporkId:   true,
 	}
 )
 
