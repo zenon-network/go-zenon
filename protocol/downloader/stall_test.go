@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,25 +32,33 @@ func stallHeight(h types.Hash) uint64 {
 	return stallHeights[h]
 }
 
-// TestBlockFetchStallTimeout verifies that fetchBlocks terminates when a
-// peer withholds the head block of the download window: the cache fills
+// TestBlockFetchStallTimeout verifies that fetchBlocks terminates when no
+// peer can serve the head block of the download window: the cache fills
 // behind the hole, TakeBlocks hands over nothing, and the extended
 // peers-unavailable guard ends the session on the spot (issue #247).
 //
-// The fixture mirrors the production scheduling order: hash replies are
-// newest first (fetchHashes inserts them as they arrive with fifo=true),
-// so the head of the window ends up at the BOTTOM of the priority queue
-// and reservations drain the tail first. The peer below honestly answers
-// every request with the non-empty subset it holds — nothing else exists
-// on the wire, where an empty BlocksMsg reply is dropped by the handler
-// and never reaches the queue. No ignored hashes and no injected empty
-// packs are involved: the session reaches zero reserve space, nothing in
-// flight and a missing head block purely through the delivery path.
+// The fixture mirrors production scheduling. The handler serves
+// GetBlockHashesFromNumberMsg oldest-first (handler.go reverses the
+// backwards hash walk), and fetchHashes inserts the hashes as they arrive,
+// so the window head is reserved FIRST. The production shape of a missing
+// head is a hash no peer actually has (the origin advertised something it
+// cannot serve): every peer that reserves it holds the request until
+// blockHardTTL, and the expiry sidelines that peer for the rest of the
+// session. With one peer holding the head and another serving the tail, the
+// cache fills to exactly half behind the never-delivered head; when the
+// head request expires, space is zero, nothing is in flight, no import can
+// run — the issue #247 dead state, reached purely through the delivery
+// path. No ignored hashes and no injected empty packs are involved.
 func TestBlockFetchStallTimeout(t *testing.T) {
 	origTimeout := stallTimeout
-	stallTimeout = 500 * time.Millisecond
+	stallTimeout = 5 * time.Second
 	defer func() { stallTimeout = origTimeout }()
-	// Shrink the block cache so a small number of withheld blocks fills
+	// The withheld head request must expire well inside the stall window so
+	// the guard, not the deadline, ends the session.
+	origHard := blockHardTTL
+	blockHardTTL = 200 * time.Millisecond
+	defer func() { blockHardTTL = origHard }()
+	// Shrink the block cache so a small number of served blocks fills
 	// half of it and disables the free-space arm of the peers-unavailable
 	// guard, matching the production stall scenario from issue #247.
 	origLimit := blockCacheLimit
@@ -62,44 +71,48 @@ func TestBlockFetchStallTimeout(t *testing.T) {
 	defer atomic.StoreInt32(&d.synchronising, 0)
 	defer d.endSession()
 
-	// Register a peer that has every block except the head of the window
-	// (height 1). It replies with the subset of each request it can serve;
-	// a request it cannot serve at all gets no reply, exactly like the wire,
-	// where an empty reply would be dropped and the reservation would stay
-	// outstanding until expiry.
-	p := newPeer("staller", eth61, types.Hash{}, nil, nil, nil)
-	p.getBlocks = func(hashes []types.Hash) error {
-		blocks := make([]*nom.DetailedMomentum, 0, len(hashes))
-		for _, h := range hashes {
-			if height := stallHeight(h); height > 1 {
-				blocks = append(blocks, &nom.DetailedMomentum{
-					Momentum: &nom.Momentum{Hash: h, Height: height},
-				})
+	// Both peers serve every block except the head of the window (height
+	// 1); whichever of them reserves the head holds the request until
+	// expiry, like a peer that does not have the block at all. A request
+	// that contains only the head gets no reply, exactly like the wire,
+	// where the reservation would stay outstanding until expiry.
+	newStaller := func(id string) {
+		p := newPeer(id, eth61, types.Hash{}, nil, nil, nil)
+		p.getBlocks = func(hashes []types.Hash) error {
+			blocks := make([]*nom.DetailedMomentum, 0, len(hashes))
+			for _, h := range hashes {
+				if height := stallHeight(h); height > 1 {
+					blocks = append(blocks, &nom.DetailedMomentum{
+						Momentum: &nom.Momentum{Hash: h, Height: height},
+					})
+				}
 			}
-		}
-		if len(blocks) == 0 {
+			if len(blocks) == 0 {
+				return nil
+			}
+			go func() {
+				select {
+				case d.blockCh <- blockPack{id, blocks}:
+				case <-d.cancelCh:
+				}
+			}()
 			return nil
 		}
-		go func() {
-			select {
-			case d.blockCh <- blockPack{"staller", blocks}:
-			case <-d.cancelCh:
-			}
-		}()
-		return nil
+		if err := d.peers.Register(p); err != nil {
+			t.Fatalf("register peer: %v", err)
+		}
 	}
-	if err := d.peers.Register(p); err != nil {
-		t.Fatalf("register peer: %v", err)
-	}
+	newStaller("staller-a")
+	newStaller("staller-b")
 
-	// Pre-populate the queue with the window newest first, like a
-	// production hash reply. Reservations drain heights 10 downwards, the
-	// peer fills the cache to exactly half behind the missing head, and
-	// the session is left with space == 0, nothing in flight, no cached
-	// head and hashes still pending — the issue #247 dead state.
+	// Pre-populate the queue in wire (ascending) order: the head is
+	// reserved first. The tail peers fill the cache to exactly half behind
+	// the missing head, and the session is left with space == 0, nothing
+	// in flight, no cached head and hashes still pending — the issue #247
+	// dead state.
 	hashes := make([]types.Hash, 10)
 	for i := range hashes {
-		hashes[i] = stallHash('s', uint64(len(hashes)-i))
+		hashes[i] = stallHash('s', uint64(i+1))
 	}
 	d.queue.Prepare(1)
 	d.queue.Insert(hashes, true)
@@ -233,22 +246,76 @@ func TestBlockFetchNoStallWhileImportBusy(t *testing.T) {
 }
 
 // TestBlockFetchProgressResetsStallTimer verifies that the stall timer is
-// reset when TakeBlocks makes progress: a normal download must not trigger
-// the deadline even when stallTimeout is very short.
+// reset whenever TakeBlocks hands a contiguous run to the import worker: a
+// paced download whose total runtime exceeds stallTimeout must still
+// complete, because every handover gap stays below it. The download is
+// paced so it cannot pass by finishing inside the deadline window: 24
+// hashes are queued up front and the peer answers each request after a
+// fixed delay, so handovers are spaced by the pace (~200 ms apart, six
+// batches, ~1.2 s total against a 500 ms deadline), hashes remain pending
+// throughout and the importer is idle between batches. If the offset-based
+// timer reset is removed, the deadline fires mid-download and this test
+// returns errStallNoProgress instead of nil.
 func TestBlockFetchProgressResetsStallTimer(t *testing.T) {
-	orig := stallTimeout
+	origTimeout := stallTimeout
 	stallTimeout = 500 * time.Millisecond
-	defer func() { stallTimeout = orig }()
+	defer func() { stallTimeout = origTimeout }()
+	origLimit := blockCacheLimit
+	blockCacheLimit = 16
+	defer func() { blockCacheLimit = origLimit }()
 
-	r := newLivenessRun(t, "progress", [][]types.Hash{livenessReply('p', 1, 50), nil})
-	hashErr := make(chan error, 1)
+	d := newIdleDownloader()
+	d.cancelCh = make(chan struct{})
+	atomic.StoreInt32(&d.synchronising, 1)
+	defer atomic.StoreInt32(&d.synchronising, 0)
+	defer d.endSession()
+
+	const pace = 200 * time.Millisecond
+	p := newPeer("paced", eth61, types.Hash{}, nil, nil, nil)
+	p.getBlocks = func(hashes []types.Hash) error {
+		blocks := make([]*nom.DetailedMomentum, 0, len(hashes))
+		for _, h := range hashes {
+			blocks = append(blocks, &nom.DetailedMomentum{
+				Momentum: &nom.Momentum{Hash: h, Height: stallHeight(h)},
+			})
+		}
+		go func() {
+			timer := time.NewTimer(pace)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				select {
+				case d.blockCh <- blockPack{"paced", blocks}:
+				case <-d.cancelCh:
+				}
+			case <-d.cancelCh:
+			}
+		}()
+		return nil
+	}
+	if err := d.peers.Register(p); err != nil {
+		t.Fatalf("register peer: %v", err)
+	}
+
+	// Wire order (ascending): the head is reserved first, imports run from
+	// the front, and the cache never fills. Reservation sizes follow the
+	// capacity ramp 1, 2, 4, 8, 8: five paced batches of 23 blocks plus one
+	// for the last.
+	hashes := make([]types.Hash, 24)
+	for i := range hashes {
+		hashes[i] = stallHash('p', uint64(i+1))
+	}
+	d.queue.Prepare(1)
+	d.queue.Insert(hashes, true)
+	d.processCh <- false // hash fetcher finished
+
+	start := time.Now()
 	blockErr := make(chan error, 1)
-	go func() { hashErr <- r.d.fetchHashes(r.p, 0, 1) }()
-	go func() { blockErr <- r.d.fetchBlocks(1) }()
-
+	go func() { blockErr <- d.fetchBlocks(1) }()
 	expectReturn(t, "fetchBlocks", blockErr, nil, 15*time.Second)
-	expectReturn(t, "fetchHashes", hashErr, nil, 5*time.Second)
-	r.requireImported(t, 1, 50)
+	if elapsed := time.Since(start); elapsed < 6*pace {
+		t.Fatalf("download finished in %v, want at least %v: the batches were not paced, so the test cannot prove the timer reset", elapsed, 6*pace)
+	}
 }
 
 // TestBlockFetchNoStallWhenIdle verifies that the stall deadline does not
@@ -304,7 +371,10 @@ func TestBlockFetchLongImportResetsStallWindow(t *testing.T) {
 		func([]*nom.DetailedMomentum) (int, error) {
 			entered.Do(func() { close(importEntered) })
 			<-releaseImport
-			return 0, nil // block 1 was handed over; nothing further is takable (2 is withheld in flight)
+			// Block 1 was handed over before this ran; returning 0 means no
+			// further TakeBlocks finds a contiguous run (2 is withheld in
+			// flight).
+			return 0, nil
 		},
 		func(string) {},
 		nil,
@@ -385,36 +455,29 @@ func TestBlockFetchLongImportResetsStallWindow(t *testing.T) {
 	expectReturn(t, "fetchBlocks", blockErr, errStallNoProgress, 15*time.Second)
 }
 
-// TestSynchroniseStallDropGatedOnInFlight verifies the drop policy for
-// errStallNoProgress: the peer is dropped only when nothing is in flight
-// anymore (a sustained withholder); while a request is still in flight the
-// session is cancelled without a drop, so an honest slow peer set cannot
-// get the best-TD origin removed.
+// TestSynchroniseStallDropGatedOnInFlight verifies the drop policy for the
+// stall deadline: the peer is dropped only when nothing was in flight when
+// the deadline fired (a sustained withholder); while a request was still in
+// flight the session is cancelled without a drop, so an honest slow peer
+// set cannot get the best-TD origin removed. The in-flight count travels
+// inside the error because cancellation resets the queue before Synchronise
+// runs: reading the queue there would always see zero.
 func TestSynchroniseStallDropGatedOnInFlight(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		inFlight bool
+		inFlight int
 		wantDrop bool
 	}{
-		{"drops the withholder when nothing is in flight", false, true},
-		{"keeps the origin while a request is in flight", true, false},
+		{"drops the withholder when nothing is in flight", 0, true},
+		{"keeps the origin while a request is in flight", 1, false},
+		{"keeps the origin while several requests are in flight", 3, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var dropped []string
 			d := newIdleDownloader()
 			d.dropPeer = func(id string) { dropped = append(dropped, id) }
-			d.synchroniseMock = func(string, types.Hash) error { return errStallNoProgress }
-
-			if tc.inFlight {
-				d.queue.Prepare(1)
-				d.queue.Insert([]types.Hash{stallHash('g', 1)}, true)
-				p := newPeer("holder", eth61, types.Hash{}, nil, nil, nil)
-				if err := d.peers.Register(p); err != nil {
-					t.Fatalf("register peer: %v", err)
-				}
-				if req := d.queue.Reserve(p, 1); req == nil {
-					t.Fatal("expected a reserved request")
-				}
+			d.synchroniseMock = func(string, types.Hash) error {
+				return &stallNoProgressError{inFlight: tc.inFlight}
 			}
 
 			d.Synchronise("origin", types.Hash{}, 100)
@@ -426,6 +489,58 @@ func TestSynchroniseStallDropGatedOnInFlight(t *testing.T) {
 				t.Fatalf("origin must not be dropped while a request is in flight, got %v", dropped)
 			}
 		})
+	}
+}
+
+// TestBlockFetchStallCapturesInFlight verifies that the stall deadline
+// captures the number of requests in flight at the moment it fires, and
+// that a request in flight counts as outstanding work even after the
+// pending queue is drained: with a single hash and a silent peer, Pending()
+// is 0 from the first reservation on, and the deadline must still fire.
+// The captured value is what Synchronise uses for the drop decision, and it
+// must be captured here — cancellation resets the queue before Synchronise
+// sees the error.
+func TestBlockFetchStallCapturesInFlight(t *testing.T) {
+	origTimeout := stallTimeout
+	stallTimeout = 300 * time.Millisecond
+	defer func() { stallTimeout = origTimeout }()
+	// Keep the request alive past the deadline so exactly one is in flight
+	// when it fires.
+	origHard := blockHardTTL
+	blockHardTTL = 10 * time.Second
+	defer func() { blockHardTTL = origHard }()
+
+	d := newIdleDownloader()
+	d.cancelCh = make(chan struct{})
+	atomic.StoreInt32(&d.synchronising, 1)
+	defer atomic.StoreInt32(&d.synchronising, 0)
+	defer d.endSession()
+
+	// The peer never answers: its first request stays in flight and the
+	// pending queue drains to zero.
+	p := newPeer("silent", eth61, types.Hash{}, nil, nil, nil)
+	p.getBlocks = func(hashes []types.Hash) error { return nil }
+	if err := d.peers.Register(p); err != nil {
+		t.Fatalf("register peer: %v", err)
+	}
+
+	d.queue.Prepare(1)
+	d.queue.Insert([]types.Hash{stallHash('f', 1)}, true)
+	d.processCh <- false // hash fetcher finished
+
+	blockErr := make(chan error, 1)
+	go func() { blockErr <- d.fetchBlocks(1) }()
+	select {
+	case err := <-blockErr:
+		var stalled *stallNoProgressError
+		if !errors.As(err, &stalled) {
+			t.Fatalf("fetchBlocks returned %v, want a stallNoProgressError", err)
+		}
+		if stalled.inFlight != 1 {
+			t.Fatalf("deadline captured inFlight == %d, want 1", stalled.inFlight)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("fetchBlocks did not return")
 	}
 }
 
@@ -485,5 +600,154 @@ func TestBlockFetchDeadStateGuard(t *testing.T) {
 	// The guard must fire on the spot, not via the stall deadline backstop.
 	if elapsed := time.Since(start); elapsed > stallTimeout {
 		t.Fatalf("peers-unavailable guard did not fire on the spot; the %.0fs stall deadline ended the session instead (took %v)", stallTimeout.Seconds(), elapsed)
+	}
+}
+
+// TestBlockFetchImportFreesCapacityDuringPass verifies that an import
+// draining the cache while the scheduling pass runs neither trips the
+// peers-unavailable guard nor ends the session: the pre-import zero reserve
+// space must not be combined with the post-import missing head block. The
+// fetcher must instead schedule the pending tail against the freed space on
+// the next tick and complete the session.
+func TestBlockFetchImportFreesCapacityDuringPass(t *testing.T) {
+	origTimeout := stallTimeout
+	stallTimeout = 30 * time.Second // the deadline must not end this session
+	defer func() { stallTimeout = origTimeout }()
+	origHard := blockHardTTL
+	blockHardTTL = 10 * time.Second
+	defer func() { blockHardTTL = origHard }()
+	origLimit := blockCacheLimit
+	blockCacheLimit = 16
+	defer func() { blockCacheLimit = origLimit }()
+
+	d := newIdleDownloader()
+	d.cancelCh = make(chan struct{})
+	atomic.StoreInt32(&d.synchronising, 1)
+	defer atomic.StoreInt32(&d.synchronising, 0)
+	defer d.endSession()
+
+	// An honest peer serves the pending tail as soon as it is reserved.
+	p := newPeer("server", eth61, types.Hash{}, nil, nil, nil)
+	p.getBlocks = func(hashes []types.Hash) error {
+		blocks := make([]*nom.DetailedMomentum, 0, len(hashes))
+		for _, h := range hashes {
+			blocks = append(blocks, &nom.DetailedMomentum{
+				Momentum: &nom.Momentum{Hash: h, Height: stallHeight(h)},
+			})
+		}
+		go func() {
+			select {
+			case d.blockCh <- blockPack{"server", blocks}:
+			case <-d.cancelCh:
+			}
+		}()
+		return nil
+	}
+	if err := d.peers.Register(p); err != nil {
+		t.Fatalf("register peer: %v", err)
+	}
+
+	hashes := make([]types.Hash, 10)
+	for i := range hashes {
+		hashes[i] = stallHash('r', uint64(i+1))
+	}
+	d.queue.Prepare(1)
+	// Only the tail beyond the seeded cache stays pending, like a real
+	// delivery path: served hashes leave the pending queue.
+	d.queue.Insert(hashes[8:], true)
+
+	// Seed the edge of the raced state: the head block is present (a
+	// successful import is possible), the cache is exactly half full, so
+	// the scheduling pass reserves nothing, and nothing is in flight.
+	d.queue.lock.Lock()
+	for i, h := range hashes[:8] {
+		d.queue.blockCache[i] = &Block{
+			RawBlock:   &nom.DetailedMomentum{Momentum: &nom.Momentum{Hash: h, Height: uint64(i + 1)}},
+			OriginPeer: "server",
+		}
+		d.queue.blockPool[h] = uint64(i + 1)
+	}
+	d.queue.lock.Unlock()
+
+	d.processCh <- false // hash fetcher finished
+	blockErr := make(chan error, 1)
+	go func() { blockErr <- d.fetchBlocks(1) }()
+
+	// Let several scheduling passes run against the full cache: the guard
+	// must stay silent because the head is present and nothing expired.
+	time.Sleep(500 * time.Millisecond)
+	select {
+	case err := <-blockErr:
+		t.Fatalf("fetchBlocks returned %v before the import freed capacity", err)
+	default:
+	}
+
+	// The import drains the cache mid-session. A guard that combined the
+	// pre-import zero space with the now-missing head would end the
+	// session here with errPeersUnavailable.
+	d.process()
+
+	// The fetcher must retry scheduling against the freed space and
+	// complete the session normally.
+	expectReturn(t, "fetchBlocks", blockErr, nil, 15*time.Second)
+}
+
+// TestQueueNoProgress pins the guard predicate queue.NoProgress: the
+// genuinely dead state fires, the state left by an import that freed space
+// during the pass defers (spaceAtLoop == 0, space > 0, head taken), a busy
+// import suppresses the dead-state arm, and room before and after a failed
+// pass fires the no-peer-can-serve arm.
+func TestQueueNoProgress(t *testing.T) {
+	origLimit := blockCacheLimit
+	blockCacheLimit = 16
+	defer func() { blockCacheLimit = origLimit }()
+
+	// Dead state (issue #247): half cache filled behind the missing head,
+	// hashes pending, nothing in flight, no import running.
+	dead := newQueue()
+	dead.Prepare(1)
+	h := make([]types.Hash, 10)
+	for i := range h {
+		h[i] = testHash('q', uint64(i+1))
+	}
+	dead.Insert(h, true)
+	dead.lock.Lock()
+	for i := 1; i <= 8; i++ {
+		dead.blockCache[i] = &Block{RawBlock: &nom.DetailedMomentum{Momentum: &nom.Momentum{Hash: h[i], Height: uint64(i + 1)}}}
+		dead.blockPool[h[i]] = uint64(i + 1)
+	}
+	dead.lock.Unlock()
+	if !dead.NoProgress(0, false) {
+		t.Fatal("dead state not detected")
+	}
+	if dead.NoProgress(0, true) {
+		t.Fatal("dead-state arm fired while an import is running")
+	}
+	if !dead.NoProgress(0, false) {
+		t.Fatal("dead state not stable across ticks")
+	}
+
+	// Import freed room during the pass: the head was taken and space is
+	// available again, but the pass ran against a full cache. Must defer
+	// to the next tick, not fire.
+	freed := newQueue()
+	freed.Prepare(1)
+	freed.Insert(h[8:], true) // heights 9 and 10 pending
+	freed.lock.Lock()
+	freed.blockOffset = 9
+	freed.lock.Unlock()
+	if freed.NoProgress(0, false) {
+		t.Fatal("guard fired although an import freed space during the pass")
+	}
+
+	// Room before and after a failed pass: no idle peer could serve.
+	room := newQueue()
+	room.Prepare(1)
+	room.Insert(h, true)
+	if !room.NoProgress(8, false) {
+		t.Fatal("guard did not fire with room before and after the pass")
+	}
+	if room.NoProgress(0, false) {
+		t.Fatal("guard fired although the pass had no room to reserve anything")
 	}
 }

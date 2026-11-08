@@ -148,6 +148,47 @@ func (q *queue) Throttle() bool {
 	return pending >= len(q.blockCache)-len(q.blockPool)
 }
 
+// NoProgress reports whether the block-fetch phase is stuck and the session
+// should end with errPeersUnavailable. It mirrors the guard in fetchBlocks
+// and samples the whole predicate under one lock hold, so an import that
+// drains the cache while the scheduling pass runs cannot be combined with a
+// pre-import sample (a post-import missing head with pre-import zero space
+// would otherwise fire on a session whose import just freed room).
+// spaceAtLoop is the reserve space sampled before the reservation loop:
+//
+//   - First arm: reserve space was available both before the pass and now,
+//     yet nothing could be reserved — no idle peer can serve.
+//   - Second arm: reserve space is zero, the head block is missing and no
+//     import is running (importing) or can start — with nothing in flight
+//     and no reservation able to succeed, no event can ever change this
+//     state (issue #247).
+//
+// If an import freed room during the pass (spaceAtLoop == 0 but space > 0
+// now), neither arm fires and the next tick re-schedules against the freed
+// space.
+func (q *queue) NoProgress(spaceAtLoop int, importing bool) bool {
+	q.lock.RLock()
+	defer q.lock.RUnlock()
+
+	// Not stuck while throttled (Throttle).
+	pending := 0
+	for _, request := range q.pendPool {
+		pending += len(request.Hashes)
+	}
+	if pending >= len(q.blockCache)-len(q.blockPool) {
+		return false
+	}
+	// Not stuck while requests are in flight (InFlight).
+	if len(q.pendPool) != 0 {
+		return false
+	}
+	space := (len(q.blockCache) / 2) - len(q.blockPool)
+	if spaceAtLoop > 0 && space > 0 {
+		return true
+	}
+	return space <= 0 && len(q.blockCache) != 0 && q.blockCache[0] == nil && !importing
+}
+
 // Has checks if a hash is within the download queue or not.
 func (q *queue) Has(hash types.Hash) bool {
 	q.lock.RLock()

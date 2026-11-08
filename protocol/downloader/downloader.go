@@ -59,6 +59,22 @@ var (
 	maxBlockProcess = 256        // Number of blocks to import at once into the chain
 )
 
+// stallNoProgressError is returned by fetchBlocks when the session-level
+// no-progress deadline fires. It carries the number of requests still in
+// flight at the moment the deadline fired: syncWithPeer cancels the session
+// on any fetcher error, which resets the queue, so the count cannot be
+// recovered from the queue afterwards. Synchronise uses it to decide whether
+// the origin is a sustained withholder (drop) or the peer set is merely
+// slow (cancel the session only).
+type stallNoProgressError struct {
+	inFlight int
+}
+
+func (e *stallNoProgressError) Error() string { return errStallNoProgress.Error() }
+
+// Unwrap lets errors.Is match the bare errStallNoProgress sentinel.
+func (e *stallNoProgressError) Unwrap() error { return errStallNoProgress }
+
 var (
 	errBusy             = errors.New("busy")
 	errUnknownPeer      = errors.New("peer is unknown or unhealthy")
@@ -276,7 +292,25 @@ func (d *Downloader) UnregisterPeer(id string) error {
 func (d *Downloader) Synchronise(id string, head types.Hash, td uint64) {
 	log.Debug("Attempting synchronisation", "peer-id", id, "head", head, "TD", td)
 
-	switch err := d.synchronise(id, head, td); err {
+	err := d.synchronise(id, head, td)
+	var stalled *stallNoProgressError
+	if errors.As(err, &stalled) {
+		// The deadline only proves that no handover happened for
+		// stallTimeout. If nothing was in flight anymore when it fired,
+		// the origin is a sustained withholder and must be dropped. If a
+		// request was still in flight the peer set may just be slow:
+		// dropping the best-TD origin would repeat against the next one on
+		// every force sync, so only cancel the session. The count was
+		// captured before cancellation reset the queue (see fetchBlocks).
+		if stalled.inFlight == 0 {
+			log.Info("Removing peer", "peer-id", id, "reason", err)
+			d.dropPeer(id)
+		} else {
+			log.Info("Synchronisation aborted", "peer-id", id, "reason", err)
+		}
+		return
+	}
+	switch err {
 	case nil:
 		log.Debug("Synchronisation completed")
 
@@ -286,20 +320,6 @@ func (d *Downloader) Synchronise(id string, head types.Hash, td uint64) {
 	case errTimeout, errBadPeer, errStallingPeer, errBannedHead, errEmptyHashSet, errPeersUnavailable, errInvalidChain, errCrossCheckFailed:
 		log.Info("Removing peer", "peer-id", id, "reason", err)
 		d.dropPeer(id)
-
-	case errStallNoProgress:
-		// The deadline only proves that no handover happened for
-		// stallTimeout. If nothing is in flight anymore, the origin is a
-		// sustained withholder and must be dropped. If a request is still
-		// in flight the peer set may just be slow: dropping the best-TD
-		// origin would repeat against the next one on every force sync, so
-		// only cancel the session.
-		if d.queue.InFlight() == 0 {
-			log.Info("Removing peer", "peer-id", id, "reason", err)
-			d.dropPeer(id)
-		} else {
-			log.Info("Synchronisation aborted", "peer-id", id, "reason", err)
-		}
 
 	case errPendingQueue:
 		log.Debug("Synchronisation aborted", "reason", err)
@@ -811,6 +831,28 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 					log.Debug("Block delivery timeout", "peer", peer)
 				}
 			}
+			// Session-level no-progress deadline (issue #247), checked before
+			// the pending-only short circuit below: reservations can drain the
+			// pending queue while requests stay in flight, and two peers
+			// alternating on one re-queued hash would otherwise cycle forever
+			// without a handover or a timeout. In-flight requests count as
+			// outstanding work, and a busy import refreshes the clock even
+			// while nothing is pending: once the importer exits, pending work
+			// gets a full fresh window. If nothing has been handed to the
+			// import worker for stallTimeout, the fetch side can never advance
+			// the frontier. The captured in-flight count travels with the
+			// error because cancelling the session resets the queue before
+			// Synchronise can read it.
+			if offset := d.queue.BlockOffset(); offset != lastOffset || d.Processing() {
+				lastOffset = offset
+				lastHandover = time.Now()
+			} else if d.queue.Pending() > 0 || d.queue.InFlight() > 0 {
+				if time.Since(lastHandover) > stallTimeout {
+					inFlight := d.queue.InFlight()
+					log.Warn("Block download stalled: no progress", "pending", d.queue.Pending(), "in-flight", inFlight, "last-handover", lastHandover)
+					return &stallNoProgressError{inFlight: inFlight}
+				}
+			}
 			// If there's noting more to fetch, wait or terminate
 			if d.queue.Pending() == 0 {
 				if d.queue.InFlight() == 0 && finished {
@@ -819,6 +861,11 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 				}
 				break
 			}
+			// Sample the reserve space before the scheduling pass: if an
+			// import drains the cache while the pass runs, the guard below
+			// must not combine this pre-import zero with a post-import
+			// sample (see queue.NoProgress).
+			spaceAtLoop := d.queue.ReserveSpace()
 			// Send a download request to all idle peers, until throttled
 			for _, peer := range d.peers.IdlePeers() {
 				// Short circuit if throttling activated
@@ -840,30 +887,13 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 				}
 			}
 			// Make sure that we have peers available for fetching. If all peers have been tried
-			// and all failed throw an error. The second arm covers the case where the head
-			// block of the window was never delivered: nothing is in flight, no import can
-			// run and no reservation can ever succeed, so the session can never make
-			// progress again — the guard can fire on the spot instead of waiting for the
-			// stall deadline (issue #247).
-			space := d.queue.ReserveSpace()
-			if !d.queue.Throttle() && d.queue.InFlight() == 0 &&
-				(space > 0 || (d.queue.GetHeadBlock() == nil && !d.Processing())) {
+			// and all failed throw an error. The second arm of queue.NoProgress covers the
+			// case where the head block of the window was never delivered: nothing is in
+			// flight, no import can run and no reservation can ever succeed, so the session
+			// can never make progress again — the guard can fire on the spot instead of
+			// waiting for the stall deadline (issue #247).
+			if d.queue.NoProgress(spaceAtLoop, d.Processing()) {
 				return errPeersUnavailable
-			}
-			// Session-level no-progress deadline (issue #247). If hashes are
-			// still pending but nothing has been handed to the import worker
-			// for stallTimeout, the fetch side can never advance the frontier:
-			// every request either expired back into the queue or is throttled
-			// behind a full cache. The import-worker check excludes the honest
-			// slow-import case: while Processing() is true a batch is owned and
-			// the handover clock is not the right liveness signal. Cancel so
-			// Synchronise drops the peer and retries with another.
-			if offset := d.queue.BlockOffset(); offset != lastOffset || d.Processing() {
-				lastOffset = offset
-				lastHandover = time.Now()
-			} else if pending := d.queue.Pending(); pending > 0 && time.Since(lastHandover) > stallTimeout {
-				log.Warn("Block download stalled: no progress", "pending", pending, "last-handover", lastHandover)
-				return errStallNoProgress
 			}
 		}
 	}
