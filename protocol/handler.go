@@ -126,18 +126,22 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 		manager.BroadcastMomentum,
 		heighter,
 		manager.chainman.InsertChain,
-		manager.removePeer,
-		manager.rejectPeer)
+		manager.removePeer)
 
 	return manager
 }
 
-// rejectPeer is the downloader's and fetcher's import-failure hook. When
-// the bridge reports a SideChainRejected, the peer served a branch this
-// node refuses on a consensus check; it is quarantined, so it cannot
-// restart the download-and-reject cycle on the next sync interval or by
+// rejectPeer is the downloader's import-failure hook. When the bridge
+// reports a SideChainRejected, the peer served a branch this node
+// refuses on a consensus check; it is quarantined, so it cannot restart
+// the download-and-reject cycle on the next sync interval or by
 // reconnecting, and removed. Any other failure is left to the caller's
 // existing handling.
+//
+// The fetcher has no such hook. It propagates a gossiped momentum
+// before importing it, so the peer that delivers one is usually an
+// honest relayer, not its author. The downloader fetches from the
+// serving peer's own chain, so its verdicts name the peer at fault.
 //
 // The import that reports the verdict may outlive the connection that
 // served the bytes: unregistering a peer does not join its import. The
