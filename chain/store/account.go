@@ -90,8 +90,12 @@ type Account interface {
 // MarkAsUnreceived records an incoming send-block hash both in a
 // permanent index and in the pending set; MarkAsReceived removes the
 // hash from the pending set only. GetUnreceivedAccountBlockHashes
-// returns up to atMost pending hashes in ascending byte order — the
-// ledger RPC scans at most 500 per call. MarkBlockThatReceives maps a
+// returns up to atMost pending hashes in ascending byte order.
+// ForEachUnreceivedAccountBlockHash calls fn on the pending hashes in
+// the same order, reading each key once, and stops when fn returns false
+// or an error, which it returns; the ledger RPC uses it to examine at
+// most 10000 per call. Both skip the tombstones MarkAsReceived leaves
+// in the pending set without counting them. MarkBlockThatReceives maps a
 // send-block hash to the header of the receive block that consumed it
 // and GetBlockWhichReceives reads the mapping back (nil if none).
 //
@@ -111,6 +115,7 @@ type AccountMailbox interface {
 
 	GetBlockWhichReceives(fromHash types.Hash) (*types.AccountHeader, error)
 	GetUnreceivedAccountBlockHashes(atMost uint64) ([]types.Hash, error)
+	ForEachUnreceivedAccountBlockHash(fn func(hash types.Hash) (bool, error)) error
 
 	SequencerPushBack(types.AccountHeader)
 	SequencerSize() (uint64, error)

@@ -14,8 +14,9 @@ var (
 	// or 50 for LedgerApi.GetUnreceivedBlocksByAddress.
 	ErrPageSizeParamTooBig = common.NewErrorWCode(-32000, "page-size parameter is too big")
 	// ErrPageIndexParamTooBig is returned by
-	// LedgerApi.GetUnreceivedBlocksByAddress when pageIndex is 10 or
-	// greater. No other handler currently returns it.
+	// LedgerApi.GetUnreceivedBlocksByAddress when the requested page
+	// would start past the 10000 pending entries one call examines. No
+	// other handler currently returns it.
 	ErrPageIndexParamTooBig = common.NewErrorWCode(-32000, "page-index parameter is too big")
 	// ErrCountParamTooBig is returned by the height-ranged ledger reads
 	// (GetAccountBlocksByHeight, GetMomentumsByHeight and

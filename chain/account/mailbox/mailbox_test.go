@@ -1,6 +1,8 @@
 package mailbox
 
 import (
+	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -140,5 +142,67 @@ func TestSequencerByHeightCorrupted(t *testing.T) {
 	}
 	if header != nil {
 		t.Fatalf("expected nil header on error, got %v", header)
+	}
+}
+
+// ForEachUnreceivedAccountBlockHash visits pending hashes in ascending key
+// order, skips received ones, stops when fn returns false and returns fn's
+// error; GetUnreceivedAccountBlockHashes lists the same prefix.
+func TestForEachUnreceivedAccountBlockHash(t *testing.T) {
+	m := NewAccountMailbox(types.PillarContract, db.NewMemDB())
+	var hashes []types.Hash
+	for i := byte(1); i <= 5; i++ {
+		h := types.NewHash([]byte{i})
+		hashes = append(hashes, h)
+		if err := m.MarkAsUnreceived(h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.MarkAsReceived(hashes[2]); err != nil {
+		t.Fatal(err)
+	}
+
+	var visited []types.Hash
+	if err := m.ForEachUnreceivedAccountBlockHash(func(h types.Hash) (bool, error) {
+		visited = append(visited, h)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(visited) != 4 {
+		t.Fatalf("visited %d hashes, want 4", len(visited))
+	}
+	for i := 1; i < len(visited); i++ {
+		if bytes.Compare(visited[i-1].Bytes(), visited[i].Bytes()) >= 0 {
+			t.Fatalf("hashes not in ascending order at %d", i)
+		}
+		if visited[i] == hashes[2] {
+			t.Fatal("received hash visited")
+		}
+	}
+	listed, err := m.GetUnreceivedAccountBlockHashes(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range listed {
+		if listed[i] != visited[i] {
+			t.Fatalf("GetUnreceivedAccountBlockHashes differs at %d", i)
+		}
+	}
+
+	calls := 0
+	if err := m.ForEachUnreceivedAccountBlockHash(func(types.Hash) (bool, error) {
+		calls++
+		return calls < 2, nil
+	}); err != nil || calls != 2 {
+		t.Fatalf("stop after two: calls %d err %v", calls, err)
+	}
+	stop := errors.New("stop")
+	calls = 0
+	if err := m.ForEachUnreceivedAccountBlockHash(func(types.Hash) (bool, error) {
+		calls++
+		return true, stop
+	}); err != stop || calls != 1 {
+		t.Fatalf("error: calls %d err %v", calls, err)
 	}
 }

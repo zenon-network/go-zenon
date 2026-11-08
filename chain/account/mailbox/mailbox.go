@@ -94,32 +94,36 @@ func (m *mailbox) GetUnreceivedAccountBlockHashes(atMost uint64) ([]types.Hash, 
 	if atMost == 0 {
 		return list, nil
 	}
+	err := m.ForEachUnreceivedAccountBlockHash(func(hash types.Hash) (bool, error) {
+		list = append(list, hash)
+		atMost -= 1
+		return atMost > 0, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func (m *mailbox) ForEachUnreceivedAccountBlockHash(fn func(hash types.Hash) (bool, error)) error {
 	iterator := m.DB.NewIterator(getPendingBlocksIterator())
 	defer iterator.Release()
 
 	for {
 		if !iterator.Next() {
-			if iterator.Error() != nil {
-				return nil, iterator.Error()
-			}
-			break
+			return iterator.Error()
 		}
 		if iterator.Value() == nil {
 			continue
 		}
 		hash, err := types.BytesToHash(iterator.Key()[1:])
-
 		if err != nil {
-			return nil, err
+			return err
 		}
-		list = append(list, hash)
-
-		atMost -= 1
-		if atMost == 0 {
-			return list, nil
+		if next, err := fn(hash); err != nil || !next {
+			return err
 		}
 	}
-	return list, nil
 }
 
 func (m *mailbox) SequencerSize() (uint64, error) {
