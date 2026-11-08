@@ -466,7 +466,7 @@ func (s *Supervisor) setBlockMomentum(block *nom.AccountBlock) error {
 			if confirmation == 0 {
 				return errors.Errorf("can't find block that confirms contract-receive")
 			}
-			// Once EmbeddedRefundSpork is in force, a contract-to-contract
+			// Once EmbeddedRefundSpork is in force, an embedded contract's Burn
 			// send confirmed before it is received at the first momentum
 			// where it is, so a queue stalled on a failed refund recovers
 			// (issue #271).

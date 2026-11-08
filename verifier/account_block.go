@@ -363,7 +363,7 @@ func (abv *accountBlockVerifier) momentumAcknowledged() error {
 			return InternalError(err)
 		}
 		if height != abv.block.MomentumAcknowledged.Height {
-			// Once EmbeddedRefundSpork is in force, a contract-to-contract
+			// Once EmbeddedRefundSpork is in force, an embedded contract's Burn
 			// send confirmed before it is received at the first momentum
 			// where it is; see EmbeddedRefundRecoveryHeight.
 			if abv.chain == nil {

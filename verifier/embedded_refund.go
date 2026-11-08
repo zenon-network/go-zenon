@@ -1,12 +1,15 @@
 package verifier
 
 import (
+	"bytes"
+
 	"github.com/pkg/errors"
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
 // CacheStoreAt returns the cache store at the canonical momentum of a
@@ -49,13 +52,17 @@ func CanonicalCacheStores(c chain.Chain, frontier store.Momentum) CacheStoreAt {
 // has it in force. That is normally its EnforcementHeight, later only if
 // the activation receive itself was confirmed after that height.
 //
-// Only a positive-amount send from an embedded contract qualifies, since
-// only its failure needs the refund that stalls. Those are the Bridge,
-// Pillar and Liquidity burns and the Liquidity donations; their Token
-// Burn and Accelerator Donate receives read no momentum, time or spork
-// state, so moving them to a later momentum cannot change a successful
-// outcome. Every other receive, including a user's HTLC or PTLC unlock,
-// keeps its confirmation momentum.
+// Only a positive-amount Burn sent to the Token contract by an embedded
+// contract qualifies: the Bridge, Pillar and Liquidity burns. Its failure
+// (a token the sender may not burn) needs the contract-to-contract refund
+// that stalls, and the Burn receive reads no momentum, time or spork
+// state, so moving it to a later momentum cannot change a successful
+// outcome. Other positive-amount sends between embedded contracts are
+// Donate deliveries (a Liquidity Fund to the Accelerator, a Token Mint to
+// the Liquidity contract or the Accelerator); Donate exists on those
+// contracts from genesis and cannot fail for a send that landed, so they
+// never stall and keep their confirmation momentum, as does every other
+// receive, including a user's HTLC or PTLC unlock.
 //
 // The answer depends only on chain history. Spork state is monotonic (a
 // spork cannot be deactivated), so the recovery height is fixed once the
@@ -69,7 +76,7 @@ func CanonicalCacheStores(c chain.Chain, frontier store.Momentum) CacheStoreAt {
 // Only a send confirmed before then adds a binary search over the heights
 // in between.
 func EmbeddedRefundRecoveryHeight(frontierHeight uint64, cacheAt CacheStoreAt, send *nom.AccountBlock, confirmationHeight uint64) (uint64, bool, error) {
-	if !types.IsEmbeddedAddress(send.Address) || send.Amount == nil || send.Amount.Sign() <= 0 {
+	if !isEmbeddedBurn(send) {
 		return 0, false, nil
 	}
 	if confirmationHeight == 0 || confirmationHeight >= frontierHeight {
@@ -105,3 +112,21 @@ func EmbeddedRefundRecoveryHeight(frontierHeight uint64, cacheAt CacheStoreAt, s
 	}
 	return low, true, nil
 }
+
+// isEmbeddedBurn reports whether send is a positive-amount Burn from an
+// embedded contract to the Token contract. Embedded contracts pack their
+// sends canonically, so a Burn's data is exactly the method selector.
+func isEmbeddedBurn(send *nom.AccountBlock) bool {
+	return types.IsEmbeddedAddress(send.Address) &&
+		send.ToAddress == types.TokenContract &&
+		send.Amount != nil && send.Amount.Sign() > 0 &&
+		bytes.Equal(send.Data, burnSelector)
+}
+
+var burnSelector = func() []byte {
+	method, ok := definition.ABIToken.Methods[definition.BurnMethodName]
+	if !ok {
+		panic("token ABI has no Burn method")
+	}
+	return method.Id()
+}()
