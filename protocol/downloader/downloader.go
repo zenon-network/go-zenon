@@ -327,10 +327,14 @@ func (d *Downloader) Synchronise(id string, head types.Hash, td uint64) {
 		log.Info("Removing peer", "peer-id", id, "reason", err)
 		d.dropPeer(id)
 
-	case errPendingQueue, errStallCacheFull:
+	case errPendingQueue:
+		log.Debug("Synchronisation aborted", "reason", err)
+
+	case errStallCacheFull:
 		// The session ended because the local cache is full behind a head
 		// no peer served; that does not identify the origin as malicious.
-		log.Debug("Synchronisation aborted", "reason", err)
+		// Worth Info: a sync that stopped needs an operator-visible reason.
+		log.Info("Synchronisation aborted", "reason", err)
 
 	default:
 		log.Warn("Synchronisation failed", "reason", err)

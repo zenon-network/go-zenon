@@ -32,33 +32,41 @@ func stallHeight(h types.Hash) uint64 {
 	return stallHeights[h]
 }
 
-// TestBlockFetchStallTimeout verifies that fetchBlocks terminates when no
-// peer can serve the head block of the download window: the cache fills
-// behind the hole, TakeBlocks hands over nothing, and the extended
-// peers-unavailable guard ends the session on the spot (issue #247).
+// TestBlockFetchWithheldHeadEndsSession verifies that fetchBlocks
+// terminates when no peer can serve the head block of the download window:
+// the cache fills behind the hole, TakeBlocks hands over nothing and the
+// peers-unavailable guard (reserve space left, nothing reservable) ends the
+// session. It sits in the issue #247 family of dead states.
 //
-// The fixture mirrors production scheduling. The handler serves
-// GetBlockHashesFromNumberMsg oldest-first (handler.go reverses the
-// backwards hash walk), and fetchHashes inserts the hashes as they arrive,
-// so the window head is reserved FIRST. The production shape of a missing
-// head is a hash no peer actually has (the origin advertised something it
-// cannot serve): whichever peer reserves it holds the request until
-// blockHardTTL. Expire re-pushes the hash but does not SetIdle the peer,
-// so each expiry sidelines that peer for the rest of the session. With two
-// peers and a 16-slot cache, the tail peer fills 7 of the 8 reserve slots
-// behind the never-delivered head (the in-flight head reservation caps the
-// tail fill); once both peers have held and expired on the head, no idle
-// peer remains to re-reserve it, reserve space is still 1, and the
-// space > 0 arm of the guard (space available, nothing reservable) ends
-// the session with errPeersUnavailable. Verified by instrumenting
-// queue.NoProgress in this fixture: spaceAtLoop=1, space=1, ARM 1.
+// This is a fixture test, not a regression test for the fix: run against
+// the pre-fix downloader (merge base 0e80915, with only a test-only
+// stallTimeout supplied for compilation) it meets the same assertions,
+// because the state it reaches still has one reserve slot free — the
+// in-flight head reservation caps the tail fill at 7 of the 8 slots
+// (space == 1), which is exactly the condition the pre-fix guard already
+// fired on. Verified by instrumenting queue.NoProgress in this fixture:
+// spaceAtLoop=1, space=1, the space > 0 arm. The tests that discriminate
+// the fix from dev are TestBlockFetchDeadStateGuard and
+// TestBlockFetchOmittedHeadCacheFull (the zero-space arm, unreachable for
+// the pre-fix guard), TestBlockFetchStallCapturesInFlight (the deadline)
+// and the drop-gate tests.
 //
-// The zero-space state (errStallCacheFull) is not reachable through this
-// delivery path — the only route to it runs through peer-ignored hashes,
-// which only fill on an empty delivery, and the wire handler drops empty
-// BlocksMsg replies — so it is seeded directly in
-// TestBlockFetchDeadStateGuard instead.
-func TestBlockFetchStallTimeout(t *testing.T) {
+// Wire order, for the record: the handler serves
+// GetBlockHashesFromNumberMsg newest first (handler.go reverses the
+// ascending hash walk), and fetchHashes inserts arrivals with fifo=true,
+// so in production the first hash of a batch is reserved first and the
+// window head is reserved last. This fixture inserts ascending on purpose —
+// the reverse of the wire order — so the window head (height 1) is reserved
+// first here. The production shape of a missing head is a hash no peer
+// actually has (the origin advertised something it cannot serve): whichever
+// peer reserves it holds the request until blockHardTTL. Expire re-pushes
+// the hash but does not SetIdle the peer, so each expiry sidelines that
+// peer for the rest of the session. With two peers and a 16-slot cache, the
+// tail fills 7 of the 8 reserve slots behind the never-delivered head; once
+// both peers have held and expired on the head, no idle peer remains to
+// re-reserve it, reserve space is still 1 and the guard ends the session
+// with errPeersUnavailable.
+func TestBlockFetchWithheldHeadEndsSession(t *testing.T) {
 	origTimeout := stallTimeout
 	stallTimeout = 5 * time.Second
 	defer func() { stallTimeout = origTimeout }()
@@ -68,8 +76,9 @@ func TestBlockFetchStallTimeout(t *testing.T) {
 	blockHardTTL = 200 * time.Millisecond
 	defer func() { blockHardTTL = origHard }()
 	// Shrink the block cache so a small number of served blocks fills
-	// half of it and disables the free-space arm of the peers-unavailable
-	// guard, matching the production stall scenario from issue #247.
+	// most of the reserve budget: the in-flight head reservation caps the
+	// tail fill at 7 of the 8 slots, so the space > 0 arm of the guard
+	// (space available, nothing reservable) is the arm that fires.
 	origLimit := blockCacheLimit
 	blockCacheLimit = 16
 	defer func() { blockCacheLimit = origLimit }()
@@ -114,11 +123,11 @@ func TestBlockFetchStallTimeout(t *testing.T) {
 	newStaller("staller-a")
 	newStaller("staller-b")
 
-	// Pre-populate the queue in wire (ascending) order: the head is
-	// reserved first. The tail peers fill the cache to exactly half behind
-	// the missing head, and the session is left with space == 0, nothing
-	// in flight, no cached head and hashes still pending — the issue #247
-	// dead state.
+	// Pre-populate the queue in ascending order — the reverse of the wire
+	// order (see the doc comment), chosen so the head is reserved first.
+	// The tail fills 7 of the 8 reserve slots behind the withheld head, and
+	// the session is left with space == 1, nothing in flight, no cached head
+	// and hashes still pending.
 	hashes := make([]types.Hash, 10)
 	for i := range hashes {
 		hashes[i] = stallHash('s', uint64(i+1))
@@ -131,10 +140,11 @@ func TestBlockFetchStallTimeout(t *testing.T) {
 	blockErr := make(chan error, 1)
 	go func() { blockErr <- d.fetchBlocks(1) }()
 	expectReturn(t, "fetchBlocks", blockErr, errPeersUnavailable, 15*time.Second)
-	// The guard must end the dead state on the spot. If the session only
-	// ends after stallTimeout, the stall deadline covered for the guard
-	// and the test no longer discriminates it (removing the guard arm
-	// would still pass).
+	// The error assertion already separates a guard end from a deadline
+	// end (the deadline returns errStallNoProgress, which would fail the
+	// assertion above). The elapsed check additionally pins that the guard
+	// ended the session on the spot rather than the deadline covering for
+	// it.
 	if elapsed := time.Since(start); elapsed > stallTimeout {
 		t.Fatalf("peers-unavailable guard did not fire on the spot; the %.0fs stall deadline ended the session instead (took %v)", stallTimeout.Seconds(), elapsed)
 	}
@@ -262,9 +272,12 @@ func TestBlockFetchNoStallWhileImportBusy(t *testing.T) {
 // hashes are queued up front and the peer answers each request after a
 // fixed delay, so handovers are spaced by the pace (~200 ms apart, six
 // batches, ~1.2 s total against a 500 ms deadline), hashes remain pending
-// throughout and the importer is idle between batches. If the offset-based
-// timer reset is removed, the deadline fires mid-download and this test
-// returns errStallNoProgress instead of nil.
+// throughout and the importer is idle between batches. The offset reset is
+// the mechanism that keeps the clock fresh here: with it removed, the
+// deadline fires mid-download and this test returns errStallNoProgress
+// instead of nil (verified by mutation; note a busy import also refreshes
+// the clock, so the reset is not the only refresh path — with the paced
+// importer idle between batches the deadline still fires).
 func TestBlockFetchProgressResetsStallTimer(t *testing.T) {
 	origTimeout := stallTimeout
 	stallTimeout = 500 * time.Millisecond
@@ -306,10 +319,10 @@ func TestBlockFetchProgressResetsStallTimer(t *testing.T) {
 		t.Fatalf("register peer: %v", err)
 	}
 
-	// Wire order (ascending): the head is reserved first, imports run from
-	// the front, and the cache never fills. Reservation sizes follow the
-	// capacity ramp 1, 2, 4, 8, 8: five paced batches of 23 blocks plus one
-	// for the last.
+	// Ascending fixture order (the reverse of the wire order, chosen so
+	// the head is reserved first): imports run from the front and the cache
+	// never fills. Reservation sizes follow the capacity ramp 1, 2, 4, 8, 8:
+	// five paced batches of 23 blocks plus one for the last.
 	hashes := make([]types.Hash, 24)
 	for i := range hashes {
 		hashes[i] = stallHash('p', uint64(i+1))
@@ -630,12 +643,82 @@ func TestBlockFetchDeadStateGuard(t *testing.T) {
 	}
 }
 
-// TestBlockFetchImportFreesCapacityDuringPass verifies that an import
-// draining the cache while the scheduling pass runs neither trips the
-// peers-unavailable guard nor ends the session: the pre-import zero reserve
+// TestBlockFetchOmittedHeadCacheFull verifies that the zero-space arm of the
+// no-progress guard is reachable through an ordinary delivery path, with no
+// seeded state: the origin serves a hash list that skips the window head
+// (fetchHashes never checks that the list covers the requested height, and
+// Deliver places each block by its own height), an honest peer delivers
+// everything it reserved, and the cache fills to exactly half behind the
+// never-queued head. No reservation can ever succeed and no import can ever
+// run, so the guard ends the session on the spot with errStallCacheFull
+// (issue #247). On the pre-fix downloader this fixture never returns: the
+// old guard requires free reserve space, no deadline exists, and the session
+// is the #247 dead state — which is what makes this a regression test,
+// unlike TestBlockFetchWithheldHeadEndsSession. The elapsed check pins the
+// guard, not the stall deadline, as the terminator.
+func TestBlockFetchOmittedHeadCacheFull(t *testing.T) {
+	origTimeout := stallTimeout
+	stallTimeout = 5 * time.Second
+	defer func() { stallTimeout = origTimeout }()
+	origLimit := blockCacheLimit
+	blockCacheLimit = 16
+	defer func() { blockCacheLimit = origLimit }()
+
+	d := newIdleDownloader()
+	d.cancelCh = make(chan struct{})
+	atomic.StoreInt32(&d.synchronising, 1)
+	defer atomic.StoreInt32(&d.synchronising, 0)
+	defer d.endSession()
+
+	// An honest peer serves every hash it is asked for; height 1 is never
+	// queued, so it is never requested.
+	p := newPeer("honest", eth61, types.Hash{}, nil, nil, nil)
+	p.getBlocks = func(hashes []types.Hash) error {
+		blocks := make([]*nom.DetailedMomentum, 0, len(hashes))
+		for _, h := range hashes {
+			blocks = append(blocks, &nom.DetailedMomentum{
+				Momentum: &nom.Momentum{Hash: h, Height: stallHeight(h)},
+			})
+		}
+		go func() {
+			select {
+			case d.blockCh <- blockPack{"honest", blocks}:
+			case <-d.cancelCh:
+			}
+		}()
+		return nil
+	}
+	if err := d.peers.Register(p); err != nil {
+		t.Fatalf("register peer: %v", err)
+	}
+
+	// The origin's list skips the window head: heights 2..10, ascending.
+	hashes := make([]types.Hash, 9)
+	for i := range hashes {
+		hashes[i] = stallHash('o', uint64(i+2))
+	}
+	d.queue.Prepare(1)
+	d.queue.Insert(hashes, true)
+	d.processCh <- false // hash fetcher finished
+
+	start := time.Now()
+	blockErr := make(chan error, 1)
+	go func() { blockErr <- d.fetchBlocks(1) }()
+	expectReturn(t, "fetchBlocks", blockErr, errStallCacheFull, 15*time.Second)
+	if elapsed := time.Since(start); elapsed > stallTimeout {
+		t.Fatalf("cache-full guard did not fire on the spot; the %.0fs stall deadline ended the session instead (took %v)", stallTimeout.Seconds(), elapsed)
+	}
+}
+
+// the raced shape end to end — an import draining the cache while the
+// scheduling pass runs — and verifies the session neither trips the
+// peers-unavailable guard nor ends early: the pre-import zero reserve
 // space must not be combined with the post-import missing head block. The
 // fetcher must instead schedule the pending tail against the freed space on
-// the next tick and complete the session.
+// the next tick and complete the session. The sleep followed by an explicit
+// d.process() does not guarantee the import lands inside a scheduling pass,
+// so the interleaving itself is pinned deterministically by
+// TestQueueNoProgress's freed case, which checks the predicate directly.
 func TestBlockFetchImportFreesCapacityDuringPass(t *testing.T) {
 	origTimeout := stallTimeout
 	stallTimeout = 30 * time.Second // the deadline must not end this session
