@@ -230,9 +230,12 @@ func (q *queue) Insert(hashes []types.Hash, fifo bool) []types.Hash {
 
 		q.hashPool[hash] = q.hashCounter
 		if fifo {
-			q.hashQueue.Push(hash, -float32(q.hashCounter)) // Lowest gets schedules first
+			// Negated priority: prque pops the GREATEST priority, so the
+			// earliest inserted hash schedules first.
+			q.hashQueue.Push(hash, -float32(q.hashCounter))
 		} else {
-			q.hashQueue.Push(hash, float32(q.hashCounter)) // Highest gets schedules first
+			// Newest inserted schedules first.
+			q.hashQueue.Push(hash, float32(q.hashCounter))
 		}
 	}
 	return inserts
