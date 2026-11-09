@@ -166,6 +166,11 @@ type accountPool struct {
 	// moves, and used both to evict queued blocks and to re-check every
 	// non-forced insert under the insert lock.
 	acknowledgement *AcknowledgementRequirement
+	// acknowledgementErr is why the rule could not be read for the
+	// committed frontier, or nil. While it is set, non-forced inserts of
+	// user blocks are refused, as the account verifier refuses them on the
+	// same failure. Guarded by changes.
+	acknowledgementErr error
 }
 
 func (ap *accountPool) getAccountManager(address types.Address) *accountManager {
@@ -315,8 +320,8 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	// block of a momentum being applied, which the momentum verifier
 	// checks against that momentum's own parent.
 	if !forceAdd {
-		if err := ap.acknowledgement.Check(block); err != nil {
-			log.Info("rejecting account-block with stale momentum-acknowledged", "reason", err)
+		if err := ap.checkAcknowledgement(block); err != nil {
+			log.Info("rejecting account-block that fails the momentum-acknowledged recency rule", "reason", err)
 			return err
 		}
 	}
@@ -591,12 +596,14 @@ func (ap *accountPool) primeAcknowledgement() {
 // chain cache and the momentum pool have both moved to the new frontier;
 // while DynamicPlasmaSpork is not enforced there it costs a
 // single spork enumeration and leaves the rule off. A spork state that
-// cannot be read also leaves it off, logged: the pool's use of the rule
-// is admission hygiene and housekeeping, and the account verifier,
-// content selection and the momentum verifier all fail closed on it.
-// Must be called with ap.changes held.
+// cannot be read is recorded in ap.acknowledgementErr and logged:
+// admission then refuses user blocks until a later refresh can read it,
+// as the account verifier does, while eviction, which is housekeeping,
+// keeps the queue as it is; content selection and the momentum verifier
+// fail closed on it on their own. Must be called with ap.changes held.
 func (ap *accountPool) refreshAcknowledgement() {
 	ap.acknowledgement = nil
+	ap.acknowledgementErr = nil
 	if ap.cacheAt == nil {
 		return
 	}
@@ -606,10 +613,23 @@ func (ap *accountPool) refreshAcknowledgement() {
 	}
 	requirement, err := NewAcknowledgementRequirement(frontier, ap.cacheAt)
 	if err != nil {
-		ap.log.Warn("not applying the momentum-acknowledged recency rule in the pool", "reason", err)
+		ap.log.Warn("refusing user account-blocks: the momentum-acknowledged recency rule cannot be read", "reason", err)
+		ap.acknowledgementErr = err
 		return
 	}
 	ap.acknowledgement = requirement
+}
+
+// checkAcknowledgement is the pool's admission check of the
+// acknowledgement recency rule for the momentum after the committed
+// frontier: it refuses a user block while the rule cannot be read there,
+// and otherwise applies it. Embedded blocks are exempt. Must be called
+// with ap.changes held.
+func (ap *accountPool) checkAcknowledgement(block *nom.AccountBlock) error {
+	if ap.acknowledgementErr != nil && !types.IsEmbeddedAddress(block.Address) {
+		return fmt.Errorf("momentum-acknowledged recency rule unreadable at the frontier: %w", ap.acknowledgementErr)
+	}
+	return ap.acknowledgement.Check(block)
 }
 
 // evictFailingAcknowledgements drops every pending user block that the

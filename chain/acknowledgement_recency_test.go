@@ -355,6 +355,8 @@ type recencyParentStore struct {
 	store.Momentum
 	identifier types.HashHeight
 	storage    db.DB
+	// sporkStoreMissing makes the spork contract unreadable.
+	sporkStoreMissing bool
 }
 
 func (s *recencyParentStore) Identifier() types.HashHeight { return s.identifier }
@@ -362,6 +364,9 @@ func (s *recencyParentStore) GetMomentumByHeight(height uint64) (*nom.Momentum, 
 	return canonicalAt(height)
 }
 func (s *recencyParentStore) GetAccountStore(types.Address) store.Account {
+	if s.sporkStoreMissing {
+		return nil
+	}
 	return &recencyAccountStore{storage: s.storage}
 }
 func (s *recencyParentStore) IsSporkActive(*types.ImplementedSpork) (bool, error) {
@@ -508,4 +513,37 @@ func TestAccountPool_StaleAcknowledgementRejectedAtAdmission(t *testing.T) {
 	stable.frontier = &recencyParentStore{identifier: ackAt(H - 1), storage: storage}
 	ap.DeleteMomentum(&nom.DetailedMomentum{Momentum: &nom.Momentum{Hash: ackHash(H), Height: H}})
 	common.FailIfErr(t, ap.addAccountBlockTransaction(transaction(types.Address{0, 5}, 90), false))
+}
+
+// While the pool cannot read the rule for its frontier it refuses user
+// blocks, as the account verifier does on the same failure, rather than
+// admitting (and broadcasting) them unchecked. Forced and embedded inserts
+// are unaffected, and user blocks are admitted again once a later frontier
+// can be read.
+func TestAccountPool_UnreadableRequirementRefusesAdmission(t *testing.T) {
+	gate := withDynamicPlasmaSporkId(t)
+	const H = 100
+	storage := db.NewMemDB()
+	enforcedSpork(gate, H).Save(storage)
+	stable := &recencyStable{frontier: &recencyParentStore{identifier: ackAt(H), storage: storage, sporkStoreMissing: true}}
+	ap := newAccountPool(stable)
+	ap.cacheAt = scriptedCacheAt(map[types.Hash]uint64{gate: H})
+	ap.primeAcknowledgement()
+
+	transaction := func(block *nom.AccountBlock) *nom.AccountBlockTransaction {
+		block.Hash = block.ComputeHash()
+		return &nom.AccountBlockTransaction{Block: block, Changes: db.NewPatch()}
+	}
+
+	err := ap.addAccountBlockTransaction(transaction(userBlock(types.Address{0, 1}, 1, ackAt(H))), false)
+	if err == nil || IsAcknowledgementRejection(err) {
+		t.Fatalf("user insert with an unreadable rule: want a read error, got %v", err)
+	}
+	common.FailIfErr(t, ap.addAccountBlockTransaction(transaction(userBlock(types.Address{0, 2}, 1, ackAt(H))), true))
+	contract := &nom.AccountBlock{Address: types.PlasmaContract, BlockType: nom.BlockTypeContractSend, Height: 1, MomentumAcknowledged: ackAt(50)}
+	common.FailIfErr(t, ap.addAccountBlockTransaction(transaction(contract), false))
+
+	stable.frontier = &recencyParentStore{identifier: ackAt(H + 1), storage: storage}
+	ap.InsertMomentum(&nom.DetailedMomentum{Momentum: &nom.Momentum{Hash: ackHash(H + 1), Height: H + 1}})
+	common.FailIfErr(t, ap.addAccountBlockTransaction(transaction(userBlock(types.Address{0, 3}, 1, ackAt(H+1))), false))
 }
