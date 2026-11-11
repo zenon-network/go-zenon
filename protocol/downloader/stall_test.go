@@ -57,7 +57,7 @@ func stallHeight(h types.Hash) uint64 {
 // so in production the first hash of a batch is reserved first and the
 // window head is reserved last. This fixture inserts ascending on purpose —
 // the reverse of the wire order — so the window head (height 1) is reserved
-// first here. The production shape of a missing head is a hash no peer
+// first here. One production shape of a missing head is a hash no peer
 // actually has (the origin advertised something it cannot serve): whichever
 // peer reserves it holds the request until blockHardTTL. Expire re-pushes
 // the hash but does not SetIdle the peer, so each expiry sidelines that
@@ -693,6 +693,8 @@ func TestBlockFetchOmittedHeadCacheFull(t *testing.T) {
 	}
 
 	// The origin's list skips the window head: heights 2..10, ascending.
+	// (The newest-first wire order — 10 … 2 — reaches the same state:
+	// 10–3 fill the budget and 2 is left pending.)
 	hashes := make([]types.Hash, 9)
 	for i := range hashes {
 		hashes[i] = stallHash('o', uint64(i+2))
@@ -710,6 +712,7 @@ func TestBlockFetchOmittedHeadCacheFull(t *testing.T) {
 	}
 }
 
+// TestBlockFetchImportFreesCapacityDuringPass is a smoke test driving
 // the raced shape end to end — an import draining the cache while the
 // scheduling pass runs — and verifies the session neither trips the
 // peers-unavailable guard nor ends early: the pre-import zero reserve

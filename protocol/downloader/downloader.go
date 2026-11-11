@@ -857,7 +857,8 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 			// Synchronise can read it.
 			// Sample Processing() before the offset read: process() sets the
 			// flag before TakeBlocks and clears it after the import, so a
-			// handover that lands between the two reads still shows up as busy.
+			// handover that lands between the two reads shows up as busy or as a
+			// new offset.
 			busy := d.Processing()
 			if offset := d.queue.BlockOffset(); offset != lastOffset || busy {
 				lastOffset = offset
