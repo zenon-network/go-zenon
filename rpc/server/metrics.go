@@ -27,6 +27,9 @@ var (
 	successfulRequestGauge = metrics.NewRegisteredGauge("rpc/success", nil)
 	failedReqeustGauge     = metrics.NewRegisteredGauge("rpc/failure", nil)
 	rpcServingTimer        = metrics.NewRegisteredTimer("rpc/duration/all", nil)
+	// overloadedHTTPCounter counts HTTP requests refused by the server-wide
+	// admission limit; see Server.SetMaxConcurrentHTTPRequests.
+	overloadedHTTPCounter = metrics.NewRegisteredCounter("rpc/http/overloaded", nil)
 )
 
 func newRPCServingTimer(method string, valid bool) metrics.Timer {

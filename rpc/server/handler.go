@@ -102,7 +102,8 @@ type callProc struct {
 
 // releaseCallSlot returns one call slot to the semaphore. It is a no-op
 // when callSlots is nil, which is the case for handlers created outside a
-// Client (e.g. HTTP serveSingleRequest) where the semaphore does not apply.
+// Client (e.g. HTTP serveSingleRequest), whose requests are bounded by the
+// server-wide HTTP admission limit instead.
 func (h *handler) releaseCallSlot() {
 	if h.callSlots == nil {
 		return
