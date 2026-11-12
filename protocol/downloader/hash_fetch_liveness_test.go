@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -148,7 +149,7 @@ func expectReturn(t *testing.T, what string, errc <-chan error, want error, time
 	t.Helper()
 	select {
 	case err := <-errc:
-		if err != want {
+		if !errors.Is(err, want) {
 			t.Fatalf("%s returned %v, want %v", what, err, want)
 		}
 	case <-time.After(timeout):
