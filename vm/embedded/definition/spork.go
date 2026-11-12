@@ -148,18 +148,30 @@ func GetSporkInfoById(context db.DB, id types.Hash) *Spork {
 // genesis rollback) are skipped, matching GetSporkInfoById's treatment
 // of empty values as absent.
 func GetAllSporks(context db.DB) []*Spork {
+	sporks, err := ReadAllSporks(context)
+	common.DealWithErr(err)
+	return sporks
+}
+
+// ReadAllSporks is GetAllSporks returning the iterator's error instead
+// of panicking, for consensus checks that must fail closed on an
+// unreadable store rather than abort the node. On error it returns no
+// sporks, never a partial list.
+func ReadAllSporks(context db.DB) ([]*Spork, error) {
 	iterator := context.NewIterator([]byte{sporkInfoPrefix})
 	defer iterator.Release()
 
 	sporks := make([]*Spork, 0)
 	for {
 		if !iterator.Next() {
-			common.DealWithErr(iterator.Error())
+			if err := iterator.Error(); err != nil {
+				return nil, err
+			}
 			break
 		}
 		if data := iterator.Value(); len(data) > 0 {
 			sporks = append(sporks, ParseSporkInfo(data))
 		}
 	}
-	return sporks
+	return sporks, nil
 }

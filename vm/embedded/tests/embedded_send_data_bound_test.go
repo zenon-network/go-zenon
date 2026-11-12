@@ -2,6 +2,7 @@ package tests
 
 import (
 	"encoding/base64"
+	"errors"
 	"math/big"
 	"strings"
 	"testing"
@@ -300,12 +301,14 @@ func TestEmbeddedSendData_QuoteAtEnforcementMomentum(t *testing.T) {
 
 // The spork-gated send rules read the spork state at the block's
 // MomentumAcknowledged, the convention every spork gate in the VM follows
-// (vm_context/spork.go) and the one the receive-data rule adopted in #179.
-// A block that acknowledges a momentum before enforcement is therefore
-// priced and bounded under the pre-spork rules even when it is created and
-// cemented after activation, and the verifier's recomputation agrees; a
-// block acknowledging the frontier gets the new rules. The acknowledgement
-// anchor itself is a chain-wide design question, not part of this change.
+// (vm_context/spork.go) and the one the receive-data rule adopted in #179:
+// a send acknowledging a momentum before enforcement is priced and bounded
+// under the pre-spork rules, and the verifier's recomputation agrees. This
+// test used to admit and cement such a send after activation. That was the
+// bypass of issue #227: Dynamic Plasma also gates the acknowledgement
+// recency rule, so once it is enforced at the frontier the send is rejected
+// for its stale acknowledgement (verifier.ErrABMAStale) and cannot keep the
+// pre-spork rules. A send acknowledging the frontier gets the new rules.
 func TestEmbeddedSendData_RulesFollowAcknowledgedMomentum(t *testing.T) {
 	t.Run("htlc unlock cap and preimage bound", func(t *testing.T) {
 		z := mock.NewMockZenon(t)
@@ -314,28 +317,26 @@ func TestEmbeddedSendData_RulesFollowAcknowledgedMomentum(t *testing.T) {
 		preSpork, err := z.Chain().GetFrontierMomentumStore().GetFrontierMomentum()
 		common.FailIfErr(t, err)
 		activateDynamicPlasmaPastHeight(t, z)
+		v := newTestVerifier(z)
 
 		tier := constants.AlphanetPlasmaTable.EmbeddedWWithdraw
-		stale := unlockSend(g.User2.Address, make([]byte, constants.MaxDataLength))
-		stale.MomentumAcknowledged = preSpork.Identifier()
-		staleSent := z.InsertSendBlock(stale, nil, mock.SkipVmChanges)
-		if staleSent.BasePlasma != tier {
-			t.Fatalf("base plasma of a send acknowledging a pre-spork momentum: got %d want the tier %d", staleSent.BasePlasma, tier)
+		staleSend := func(preimage []byte) *nom.AccountBlock {
+			template := unlockSend(g.User2.Address, preimage)
+			template.BlockType = nom.BlockTypeUserSend
+			return signedUserBlock(t, z, g.User2, template, preSpork.Identifier())
 		}
-		stale = unlockSend(g.User2.Address, make([]byte, constants.HtlcPreimageMaxLength+1))
-		stale.MomentumAcknowledged = preSpork.Identifier()
-		z.InsertSendBlock(stale, nil, mock.SkipVmChanges)
-
-		z.InsertNewMomentum()
-		cemented, err := z.Chain().GetFrontierMomentumStore().GetAccountBlockByHash(staleSent.Hash)
-		common.FailIfErr(t, err)
-		if cemented == nil {
-			t.Fatal("send acknowledging a pre-spork momentum was not cemented after activation")
-		}
-		got, err := vm.CanonicalBasePlasma(z.Chain(), cemented)
+		stale := staleSend(make([]byte, constants.MaxDataLength))
+		// Priced at its acknowledgement: the pre-spork method tier.
+		got, err := vm.CanonicalBasePlasma(z.Chain(), stale)
 		common.FailIfErr(t, err)
 		if got != tier {
-			t.Fatalf("canonical base plasma of the send acknowledging a pre-spork momentum: got %d want %d", got, tier)
+			t.Fatalf("canonical base plasma of a send acknowledging a pre-spork momentum: got %d want the tier %d", got, tier)
+		}
+		if err := v.AccountBlock(stale); !errors.Is(err, verifier.ErrABMAStale) {
+			t.Fatalf("send acknowledging a pre-spork momentum: want %v, got %v", verifier.ErrABMAStale, err)
+		}
+		if err := v.AccountBlock(staleSend(make([]byte, constants.HtlcPreimageMaxLength+1))); !errors.Is(err, verifier.ErrABMAStale) {
+			t.Fatalf("send with a long preimage acknowledging a pre-spork momentum: want %v, got %v", verifier.ErrABMAStale, err)
 		}
 
 		// the same account, acknowledging the frontier, gets the new rules
@@ -350,11 +351,15 @@ func TestEmbeddedSendData_RulesFollowAcknowledgedMomentum(t *testing.T) {
 		preSpork, err := z.Chain().GetFrontierMomentumStore().GetFrontierMomentum()
 		common.FailIfErr(t, err)
 		activateDynamicPlasmaPastHeight(t, z)
+		v := newTestVerifier(z)
 
 		overBound := strings.Repeat("A", constants.ECDSASignatureStringMaxLength+1)
-		stale := updateWrapToken(types.Hash{1}, overBound)
-		stale.MomentumAcknowledged = preSpork.Identifier()
-		z.InsertSendBlock(stale, nil, mock.SkipVmChanges)
+		template := updateWrapToken(types.Hash{1}, overBound)
+		template.BlockType = nom.BlockTypeUserSend
+		stale := signedUserBlock(t, z, g.User1, template, preSpork.Identifier())
+		if err := v.AccountBlock(stale); !errors.Is(err, verifier.ErrABMAStale) {
+			t.Fatalf("send acknowledging a pre-spork momentum: want %v, got %v", verifier.ErrABMAStale, err)
+		}
 		z.InsertSendBlock(updateWrapToken(types.Hash{1}, overBound), constants.ErrInvalidECDSASignature, mock.SkipVmChanges)
 	})
 }

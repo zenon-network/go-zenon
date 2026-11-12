@@ -155,6 +155,22 @@ type accountPool struct {
 	// oldest entries are evicted and their blocks are reported again.
 	oversizedReported     *lru.Cache
 	oversizedReportedOnce sync.Once
+
+	// cacheAt gives the acknowledgement recency rule its view of the
+	// chain cache (see refreshAcknowledgement). NewChain sets it; a pool
+	// without it cannot read the rule and applies nothing for it.
+	cacheAt CacheStoreAt
+	// acknowledgement is the acknowledgement recency rule for the momentum
+	// after the committed frontier, or nil while it does not apply there
+	// or cannot be read. Guarded by changes, rebuilt whenever the frontier
+	// moves, and used both to evict queued blocks and to re-check every
+	// non-forced insert under the insert lock.
+	acknowledgement *AcknowledgementRequirement
+	// acknowledgementErr is why the rule could not be read for the
+	// committed frontier, or nil. While it is set, non-forced inserts of
+	// user blocks are refused, as the account verifier refuses them on the
+	// same failure. Guarded by changes.
+	acknowledgementErr error
 }
 
 func (ap *accountPool) getAccountManager(address types.Address) *accountManager {
@@ -296,6 +312,19 @@ func (ap *accountPool) addAccountBlockTransaction(transaction *nom.AccountBlockT
 	previous := block.Previous()
 
 	log := ap.log.New("header", block.Header())
+
+	// The verifier checked the acknowledgement against the frontier it
+	// saw, which a momentum committed since may have moved past (an RPC
+	// submission verifies before taking the insert lock). Check again
+	// against the frontier this insert lands on. A forced insert carries a
+	// block of a momentum being applied, which the momentum verifier
+	// checks against that momentum's own parent.
+	if !forceAdd {
+		if err := ap.checkAcknowledgement(block); err != nil {
+			log.Info("rejecting account-block that fails the momentum-acknowledged recency rule", "reason", err)
+			return err
+		}
+	}
 
 	frontier := ap.getFrontierAccountStore(address)
 	frontierIdentifier := frontier.Identifier()
@@ -549,12 +578,125 @@ func (ap *accountPool) InsertMomentum(detailed *nom.DetailedMomentum) {
 	if err := ap.rebuild(detailed); err != nil {
 		common.ChainLogger.Error("failed to handle InsertMomentum in AccountPool", "reason", err)
 	}
+	ap.refreshAcknowledgement()
+	ap.evictFailingAcknowledgements(ap.acknowledgement)
+}
+
+// primeAcknowledgement reads the acknowledgement recency rule for the
+// committed frontier, so that inserts after start-up are checked before
+// the first momentum event.
+func (ap *accountPool) primeAcknowledgement() {
+	ap.changes.Lock()
+	defer ap.changes.Unlock()
+	ap.refreshAcknowledgement()
+}
+
+// refreshAcknowledgement rebuilds ap.acknowledgement for the committed
+// frontier. It runs on every InsertMomentum and DeleteMomentum, after the
+// chain cache and the momentum pool have both moved to the new frontier;
+// while DynamicPlasmaSpork is not enforced there it costs a
+// single spork enumeration and leaves the rule off. A spork state that
+// cannot be read is recorded in ap.acknowledgementErr and logged:
+// admission then refuses user blocks until a later refresh can read it,
+// as the account verifier does, while eviction, which is housekeeping,
+// keeps the queue as it is; content selection and the momentum verifier
+// fail closed on it on their own. Must be called with ap.changes held.
+func (ap *accountPool) refreshAcknowledgement() {
+	ap.acknowledgement = nil
+	ap.acknowledgementErr = nil
+	if ap.cacheAt == nil {
+		return
+	}
+	frontier := ap.stable.GetFrontierMomentumStore()
+	if frontier == nil {
+		return
+	}
+	requirement, err := NewAcknowledgementRequirement(frontier, ap.cacheAt)
+	if err != nil {
+		ap.log.Warn("refusing user account-blocks: the momentum-acknowledged recency rule cannot be read", "reason", err)
+		ap.acknowledgementErr = err
+		return
+	}
+	ap.acknowledgement = requirement
+}
+
+// checkAcknowledgement is the pool's admission check of the
+// acknowledgement recency rule for the momentum after the committed
+// frontier: it refuses a user block while the rule cannot be read there,
+// and otherwise applies it. Embedded blocks are exempt. Must be called
+// with ap.changes held.
+func (ap *accountPool) checkAcknowledgement(block *nom.AccountBlock) error {
+	if ap.acknowledgementErr != nil && !types.IsEmbeddedAddress(block.Address) {
+		return fmt.Errorf("momentum-acknowledged recency rule unreadable at the frontier: %w", ap.acknowledgementErr)
+	}
+	return ap.acknowledgement.Check(block)
+}
+
+// evictFailingAcknowledgements drops every pending user block that the
+// momentum after the frontier could not confirm under requirement,
+// together with the account's pending blocks above it, which chain onto
+// it. InsertMomentum runs it for the new frontier, so a stale block is
+// dropped at the first momentum whose parent enforces a spork it does
+// not acknowledge, whether or not its account sends again. A block whose
+// acknowledgement cannot be read is kept and logged. A rollback only
+// shrinks the enforced set, so DeleteMomentum has nothing to evict.
+// Must be called with ap.changes held.
+func (ap *accountPool) evictFailingAcknowledgements(requirement *AcknowledgementRequirement) {
+	if requirement == nil {
+		return
+	}
+	for address, manager := range ap.managers {
+		if types.IsEmbeddedAddress(address) {
+			continue
+		}
+		cutoff := uint64(0)
+		var reason error
+		for height, block := range manager.blocks {
+			err := requirement.Check(block)
+			if err == nil {
+				continue
+			}
+			if !IsAcknowledgementRejection(err) {
+				ap.log.Warn("keeping block whose momentum-acknowledged can't be checked", "block", block.Header(), "reason", err)
+				continue
+			}
+			if cutoff == 0 || height < cutoff {
+				cutoff = height
+				reason = err
+			}
+		}
+		if cutoff == 0 {
+			continue
+		}
+		ap.log.Info("evicting stale momentum-acknowledged suffix",
+			"address", address,
+			"cutoff-height", cutoff,
+			"reason", reason)
+		for {
+			frontier := db.GetFrontierIdentifier(manager.db.Frontier())
+			if frontier.Height < cutoff {
+				break
+			}
+			if err := manager.Pop(); err != nil {
+				ap.log.Error("failed to pop stale momentum-acknowledged block",
+					"address", address,
+					"frontier", frontier,
+					"reason", err)
+				delete(ap.managers, address)
+				break
+			}
+		}
+		if len(manager.blocks) == 0 {
+			delete(ap.managers, address)
+		}
+	}
 }
 func (ap *accountPool) DeleteMomentum(detailed *nom.DetailedMomentum) {
 	ap.refreshDynamicPlasma()
 
 	ap.changes.Lock()
 	defer ap.changes.Unlock()
+	defer ap.refreshAcknowledgement()
 
 	// Only remove managers for addresses whose account blocks were included
 	// in the deleted momentum.  Wiping every manager discards pending blocks

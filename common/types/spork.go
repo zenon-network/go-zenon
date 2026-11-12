@@ -43,7 +43,10 @@ var (
 	// DynamicPlasmaSpork gates the activation of the dynamic plasma pricing
 	// model. Until this spork's EnforcementHeight is reached, the legacy
 	// fixed-price plasma model is in use; at activation, momentums switch
-	// to version 2 with adaptive fusion/work prices.
+	// to version 2 with adaptive fusion/work prices. Once it is enforced at
+	// a momentum's parent, the user account blocks in that momentum must
+	// also acknowledge a momentum that enforces every spork the parent
+	// enforces (issue #227, see chain.AcknowledgementRequirement).
 	DynamicPlasmaSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000002")
 
 	// EmbeddedRefundSpork gates the refund of a failed contract-to-contract
