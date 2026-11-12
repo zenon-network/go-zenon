@@ -49,6 +49,15 @@ var (
 	// enforces (issue #227, see chain.AcknowledgementRequirement).
 	DynamicPlasmaSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000002")
 
+	// EmbeddedRefundSpork gates the refund of a failed contract-to-contract
+	// send (issue #271). Until this spork's EnforcementHeight is reached, a
+	// failed receive refunds through the ordinary send path, whose method
+	// lookup cannot resolve a data-less send to an embedded contract, so the
+	// receive is never generated. At activation the refund to an embedded
+	// sender skips that lookup, and an embedded contract accepts a
+	// data-less send from another embedded contract as a plain deposit.
+	EmbeddedRefundSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000004")
+
 	// EpochRewardTermsSpork gates per-epoch pillar reward-sharing terms
 	// (issue #228). Until this spork's EnforcementHeight is reached, an
 	// epoch's pillar rewards are split with the give-percentages stored
@@ -70,6 +79,7 @@ var (
 		BridgeAndLiquiditySpork.SporkId: true,
 		Libp2pSpork.SporkId:             true,
 		DynamicPlasmaSpork.SporkId:      true,
+		EmbeddedRefundSpork.SporkId:     true,
 		EpochRewardTermsSpork.SporkId:   true,
 	}
 )

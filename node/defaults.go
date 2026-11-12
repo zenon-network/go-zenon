@@ -49,8 +49,10 @@ var DefaultNodeConfig = Config{
 
 		HTTPVirtualHosts: []string{"localhost"},
 
-		MaxSubscriptionsPerConn: rpc.DefaultMaxSubscriptionsPerConn,
-		MaxSubscriptions:        subscribe.DefaultMaxSubscriptions,
+		MaxSubscriptionsPerConn:   rpc.DefaultMaxSubscriptionsPerConn,
+		MaxSubscriptions:          subscribe.DefaultMaxSubscriptions,
+		MaxConcurrentHTTPRequests: rpc.DefaultMaxConcurrentHTTPRequests,
+		MaxHTTPConnections:        DefaultMaxHTTPConnections,
 	},
 	Net: NetConfig{
 		ListenHost:        p2p.DefaultListenHost,

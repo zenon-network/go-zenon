@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rs/cors"
+	"golang.org/x/net/netutil"
 
 	"github.com/zenon-network/go-zenon/common"
 	rpc "github.com/zenon-network/go-zenon/rpc/server"
@@ -25,7 +26,14 @@ type httpConfig struct {
 	CorsAllowedOrigins      []string
 	Vhosts                  []string
 	MaxSubscriptionsPerConn int
-	prefix                  string // path prefix on which to mount http handler
+	// MaxConcurrentRequests bounds the JSON-RPC requests served at once;
+	// see rpc.Server.SetMaxConcurrentHTTPRequests. Zero selects the default.
+	MaxConcurrentRequests int
+	// MaxConnections bounds the connections the listener holds open at
+	// once, WebSocket connections on a shared port included. Zero selects
+	// DefaultMaxHTTPConnections; a negative value removes the cap.
+	MaxConnections int
+	prefix         string // path prefix on which to mount http handler
 }
 
 // wsConfig is the JSON-RPC/Websocket configuration
@@ -52,6 +60,7 @@ type httpServer struct {
 	mu       sync.Mutex
 	server   *http.Server
 	listener net.Listener // non-nil when server is running
+	maxConns int          // the listener's connection cap; zero when uncapped
 
 	// HTTP RPC handler things.
 
@@ -72,6 +81,30 @@ type httpServer struct {
 	// shutdownTimeout bounds how long stop waits for in-flight HTTP
 	// requests before it closes their connections.
 	shutdownTimeout time.Duration
+}
+
+// DefaultMaxHTTPConnections is the HTTP-RPC listener's connection cap when
+// the configuration leaves it at zero: four connections for each request
+// slot of rpc.DefaultMaxConcurrentHTTPRequests.
+const DefaultMaxHTTPConnections = 4 * rpc.DefaultMaxConcurrentHTTPRequests
+
+// defaultMaxHTTPConnections is the cap a zero configuration selects. It is
+// DefaultMaxHTTPConnections; tests lower it to exercise the default path
+// without opening a thousand connections.
+var defaultMaxHTTPConnections = DefaultMaxHTTPConnections
+
+// effectiveMaxHTTPConnections maps a configured connection cap to the one
+// the listener uses: zero selects defaultMaxHTTPConnections and a negative
+// value means no cap, reported as zero.
+func effectiveMaxHTTPConnections(n int) int {
+	switch {
+	case n == 0:
+		return defaultMaxHTTPConnections
+	case n < 0:
+		return 0
+	default:
+		return n
+	}
 }
 
 // defaultShutdownTimeout is how long an HTTP server waits on stop for
@@ -152,6 +185,16 @@ func (h *httpServer) start() error {
 		h.disableWS()
 		return err
 	}
+	// The connection cap belongs to HTTP-RPC: a server that only carries
+	// WebSocket is bounded per IP by its handler instead.
+	maxConns := 0
+	if h.rpcAllowed() {
+		maxConns = effectiveMaxHTTPConnections(h.httpConfig.MaxConnections)
+	}
+	if maxConns > 0 {
+		listener = netutil.LimitListener(listener, maxConns)
+	}
+	h.maxConns = maxConns
 	h.listener = listener
 	go h.server.Serve(listener)
 
@@ -170,6 +213,8 @@ func (h *httpServer) start() error {
 	h.log.Info("HTTP server started",
 		"endpoint", listener.Addr(),
 		"prefix", h.httpConfig.prefix,
+		"maxrequests", h.httpHandler.Load().(*rpcHandler).server.MaxConcurrentHTTPRequests(),
+		"maxconns", maxConns,
 		"cors", strings.Join(h.httpConfig.CorsAllowedOrigins, ","),
 		"vhosts", strings.Join(h.httpConfig.Vhosts, ","),
 	)
@@ -277,7 +322,7 @@ func (h *httpServer) doStop() {
 
 	// Clear out everything to allow re-configuring it later.
 	h.host, h.port, h.endpoint = "", 0, ""
-	h.server, h.listener = nil, nil
+	h.server, h.listener, h.maxConns = nil, nil, 0
 }
 
 // enableRPC turns on JSON-RPC over HTTP on the server.
@@ -292,13 +337,22 @@ func (h *httpServer) enableRPC(apis []rpc.API, config httpConfig) error {
 	// Create RPC server and handler.
 	srv := rpc.NewServer()
 	srv.SetMaxSubscriptionsPerConn(config.MaxSubscriptionsPerConn)
+	srv.SetMaxConcurrentHTTPRequests(config.MaxConcurrentRequests)
 	if err := RegisterApisFromWhitelist(apis, config.Modules, srv, false); err != nil {
 		return err
 	}
 	h.httpConfig = config
+	// Admission is outermost so a request's slot is held until the gzip
+	// writer has finished its output, not only until the RPC server has
+	// returned. A refusal goes through the same CORS policy, so a browser
+	// client from an allowed origin can read the 503 and its -32005 error;
+	// a refused preflight is answered by that policy as usual.
 	h.httpHandler.Store(&rpcHandler{
-		Handler: NewHTTPHandlerStack(srv, config.CorsAllowedOrigins, config.Vhosts),
-		server:  srv,
+		Handler: srv.AdmitHTTPRefusingWith(
+			NewHTTPHandlerStack(srv, config.CorsAllowedOrigins, config.Vhosts),
+			newCorsHandler(http.HandlerFunc(rpc.OverloadedHTTP), config.CorsAllowedOrigins),
+		),
+		server: srv,
 	})
 	return nil
 }
