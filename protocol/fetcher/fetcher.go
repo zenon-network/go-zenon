@@ -56,7 +56,8 @@ type blockRequesterFn func([]types.Hash) error
 
 // blockVerifierFn is a callback type to run structural pre-checks on a detailed
 // momentum before propagation; signature and producer verification happen
-// later during insertion.
+// later during insertion. A momentum that fails is discarded and the peer
+// that delivered it is not penalised.
 type blockVerifierFn func(detailed *nom.DetailedMomentum) error
 
 // blockBroadcasterFn is a callback type for broadcasting a block to connected peers.
@@ -122,11 +123,11 @@ type Fetcher struct {
 
 	// Callbacks
 	getBlock       blockRetrievalFn   // Retrieves a block from the local chain
-	verifyBlock    blockVerifierFn    // Fully verifies a momentum before propagation
+	verifyBlock    blockVerifierFn    // Runs the structural pre-check on a momentum before import
 	broadcastBlock blockBroadcasterFn // Broadcasts a block to connected peers
 	chainHeight    chainHeightFn      // Retrieves the current chain's height
 	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
-	dropPeer       peerDropFn         // Drops a peer for misbehaving
+	dropPeer       peerDropFn         // Drops a peer for misbehaving; no fetcher path calls it at present
 	rejectPeer     peerRejectFn       // Reports an import failure attributed to a peer (optional)
 
 	// Testing hooks
@@ -512,10 +513,17 @@ func (f *Fetcher) insert(peer string, detailed *nom.DetailedMomentum) {
 		if parent == nil {
 			return
 		}
-		// Run structural pre-checks before propagation
+		// Run the structural pre-check before import. A momentum that fails
+		// it is discarded here, so it is neither imported nor broadcast.
+		// The peer that delivered it is not dropped: it is usually relaying
+		// the momentum, nodes of earlier releases relay before they
+		// validate, and nothing the pre-check reads tells a momentum the
+		// deliverer altered from one it passed on unchanged. The timestamp
+		// verdict also depends on the local clock, so the same momentum can
+		// pass moments later. The per-peer queue allowance bounds how many
+		// deliveries from one peer are being checked at a time.
 		if err := f.verifyBlock(detailed); err != nil {
 			log.Info("momentum verification failed", "peer", peer, "momentum", momentum.Height, "hash", hash[:4], "reason", err)
-			f.dropPeer(peer)
 			return
 		}
 		// Run the actual import and log any issues
