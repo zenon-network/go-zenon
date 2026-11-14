@@ -11,11 +11,11 @@ import (
 // producerStallWindow is how long anything short of an import may keep
 // production blocked: a best peer's advertised height, a download session
 // against it, and blocks a session has fetched that the import worker has
-// not taken. It is production policy, not a bound on a session: a session
-// against responsive peers reaches its first import well inside it, while
-// one whose origin uses every request's timeout can run for longer, which
-// is why the window is measured from the last import and from nothing a
-// session does.
+// not taken. It is production policy, not a bound on a session: a first
+// import is expected well inside it, but every request of a session has
+// its own timeout and a session can run for longer without importing,
+// which is why the window is measured from the last import and from
+// nothing a session does.
 const producerStallWindow = 60 * time.Second
 
 // producerProgress records the last time a download session imported a
