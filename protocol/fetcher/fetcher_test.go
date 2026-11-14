@@ -159,10 +159,13 @@ func waitFor(t *testing.T, signal <-chan struct{}, what string) {
 	}
 }
 
-// expectDiscarded stops the fetcher, which joins every import it started,
-// and fails unless the momentums that failed the pre-check were discarded
-// and nothing else: no peer dropped, no peer reported to the import-failure
-// hook, nothing imported and nothing broadcast.
+// expectDiscarded stops the fetcher and fails unless the momentums that
+// failed the pre-check were discarded and nothing else: no peer dropped, no
+// peer reported to the import-failure hook, nothing imported and nothing
+// broadcast. Stop joins the imports the loop has already started. The
+// harness runs the loop without Start, so an import the loop starts after
+// Stop has begun waiting is not joined: the caller must first have seen
+// every delivery it expects to be imported reach the pre-check.
 func expectDiscarded(t *testing.T, h *testHarness, inserted *int32) {
 	t.Helper()
 	h.stop()
@@ -324,7 +327,8 @@ func TestEnqueue_PreCheckFailuresStayWithinPeerAllowance(t *testing.T) {
 		waitFor(t, entered, "a queued delivery to reach the pre-check")
 	}
 	// The loop takes events in order, so once it has answered this request
-	// it has scheduled every delivery above that it accepted.
+	// it has started the import of every delivery above that it accepted,
+	// and stopping the fetcher joins them all.
 	h.f.Filter("nobody", nil)
 
 	releaseOnce.Do(func() { close(release) })
