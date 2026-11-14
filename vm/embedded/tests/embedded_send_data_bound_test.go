@@ -145,10 +145,10 @@ func TestEmbeddedSendData_AfterSpork_ArgumentBytesPriced(t *testing.T) {
 		t.Fatalf("plasma quote: got basePlasma %d, the applied block paid %d", quote.BasePlasma, large.BasePlasma)
 	}
 
-	// zero-argument call: selector only, tier alone. Only the HTLC spork
-	// is active here, and the HTLC table is built on the accelerator one
-	// (sporkVariantKey, vm/embedded/embedded.go), where the stake
-	// CollectReward tier is EmbeddedSimple.
+	// zero-argument call: selector only, tier alone. Of the three legacy
+	// sporks only HTLC is active here, and the HTLC table is built on the
+	// accelerator one (sporkVariantKey, vm/embedded/embedded.go), where
+	// the stake CollectReward tier is EmbeddedSimple.
 	collectTier := constants.AlphanetPlasmaTable.EmbeddedSimple
 	collect := z.InsertSendBlock(&nom.AccountBlock{
 		Address:   g.User1.Address,
