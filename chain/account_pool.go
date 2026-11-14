@@ -1194,7 +1194,9 @@ func (ap *accountPool) GetUncommittedAccountBlocksByAddress(address types.Addres
 // first and tells this pool afterwards, and readers such as the peer
 // handshake do not hold the insert lock, so the two can disagree here:
 //   - after a momentum is popped and before DeleteMomentum, the store is
-//     below the manager's base, and the block in between is in neither;
+//     below the manager's base by the account's blocks in that momentum.
+//     They are no longer committed and the manager does not index them,
+//     although its DB, built on the state before the pop, still has them;
 //   - after a momentum is inserted and before InsertMomentum, the store is
 //     above the manager's base, and the manager still holds blocks that
 //     are confirmed now;
@@ -1204,9 +1206,9 @@ func (ap *accountPool) GetUncommittedAccountBlocksByAddress(address types.Addres
 // The walk therefore starts at the manager's frontier and goes down for
 // as long as the manager holds the height and the height is above the
 // committed one. With the two in agreement that is every height between
-// them. Otherwise it is the part of the manager's own chain that is not
-// committed, which is also what the pool's frontier store shows for the
-// address until the pending event is handled.
+// them. Otherwise it is the indexed part of the manager's own chain that
+// is above the committed height, and it ends at the frontier the pool
+// reports for the address until the pending event is handled.
 func (ap *accountPool) getUncommittedAccountBlocksByAddress(address types.Address) []*nom.AccountBlock {
 	stableHeight := ap.getStableAccountStore(address).Identifier().Height
 	manager := ap.getAccountManager(address)

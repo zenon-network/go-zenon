@@ -91,10 +91,11 @@ func expectListing(t *testing.T, got []*nom.AccountBlock, want ...*nom.AccountBl
 }
 
 // A momentum rollback pops the momentum first and tells the pool afterwards.
-// In between, the committed state of an account with a block in that
-// momentum is one block below the state its manager was built on, and the
-// manager does not hold that block. Listing the uncommitted blocks then
-// must return, not panic.
+// In between, the committed state of an account with blocks in that
+// momentum is below the state its manager was built on, and the manager
+// does not index the blocks in between. Listing the uncommitted blocks
+// then must return, not panic. Here the momentum held one block of the
+// account.
 func TestAccountPool_UncommittedListing_CommittedStateBelowManager(t *testing.T) {
 	blocks := listingChain(2)
 	address := blocks[0].Address
@@ -111,9 +112,10 @@ func TestAccountPool_UncommittedListing_CommittedStateBelowManager(t *testing.T)
 	expectListing(t, ap.GetUncommittedAccountBlocksByAddress(address))
 }
 
-// The same window with blocks pending on top of the confirmed one. The
-// listing is the blocks the manager holds; the block that left the
-// committed state is in neither place until the pool handles the rollback.
+// The same window with blocks pending on top of the confirmed ones. The
+// listing is the blocks the manager indexes. A block that left the
+// committed state is not listed until the pool has handled the rollback,
+// whether the momentum held one block of the account or more.
 func TestAccountPool_UncommittedListing_CommittedStateBelowManagerWithPending(t *testing.T) {
 	blocks := listingChain(4)
 	address := blocks[0].Address
@@ -130,8 +132,14 @@ func TestAccountPool_UncommittedListing_CommittedStateBelowManagerWithPending(t 
 
 	expectListing(t, ap.GetAllUncommittedAccountBlocks(), blocks[2], blocks[3])
 	expectListing(t, ap.GetUncommittedAccountBlocksByAddress(address), blocks[2], blocks[3])
-	// The listing agrees with the frontier the pool reports for the address.
+	// The listing ends at the frontier the pool reports for the address.
 	common.Expect(t, ap.GetFrontierAccountStore(address).Identifier(), blocks[3].Identifier())
+
+	// A momentum that confirmed two blocks of the account.
+	stable.current = states[0]
+
+	expectListing(t, ap.GetAllUncommittedAccountBlocks(), blocks[2], blocks[3])
+	expectListing(t, ap.GetUncommittedAccountBlocksByAddress(address), blocks[2], blocks[3])
 }
 
 // The listing reads the committed state and then, for an address without a
