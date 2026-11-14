@@ -36,11 +36,32 @@ type handoffDownloader struct {
 	session                    bool
 	workerStartsAfterFirstRead bool
 	reads                      []string
+	// beforeFirstRead, when set, runs once before the first of the three
+	// reads is answered: something that happened in the downloader after
+	// the predicate was entered and before it looked.
+	beforeFirstRead func()
+	// workerFinishesBeforeProcessingRead, when set, runs once before
+	// Processing is answered and leaves the downloader idle: the worker
+	// that held a batch at the Stats read has imported it and lowered its
+	// flag by the time the flag is read.
+	workerFinishesBeforeProcessingRead func()
 }
 
-func (d *handoffDownloader) Synchronising() bool { return d.session }
+func (d *handoffDownloader) entered() {
+	if d.beforeFirstRead != nil {
+		hook := d.beforeFirstRead
+		d.beforeFirstRead = nil
+		hook()
+	}
+}
+
+func (d *handoffDownloader) Synchronising() bool {
+	d.entered()
+	return d.session
+}
 
 func (d *handoffDownloader) Stats() (pending int, cached int, importing int, estimate time.Duration) {
+	d.entered()
 	defer d.afterRead("Stats")
 	switch d.stage {
 	case stageDelivered:
@@ -52,6 +73,13 @@ func (d *handoffDownloader) Stats() (pending int, cached int, importing int, est
 }
 
 func (d *handoffDownloader) Processing() bool {
+	d.entered()
+	if d.workerFinishesBeforeProcessingRead != nil {
+		finish := d.workerFinishesBeforeProcessingRead
+		d.workerFinishesBeforeProcessingRead = nil
+		finish()
+		d.stage = stageIdle
+	}
 	defer d.afterRead("Processing")
 	return d.stage == stageTaken || d.stage == stageImporting
 }
@@ -64,9 +92,11 @@ func (d *handoffDownloader) afterRead(name string) {
 	}
 }
 
-// readinessPaths are the two states in which, with no import work
-// pending, the predicate says ready: caught up with the best advertised
-// height, and behind it but past the stall window with no import.
+// readinessPaths are the states in which, with no import work pending, the
+// predicate says ready: caught up with the best advertised height, inside
+// the stall window or past it, and behind that height but past the window.
+// Inside the window a running session and blocks waiting in the queue hold
+// production; past it they do not, and only blocks the worker owns do.
 var readinessPaths = []struct {
 	name   string
 	height uint64
@@ -74,11 +104,15 @@ var readinessPaths = []struct {
 	elapse time.Duration
 }{
 	{"caught up", 12, 12, 0},
+	{"caught up, stall window expired", 12, 12, producerStallWindow},
 	{"stall window expired", 10, 12, producerStallWindow},
 }
 
-// Every stage of the handoff blocks production on both paths that would
-// otherwise be ready, and the idle downloader releases it on both. The
+// Every stage of the handoff at which the worker owns blocks holds
+// production on every path that would otherwise be ready, and the idle
+// downloader releases it on all of them. A running session, and a batch
+// that is delivered but not taken, hold only inside the stall window: past
+// it they are no more than the advertised height that led to them. The
 // predicate under test is the body of ReadyToProduce, reading the model in
 // place of the downloader.
 func TestReadyToProduce_BlocksAtEveryHandoffStage(t *testing.T) {
@@ -88,16 +122,22 @@ func TestReadyToProduce_BlocksAtEveryHandoffStage(t *testing.T) {
 			pm, _ := newReadinessManager(t, 1, path.height)
 			addPeer(t, pm, 1, path.td)
 			clock.t = clock.t.Add(path.elapse)
+			insideWindow := path.elapse < producerStallWindow
 
 			if !pm.readyToProduce(&handoffDownloader{stage: stageIdle}) {
 				t.Fatal("not ready with nothing delivered and no worker")
 			}
-			if pm.readyToProduce(&handoffDownloader{stage: stageIdle, session: true}) {
-				t.Fatal("ready while a session is running")
+			if ready := pm.readyToProduce(&handoffDownloader{stage: stageIdle, session: true}); ready == insideWindow {
+				t.Fatalf("ready = %v while a session is running, inside the window = %v", ready, insideWindow)
 			}
-			for _, stage := range []handoffStage{stageDelivered, stageTaken, stageImporting} {
-				if pm.readyToProduce(&handoffDownloader{stage: stage}) {
-					t.Fatalf("ready at handoff stage %d", stage)
+			if ready := pm.readyToProduce(&handoffDownloader{stage: stageDelivered}); ready == insideWindow {
+				t.Fatalf("ready = %v with a batch delivered and not taken, inside the window = %v", ready, insideWindow)
+			}
+			for _, stage := range []handoffStage{stageTaken, stageImporting} {
+				for _, session := range []bool{false, true} {
+					if pm.readyToProduce(&handoffDownloader{stage: stage, session: session}) {
+						t.Fatalf("ready at handoff stage %d (session %v)", stage, session)
+					}
 				}
 			}
 			// The real downloader behind the exported predicate is idle
@@ -111,7 +151,8 @@ func TestReadyToProduce_BlocksAtEveryHandoffStage(t *testing.T) {
 
 // A worker that starts between the predicate's two downloader reads takes
 // the batch out of the queue after one read and raises its flag before the
-// other. Reading Stats first sees the batch cached; reading Processing
+// other. Reading Stats first sees the batch cached and then, where the
+// cached count no longer holds, the worker's flag; reading Processing
 // first would see no worker and then an empty queue, and let production
 // through while the worker owns blocks. This fails if the two reads are
 // swapped.
@@ -129,6 +170,49 @@ func TestReadyToProduce_SeesAWorkerStartingBetweenTheReads(t *testing.T) {
 			}
 			if len(work.reads) == 0 || work.reads[0] != "Stats" {
 				t.Fatalf("the queue must be read before the worker flag, got %v", work.reads)
+			}
+		})
+	}
+}
+
+// An import that finishes while the predicate runs, with the window
+// expired when it was entered, leaves the worker idle and the queue empty
+// by the time they are read. The window is read after the worker's flag,
+// so the import is seen and the node, still behind, is held. The import
+// lands either before the downloader is read at all, or after Stats has
+// looked past a batch the worker had taken and before the flag is read.
+// This fails if the window is sampled before any of the downloader reads.
+func TestReadyToProduce_SeesAnImportThatFinishedDuringTheReads(t *testing.T) {
+	for _, landing := range []string{"before the first read", "between Stats and Processing"} {
+		t.Run(landing, func(t *testing.T) {
+			clock := useReadinessClock(t)
+			pm, bridge := newReadinessManager(t, 1, 10)
+			addPeer(t, pm, 1, 12)
+			clock.t = clock.t.Add(producerStallWindow)
+			if !pm.readyToProduce(&handoffDownloader{session: true}) {
+				t.Fatal("not ready past the window with a session that imported nothing")
+			}
+
+			bridge.moved = true
+			imported := func() {
+				if _, err := pm.insertFromDownload(nil); err != nil {
+					t.Error(err)
+				}
+			}
+			work := &handoffDownloader{session: true}
+			if landing == "before the first read" {
+				work.beforeFirstRead = imported
+			} else {
+				// Taken and not yet published: Stats sees nothing, and
+				// the worker is done before its flag is read.
+				work.stage = stageTaken
+				work.workerFinishesBeforeProcessingRead = imported
+			}
+			if pm.readyToProduce(work) {
+				t.Fatalf("ready although a download import landed %s", landing)
+			}
+			if len(work.reads) != 2 || work.reads[1] != "Processing" {
+				t.Fatalf("the predicate did not read the worker's flag after the queue, got %v", work.reads)
 			}
 		})
 	}
