@@ -211,15 +211,20 @@ func TestInboundOriginBound(t *testing.T) {
 	offerInbound(t, srv, h, "/ip4/198.51.100.3/tcp/4001", true)
 	offerInbound(t, srv, h, "/ip4/198.51.100.4/tcp/4001", false)
 
-	// An outbound peer does not count against its origin's group.
+	// Only inbound peers count against a group. The 2001:db8:1::/48
+	// group is full; once one of its peers is an outbound peer instead,
+	// it admits exactly one more.
+	offerInbound(t, srv, h, "/ip6/2001:db8:1::5/tcp/4001", false)
 	srv.peerMu.Lock()
 	for _, p := range srv.peerMap {
-		if p.originGroup == "4:203.0" {
-			p.inbound, p.originGroup = false, ""
+		if p.originGroup == subnetKey(net.ParseIP("2001:db8:1::")) {
+			p.inbound = false
+			break
 		}
 	}
 	srv.peerMu.Unlock()
-	offerInbound(t, srv, h, "/ip4/203.0.113.6/tcp/4001", true)
+	offerInbound(t, srv, h, "/ip6/2001:db8:1::5/tcp/4001", true)
+	offerInbound(t, srv, h, "/ip6/2001:db8:1::6/tcp/4001", false)
 }
 
 // TestInboundOriginBoundExemptions pins which inbound peers the
@@ -236,6 +241,7 @@ func TestInboundOriginBoundExemptions(t *testing.T) {
 		"/ip4/169.254.10.10/tcp/4001",
 		"/ip6/fd00:1::1/tcp/4001",
 		"/ip6/fe80::1/tcp/4001",
+		"/ip6zone/en0/ip6/fe80::1/tcp/4001", // how a link-local source is observed
 	} {
 		t.Run(addr, func(t *testing.T) {
 			srv, h, _ := newCapacityTestServer(t)
@@ -285,6 +291,9 @@ func TestInboundOriginGroup(t *testing.T) {
 		{"/ip4/127.0.0.1/tcp/4001", ""},
 		{"/ip4/172.30.0.11/tcp/4001", ""},
 		{"/ip6/::ffff:10.0.0.1/tcp/4001", ""},
+		{"/ip6zone/en0/ip6/fe80::1/tcp/4001", ""},
+		{"/ip6zone/en0/ip6/2001:db8:1::9/tcp/4001", subnetKey(net.ParseIP("2001:db8:1::"))},
+		{"/ip6zone/en0/ip6/fe80::1/tcp/4001/p2p/16Uiu2HAmRe2RazMPxYEV1A8Vs7LbVfNVMqBdiw7zgSkBLB3E2vQv/p2p-circuit", relayedOrigin},
 	} {
 		conn := &capacityTestConn{addr: mustAddr(t, tc.addr)}
 		s := &capacityTestStream{conn: conn}
@@ -341,8 +350,19 @@ func waitForPeerGone(t *testing.T, srv *Server, id peer.ID, timeout time.Duratio
 	}
 }
 
-// waitForOutboundPeer polls until srv holds id as a peer it dialled.
-func waitForOutboundPeer(t *testing.T, srv *Server, id peer.ID, timeout time.Duration) {
+// inboundPeer reports whether srv holds id as an inbound peer.
+func inboundPeer(srv *Server, id peer.ID) bool {
+	srv.peerMu.RLock()
+	defer srv.peerMu.RUnlock()
+	p := srv.peerMap[id.String()]
+	return p != nil && p.inbound
+}
+
+// sweepUntilOutboundPeer runs sweep, one tick of a dial loop, until srv
+// holds id as a peer it dialled. One sweep is enough when its dial
+// succeeds; repeating it covers a dial that fails (the candidate is then
+// in backoff for a few seconds) without waiting for the loop's ticker.
+func sweepUntilOutboundPeer(t *testing.T, srv *Server, id peer.ID, sweep func(), timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for {
@@ -356,7 +376,8 @@ func waitForOutboundPeer(t *testing.T, srv *Server, id peer.ID, timeout time.Dur
 		if time.Now().After(deadline) {
 			t.Fatalf("%s did not dial %s within %s", srv.Name, id, timeout)
 		}
-		time.Sleep(50 * time.Millisecond)
+		sweep()
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -413,6 +434,22 @@ func TestInboundCannotTakeReservedSlotOverLoopback(t *testing.T) {
 	if adoptedC || peersA != 1 {
 		t.Fatalf("A adopted the second inbound peer=%v and has %d peers, want false and 1", adoptedC, peersA)
 	}
+	if got := srvA.host.Network().Connectedness(srvB.host.ID()); got != network.Connected {
+		t.Fatalf("Connectedness(B) = %v after refusing C, want Connected", got)
+	}
+
+	// The inbound place is held by the session, not by a counter: when B
+	// disconnects, A's own peer teardown frees it and C is adopted.
+	srvB.Stop()
+	waitForPeerGone(t, srvA, srvB.host.ID(), 10*time.Second)
+	deadline := time.Now().Add(10 * time.Second)
+	for !inboundPeer(srvA, srvC.host.ID()) {
+		if time.Now().After(deadline) {
+			t.Fatal("A did not adopt C inbound after B left")
+		}
+		_ = srvC.dialPeer(infoA)
+		time.Sleep(200 * time.Millisecond)
+	}
 
 	if err := srvA.dialPeer(peer.AddrInfo{ID: srvD.host.ID(), Addrs: srvD.host.Addrs()}); err != nil {
 		t.Fatalf("A could not dial into its reserved slot: %v", err)
@@ -420,8 +457,8 @@ func TestInboundCannotTakeReservedSlotOverLoopback(t *testing.T) {
 	if got := srvA.PeerCount(); got != 2 {
 		t.Fatalf("A has %d peers, want 2", got)
 	}
-	if got := srvA.host.Network().Connectedness(srvB.host.ID()); got != network.Connected {
-		t.Fatalf("Connectedness(B) = %v, want Connected", got)
+	if !inboundPeer(srvA, srvC.host.ID()) {
+		t.Fatal("A's dial displaced its inbound peer")
 	}
 }
 
@@ -481,8 +518,7 @@ func TestBootstrapRedialCountsOutboundOnly(t *testing.T) {
 	if deficit, peers, outbound := srvA.outboundDeficit(); deficit != 1 || peers != 1 || outbound != 0 {
 		t.Fatalf("outboundDeficit = %d (peers %d, outbound %d), want 1 (1, 0)", deficit, peers, outbound)
 	}
-	srvA.redialBootstrapPeers()
-	waitForOutboundPeer(t, srvA, infoC.ID, 10*time.Second)
+	sweepUntilOutboundPeer(t, srvA, infoC.ID, srvA.redialBootstrapPeers, 20*time.Second)
 
 	// At the outbound target a sweep has nothing left to do.
 	if deficit, _, _ := srvA.outboundDeficit(); deficit != 0 {
@@ -530,6 +566,5 @@ func TestDHTDialCountsOutboundOnly(t *testing.T) {
 		t.Fatalf("add C to A's routing table: added=%v err=%v", added, err)
 	}
 
-	srvA.dialDHTCandidates()
-	waitForOutboundPeer(t, srvA, srvC.host.ID(), 10*time.Second)
+	sweepUntilOutboundPeer(t, srvA, srvC.host.ID(), srvA.dialDHTCandidates, 20*time.Second)
 }

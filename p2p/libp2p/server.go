@@ -88,13 +88,15 @@ const (
 
 	// inboundOriginDivisor and minInboundPerOrigin size the per-origin
 	// bound on adopted inbound peers (see maxInboundPerOrigin): one origin
-	// group may hold at most 1/inboundOriginDivisor of the inbound slots,
-	// and never fewer than minInboundPerOrigin. A quarter means the inbound
-	// slots cannot be filled from fewer than four origin groups, while
-	// honest peers that share a hosting provider's prefix still fit: with
-	// the default limits that is 11 peers from one IPv4 /16. The floor
-	// keeps a small MaxPeers from turning the bound into one peer per
-	// prefix.
+	// group may hold 1/inboundOriginDivisor of the inbound slots, or
+	// minInboundPerOrigin if that is more. With the default limits that is
+	// 11 of 44 inbound slots, so the inbound slots cannot be filled from
+	// fewer than four bounded origin groups, while honest peers that share
+	// a hosting provider's IPv4 /16 still fit. The floor keeps a small
+	// MaxPeers from turning the bound into one peer per prefix; where it
+	// applies (fewer than eight inbound slots) a group holds more than a
+	// quarter, and with two inbound slots or fewer the bound has no
+	// effect.
 	inboundOriginDivisor = 4
 	minInboundPerOrigin  = 2
 )
@@ -117,7 +119,8 @@ type Server struct {
 	// this were dialled by this node, however many inbound peers it has,
 	// which is how the legacy backend counts its dial target. The same
 	// number of slots, at most half of MaxPeers, is kept free of inbound
-	// peers (see reservedOutbound). Zero disables both.
+	// peers (see reservedOutbound). Zero turns off the loops and the
+	// reservation; the bootstrap dials made at start-up still run.
 	MinConnectedPeers int
 
 	// MaxPendingPeers is the maximum number of peers that can be
@@ -333,27 +336,53 @@ func (srv *Server) maxInboundPerOrigin() int {
 // connections share one group and connections with no IP origin another.
 //
 // Two kinds of peer are not bounded. A loopback, private or link-local
-// source can only be reached from the operator's own host or network,
-// and behind a local proxy or container network every inbound peer shows
-// the same such address, so bounding it would cap those nodes (and any
-// single-host test network) at a few inbound peers without limiting a
-// remote source. A peer listed in BootstrapPeers was chosen by the
-// operator and is authenticated by its key.
+// source is either a peer on the operator's own host or network, or the
+// address of a local proxy or container gateway that stands in for the
+// real source of every inbound peer. Neither is a prefix a remote source
+// holds, and in the second case the bound would cap the node at a few
+// inbound peers in total, so these origins are left alone; this is also
+// what a single-host test network shows for every peer. A node behind
+// such a proxy therefore gets nothing from the per-origin bound, since
+// remote sources are indistinguishable there, and relies on the outbound
+// reservation. A peer listed in BootstrapPeers was chosen by the operator
+// and is authenticated by its key.
 func (srv *Server) inboundOriginGroup(pid peer.ID, s network.Stream) string {
 	for _, pi := range srv.BootstrapPeers {
 		if pi.ID == pid {
 			return ""
 		}
 	}
-	origin := observedOrigin(streamOrigin(s))
+	addr := streamOrigin(s)
+	origin := observedOrigin(addr)
 	if origin == relayedOrigin {
 		return relayedOrigin
 	}
 	ip := net.ParseIP(origin)
+	if ip == nil {
+		ip = zonedIP6(addr)
+	}
 	if ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
 		return ""
 	}
 	return subnetKey(ip)
+}
+
+// zonedIP6 returns the IPv6 address of a multiaddr that starts with a
+// zone (/ip6zone/<zone>/ip6/<address>), or nil. A link-local IPv6 source
+// is observed in that form, which observedOrigin does not read as an IP.
+func zonedIP6(a ma.Multiaddr) net.IP {
+	if a == nil {
+		return nil
+	}
+	protos := a.Protocols()
+	if len(protos) < 2 || protos[0].Code != ma.P_IP6ZONE || protos[1].Code != ma.P_IP6 {
+		return nil
+	}
+	v, err := a.ValueForProtocol(ma.P_IP6)
+	if err != nil {
+		return nil
+	}
+	return net.ParseIP(v)
 }
 
 // inboundRefusalLocked decides whether an inbound peer in the given
