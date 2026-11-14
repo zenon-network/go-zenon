@@ -26,6 +26,7 @@ type batchCancelService struct {
 	started int32 // atomic: Step calls that began
 
 	first   chan struct{} // closed when the first Step call is running
+	big     chan struct{} // closed when the Big call is running
 	later   chan struct{} // closed when any later Step call is running
 	release chan struct{} // closed by the test to let later calls return
 	subs    chan *Subscription
@@ -37,6 +38,7 @@ type batchCancelService struct {
 func newBatchCancelService() *batchCancelService {
 	return &batchCancelService{
 		first:   make(chan struct{}),
+		big:     make(chan struct{}),
 		later:   make(chan struct{}),
 		release: make(chan struct{}),
 		subs:    make(chan *Subscription, 1),
@@ -52,6 +54,14 @@ func (s *batchCancelService) Step(ctx context.Context) string {
 	s.laterOnce.Do(func() { close(s.later) })
 	<-s.release
 	return "later"
+}
+
+// Big returns, once its context has ended, a result that alone crosses the
+// batch response budget.
+func (s *batchCancelService) Big(ctx context.Context) string {
+	close(s.big)
+	<-ctx.Done()
+	return strings.Repeat("x", maxBatchResponseBytes+1)
 }
 
 // Events creates a subscription, sends one notification, which is buffered
@@ -311,5 +321,70 @@ func TestStoppedBatchKeepsWhatItRan(t *testing.T) {
 	}
 	if got := strings.Join(ids, ","); got != "1,2" {
 		t.Fatalf("batch reply answers ids %s, want 1,2", got)
+	}
+}
+
+// A batch whose context ends during the call whose answer crosses the
+// response budget stops like any other stopped batch: the calls after it are
+// neither run nor answered, the budget error included. Fails if the budget
+// fallback answers the remaining calls of a batch that has been stopped.
+func TestStoppedBatchGetsNoBudgetErrors(t *testing.T) {
+	svc := newBatchCancelService()
+	defer svc.releaseLater()
+	server := NewServer()
+	if err := server.RegisterName("batch", svc); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Stop)
+
+	w := &recordingWriter{done: make(chan interface{})}
+	h := newHandler(context.Background(), w, server.idgen, &server.services, 0)
+	t.Cleanup(func() {
+		h.cancelRoot()
+		h.callWG.Wait()
+	})
+	h.handleBatch([]*jsonrpcMessage{
+		{Version: vsn, ID: json.RawMessage("1"), Method: "batch.big"},
+		{Version: vsn, ID: json.RawMessage("2"), Method: "batch.step"},
+		{Version: vsn, Method: "batch.step"},
+		{Version: vsn, ID: json.RawMessage("4"), Method: "batch.step"},
+	}, false)
+	select {
+	case <-svc.big:
+	case <-time.After(teardownTestTimeout):
+		t.Fatal("the first call of the batch never started")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		h.close(io.EOF, nil)
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(teardownTestTimeout):
+		t.Fatal("handler.close is still waiting for the batch")
+	}
+	if n := atomic.LoadInt32(&svc.started); n != 0 {
+		t.Fatalf("the batch ran %d step calls after it was stopped, want 0", n)
+	}
+
+	msgs := w.written()
+	if len(msgs) != 1 {
+		t.Fatalf("handler wrote %d messages, want the one batch reply", len(msgs))
+	}
+	answers, ok := msgs[0].([]*jsonrpcMessage)
+	if !ok {
+		t.Fatalf("handler wrote %T, want a batch reply", msgs[0])
+	}
+	var ids []string
+	for _, a := range answers {
+		if a.Error != nil {
+			t.Fatalf("answer %s is the error %q: a call that was not started was answered", a.ID, a.Error.Message)
+		}
+		ids = append(ids, string(a.ID))
+	}
+	if got := strings.Join(ids, ","); got != "1" {
+		t.Fatalf("batch reply answers ids %s, want 1", got)
 	}
 }

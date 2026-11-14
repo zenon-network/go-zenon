@@ -197,6 +197,13 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage, slotAcquired bool) {
 			// have answered them, except that a call is not executed and
 			// gets the budget error instead of its result.
 			if responseBytes > maxBatchResponseBytes {
+				// A batch whose context ended during the call that crossed
+				// the budget is stopped like any other: the elements after
+				// it get no answer, the budget error included.
+				if err := cp.ctx.Err(); err != nil {
+					h.log.Debug("Batch stopped, its context ended", "skipped", len(calls)-i-1, "err", err)
+					break
+				}
 				h.log.Warn("Batch response too large", "responseBytes", responseBytes, "skipped", len(calls)-i-1)
 				for _, rest := range calls[i+1:] {
 					switch {
