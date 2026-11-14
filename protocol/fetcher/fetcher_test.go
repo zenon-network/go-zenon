@@ -3,11 +3,13 @@ package fetcher
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/verifier"
 )
 
 func newTestMomentum(height uint64, prevHash types.Hash) *nom.Momentum {
@@ -23,11 +25,12 @@ func newTestMomentum(height uint64, prevHash types.Hash) *nom.Momentum {
 }
 
 type testHarness struct {
-	f            *Fetcher
-	droppedPeers chan string
-	broadcasts   chan *nom.DetailedMomentum
-	quit         chan struct{}
-	stopOnce     sync.Once
+	f             *Fetcher
+	droppedPeers  chan string
+	rejectedPeers chan string // peers reported to the import-failure hook
+	broadcasts    chan *nom.DetailedMomentum
+	quit          chan struct{}
+	stopOnce      sync.Once
 }
 
 func newTestHarness(getBlock blockRetrievalFn, verifyBlock blockVerifierFn, insertChain chainInsertFn) *testHarness {
@@ -38,10 +41,13 @@ func newTestHarness(getBlock blockRetrievalFn, verifyBlock blockVerifierFn, inse
 // expiredHook set before the loop starts, so a test can observe when hashes
 // begin fetching and when timed-out fetches are swept.
 func newHookedTestHarness(getBlock blockRetrievalFn, verifyBlock blockVerifierFn, insertChain chainInsertFn, fetchingHook, expiredHook func([]types.Hash)) *testHarness {
+	// The peer channels hold more than one peer's whole queue allowance, so
+	// a test that expects no report never parks an import on a full channel.
 	h := &testHarness{
-		droppedPeers: make(chan string, 10),
-		broadcasts:   make(chan *nom.DetailedMomentum, 10),
-		quit:         make(chan struct{}),
+		droppedPeers:  make(chan string, 2*blockLimit),
+		rejectedPeers: make(chan string, 2*blockLimit),
+		broadcasts:    make(chan *nom.DetailedMomentum, 10),
+		quit:          make(chan struct{}),
 	}
 
 	h.f = New(
@@ -55,7 +61,7 @@ func newHookedTestHarness(getBlock blockRetrievalFn, verifyBlock blockVerifierFn
 		func() uint64 { return 1 },
 		insertChain,
 		func(id string) { h.droppedPeers <- id },
-		nil,
+		func(id string, err error) { h.rejectedPeers <- id },
 	)
 	h.f.fetchingHook = fetchingHook
 	h.f.expiredHook = expiredHook
@@ -121,57 +127,210 @@ func TestInsert_VerifyBlockCalled(t *testing.T) {
 	}
 }
 
-func TestInsert_VerifyBlockFails_DropsPeer(t *testing.T) {
+// knowsOnly returns a chain lookup that knows parent and nothing else.
+func knowsOnly(parent *nom.Momentum) blockRetrievalFn {
+	return func(hash types.Hash) *nom.DetailedMomentum {
+		if hash == parent.Hash {
+			return &nom.DetailedMomentum{Momentum: parent}
+		}
+		return nil
+	}
+}
+
+// siblings returns n distinct momentums at height 2 on top of parent.
+func siblings(parent *nom.Momentum, n int) []*nom.DetailedMomentum {
+	blocks := make([]*nom.DetailedMomentum, n)
+	for i := range blocks {
+		m := newTestMomentum(2, parent.Hash)
+		m.TimestampUnix += uint64(i)
+		m.Hash = m.ComputeHash()
+		blocks[i] = &nom.DetailedMomentum{Momentum: m}
+	}
+	return blocks
+}
+
+// waitFor fails the test unless signal fires within the deadline.
+func waitFor(t *testing.T, signal <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+// expectDiscarded stops the fetcher, which joins every import it started,
+// and fails unless the momentums that failed the pre-check were discarded
+// and nothing else: no peer dropped, no peer reported to the import-failure
+// hook, nothing imported and nothing broadcast.
+func expectDiscarded(t *testing.T, h *testHarness, inserted *int32) {
+	t.Helper()
+	h.stop()
+	if n := len(h.droppedPeers); n != 0 {
+		t.Errorf("%d peer drops for a momentum that failed the pre-check, the first of %q", n, <-h.droppedPeers)
+	}
+	if n := len(h.rejectedPeers); n != 0 {
+		t.Errorf("%d reports to the import-failure hook for a momentum that was never imported, the first of %q", n, <-h.rejectedPeers)
+	}
+	if n := atomic.LoadInt32(inserted); n != 0 {
+		t.Errorf("insertChain was called %d times for a momentum that failed the pre-check", n)
+	}
+	if n := len(h.broadcasts); n != 0 {
+		t.Errorf("%d broadcasts of a momentum that failed the pre-check", n)
+	}
+}
+
+// A gossiped momentum that fails the pre-check is discarded: it is not
+// imported and not broadcast, and the peer that delivered it stays
+// connected. The deliverer is usually a relayer, and no pre-check verdict
+// shows that the deliverer rather than the author is at fault. The timestamp
+// verdict also depends on the local clock.
+func TestInsert_PreCheckFailure_DiscardsAndKeepsDeliverer(t *testing.T) {
+	verdicts := []struct {
+		name string
+		err  error
+	}{
+		{"timestamp in the future", verifier.ErrMTimestampInTheFuture},
+		{"timestamp not increasing", verifier.ErrMTimestampNotIncreasing},
+		{"version invalid", verifier.ErrMVersionInvalid},
+		{"content layout", errors.New("momentum content size is different than the size of the prefetched account-blocks")},
+		{"internal error", verifier.InternalError(errors.New("store closed"))},
+	}
+	for _, verdict := range verdicts {
+		verdict := verdict
+		t.Run(verdict.name, func(t *testing.T) {
+			parent := newTestMomentum(1, types.Hash{})
+			block := newTestMomentum(2, parent.Hash)
+
+			verified := make(chan struct{}, 1)
+			var inserted int32
+			h := newTestHarness(
+				knowsOnly(parent),
+				func(*nom.DetailedMomentum) error {
+					verified <- struct{}{}
+					return verdict.err
+				},
+				func(momentums []*nom.DetailedMomentum) (int, error) {
+					atomic.AddInt32(&inserted, 1)
+					return len(momentums), nil
+				},
+			)
+			defer h.stop()
+
+			if err := h.f.Enqueue("relayer", &nom.DetailedMomentum{Momentum: block}); err != nil {
+				t.Fatalf("Enqueue failed: %v", err)
+			}
+			waitFor(t, verified, "the pre-check")
+			expectDiscarded(t, h, &inserted)
+		})
+	}
+}
+
+// The timestamp verdict passes once the local clock has caught up, so the
+// discarded momentum must leave nothing behind that keeps a later delivery
+// out: the same peer delivers it again, and it is checked again, imported
+// and broadcast.
+func TestInsert_FutureTimestamp_ImportsOnLaterDelivery(t *testing.T) {
 	parent := newTestMomentum(1, types.Hash{})
 	block := newTestMomentum(2, parent.Hash)
+	imported := &importedSet{blocks: map[types.Hash]*nom.DetailedMomentum{
+		parent.Hash: {Momentum: parent},
+	}}
 
-	verifyErr := errors.New("invalid momentum: bad chain identifier")
-	var insertCalled bool
-	var mu sync.Mutex
-
+	var verifies int32
 	h := newTestHarness(
-		func(hash types.Hash) *nom.DetailedMomentum {
-			if hash == parent.Hash {
-				return &nom.DetailedMomentum{Momentum: parent}
+		imported.get,
+		func(*nom.DetailedMomentum) error {
+			if atomic.AddInt32(&verifies, 1) == 1 {
+				return verifier.ErrMTimestampInTheFuture
 			}
 			return nil
 		},
-		func(detailed *nom.DetailedMomentum) error {
-			return verifyErr
-		},
 		func(momentums []*nom.DetailedMomentum) (int, error) {
-			mu.Lock()
-			insertCalled = true
-			mu.Unlock()
-			return 0, nil
+			imported.add(momentums)
+			return len(momentums), nil
 		},
 	)
 	defer h.stop()
 
-	h.f.insert("bad-peer", &nom.DetailedMomentum{Momentum: block})
-
-	// Should drop the peer
-	select {
-	case peer := <-h.droppedPeers:
-		if peer != "bad-peer" {
-			t.Errorf("expected peer 'bad-peer' to be dropped, got %q", peer)
+	// A delivery made while the first one is still queued is deduplicated,
+	// so keep delivering until one gets through.
+	detailed := &nom.DetailedMomentum{Momentum: block}
+	deadline := time.After(5 * time.Second)
+	for broadcast := false; !broadcast; {
+		if err := h.f.Enqueue("relayer", detailed); err != nil {
+			t.Fatalf("Enqueue failed: %v", err)
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for peer drop")
+		select {
+		case got := <-h.broadcasts:
+			if got.Momentum.Hash != block.Hash {
+				t.Fatalf("broadcast %v, want %v", got.Momentum.Hash, block.Hash)
+			}
+			broadcast = true
+		case <-time.After(10 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("the momentum was not imported on a later delivery")
+		}
 	}
 
-	// Should NOT broadcast
-	select {
-	case <-h.broadcasts:
-		t.Error("broadcastBlock should not be called when verification fails")
-	case <-time.After(500 * time.Millisecond):
-		// expected
+	h.stop()
+	if n := atomic.LoadInt32(&verifies); n != 2 {
+		t.Errorf("the pre-check ran %d times, want 2: once refused, once passed", n)
 	}
+	if imported.get(block.Hash) == nil {
+		t.Error("the momentum was broadcast without being imported")
+	}
+	for len(h.droppedPeers) > 0 {
+		t.Errorf("peer %q was dropped for a momentum that became valid", <-h.droppedPeers)
+	}
+	if n := len(h.broadcasts); n != 0 {
+		t.Errorf("%d further broadcasts of the same momentum", n)
+	}
+}
 
-	mu.Lock()
-	defer mu.Unlock()
-	if insertCalled {
-		t.Error("insertChain should not be called when verification fails")
+// Without the drop, what holds a peer that keeps delivering momentums that
+// fail the pre-check is its queue allowance: at most blockLimit of its
+// deliveries are being checked at a time and the rest are refused.
+func TestEnqueue_PreCheckFailuresStayWithinPeerAllowance(t *testing.T) {
+	parent := newTestMomentum(1, types.Hash{})
+	blocks := siblings(parent, blockLimit+16)
+
+	entered := make(chan struct{}, len(blocks))
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	var verifies, inserted int32
+	h := newTestHarness(
+		knowsOnly(parent),
+		func(*nom.DetailedMomentum) error {
+			atomic.AddInt32(&verifies, 1)
+			entered <- struct{}{}
+			<-release
+			return verifier.ErrMVersionInvalid
+		},
+		func(momentums []*nom.DetailedMomentum) (int, error) {
+			atomic.AddInt32(&inserted, 1)
+			return len(momentums), nil
+		},
+	)
+	defer h.stop()
+	defer releaseOnce.Do(func() { close(release) })
+
+	for _, block := range blocks {
+		if err := h.f.Enqueue("flooder", block); err != nil {
+			t.Fatalf("Enqueue failed: %v", err)
+		}
+	}
+	for i := 0; i < blockLimit; i++ {
+		waitFor(t, entered, "a queued delivery to reach the pre-check")
+	}
+	// The loop takes events in order, so once it has answered this request
+	// it has scheduled every delivery above that it accepted.
+	h.f.Filter("nobody", nil)
+
+	releaseOnce.Do(func() { close(release) })
+	expectDiscarded(t, h, &inserted)
+	if n := atomic.LoadInt32(&verifies); n != blockLimit {
+		t.Errorf("the pre-check ran for %d of %d deliveries from one peer, want its allowance of %d", n, len(blocks), blockLimit)
 	}
 }
 
@@ -281,61 +440,96 @@ func TestInsert_Success_BroadcastsAfterInsertion(t *testing.T) {
 	}
 }
 
+// announceAndAwaitFetch announces hash on behalf of announcing-peer with a
+// request function that never delivers, and waits until the fetcher has
+// asked for it, so that a later delivery counts as the explicit fetch.
+func announceAndAwaitFetch(t *testing.T, h *testHarness, fetching <-chan []types.Hash, hash types.Hash) {
+	t.Helper()
+	if err := h.f.Notify("announcing-peer", hash, time.Now(), func([]types.Hash) error { return nil }); err != nil {
+		t.Fatalf("Notify failed: %v", err)
+	}
+	waitForHashes(t, fetching, 1, 10*arriveTimeout, "began fetching")
+}
+
+// An explicitly fetched momentum is attributed to the peer that delivered
+// it, not to the peer that announced its hash: when its import fails, the
+// import-failure hook is given the sender.
 func TestFilter_ExplicitFetch_AttributesToActualSender(t *testing.T) {
 	parent := newTestMomentum(1, types.Hash{})
 	block := newTestMomentum(2, parent.Hash)
 
-	h := newTestHarness(
-		func(hash types.Hash) *nom.DetailedMomentum {
-			if hash == parent.Hash {
-				return &nom.DetailedMomentum{Momentum: parent}
-			}
-			return nil
+	fetching := make(chan []types.Hash, 1)
+	h := newHookedTestHarness(
+		knowsOnly(parent),
+		func(*nom.DetailedMomentum) error { return nil },
+		func([]*nom.DetailedMomentum) (int, error) {
+			return 0, errors.New("invalid momentum: bad signature")
 		},
-		func(detailed *nom.DetailedMomentum) error {
-			return errors.New("invalid momentum: bad signature")
-		},
-		func(momentums []*nom.DetailedMomentum) (int, error) {
-			return 0, nil
-		},
+		func(hashes []types.Hash) { fetching <- hashes },
+		nil,
 	)
 	defer h.stop()
 
-	// "announcing-peer" announces the hash; it never actually delivers it.
-	if err := h.f.Notify("announcing-peer", block.Hash, time.Now(), func(hashes []types.Hash) error {
-		return nil
-	}); err != nil {
-		t.Fatalf("Notify failed: %v", err)
-	}
+	// "announcing-peer" announces the hash; it never delivers it.
+	announceAndAwaitFetch(t, h, fetching, block.Hash)
 
-	// Wait for the fetcher to move the hash into the "fetching" state, i.e.
-	// past arriveTimeout, so the subsequent delivery is treated as an
-	// explicit fetch response rather than an unsolicited block.
-	time.Sleep(arriveTimeout + 250*time.Millisecond)
-
-	// A different peer ("sending-peer") delivers the (malformed) momentum in
-	// response - this must be attributed to sending-peer, not announcing-peer.
+	// A different peer delivers the momentum in response.
 	remaining := h.f.Filter("sending-peer", []*nom.DetailedMomentum{{Momentum: block}})
 	if len(remaining) != 0 {
 		t.Fatalf("expected explicit fetch to be consumed, got %d remaining", len(remaining))
 	}
 
-	// Only the peer that actually delivered the malformed momentum should be dropped.
 	select {
-	case peer := <-h.droppedPeers:
+	case peer := <-h.rejectedPeers:
 		if peer != "sending-peer" {
-			t.Errorf("expected 'sending-peer' to be dropped, got %q", peer)
+			t.Errorf("the import failure was attributed to %q, want \"sending-peer\"", peer)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for peer drop")
+		t.Fatal("timed out waiting for the import failure to be reported")
 	}
 
-	select {
-	case peer := <-h.droppedPeers:
-		t.Errorf("announcing peer must not be penalized, but dropped: %q", peer)
-	case <-time.After(500 * time.Millisecond):
-		// expected
+	h.stop()
+	for len(h.rejectedPeers) > 0 {
+		t.Errorf("the import failure was also attributed to %q", <-h.rejectedPeers)
 	}
+	for len(h.droppedPeers) > 0 {
+		t.Errorf("peer %q was dropped", <-h.droppedPeers)
+	}
+}
+
+// An explicitly fetched momentum that fails the pre-check is discarded like
+// a gossiped one. Neither the peer that announced the hash nor the peer that
+// answered the fetch is dropped.
+func TestFilter_ExplicitFetch_PreCheckFailureKeepsAnnouncerAndSender(t *testing.T) {
+	parent := newTestMomentum(1, types.Hash{})
+	block := newTestMomentum(2, parent.Hash)
+
+	fetching := make(chan []types.Hash, 1)
+	verified := make(chan struct{}, 1)
+	var inserted int32
+	h := newHookedTestHarness(
+		knowsOnly(parent),
+		func(*nom.DetailedMomentum) error {
+			verified <- struct{}{}
+			return verifier.ErrMTimestampInTheFuture
+		},
+		func(momentums []*nom.DetailedMomentum) (int, error) {
+			atomic.AddInt32(&inserted, 1)
+			return len(momentums), nil
+		},
+		func(hashes []types.Hash) { fetching <- hashes },
+		nil,
+	)
+	defer h.stop()
+
+	announceAndAwaitFetch(t, h, fetching, block.Hash)
+
+	remaining := h.f.Filter("sending-peer", []*nom.DetailedMomentum{{Momentum: block}})
+	if len(remaining) != 0 {
+		t.Fatalf("expected explicit fetch to be consumed, got %d remaining", len(remaining))
+	}
+	waitFor(t, verified, "the pre-check")
+	expectDiscarded(t, h, &inserted)
 }
 
 func TestInsert_ParentUnknown_Aborts(t *testing.T) {
