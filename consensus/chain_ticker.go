@@ -5,6 +5,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 )
 
@@ -30,6 +31,19 @@ type ChainTicker interface {
 	HasStarted(tick uint64) bool
 	GetEndBlock(tick uint64) (*nom.Momentum, error)
 	GetContent(tick uint64) ([]*nom.Momentum, error)
+
+	// frontierStore returns one snapshot of the frontier momentum store.
+	// The exported methods above each take their own snapshot; the At
+	// variants below answer from the snapshot they are given, so a
+	// computation that needs several reads can take one snapshot and
+	// pass it to every read, and a frontier that moves meanwhile (a
+	// rollback and re-extension) cannot mix two branches into one
+	// result.
+	frontierStore() store.Momentum
+	isFinishedAt(momentumStore store.Momentum, tick uint64) bool
+	hasStartedAt(momentumStore store.Momentum, tick uint64) bool
+	getEndBlockAt(momentumStore store.Momentum, tick uint64) (*nom.Momentum, error)
+	getContentAt(momentumStore store.Momentum, tick uint64) ([]*nom.Momentum, error)
 }
 
 type chainTicker struct {
@@ -37,12 +51,33 @@ type chainTicker struct {
 	chain.Chain
 }
 
+func (ct *chainTicker) frontierStore() store.Momentum {
+	return ct.GetFrontierMomentumStore()
+}
+
 func (ct *chainTicker) IsFinished(tick uint64) bool {
+	return ct.isFinishedAt(ct.frontierStore(), tick)
+}
+
+func (ct *chainTicker) HasStarted(tick uint64) bool {
+	return ct.hasStartedAt(ct.frontierStore(), tick)
+}
+
+// GetEndBlock returns the head of the previous tick group.
+func (ct *chainTicker) GetEndBlock(tick uint64) (*nom.Momentum, error) {
+	return ct.getEndBlockAt(ct.frontierStore(), tick)
+}
+
+func (ct *chainTicker) GetContent(tick uint64) ([]*nom.Momentum, error) {
+	return ct.getContentAt(ct.frontierStore(), tick)
+}
+
+func (ct *chainTicker) isFinishedAt(momentumStore store.Momentum, tick uint64) bool {
 	if tick > (1<<62)-1 {
 		panic("most probably an overflow error")
 	}
 	_, eTime := ct.ToTime(tick)
-	block, err := ct.GetFrontierMomentumStore().GetFrontierMomentum()
+	block, err := momentumStore.GetFrontierMomentum()
 	common.DealWithErr(err)
 	if block.Timestamp.After(eTime) || block.Timestamp.Equal(eTime) {
 		return true
@@ -50,12 +85,12 @@ func (ct *chainTicker) IsFinished(tick uint64) bool {
 	return false
 }
 
-func (ct *chainTicker) HasStarted(tick uint64) bool {
+func (ct *chainTicker) hasStartedAt(momentumStore store.Momentum, tick uint64) bool {
 	if tick > (1<<62)-1 {
 		panic("most probably an overflow error")
 	}
 	sTime, _ := ct.ToTime(tick)
-	block, err := ct.GetFrontierMomentumStore().GetFrontierMomentum()
+	block, err := momentumStore.GetFrontierMomentum()
 	common.DealWithErr(err)
 	if block.Timestamp.Before(sTime) {
 		return false
@@ -63,13 +98,12 @@ func (ct *chainTicker) HasStarted(tick uint64) bool {
 	return true
 }
 
-// Returns the head of the previous tick group
-func (ct *chainTicker) GetEndBlock(tick uint64) (*nom.Momentum, error) {
+func (ct *chainTicker) getEndBlockAt(momentumStore store.Momentum, tick uint64) (*nom.Momentum, error) {
 	if tick > (1<<62)-1 {
 		panic("most probably an overflow error")
 	}
 	_, eTime := ct.ToTime(tick)
-	block, err := ct.GetFrontierMomentumStore().GetMomentumBeforeTime(&eTime)
+	block, err := momentumStore.GetMomentumBeforeTime(&eTime)
 	if err != nil {
 		return nil, err
 	}
@@ -79,12 +113,12 @@ func (ct *chainTicker) GetEndBlock(tick uint64) (*nom.Momentum, error) {
 	return block, err
 }
 
-func (ct *chainTicker) GetContent(tick uint64) ([]*nom.Momentum, error) {
+func (ct *chainTicker) getContentAt(momentumStore store.Momentum, tick uint64) ([]*nom.Momentum, error) {
 	if tick > (1<<62)-1 {
 		panic("most probably an overflow error")
 	}
 	sTime, _ := ct.ToTime(tick)
-	endBlock, err := ct.GetEndBlock(tick)
+	endBlock, err := ct.getEndBlockAt(momentumStore, tick)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +128,7 @@ func (ct *chainTicker) GetContent(tick uint64) ([]*nom.Momentum, error) {
 		if tick == 0 {
 			startBlock = ct.GetGenesisMomentum()
 		} else {
-			startBlock, err = ct.GetEndBlock(tick - 1)
+			startBlock, err = ct.getEndBlockAt(momentumStore, tick-1)
 			if err != nil {
 				return nil, err
 			}
@@ -107,15 +141,18 @@ func (ct *chainTicker) GetContent(tick uint64) ([]*nom.Momentum, error) {
 			return []*nom.Momentum{}, nil
 		}
 
-		store := ct.GetFrontierMomentumStore()
-		blocks, err := store.GetMomentumsByHeight(startBlock.Height+1, true, endBlock.Height-startBlock.Height)
+		blocks, err := momentumStore.GetMomentumsByHeight(startBlock.Height+1, true, endBlock.Height-startBlock.Height)
 		if err != nil {
 			return nil, err
 		}
 
-		// empty genesis tick
+		// The equal-height case, which includes the empty genesis tick,
+		// returned above. endBlock was read from this store, so the
+		// range up to it cannot be empty on a consistent store: an
+		// empty result means the store does not hold the momentums it
+		// reported, and must not be served as a tick without momentums.
 		if len(blocks) == 0 {
-			return []*nom.Momentum{}, nil
+			return nil, errors.Errorf("chainTicker.GetContent found no momentums for tick %v between heights %v and %v", tick, startBlock.Height, endBlock.Height)
 		}
 
 		// make sure proof is right

@@ -1,6 +1,7 @@
 package pillar
 
 import (
+	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
@@ -33,7 +34,14 @@ func (w *worker) generateMomentum(e consensus.ProducerEvent) (*nom.MomentumTrans
 			return nil, nil, err
 		}
 		plasma := dp.NewDynamicPlasma(previousMomentum, config)
-		blocks = NewMomentumContentSelector(plasma).Content(w.chain.GetAllUncommittedAccountBlocks())
+		// The acknowledgement recency rule at this parent, read once for
+		// the whole selection. It is gated on DynamicPlasmaSpork, so the
+		// pre-dynamic-plasma selection below never has one to apply.
+		acknowledgement, err := chain.NewAcknowledgementRequirement(store, w.chain.GetCacheStore)
+		if err != nil {
+			return nil, nil, err
+		}
+		blocks = NewMomentumContentSelectorWithAcknowledgement(plasma, acknowledgement).Content(w.chain.GetAllUncommittedAccountBlocks())
 		basePlasma := plasma.ComputeTotalBasePlasma(blocks)
 		m = &nom.Momentum{
 			ChainIdentifier: w.chain.ChainIdentifier(),

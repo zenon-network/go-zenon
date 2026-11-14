@@ -58,6 +58,7 @@ var (
 	_ Error = new(invalidMessageError)
 	_ Error = new(invalidParamsError)
 	_ Error = new(batchResponseTooLargeError)
+	_ Error = new(serverOverloadedError)
 )
 
 const defaultErrorCode = -32000
@@ -69,6 +70,18 @@ type batchResponseTooLargeError struct{}
 func (e *batchResponseTooLargeError) ErrorCode() int { return -32003 }
 
 func (e *batchResponseTooLargeError) Error() string { return "batch response too large" }
+
+// serverOverloadedError answers a request that arrives while the server is
+// already serving as many requests as its admission limit allows. The code
+// is the "limit exceeded" code of EIP-1474; nothing in the request was run
+// and it may be retried.
+type serverOverloadedError struct{}
+
+func (e *serverOverloadedError) ErrorCode() int { return -32005 }
+
+func (e *serverOverloadedError) Error() string {
+	return "server overloaded: too many concurrent requests, retry later"
+}
 
 type methodNotFoundError struct{ method string }
 

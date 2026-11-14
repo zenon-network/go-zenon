@@ -66,6 +66,12 @@ func (cs *consensus) FrontierPillarReader() api.PillarReader {
 		points:        cs.points,
 	}
 }
+
+// FixedPillarReader returns a reader that answers every query from the
+// momentum store at identifier: the period and epoch points, the
+// elections and the delegations are resolved against that momentum's
+// chain, not the live frontier. If identifier is not in the chain the
+// store is missing and every query that needs it returns an error.
 func (cs *consensus) FixedPillarReader(identifier types.HashHeight) api.PillarReader {
 	return &API{
 		momentumStore: cs.chain.GetMomentumStore(identifier),

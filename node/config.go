@@ -115,8 +115,8 @@ func (c ProducerConfig) Format(f fmt.State, verb rune) {
 // RPCConfig configures the node's public RPC: whether the HTTP and
 // WebSocket servers are enabled, the host and port each listens on,
 // the set of API endpoints to expose, the allowed virtual hosts, CORS
-// domains and WebSocket origins, and the subscription and per-IP
-// WebSocket connection limits.
+// domains and WebSocket origins, the subscription and per-IP WebSocket
+// connection limits, and the HTTP request and connection limits.
 type RPCConfig struct {
 	EnableHTTP bool
 	EnableWS   bool
@@ -148,6 +148,26 @@ type RPCConfig struct {
 	// connection and MaxWSConnectionsPerIP connections, one address can hold
 	// at most their product in subscriptions.
 	MaxWSConnectionsPerIP int
+	// MaxConcurrentHTTPRequests bounds the JSON-RPC requests served over
+	// HTTP at once, across all clients. A request counts from before its
+	// body is read until its reply has been written, whether it carries one
+	// call or a batch, which runs its calls one after another. A request
+	// that arrives while the limit is reached is not read and is answered
+	// with HTTP 503 and JSON-RPC error -32005 ("server overloaded"), which a
+	// client may retry. Zero selects the built-in default, 256: four times
+	// the 64 calls one WebSocket connection may run at once.
+	MaxConcurrentHTTPRequests int
+	// MaxHTTPConnections bounds the TCP connections the HTTP RPC listener
+	// holds open at once, idle keep-alive connections included. Once it is
+	// reached the listener stops accepting, and further connections wait in
+	// the operating system's accept queue until one closes. When WebSocket
+	// shares the HTTP port its connections count as well. The cap keeps a
+	// flood of slow or idle connections from taking the file descriptors
+	// and goroutines the rest of the node needs. Zero selects the built-in
+	// default, 1024: four connections for each request slot of the default
+	// MaxConcurrentHTTPRequests, room for idle keep-alive clients. A
+	// negative value removes the cap.
+	MaxHTTPConnections int
 }
 
 // NetConfig configures the node's p2p networking: the listen host and

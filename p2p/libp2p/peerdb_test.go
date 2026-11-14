@@ -2,6 +2,7 @@ package libp2p
 
 import (
 	"fmt"
+	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -41,7 +42,7 @@ func TestPeerDBRoundTripAndPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	d.recordConnected(pid, []ma.Multiaddr{addr})
+	d.recordDirect(pid, []ma.Multiaddr{addr})
 
 	seeds := d.seeds(0)
 	if len(seeds) != 1 || seeds[0].ID != pid {
@@ -82,7 +83,7 @@ func TestPeerDBOrderingAndLimit(t *testing.T) {
 		pid := testPeerID(t)
 		pids = append(pids, pid)
 		addr := mustAddr(t, fmt.Sprintf("/ip4/10.0.0.%d/tcp/35995", i+1))
-		d.recordConnected(pid, []ma.Multiaddr{addr})
+		d.recordDirect(pid, []ma.Multiaddr{addr})
 		clock = clock.Add(time.Minute)
 	}
 
@@ -116,7 +117,7 @@ func TestPeerDBExpiry(t *testing.T) {
 	d.now = func() time.Time { return clock }
 
 	pid := testPeerID(t)
-	d.recordConnected(pid, []ma.Multiaddr{mustAddr(t, "/ip4/10.0.0.1/tcp/35995")})
+	d.recordDirect(pid, []ma.Multiaddr{mustAddr(t, "/ip4/10.0.0.1/tcp/35995")})
 
 	clock = base.Add(peerDBMaxAge + time.Hour)
 	if seeds := d.seeds(0); len(seeds) != 0 {
@@ -143,7 +144,7 @@ func TestPeerDBFailCountPrune(t *testing.T) {
 
 	pid := testPeerID(t)
 	addrs := []ma.Multiaddr{mustAddr(t, "/ip4/10.0.0.1/tcp/35995")}
-	d.recordConnected(pid, addrs)
+	d.recordDirect(pid, addrs)
 
 	for i := 0; i <= peerDBMaxFailCount; i++ {
 		d.recordDialFail(pid)
@@ -153,7 +154,7 @@ func TestPeerDBFailCountPrune(t *testing.T) {
 	}
 
 	// A successful connect resets the counter.
-	d.recordConnected(pid, addrs)
+	d.recordDirect(pid, addrs)
 	if seeds := d.seeds(0); len(seeds) != 1 {
 		t.Fatal("reconnect did not reset fail count")
 	}
@@ -182,7 +183,7 @@ func TestPeerDBSkipsForeignRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	pid := testPeerID(t)
-	d.recordConnected(pid, []ma.Multiaddr{mustAddr(t, "/ip4/10.0.0.1/tcp/35995")})
+	d.recordDirect(pid, []ma.Multiaddr{mustAddr(t, "/ip4/10.0.0.1/tcp/35995")})
 
 	seeds := d.seeds(0)
 	if len(seeds) != 1 || seeds[0].ID != pid {
@@ -205,8 +206,8 @@ func TestPeerDBEmptyAddrsKeepExisting(t *testing.T) {
 
 	pid := testPeerID(t)
 	addr := mustAddr(t, "/ip4/10.0.0.1/tcp/35995")
-	d.recordConnected(pid, []ma.Multiaddr{addr})
-	d.recordConnected(pid, nil)
+	d.recordDirect(pid, []ma.Multiaddr{addr})
+	d.recordDirect(pid, nil)
 
 	seeds := d.seeds(0)
 	if len(seeds) != 1 || len(seeds[0].Addrs) != 1 || !seeds[0].Addrs[0].Equal(addr) {
@@ -235,7 +236,7 @@ func TestPeerDBExpireCapsRecordCount(t *testing.T) {
 	for i := 0; i < peerDBMaxRecords+extra; i++ {
 		pid := testPeerID(t)
 		group := (i >> 8) & 0xff // 0..7
-		d.recordConnected(pid, []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/10.%d.0.%d/tcp/35995", group, i&0xff))})
+		d.recordDirect(pid, []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/10.%d.0.%d/tcp/35995", group, i&0xff))})
 		groups[group] = append(groups[group], pid)
 		clock = clock.Add(time.Second)
 	}
@@ -288,14 +289,14 @@ func TestPeerDBSeedsDiversifyAcrossSubnets(t *testing.T) {
 
 	// One peer from a distinct subnet, seen first (oldest).
 	outsider := testPeerID(t)
-	d.recordConnected(outsider, []ma.Multiaddr{mustAddr(t, "/ip4/203.0.113.1/tcp/35995")})
+	d.recordDirect(outsider, []ma.Multiaddr{mustAddr(t, "/ip4/203.0.113.1/tcp/35995")})
 	clock = clock.Add(time.Minute)
 
 	// Many more-recently-seen peers all from the same /24, as an
 	// attacker cycling identities from one source would produce.
 	for i := 0; i < 20; i++ {
 		pid := testPeerID(t)
-		d.recordConnected(pid, []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/10.0.0.%d/tcp/35995", i+1))})
+		d.recordDirect(pid, []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/10.0.0.%d/tcp/35995", i+1))})
 		clock = clock.Add(time.Minute)
 	}
 
@@ -314,29 +315,222 @@ func TestPeerDBSeedsDiversifyAcrossSubnets(t *testing.T) {
 	}
 }
 
-// TestSubnetKeyGroups verifies the granularity subnetKey buckets
-// addresses at: IPv4 by /16, and DNS-only peers sharing one group
-// regardless of the hostname they advertise.
+// TestSubnetKeyGroups verifies the granularity subnetKey buckets origin
+// IPs at (IPv4 by /16, IPv6 by /48, no IP as the unobserved group) and
+// what observedOrigin takes from a connection's remote multiaddr.
 func TestSubnetKeyGroups(t *testing.T) {
-	a := subnetKey([]ma.Multiaddr{mustAddr(t, "/ip4/10.0.0.1/tcp/35995")})
-	b := subnetKey([]ma.Multiaddr{mustAddr(t, "/ip4/10.0.5.9/tcp/35995")})
-	if a != b {
+	a := subnetKey(net.ParseIP("10.0.0.1"))
+	if b := subnetKey(net.ParseIP("10.0.5.9")); a != b {
 		t.Fatalf("expected same /16 to share a key: %q != %q", a, b)
 	}
-
-	c := subnetKey([]ma.Multiaddr{mustAddr(t, "/ip4/203.0.113.1/tcp/35995")})
-	if a == c {
+	if c := subnetKey(net.ParseIP("203.0.113.1")); a == c {
 		t.Fatalf("expected different /16s to have different keys, both %q", a)
 	}
-
-	dnsA := subnetKey([]ma.Multiaddr{mustAddr(t, "/dns4/seed.example.com/tcp/35995")})
-	dnsB := subnetKey([]ma.Multiaddr{mustAddr(t, "/dns4/other.example.com/tcp/35995")})
-	if dnsA != dnsB {
-		t.Fatalf("expected DNS-only peers to share a key regardless of hostname: %q != %q", dnsA, dnsB)
+	if m := subnetKey(net.ParseIP("::ffff:10.0.9.9")); m != a {
+		t.Fatalf("expected an IPv4-mapped IPv6 origin to key as IPv4: %q != %q", m, a)
+	}
+	v6a := subnetKey(net.ParseIP("2001:db8:1::1"))
+	if v6b := subnetKey(net.ParseIP("2001:db8:1:ffff::2")); v6a != v6b {
+		t.Fatalf("expected same /48 to share a key: %q != %q", v6a, v6b)
+	}
+	if v6c := subnetKey(net.ParseIP("2001:db8:2::1")); v6a == v6c {
+		t.Fatalf("expected different /48s to have different keys, both %q", v6a)
+	}
+	if k := subnetKey(nil); k != unobservedGroup {
+		t.Fatalf("subnetKey(nil) = %q, want %q", k, unobservedGroup)
+	}
+	if k := recordGroup(&peerDBRecord{Addrs: []string{"/ip4/203.0.113.1/tcp/35995"}}); k != unobservedGroup {
+		t.Fatalf("a record without an origin keyed %q from its advertised addresses, want %q", k, unobservedGroup)
 	}
 
-	if dnsA == subnetKey(nil) {
-		t.Fatalf("expected the DNS key to differ from the no-address key")
+	for _, tc := range []struct {
+		addr string
+		want string
+	}{
+		{"/ip4/198.51.100.7/tcp/51234", "198.51.100.7"},
+		{"/ip6/2001:db8::7/udp/4001/quic-v1", "2001:db8::7"},
+		{"/ip4/192.0.2.1/tcp/4001/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC/p2p-circuit", relayedOrigin},
+		{"/ip6/2001:db8:9::1/udp/4001/quic-v1/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC/p2p-circuit", relayedOrigin},
+		{"/dns4/seed.example.com/tcp/35995", ""},
+	} {
+		if got := observedOrigin(mustAddr(t, tc.addr)); got != tc.want {
+			t.Fatalf("observedOrigin(%s) = %q, want %q", tc.addr, got, tc.want)
+		}
+	}
+	if got := observedOrigin(nil); got != "" {
+		t.Fatalf("observedOrigin(nil) = %q", got)
+	}
+}
+
+// TestPeerDBDiversityKeyedOnObservedOrigin is #263: the diversity group is
+// the observed connection origin, not the self-advertised addresses. One
+// source cycling identities that each advertise a different /16 occupies
+// one group, in seeds and in over-cap eviction; two peers advertising the
+// same /16 from different origins occupy two.
+func TestPeerDBDiversityKeyedOnObservedOrigin(t *testing.T) {
+	attacker := mustAddr(t, "/ip4/198.51.100.7/tcp/51234")
+
+	t.Run("many advertised subnets, one origin", func(t *testing.T) {
+		d, clock := openTestPeerDB(t)
+		honest := syntheticPeer(9, 0)
+		d.recordDirect(honest, []ma.Multiaddr{mustAddr(t, "/ip4/203.0.113.1/tcp/35995")})
+		var sybils []peer.ID
+		for i := 0; i < 20; i++ {
+			*clock = clock.Add(time.Minute)
+			id := syntheticPeer(1, i)
+			d.recordConnected(id, wideAddr(t, i), attacker)
+			sybils = append(sybils, id)
+		}
+		groups := make(map[string]bool)
+		for _, id := range sybils {
+			groups[recordGroup(d.record(id))] = true
+		}
+		if len(groups) != 1 {
+			t.Fatalf("20 identities from one origin span %d groups, want 1", len(groups))
+		}
+		seeds := d.seeds(2)
+		if len(seeds) != 2 || (seeds[0].ID != honest && seeds[1].ID != honest) {
+			t.Fatalf("seeds(2) = %v; the older honest peer must get the second slot", seeds)
+		}
+		// The stored addresses are still the advertised, dialable ones.
+		if got := d.record(sybils[3]).Addrs; len(got) != 1 || got[0] != wideAddr(t, 3)[0].String() {
+			t.Fatalf("stored addrs = %v, want the advertised address", got)
+		}
+	})
+
+	t.Run("one advertised subnet, two origins", func(t *testing.T) {
+		d, clock := openTestPeerDB(t)
+		far := syntheticPeer(2, 0)
+		d.recordConnected(far, []ma.Multiaddr{mustAddr(t, "/ip4/10.0.0.1/tcp/35995")}, mustAddr(t, "/ip4/203.0.113.9/tcp/40000"))
+		for i := 0; i < 5; i++ {
+			*clock = clock.Add(time.Minute)
+			d.recordConnected(syntheticPeer(1, i), []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/10.0.0.%d/tcp/35995", i+2))}, attacker)
+		}
+		if a, b := recordGroup(d.record(far)), recordGroup(d.record(syntheticPeer(1, 0))); a == b {
+			t.Fatalf("same advertised /16 from different origins share group %q", a)
+		}
+		seeds := d.seeds(2)
+		if len(seeds) != 2 || (seeds[0].ID != far && seeds[1].ID != far) {
+			t.Fatalf("seeds(2) = %v; the peer from the other origin must get a slot", seeds)
+		}
+	})
+
+	t.Run("relays in many prefixes, one group", func(t *testing.T) {
+		// A relayed connection's remote multiaddr starts with the relay's
+		// address, which the peer chooses; identities routed through
+		// relays in different IPv4 /16s and IPv6 /48s still share a group.
+		d, clock := openTestPeerDB(t)
+		honest := syntheticPeer(9, 0)
+		d.recordDirect(honest, []ma.Multiaddr{mustAddr(t, "/ip4/203.0.113.1/tcp/35995")})
+		const relay = "QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+		var relayed []peer.ID
+		for i := 0; i < 10; i++ {
+			*clock = clock.Add(time.Minute)
+			via := fmt.Sprintf("/ip4/%d.%d.0.1/tcp/4001/p2p/%s/p2p-circuit", 20+i, i, relay)
+			if i%2 == 1 {
+				via = fmt.Sprintf("/ip6/2001:db8:%x::1/udp/4001/quic-v1/p2p/%s/p2p-circuit", i, relay)
+			}
+			id := syntheticPeer(1, i)
+			d.recordConnected(id, wideAddr(t, i), mustAddr(t, via))
+			relayed = append(relayed, id)
+		}
+		for _, id := range relayed {
+			if g := recordGroup(d.record(id)); g != relayedOrigin {
+				t.Fatalf("relayed identity %s in group %q, want %q", id, g, relayedOrigin)
+			}
+		}
+		seeds := d.seeds(2)
+		if len(seeds) != 2 || (seeds[0].ID != honest && seeds[1].ID != honest) {
+			t.Fatalf("seeds(2) = %v; the older honest peer must get the second slot", seeds)
+		}
+		// A later direct connection moves the peer out of the relayed group.
+		d.recordConnected(relayed[0], nil, mustAddr(t, "/ip4/198.51.100.20/tcp/51234"))
+		if g := recordGroup(d.record(relayed[0])); g == relayedOrigin || g == unobservedGroup {
+			t.Fatalf("directly reconnected peer still in group %q", g)
+		}
+	})
+
+	t.Run("eviction takes from the shared origin", func(t *testing.T) {
+		// 600 honest peers, each from its own origin and seen longest ago,
+		// and 1500 identities from one origin advertising distinct /16s:
+		// 100 over the cap, all taken from the one-origin group.
+		d, clock := openTestPeerDB(t)
+		var honest, sybils []peer.ID
+		for i := 0; i < 600; i++ {
+			*clock = clock.Add(time.Second)
+			id := syntheticPeer(9, i)
+			d.recordDirect(id, wideAddr(t, i))
+			honest = append(honest, id)
+		}
+		for i := 0; i < 1500; i++ {
+			*clock = clock.Add(time.Second)
+			id := syntheticPeer(1, i)
+			d.recordConnected(id, wideAddr(t, 1000+i), attacker)
+			sybils = append(sybils, id)
+		}
+		establish(clock)
+		d.expire()
+		if d.countPresent(honest) != 600 || d.countPresent(sybils) != 1400 {
+			t.Fatalf("honest %d/600, one-origin %d/1500 remain; want 600 and 1400", d.countPresent(honest), d.countPresent(sybils))
+		}
+	})
+}
+
+// TestPeerDBOriginRefreshAndLegacyRecords: records in the format written
+// before the origin field existed still load and seed, share the
+// unobserved group whatever they advertise, and gain an origin on the
+// peer's next connection; a later record call without an origin keeps
+// the stored one.
+func TestPeerDBOriginRefreshAndLegacyRecords(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "peerdb")
+	d, err := openPeerDB(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	legacyA, legacyB := syntheticPeer(1, 0), syntheticPeer(2, 0)
+	// Byte-for-byte the shape the previous code wrote, with and without
+	// the firstSeen stamp.
+	for id, raw := range map[peer.ID]string{
+		legacyA: fmt.Sprintf(`{"v":1,"addrs":["/ip4/10.1.0.1/tcp/35995"],"lastSeen":%d,"failCount":0,"firstSeen":%d}`, now, now-3600),
+		legacyB: fmt.Sprintf(`{"v":1,"addrs":["/ip4/10.2.0.1/tcp/35995"],"lastSeen":%d,"failCount":0}`, now-60),
+	} {
+		if err := d.db.Put([]byte(id), []byte(raw), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err = openPeerDB(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	if seeds := d.seeds(0); len(seeds) != 2 {
+		t.Fatalf("legacy records: seeds = %v, want both", seeds)
+	}
+	for _, id := range []peer.ID{legacyA, legacyB} {
+		rec := d.record(id)
+		if rec == nil || rec.Origin != "" || recordGroup(rec) != unobservedGroup {
+			t.Fatalf("legacy record %s = %+v, want no origin and the unobserved group", id, rec)
+		}
+	}
+
+	origin := mustAddr(t, "/ip4/198.51.100.7/tcp/51234")
+	d.recordConnected(legacyA, nil, origin)
+	rec := d.record(legacyA)
+	if rec == nil || rec.Origin != "198.51.100.7" || len(rec.Addrs) != 1 {
+		t.Fatalf("after reconnect: %+v, want origin 198.51.100.7 and the stored address kept", rec)
+	}
+	d.recordConnected(legacyA, nil, nil)
+	if rec := d.record(legacyA); rec.Origin != "198.51.100.7" {
+		t.Fatalf("a record call without an origin replaced it: %+v", rec)
+	}
+	d.recordConnected(legacyA, nil, mustAddr(t, "/ip6/2001:db8::7/tcp/51234"))
+	if rec := d.record(legacyA); rec.Origin != "2001:db8::7" {
+		t.Fatalf("origin not refreshed from the latest connection: %+v", rec)
 	}
 }
 
@@ -364,8 +558,10 @@ func TestWarmBootstrapAcrossRestart(t *testing.T) {
 	portA, portB := freePortTCP(t), freePortTCP(t)
 	keyA, keyB := mustGenKey(t), mustGenKey(t)
 	dirA := filepath.Join(t.TempDir(), "peerdb-a")
+	dirB := filepath.Join(t.TempDir(), "peerdb-b")
 
-	// B: plain listener, no persistence, accepts inbound only.
+	// B: plain listener, accepts inbound only; its peer database records
+	// A's inbound connection.
 	srvB := &Server{
 		PrivateKey:        keyB,
 		Name:              "node-b",
@@ -373,6 +569,7 @@ func TestWarmBootstrapAcrossRestart(t *testing.T) {
 		MinConnectedPeers: 1,
 		NoDial:            true,
 		ListenAddr:        fmt.Sprintf("127.0.0.1:%d", portB),
+		PeerstoreDir:      dirB,
 	}
 	if err := srvB.Start(); err != nil {
 		t.Fatalf("start B: %v", err)
@@ -402,6 +599,31 @@ func TestWarmBootstrapAcrossRestart(t *testing.T) {
 		t.Fatalf("start A: %v", err)
 	}
 	waitForPeers(t, srvA, 1, 10*time.Second)
+	waitForPeers(t, srvB, 1, 10*time.Second)
+
+	// Both ends record the observed connection origin (#263): A the
+	// address it dialled, B the inbound source address. The record is
+	// written just after adoption, so poll rather than read once.
+	pidA, err := PeerIDFromECDSA(keyA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForOrigin := func(srv *Server, pid peer.ID, side string) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			rec := srv.peerdb.Load().record(pid)
+			if rec != nil && rec.Origin == "127.0.0.1" {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s record = %+v, want origin 127.0.0.1", side, rec)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	waitForOrigin(srvA, pidB, "A's record of B (outbound)")
+	waitForOrigin(srvB, pidA, "B's record of A (inbound)")
 	srvA.Stop()
 
 	// Second run of A: no bootstrap entries at all. Only the peer

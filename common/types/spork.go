@@ -43,8 +43,29 @@ var (
 	// DynamicPlasmaSpork gates the activation of the dynamic plasma pricing
 	// model. Until this spork's EnforcementHeight is reached, the legacy
 	// fixed-price plasma model is in use; at activation, momentums switch
-	// to version 2 with adaptive fusion/work prices.
+	// to version 2 with adaptive fusion/work prices. Once it is enforced at
+	// a momentum's parent, the user account blocks in that momentum must
+	// also acknowledge a momentum that enforces every spork the parent
+	// enforces (issue #227, see chain.AcknowledgementRequirement).
 	DynamicPlasmaSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000002")
+
+	// EmbeddedRefundSpork gates the refund of a failed contract-to-contract
+	// send (issue #271). Until this spork's EnforcementHeight is reached, a
+	// failed receive refunds through the ordinary send path, whose method
+	// lookup cannot resolve a data-less send to an embedded contract, so the
+	// receive is never generated. At activation the refund to an embedded
+	// sender skips that lookup, and an embedded contract accepts a
+	// data-less send from another embedded contract as a plain deposit.
+	EmbeddedRefundSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000004")
+
+	// EpochRewardTermsSpork gates per-epoch pillar reward-sharing terms
+	// (issue #228). Until this spork's EnforcementHeight is reached, an
+	// epoch's pillar rewards are split with the give-percentages stored
+	// in PillarInfo when the epoch is settled; at activation,
+	// UpdatePillar schedules a give-percentage change from the epoch
+	// after the one in which it executes, and settlement uses the terms
+	// that were in force during the settled epoch.
+	EpochRewardTermsSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000007")
 
 	// ImplementedSporksMap is the set of spork IDs this build knows
 	// how to enforce. After every momentum insertion the momentum pool
@@ -58,6 +79,8 @@ var (
 		BridgeAndLiquiditySpork.SporkId: true,
 		Libp2pSpork.SporkId:             true,
 		DynamicPlasmaSpork.SporkId:      true,
+		EmbeddedRefundSpork.SporkId:     true,
+		EpochRewardTermsSpork.SporkId:   true,
 	}
 )
 

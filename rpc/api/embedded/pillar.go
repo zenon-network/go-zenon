@@ -116,6 +116,19 @@ func (a *PillarApi) GetQsrRegistrationCost() (string, error) {
 // revoked) come from contract state at the account-pool frontier. Type is 1
 // for legacy pillars and 2 for regular ones.
 //
+// GiveMomentumRewardPercentage and GiveDelegateRewardPercentage are the
+// pillar's newest reward-sharing split, as last set by UpdatePillar.
+// Once the EpochRewardTermsSpork is enforced, an UpdatePillar that
+// changes them in epoch E (the epoch of the momentum its contract
+// receive block acknowledges) takes effect for reward settlement from
+// epoch E+1. During E these fields may therefore report a pending
+// split, while E is settled with the split set by the last change made
+// in an earlier epoch. The split that
+// settled a past epoch is recorded in that epoch's
+// getPillarEpochHistory / getPillarsHistoryByEpoch entry. Before the
+// spork, settlement uses whatever split these fields report when the
+// epoch is settled.
+//
 // CanBeRevoked and RevokeCooldown are computed from the registration
 // time and the frontier momentum timestamp: a pillar's lifetime cycles
 // through an 83-day locked window followed by a 7-day revocable window.

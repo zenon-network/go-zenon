@@ -111,7 +111,29 @@ func forEachUnpack(t Type, output []byte, start, size int) (interface{}, error) 
 		elemSize = getFullElemSize(t.Elem)
 	}
 
+	// A dynamic element (string or bytes; NewType rejects nested
+	// dynamic arrays) is an offset into output, and the encoding does
+	// not forbid two elements from naming the same payload. Decoding
+	// copies every string, so n offsets onto one payload of P bytes
+	// allocate n*P bytes from an input of n*32+P bytes: about
+	// len(output)^2/128 at worst (issue #269). In a canonical encoding
+	// the payloads follow one another, so their lengths never add up to
+	// more than the input; stop decoding once they do, before the copy
+	// that would exceed it.
+	dynamicElems := t.Elem.requiresLengthPrefix()
+	decoded := 0
+
 	for i, j := start, 0; j < size; i, j = i+elemSize, j+1 {
+		if dynamicElems {
+			_, length, err := lengthPrefixPointsTo(i, output)
+			if err != nil {
+				return nil, err
+			}
+			if length > len(output)-decoded {
+				return nil, errAliasedDynamicElements(decoded, length, len(output))
+			}
+			decoded += length
+		}
 
 		inter, err := toGoType(i, *t.Elem, output)
 		if err != nil {

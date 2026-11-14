@@ -52,6 +52,9 @@ type Server struct {
 	// maxSubscriptionsPerConn is the subscription budget given to each
 	// connection served after it was set; see SetMaxSubscriptionsPerConn.
 	maxSubscriptionsPerConn int
+	// httpRequests bounds the JSON-RPC requests served over HTTP at once;
+	// see SetMaxConcurrentHTTPRequests.
+	httpRequests *admissionLimiter
 
 	// mu orders codec registration against Stop. A codec that passes the
 	// running check is registered before Stop can take its view of the set,
@@ -67,7 +70,13 @@ type Server struct {
 
 // NewServer creates a new server instance with no registered handlers.
 func NewServer() *Server {
-	server := &Server{idgen: randomIDGenerator(), codecs: mapset.NewSet(), run: 1, maxSubscriptionsPerConn: DefaultMaxSubscriptionsPerConn}
+	server := &Server{
+		idgen:                   randomIDGenerator(),
+		codecs:                  mapset.NewSet(),
+		run:                     1,
+		maxSubscriptionsPerConn: DefaultMaxSubscriptionsPerConn,
+		httpRequests:            newAdmissionLimiter(DefaultMaxConcurrentHTTPRequests),
+	}
 	// Register the default service providing meta information about the RPC service such
 	// as the services and methods it offers.
 	rpcService := &RPCService{server}
@@ -90,6 +99,33 @@ func (s *Server) SetMaxSubscriptionsPerConn(n int) {
 // connection.
 func (s *Server) MaxSubscriptionsPerConn() int {
 	return s.maxSubscriptionsPerConn
+}
+
+// SetMaxConcurrentHTTPRequests sets how many JSON-RPC requests the server
+// serves over HTTP at once. A request holds its slot from before its body is
+// read until its reply has been written, whatever it turns out to hold: one
+// call, a batch, which runs its calls one after another, or a message that
+// is only answered with an error. A request that arrives while every slot is
+// taken is not read: it is answered at once with HTTP 503 and a JSON-RPC
+// error with code -32005 and a null id, and may be retried; see AdmitHTTP
+// for a transport that wraps ServeHTTP in handlers of its own. Like
+// SetMaxSubscriptionsPerConn it is meant to be called once, before the
+// server is handed to a transport. A value below one restores
+// DefaultMaxConcurrentHTTPRequests.
+//
+// The limit does not apply to connection-based transports such as
+// WebSocket, which bound each connection's calls with their own call slots.
+func (s *Server) SetMaxConcurrentHTTPRequests(n int) {
+	if n < 1 {
+		n = DefaultMaxConcurrentHTTPRequests
+	}
+	s.httpRequests = newAdmissionLimiter(n)
+}
+
+// MaxConcurrentHTTPRequests reports how many JSON-RPC requests the server
+// serves over HTTP at once.
+func (s *Server) MaxConcurrentHTTPRequests() int {
+	return s.httpRequests.limit()
 }
 
 // RegisterName creates a service for the given receiver type under the given name. When no
@@ -170,7 +206,8 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 		return
 	}
 	if batch {
-		// HTTP path: no call-slot semaphore, so no batch-level slot was acquired.
+		// HTTP path: no per-connection call slot was acquired. ServeHTTP
+		// holds the request's slot of the server-wide limit instead.
 		h.handleBatch(reqs, false)
 	} else {
 		h.handleMsg(reqs[0], false)

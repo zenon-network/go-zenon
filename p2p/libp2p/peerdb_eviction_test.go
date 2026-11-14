@@ -82,6 +82,17 @@ func (d *peerDB) countPresent(ids []peer.ID) int {
 	return n
 }
 
+// recordDirect records id as connecting from the first address it
+// advertises, as a peer with a public listen address does; tests about a
+// mismatch between the two call recordConnected with an explicit origin.
+func (d *peerDB) recordDirect(id peer.ID, addrs []ma.Multiaddr) {
+	var origin ma.Multiaddr
+	if len(addrs) > 0 {
+		origin = addrs[0]
+	}
+	d.recordConnected(id, addrs, origin)
+}
+
 // establish advances the clock past the tenure window so every record
 // stored so far counts as established.
 func establish(clock *time.Time) { *clock = clock.Add(peerDBTenure + time.Hour) }
@@ -95,7 +106,7 @@ func TestPeerDBWritePathTriggersExpireAtTheCap(t *testing.T) {
 
 	insert := func(from, to int) {
 		for i := from; i < to; i++ {
-			d.recordConnected(syntheticPeer(i%64, i), subnetAddr(t, i%64, i))
+			d.recordDirect(syntheticPeer(i%64, i), subnetAddr(t, i%64, i))
 		}
 	}
 	insert(0, peerDBMaxRecords) // the cap-th new record runs a pass: nothing over cap yet
@@ -108,7 +119,7 @@ func TestPeerDBWritePathTriggersExpireAtTheCap(t *testing.T) {
 	}
 	for round := 0; round < 2; round++ { // refreshes do not count
 		for i := 0; i < peerDBMaxRecords; i++ {
-			d.recordConnected(syntheticPeer(i%64, i), subnetAddr(t, i%64, i))
+			d.recordDirect(syntheticPeer(i%64, i), subnetAddr(t, i%64, i))
 		}
 	}
 	if got := d.countRecords(); got != 2*peerDBMaxRecords-1 {
@@ -147,7 +158,7 @@ func TestPeerDBFirstSeenStampedOnceAndKeptAcrossReopen(t *testing.T) {
 	d.now = func() time.Time { return clock }
 
 	id := syntheticPeer(1, 1)
-	d.recordConnected(id, subnetAddr(t, 1, 1))
+	d.recordDirect(id, subnetAddr(t, 1, 1))
 	first := clock.Unix()
 	legacy := syntheticPeer(1, 2)
 	raw, _ := json.Marshal(&peerDBRecord{Version: peerDBVersion, Addrs: dedupAddrStrings(subnetAddr(t, 1, 2)), LastSeen: first})
@@ -156,8 +167,8 @@ func TestPeerDBFirstSeenStampedOnceAndKeptAcrossReopen(t *testing.T) {
 	}
 
 	clock = clock.Add(48 * time.Hour)
-	d.recordConnected(id, subnetAddr(t, 1, 1))
-	d.recordConnected(legacy, subnetAddr(t, 1, 2))
+	d.recordDirect(id, subnetAddr(t, 1, 1))
+	d.recordDirect(legacy, subnetAddr(t, 1, 2))
 	if rec := d.record(id); rec == nil || rec.FirstSeen != first || rec.LastSeen != clock.Unix() {
 		t.Fatalf("stamped record after refresh: %+v, want firstSeen %d and lastSeen %d", rec, first, clock.Unix())
 	}
@@ -192,7 +203,7 @@ func TestPeerDBSameSourceBurstEvictsItself(t *testing.T) {
 	var established []peer.ID
 	for i := 0; i < tenured; i++ {
 		id := syntheticPeer(100+i, 0) // 50 distinct /16s
-		d.recordConnected(id, subnetAddr(t, 100+i, 0))
+		d.recordDirect(id, subnetAddr(t, 100+i, 0))
 		established = append(established, id)
 	}
 	// Long-connected peers: lastSeen stamped only at adoption, 20 days ago.
@@ -202,7 +213,7 @@ func TestPeerDBSameSourceBurstEvictsItself(t *testing.T) {
 	for i := 0; i < peerDBMaxRecords; i++ {
 		*clock = clock.Add(time.Second) // distinct first-seen per record
 		id := syntheticPeer(7, i)
-		d.recordConnected(id, subnetAddr(t, 7, i))
+		d.recordDirect(id, subnetAddr(t, 7, i))
 		burst = append(burst, id)
 	}
 	d.expire()
@@ -230,24 +241,24 @@ func TestPeerDBSpoofedSubnetBurstEvictsItself(t *testing.T) {
 	var dense, spread []peer.ID
 	for i := 0; i < 1500; i++ { // one dense honest /16
 		id := syntheticPeer(1, i)
-		d.recordConnected(id, subnetAddr(t, 1, i))
+		d.recordDirect(id, subnetAddr(t, 1, i))
 		dense = append(dense, id)
 	}
 	for i := 0; i < 500; i++ { // and 500 peers in 500 other /16s
 		id := syntheticPeer(2, i)
-		d.recordConnected(id, wideAddr(t, i))
+		d.recordDirect(id, wideAddr(t, i))
 		spread = append(spread, id)
 	}
 	establish(clock)
 	for _, id := range dense[:100] { // some established peers reconnect recently
-		d.recordConnected(id, subnetAddr(t, 1, 0))
+		d.recordDirect(id, subnetAddr(t, 1, 0))
 	}
 
 	var burst []peer.ID
 	for i := 0; i < 100; i++ { // the burst: one identity per spoofed /16
 		*clock = clock.Add(time.Second)
 		id := syntheticPeer(9, i)
-		d.recordConnected(id, []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/203.%d.0.1/tcp/35995", i))})
+		d.recordDirect(id, []ma.Multiaddr{mustAddr(t, fmt.Sprintf("/ip4/203.%d.0.1/tcp/35995", i))})
 		burst = append(burst, id)
 	}
 	d.expire()
@@ -273,7 +284,7 @@ func TestPeerDBNewcomersGoNewestFirstAcrossGroups(t *testing.T) {
 	for group := 1; group <= 3; group++ {
 		for i := 0; i < 10; i++ {
 			id := syntheticPeer(group, 100000+i)
-			d.recordConnected(id, subnetAddr(t, group, 1000+i))
+			d.recordDirect(id, subnetAddr(t, group, 1000+i))
 			established = append(established, id)
 		}
 	}
@@ -288,7 +299,7 @@ func TestPeerDBNewcomersGoNewestFirstAcrossGroups(t *testing.T) {
 			if i < sizes[group] {
 				*clock = clock.Add(time.Second)
 				id := syntheticPeer(group, i)
-				d.recordConnected(id, subnetAddr(t, group, i))
+				d.recordDirect(id, subnetAddr(t, group, i))
 				order = append(order, id)
 			}
 		}
@@ -320,7 +331,7 @@ func TestPeerDBEstablishedEvictedFromLargestGroupFirst(t *testing.T) {
 		for i := 0; i < sizes[group]; i++ {
 			*clock = clock.Add(time.Second)
 			id := syntheticPeer(group, i)
-			d.recordConnected(id, subnetAddr(t, group, i))
+			d.recordDirect(id, subnetAddr(t, group, i))
 			members[group] = append(members[group], id)
 		}
 	}
@@ -357,7 +368,7 @@ func TestPeerDBAddresslessRecordsAreEvictedLikeAnyOther(t *testing.T) {
 	d, clock := openTestPeerDB(t)
 	for i := 0; i < peerDBMaxRecords+10; i++ {
 		*clock = clock.Add(time.Second)
-		d.recordConnected(syntheticPeer(0, i), nil)
+		d.recordDirect(syntheticPeer(0, i), nil)
 	}
 	establish(clock)
 	d.expire()
@@ -375,12 +386,12 @@ func TestPeerDBAddresslessRecordsAreEvictedLikeAnyOther(t *testing.T) {
 	var addressed, addressless []peer.ID
 	for i := 0; i < 600; i++ {
 		id := syntheticPeer(1, i)
-		d2.recordConnected(id, subnetAddr(t, 1, i))
+		d2.recordDirect(id, subnetAddr(t, 1, i))
 		addressed = append(addressed, id)
 	}
 	for i := 0; i < 1500; i++ {
 		id := syntheticPeer(0, i)
-		d2.recordConnected(id, nil)
+		d2.recordDirect(id, nil)
 		addressless = append(addressless, id)
 	}
 	establish(clock2)
@@ -394,12 +405,12 @@ func TestPeerDBAddresslessRecordsAreEvictedLikeAnyOther(t *testing.T) {
 	addressed, addressless = nil, nil
 	for i := 0; i < 1500; i++ {
 		id := syntheticPeer(1, i)
-		d3.recordConnected(id, subnetAddr(t, 1, i))
+		d3.recordDirect(id, subnetAddr(t, 1, i))
 		addressed = append(addressed, id)
 	}
 	for i := 0; i < 600; i++ {
 		id := syntheticPeer(0, i)
-		d3.recordConnected(id, nil)
+		d3.recordDirect(id, nil)
 		addressless = append(addressless, id)
 	}
 	establish(clock3)
@@ -417,15 +428,15 @@ func TestPeerDBEqualSizedGroupsTieBreak(t *testing.T) {
 	half := peerDBMaxRecords / 2
 	build := func(t *testing.T, group2OlderBy time.Duration) *peerDB {
 		d, clock := openTestPeerDB(t)
-		d.recordConnected(syntheticPeer(2, 0), subnetAddr(t, 2, 0))
+		d.recordDirect(syntheticPeer(2, 0), subnetAddr(t, 2, 0))
 		*clock = clock.Add(group2OlderBy)
-		d.recordConnected(syntheticPeer(1, 0), subnetAddr(t, 1, 0))
+		d.recordDirect(syntheticPeer(1, 0), subnetAddr(t, 1, 0))
 		*clock = clock.Add(time.Minute)
 		for i := 1; i < half; i++ {
-			d.recordConnected(syntheticPeer(1, i), subnetAddr(t, 1, i))
-			d.recordConnected(syntheticPeer(2, i), subnetAddr(t, 2, i))
+			d.recordDirect(syntheticPeer(1, i), subnetAddr(t, 1, i))
+			d.recordDirect(syntheticPeer(2, i), subnetAddr(t, 2, i))
 		}
-		d.recordConnected(syntheticPeer(3, 0), subnetAddr(t, 3, 0)) // 2*half + 1 = one over the cap
+		d.recordDirect(syntheticPeer(3, 0), subnetAddr(t, 3, 0)) // 2*half + 1 = one over the cap
 		establish(clock)
 		d.expire()
 		if got := d.countRecords(); got != peerDBMaxRecords {
@@ -456,7 +467,7 @@ func TestPeerDBEqualSizedGroupsTieBreak(t *testing.T) {
 func TestPeerDBWithinGroupExactTieLowestKeyGoes(t *testing.T) {
 	d, clock := openTestPeerDB(t)
 	for i := 0; i < peerDBMaxRecords+3; i++ {
-		d.recordConnected(syntheticPeer(1, i), subnetAddr(t, 1, i)) // same instant
+		d.recordDirect(syntheticPeer(1, i), subnetAddr(t, 1, i)) // same instant
 	}
 	establish(clock)
 	d.expire()
@@ -473,7 +484,7 @@ func TestPeerDBExactTiesAreDeterministic(t *testing.T) {
 	build := func() *peerDB {
 		d, clock := openTestPeerDB(t)
 		for i := 0; i < peerDBMaxRecords+25; i++ {
-			d.recordConnected(syntheticPeer(i%5, i), subnetAddr(t, i%5, i)) // same instant for all
+			d.recordDirect(syntheticPeer(i%5, i), subnetAddr(t, i%5, i)) // same instant for all
 		}
 		establish(clock)
 		d.expire()
@@ -513,7 +524,7 @@ func TestPeerDBLegacyRecordsAreEstablished(t *testing.T) {
 	*clock = clock.Add(time.Hour)
 	for i := 0; i < 600; i++ { // stamped newcomers in the same group, later
 		*clock = clock.Add(time.Second)
-		d.recordConnected(syntheticPeer(5, 100000+i), subnetAddr(t, 5, 2000+i))
+		d.recordDirect(syntheticPeer(5, 100000+i), subnetAddr(t, 5, 2000+i))
 	}
 	d.expire() // 2100 -> 2000: the 100 newest newcomers go, no legacy record
 	if got := d.countRecords(); got != peerDBMaxRecords {
@@ -531,10 +542,12 @@ func TestPeerDBLegacyRecordsAreEstablished(t *testing.T) {
 	}
 
 	// Legacy records are established, so once the newcomers are gone the
-	// group rule applies to them: the largest legacy group loses its
-	// oldest, not the globally oldest lastSeen. Group A: 1500 legacy
-	// records seen recently; group B: 550 legacy records seen long ago;
-	// 10 stamped newcomers; 60 over the cap.
+	// group rule applies to them. They carry no observed origin and form
+	// one group whatever they advertise: group A, 1500 legacy records
+	// seen recently across two advertised /16s; group B, 550 stamped
+	// records from one observed origin, seen long ago; 10 stamped
+	// newcomers; 60 over the cap. The largest group (A) loses its oldest,
+	// not the globally oldest lastSeen (B).
 	d3, clock3 := openTestPeerDB(t)
 	putLegacy3 := func(id peer.ID, group, n int, lastSeen int64) {
 		raw, _ := json.Marshal(&peerDBRecord{Version: peerDBVersion, Addrs: dedupAddrStrings(subnetAddr(t, group, n)), LastSeen: lastSeen})
@@ -542,34 +555,38 @@ func TestPeerDBLegacyRecordsAreEstablished(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	groupB := make([]peer.ID, 0, 550)
 	for i := 0; i < 550; i++ {
-		putLegacy3(syntheticPeer(2, i), 2, i, clock3.Unix()+int64(i)) // old
+		*clock3 = clock3.Add(time.Second)
+		id := syntheticPeer(2, i)
+		d3.recordDirect(id, subnetAddr(t, 2, i)) // old, origin 10.2/16
+		groupB = append(groupB, id)
 	}
+	groupA := make([]peer.ID, 0, 1500)
 	for i := 0; i < 1500; i++ {
-		putLegacy3(syntheticPeer(1, i), 1, i, clock3.Unix()+100000+int64(i)) // recent
+		id := syntheticPeer(1, i)
+		putLegacy3(id, 1+i%2, i, clock3.Unix()+100000+int64(i)) // recent, no origin
+		groupA = append(groupA, id)
 	}
 	*clock3 = clock3.Add(200000 * time.Second)
 	var newcomers3 []peer.ID
 	for i := 0; i < 10; i++ {
 		*clock3 = clock3.Add(time.Second)
 		id := syntheticPeer(3, i)
-		d3.recordConnected(id, subnetAddr(t, 3, i))
+		d3.recordDirect(id, subnetAddr(t, 3, i))
 		newcomers3 = append(newcomers3, id)
 	}
 	d3.expire() // 2060 -> 2000: 10 newcomers, then 50 from group A (the largest)
 	if d3.countPresent(newcomers3) != 0 {
 		t.Fatal("newcomers must go before any legacy record")
 	}
-	groupA := make([]peer.ID, 0, 1500)
-	for i := 0; i < 1500; i++ {
-		groupA = append(groupA, syntheticPeer(1, i))
-	}
-	groupB := make([]peer.ID, 0, 550)
-	for i := 0; i < 550; i++ {
-		groupB = append(groupB, syntheticPeer(2, i))
-	}
 	if d3.countPresent(groupA) != 1450 || d3.countPresent(groupB) != 550 {
-		t.Fatalf("legacy groups after expire: A %d/1500, B %d/550; want 1450 and 550 (largest group first, not globally oldest lastSeen)", d3.countPresent(groupA), d3.countPresent(groupB))
+		t.Fatalf("after expire: legacy A %d/1500, observed B %d/550; want 1450 and 550 (largest group first, not globally oldest lastSeen)", d3.countPresent(groupA), d3.countPresent(groupB))
+	}
+	for i, id := range groupA { // oldest lastSeen first within the group
+		if want := i >= 50; d3.has(id) != want {
+			t.Fatalf("legacy record %d present=%v, want %v", i, !want, want)
+		}
 	}
 
 	// Legacy only, over the cap: the oldest-lastSeen go, as before.
@@ -596,17 +613,17 @@ func TestPeerDBNewcomerTieBreaks(t *testing.T) {
 	// Later arrival versus refreshed older newcomer: one over the cap.
 	d, clock := openTestPeerDB(t)
 	for i := 0; i < peerDBMaxRecords-1; i++ {
-		d.recordConnected(syntheticPeer(1, i), subnetAddr(t, 1, i))
+		d.recordDirect(syntheticPeer(1, i), subnetAddr(t, 1, i))
 	}
 	establish(clock)
 	older := syntheticPeer(5, 1)
-	d.recordConnected(older, subnetAddr(t, 5, 0))
+	d.recordDirect(older, subnetAddr(t, 5, 0))
 	*clock = clock.Add(time.Minute)
 	later := syntheticPeer(5, 2)
-	d.recordConnected(later, subnetAddr(t, 5, 0))
+	d.recordDirect(later, subnetAddr(t, 5, 0))
 	*clock = clock.Add(time.Minute)
-	d.recordConnected(older, subnetAddr(t, 5, 0)) // refreshed: newest lastSeen, still the older arrival
-	d.expire()                                    // 2001 -> 2000
+	d.recordDirect(older, subnetAddr(t, 5, 0)) // refreshed: newest lastSeen, still the older arrival
+	d.expire()                                 // 2001 -> 2000
 	if d.has(later) || !d.has(older) {
 		t.Fatalf("the later arrival must go, not the refreshed older newcomer: later=%v older=%v", d.has(later), d.has(older))
 	}
@@ -615,16 +632,16 @@ func TestPeerDBNewcomerTieBreaks(t *testing.T) {
 	// so only the first of y and z goes and the key order is checked.
 	d2, clock2 := openTestPeerDB(t)
 	for i := 0; i < peerDBMaxRecords-2; i++ {
-		d2.recordConnected(syntheticPeer(1, i), subnetAddr(t, 1, i))
+		d2.recordDirect(syntheticPeer(1, i), subnetAddr(t, 1, i))
 	}
 	establish(clock2)
 	x, y, z := syntheticPeer(5, 1), syntheticPeer(5, 2), syntheticPeer(5, 3)
 	for _, id := range []peer.ID{x, y, z} {
-		d2.recordConnected(id, subnetAddr(t, 5, 0)) // same first-seen
+		d2.recordDirect(id, subnetAddr(t, 5, 0)) // same first-seen
 	}
 	*clock2 = clock2.Add(time.Minute)
-	d2.recordConnected(x, subnetAddr(t, 5, 0)) // x: newest lastSeen; y and z tie on both stamps
-	d2.expire()                                // 2001 -> 2000
+	d2.recordDirect(x, subnetAddr(t, 5, 0)) // x: newest lastSeen; y and z tie on both stamps
+	d2.expire()                             // 2001 -> 2000
 	if !d2.has(x) || d2.has(y) || !d2.has(z) {
 		t.Fatalf("same first-seen: oldest lastSeen first, then lower key (y before z); x=%v y=%v z=%v", d2.has(x), d2.has(y), d2.has(z))
 	}
@@ -648,7 +665,7 @@ func TestPeerDBTenureBoundary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d, clock := openTestPeerDB(t)
 			probe := syntheticPeer(5, 0)
-			d.recordConnected(probe, subnetAddr(t, 5, 0))
+			d.recordDirect(probe, subnetAddr(t, 5, 0))
 			*clock = clock.Add(tc.age)
 			for i := 0; i < peerDBMaxRecords; i++ {
 				raw, _ := json.Marshal(&peerDBRecord{Version: peerDBVersion, Addrs: dedupAddrStrings(subnetAddr(t, 1, i)), LastSeen: clock.Unix()})

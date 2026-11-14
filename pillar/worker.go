@@ -128,6 +128,12 @@ func (w *worker) work(task common.TaskResolver, e consensus.ProducerEvent) {
 	}
 	w.log.Info("start creating autoreceive blocks")
 	momentumStore = w.chain.GetFrontierMomentumStore()
+	// A contract whose queue head cannot be generated is skipped for the
+	// rest of the slot instead of ending it, so it does not also stall
+	// every contract after it in w.contracts. Before this, a stalled Token
+	// queue (issue #271) kept the Spork contract from receiving, so the
+	// spork that fixes the stall could never be created or activated.
+	failed := make(map[types.Address]bool)
 	for {
 		one := false
 		for _, contractAddress := range w.contracts {
@@ -137,14 +143,18 @@ func (w *worker) work(task common.TaskResolver, e consensus.ProducerEvent) {
 			if w.shouldStop() {
 				return
 			}
+			if failed[contractAddress] {
+				continue
+			}
 
 			transaction, err := w.generateNext(momentumStore, contractAddress)
 			if err == ErrNothingToGenerate {
 				continue
 			}
 			if err != nil {
-				w.log.Error("unable to generate receive block for contract", "reason", err)
-				return
+				w.log.Error("unable to generate receive block for contract", "contract-address", contractAddress, "reason", err)
+				failed[contractAddress] = true
+				continue
 			}
 			if err := w.broadcaster.CreateAccountBlock(transaction); err != nil {
 				w.log.Error("unable to insert autoreceive block for contract", "contract-address", contractAddress, "reason", err)

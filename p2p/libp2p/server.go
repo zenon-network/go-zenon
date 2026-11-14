@@ -723,13 +723,31 @@ func (srv *Server) Start() (err error) {
 // back. extra carries addresses already known-dialable (e.g. the addrs
 // an outbound dial just used) to cover the window where identify
 // hasn't completed yet.
-func (srv *Server) recordPeerConnected(pid peer.ID, extra ...ma.Multiaddr) {
+//
+// s is the peer's Zenon stream; its connection's remote multiaddr is
+// recorded as the peer's observed origin, which (unlike the advertised
+// addresses) keys the database's diversity grouping. For an inbound
+// connection that is the source address, for an outbound one the
+// address actually dialled.
+func (srv *Server) recordPeerConnected(pid peer.ID, s network.Stream, extra ...ma.Multiaddr) {
 	pdb := srv.peerdb.Load()
 	if pdb == nil {
 		return
 	}
 	addrs := append(srv.host.Peerstore().Addrs(pid), extra...)
-	pdb.recordConnected(pid, addrs)
+	pdb.recordConnected(pid, addrs, streamOrigin(s))
+}
+
+// streamOrigin returns the remote multiaddr of s's connection, or nil.
+func streamOrigin(s network.Stream) ma.Multiaddr {
+	if s == nil {
+		return nil
+	}
+	conn := s.Conn()
+	if conn == nil {
+		return nil
+	}
+	return conn.RemoteMultiaddr()
 }
 
 // peerdbCleanupLoop runs expire() on the peer database once per
@@ -948,7 +966,7 @@ func (srv *Server) handleStream(s network.Stream) {
 	// Inbound adoption: identify may not have learned the peer's
 	// listen addresses yet, in which case this records lastSeen only
 	// and the disconnect-time refresh in runPeer fills the addresses.
-	srv.recordPeerConnected(remotePeer)
+	srv.recordPeerConnected(remotePeer, s)
 
 	go func() {
 		srv.runPeer(p)
@@ -1148,7 +1166,7 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 	// Outbound adoption: the dialed addresses are known-dialable, so
 	// pass them along in case identify hasn't populated the peerstore
 	// for this peer yet.
-	srv.recordPeerConnected(info.ID, info.Addrs...)
+	srv.recordPeerConnected(info.ID, s, info.Addrs...)
 
 	go func() {
 		srv.runPeer(p)
@@ -1500,7 +1518,7 @@ func (srv *Server) runPeer(p *Peer) {
 	// the whole connection lifetime to learn the peer's listen
 	// addresses.
 	if pid := p.remotePeer(); pid != "" {
-		srv.recordPeerConnected(pid)
+		srv.recordPeerConnected(pid, p.rw.stream)
 		// Remove the connection-manager protection granted on adoption;
 		// the connection is being torn down either way, but this avoids
 		// leaving a stale tag if the underlying connection is reused.

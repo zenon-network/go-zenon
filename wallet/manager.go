@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,15 @@ func New(config *Config) *Manager {
 // it into the encrypted set. It does not decrypt any store. It returns
 // an error if the directory cannot be created or listed.
 //
+// Start may be called again to rescan the directory. A store stays
+// unlocked only if this scan reads its file back with the same encrypted
+// data. The scan skips files it cannot read or that are not valid key
+// files, so a store unlocked from a file that is gone, that this scan
+// cannot read (even if the failure is passing), that is no longer a valid
+// key file, or that now holds different encrypted data is zeroed and
+// dropped, with a warning logged. Such a file does not fail the rescan; a
+// later Start that can read it lists it again, locked.
+//
 // Start resolves WalletDir to an absolute path before scanning so that
 // every indexed path is absolute, regardless of how the directory was
 // configured. This keeps absolute-path lookups working when WalletDir
@@ -84,16 +94,55 @@ func (m *Manager) Start() error {
 	}
 	m.log.Info("successfully ensured WalletDir exists", "wallet-dir-path", m.config.WalletDir)
 
-	m.encrypted = make(map[string]*KeyFile)
 	keyFiles, err := m.ListEntropyFilesInStandardDir()
 	if err != nil {
 		m.log.Error("wallet start err", "err", err)
 		return err
 	}
+	previous := m.encrypted
+	m.encrypted = make(map[string]*KeyFile, len(keyFiles))
 	for _, keyFile := range keyFiles {
 		m.encrypted[keyFile.Path] = keyFile
 	}
+	if m.decrypted == nil {
+		m.decrypted = make(map[string]*KeyStore)
+	}
+	for path, ks := range m.decrypted {
+		if kf, ok := m.encrypted[path]; ok && sameEncryptedKey(previous[path], kf) {
+			continue
+		}
+		if ks != nil {
+			ks.Zero()
+			m.log.Warn("locked a key store: its key file is gone, unreadable or changed", "path", path)
+		}
+		delete(m.decrypted, path)
+	}
 	return nil
+}
+
+// sameEncryptedKey reports whether two reads of a key file hold the same
+// encrypted key under the same parameters, so a store decrypted from one
+// is the store the other decrypts to.
+func sameEncryptedKey(a, b *KeyFile) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.BaseAddress == b.BaseAddress &&
+		a.Version == b.Version &&
+		a.Crypto.CipherName == b.Crypto.CipherName &&
+		a.Crypto.KDF == b.Crypto.KDF &&
+		bytes.Equal(a.Crypto.CipherData, b.Crypto.CipherData) &&
+		bytes.Equal(a.Crypto.AesNonce, b.Crypto.AesNonce) &&
+		bytes.Equal(a.Crypto.Argon2Params.Salt, b.Crypto.Argon2Params.Salt)
+}
+
+// clone returns a deep copy of kf: the copy shares no byte slice with it.
+func (kf *KeyFile) clone() *KeyFile {
+	c := *kf
+	c.Crypto.CipherData = bytes.Clone(kf.Crypto.CipherData)
+	c.Crypto.AesNonce = bytes.Clone(kf.Crypto.AesNonce)
+	c.Crypto.Argon2Params.Salt = bytes.Clone(kf.Crypto.Argon2Params.Salt)
+	return &c
 }
 
 // Stop zeroes every unlocked key store (see KeyStore.Zero) and drops
@@ -121,15 +170,17 @@ func (m *Manager) MakePathAbsolut(path string) string {
 	}
 }
 
-// GetKeyFile returns the known key file at path, resolving path against
-// the wallet directory first. It returns ErrKeyStoreNotFound when no
-// such file is known to the manager.
+// GetKeyFile returns a copy of the known key file at path, resolving path
+// against the wallet directory first. Changing the copy, or writing it
+// back, does not change the manager's record, which Start compares with
+// the rescanned file. It returns ErrKeyStoreNotFound when no such file is
+// known to the manager.
 func (m *Manager) GetKeyFile(path string) (*KeyFile, error) {
 	path = m.MakePathAbsolut(path)
 	if kf, ok := m.encrypted[path]; !ok {
 		return nil, ErrKeyStoreNotFound
 	} else {
-		return kf, nil
+		return kf.clone(), nil
 	}
 }
 

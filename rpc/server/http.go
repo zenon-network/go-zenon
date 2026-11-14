@@ -26,7 +26,9 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -261,8 +263,15 @@ func (t *httpServerConn) RemoteAddr() string {
 // SetWriteDeadline does nothing and always returns nil.
 func (t *httpServerConn) SetWriteDeadline(time.Time) error { return nil }
 
-// ServeHTTP serves JSON-RPC requests over HTTP.
+// ServeHTTP serves JSON-RPC requests over HTTP. Every request, whatever it
+// turns out to be, is admitted against the server's HTTP request limit
+// first; see AdmitHTTP.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.AdmitHTTP(http.HandlerFunc(s.serveAdmittedHTTP)).ServeHTTP(w, r)
+}
+
+// serveAdmittedHTTP serves a request that holds its admission slot.
+func (s *Server) serveAdmittedHTTP(w http.ResponseWriter, r *http.Request) {
 	// Permit dumb empty requests for remote health-checks (AWS)
 	if r.Method == http.MethodGet && r.ContentLength == 0 && r.URL.RawQuery == "" {
 		w.WriteHeader(http.StatusOK)
@@ -297,6 +306,112 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	codec := newHTTPServerConn(r, w)
 	defer codec.close()
 	s.serveSingleRequest(ctx, codec)
+}
+
+// OverloadedHTTP answers a request refused by the HTTP request limit with
+// HTTP 503 and a JSON-RPC error with code -32005 and a null id. It is the
+// refusal AdmitHTTP uses; a transport that adds response headers of its own,
+// such as CORS headers, wraps it and passes the result to
+// AdmitHTTPRefusingWith.
+func OverloadedHTTP(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("content-type", contentType)
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(errorMessage(&serverOverloadedError{}))
+}
+
+// httpAdmittedKey marks the context of a request admitted by AdmitHTTP; its
+// value is the Server whose limit holds the request's slot.
+type httpAdmittedKey struct{}
+
+// admittedHTTP reports whether r already holds a slot of s's HTTP request
+// limit.
+func (s *Server) admittedHTTP(r *http.Request) bool {
+	admitted, _ := r.Context().Value(httpAdmittedKey{}).(*Server)
+	return admitted == s
+}
+
+// AdmitHTTP returns a handler that admits each request against the server's
+// HTTP request limit (see SetMaxConcurrentHTTPRequests) before passing it to
+// next, and refuses a request that finds every slot taken with
+// OverloadedHTTP. See AdmitHTTPRefusingWith.
+func (s *Server) AdmitHTTP(next http.Handler) http.Handler {
+	return s.AdmitHTTPRefusingWith(next, http.HandlerFunc(OverloadedHTTP))
+}
+
+// AdmitHTTPRefusingWith returns a handler that admits each request against
+// the server's HTTP request limit (see SetMaxConcurrentHTTPRequests) before
+// passing it to next, and holds the slot until next has returned and the
+// request body has been closed. A transport that wraps the server's
+// ServeHTTP in handlers of its own, such as a compressing writer that
+// finishes its output after the inner handler returns, puts admission
+// outermost so that output counts as well; ServeHTTP then serves the request
+// on the slot taken here instead of taking a second one.
+//
+// Admission comes before the body is read, so a refused request costs
+// neither parsing nor a reply that echoes it. A refused request is answered
+// by refuse, which must not read the body: OverloadedHTTP, or that wrapped
+// in handlers that only add headers, such as a CORS policy. Before refuse
+// runs, the connection's read deadline is set to now and Connection: close
+// is set, so the drain net/http would otherwise run on the unread body, for
+// up to ReadTimeout and without a slot, fails at once and the connection is
+// closed once the answer is out.
+//
+// An admitted request's body is closed before its slot is released, so the
+// bounded drain net/http performs on a body that was not read to the end
+// happens while the slot is held. The exception is a request sent with
+// Expect: 100-continue whose body was not read to the end: its client may
+// still be waiting for the go-ahead to send the body, so draining it would
+// wait for bytes that never come while the answer sits unsent. Its reads are
+// aborted instead, and net/http closes the connection after the answer.
+func (s *Server) AdmitHTTPRefusingWith(next, refuse http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.admittedHTTP(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.httpRequests.tryAcquire() {
+			overloadedHTTPCounter.Inc(1)
+			_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+			w.Header().Set("Connection", "close")
+			refuse.ServeHTTP(w, r)
+			return
+		}
+		defer s.httpRequests.release()
+		body := &admittedBody{ReadCloser: r.Body}
+		defer func() {
+			if body.awaitsContinue(r) {
+				_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+			}
+			body.Close()
+		}()
+		admitted := r.WithContext(context.WithValue(r.Context(), httpAdmittedKey{}, s))
+		admitted.Body = body
+		next.ServeHTTP(w, admitted)
+	})
+}
+
+// admittedBody is the body of an admitted request. It records whether the
+// body was read to the end.
+type admittedBody struct {
+	io.ReadCloser
+	sawEOF atomic.Bool
+}
+
+func (b *admittedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		b.sawEOF.Store(true)
+	}
+	return n, err
+}
+
+// awaitsContinue reports whether r, whose body this is, was sent with
+// Expect: 100-continue and its body was not read to the end. net/http sends
+// the 100 Continue only once the handler reads the body, so the client of
+// such a request may never send it.
+func (b *admittedBody) awaitsContinue(r *http.Request) bool {
+	return r.ContentLength != 0 && !b.sawEOF.Load() &&
+		strings.Contains(strings.ToLower(r.Header.Get("Expect")), "100-continue")
 }
 
 // validateRequest returns a non-zero response code and error message if the

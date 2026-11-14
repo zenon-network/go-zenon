@@ -44,3 +44,10 @@ func TestTokenTotalSupply(t *testing.T) {
 func TestGenesisCheckSum(t *testing.T) {
 	common.FailIfErr(t, CheckGenesisCheckSum(embeddedGenesis, embeddedGenesisHash))
 }
+
+// The compiled-in genesis is not re-validated at startup, so a check
+// that rejects it would only surface here; rejecting it would be a
+// consensus break for anyone loading it from a file.
+func TestEmbeddedGenesisPassesCheckGenesis(t *testing.T) {
+	common.FailIfErr(t, CheckGenesis(embeddedGenesis))
+}

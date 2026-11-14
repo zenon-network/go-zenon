@@ -106,12 +106,31 @@ func (q *queue) Pending() int {
 	return q.hashQueue.Size()
 }
 
+// BlockOffset retrieves the height of the first cached block: it advances
+// only when TakeBlocks hands a contiguous run over to the import worker.
+func (q *queue) BlockOffset() uint64 {
+	q.lock.RLock()
+	defer q.lock.RUnlock()
+
+	return q.blockOffset
+}
+
 // InFlight retrieves the number of fetch requests currently in flight.
 func (q *queue) InFlight() int {
 	q.lock.RLock()
 	defer q.lock.RUnlock()
 
 	return len(q.pendPool)
+}
+
+// ReserveSpace returns how many more blocks fit into the cache before
+// Reserve starts returning nil: half the cache minus the blocks already
+// downloaded. It is the same quantity Reserve uses to throttle itself.
+func (q *queue) ReserveSpace() int {
+	q.lock.RLock()
+	defer q.lock.RUnlock()
+
+	return (len(q.blockCache) / 2) - len(q.blockPool)
 }
 
 // Throttle checks if the download should be throttled (active block fetches
@@ -127,6 +146,54 @@ func (q *queue) Throttle() bool {
 	}
 	// Throttle if more blocks are in-flight than free space in the cache
 	return pending >= len(q.blockCache)-len(q.blockPool)
+}
+
+// NoProgress reports whether the block-fetch phase is stuck and which
+// session-ending error applies, or nil if the phase can still advance. It
+// mirrors the guard in fetchBlocks
+// and samples the whole predicate under one lock hold, so an import that
+// drains the cache while the scheduling pass runs cannot be combined with a
+// pre-import sample (a post-import missing head with pre-import zero space
+// would otherwise fire on a session whose import just freed room).
+// spaceAtLoop is the reserve space sampled before the reservation loop:
+//
+//   - spaceAtLoop > 0 && space > 0: reserve space was available both before
+//     the pass and now, yet nothing could be reserved (no idle peer can
+//     serve). Every peer was tried, so errPeersUnavailable applies and
+//     Synchronise drops the origin.
+//   - space <= 0: reserve space is zero, the head block is missing and no
+//     import is running (importing) or can start — with nothing in flight
+//     and no reservation able to succeed, no event can ever change this
+//     state (issue #247). errStallCacheFull applies: the origin is not
+//     identified as the withholder, so Synchronise aborts without a drop.
+//
+// If an import freed room during the pass (spaceAtLoop == 0 but space > 0
+// now), neither arm fires and the next tick re-schedules against the freed
+// space.
+func (q *queue) NoProgress(spaceAtLoop int, importing bool) error {
+	q.lock.RLock()
+	defer q.lock.RUnlock()
+
+	// Not stuck while throttled (Throttle).
+	pending := 0
+	for _, request := range q.pendPool {
+		pending += len(request.Hashes)
+	}
+	if pending >= len(q.blockCache)-len(q.blockPool) {
+		return nil
+	}
+	// Not stuck while requests are in flight (InFlight).
+	if len(q.pendPool) != 0 {
+		return nil
+	}
+	space := (len(q.blockCache) / 2) - len(q.blockPool)
+	if spaceAtLoop > 0 && space > 0 {
+		return errPeersUnavailable
+	}
+	if space <= 0 && len(q.blockCache) != 0 && q.blockCache[0] == nil && !importing {
+		return errStallCacheFull
+	}
+	return nil
 }
 
 // Has checks if a hash is within the download queue or not.
@@ -163,9 +230,12 @@ func (q *queue) Insert(hashes []types.Hash, fifo bool) []types.Hash {
 
 		q.hashPool[hash] = q.hashCounter
 		if fifo {
-			q.hashQueue.Push(hash, -float32(q.hashCounter)) // Lowest gets schedules first
+			// Negated priority: prque pops the GREATEST priority, so the
+			// earliest inserted hash schedules first.
+			q.hashQueue.Push(hash, -float32(q.hashCounter))
 		} else {
-			q.hashQueue.Push(hash, float32(q.hashCounter)) // Highest gets schedules first
+			// Newest inserted schedules first.
+			q.hashQueue.Push(hash, float32(q.hashCounter))
 		}
 	}
 	return inserts
