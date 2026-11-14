@@ -261,7 +261,9 @@ var (
 // combination of the 5 sporks GetEmbeddedMethod consults, so a call
 // only ever does an array lookup rather than rebuilding the map (10
 // contracts, ~60 method structs) from scratch every time. Runs once,
-// lazily, guarded by embeddedVariantsOnce.
+// lazily, guarded by embeddedVariantsOnce. sporkVariantKey never returns
+// a key with a higher rung of the legacy ladder set and a lower one
+// clear, so those entries are built and not read.
 func buildEmbeddedVariants() {
 	for key := 0; key < embeddedVariantCombinations; key++ {
 		contractsMap := getOrigin()
@@ -284,13 +286,25 @@ func buildEmbeddedVariants() {
 	}
 }
 
-// GetEmbeddedMethod finds method instance of embedded contract by address and abiSelector
-// - returns constants.ErrNotContractAddress in case address is not an embedded address (bad prefix)
-// - returns constants.ErrContractDoesntExist in case the address doesn't link to a valid embedded contract
-// - returns constants.ErrContractMethodNotFound if the method doesn't exist
 // sporkVariantKey computes the bitmask that selects which embedded contract
 // variant is active for the given context. GetEmbeddedMethod and
 // CheckNoTrailingBytes must agree on this key, so it lives in one place.
+//
+// The Accelerator, BridgeAndLiquidity and HTLC sporks are not independent
+// switches. The lookup they were released with is a ladder,
+//
+//	if Htlc { htlc } else if BridgeAndLiquidity { bridgeAndLiquidity } else if Accelerator { accelerator } else { origin }
+//
+// in which every table is built on top of the one below it: an enforced
+// HTLC spork selects the Bridge contract and the newer Liquidity methods
+// whatever the BridgeAndLiquidity spork says, and either of the two
+// selects the Accelerator methods. The states in which that matters are
+// part of history: on mainnet the HTLC spork was enforced a few momentums
+// before BridgeAndLiquidity, and a block is checked against the sporks
+// enforced at the momentum it acknowledges. The key therefore closes the
+// ladder downwards, so that a lower rung is set whenever a higher one is.
+// The Dynamic Plasma and PTLC sporks came after the ladder and are
+// independent bits.
 func sporkVariantKey(context vm_context.AccountVmContext) int {
 	key := 0
 	if context.IsAcceleratorSporkEnforced() {
@@ -308,10 +322,20 @@ func sporkVariantKey(context vm_context.AccountVmContext) int {
 	if context.IsPtlcSporkEnforced() {
 		key |= ptlcSporkBit
 	}
+	if key&htlcSporkBit != 0 {
+		key |= bridgeAndLiquiditySporkBit
+	}
+	if key&bridgeAndLiquiditySporkBit != 0 {
+		key |= acceleratorSporkBit
+	}
 	// No change for NoPillarRegSpork
 	return key
 }
 
+// GetEmbeddedMethod finds method instance of embedded contract by address and abiSelector
+// - returns constants.ErrNotContractAddress in case address is not an embedded address (bad prefix)
+// - returns constants.ErrContractDoesntExist in case the address doesn't link to a valid embedded contract
+// - returns constants.ErrContractMethodNotFound if the method doesn't exist
 func GetEmbeddedMethod(context vm_context.AccountVmContext, address types.Address, abiSelector []byte) (Method, error) {
 	if !types.IsEmbeddedAddress(address) {
 		return nil, constants.ErrNotContractAddress
