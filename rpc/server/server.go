@@ -214,8 +214,9 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 	}
 	// The answer is written by the call's goroutine and must reach the
 	// response before ServeHTTP returns, so the call runs to the end before
-	// close cancels its context. The request's own context still ends it if
-	// the client goes away.
+	// close cancels its context. The request's own context still ends when
+	// the client goes away: a call that watches its context returns then,
+	// and a batch starts no further call.
 	h.callWG.Wait()
 }
 
