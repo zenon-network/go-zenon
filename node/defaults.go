@@ -53,6 +53,7 @@ var DefaultNodeConfig = Config{
 		MaxSubscriptions:          subscribe.DefaultMaxSubscriptions,
 		MaxConcurrentHTTPRequests: rpc.DefaultMaxConcurrentHTTPRequests,
 		MaxHTTPConnections:        DefaultMaxHTTPConnections,
+		MaxWSConnections:          DefaultMaxWSConnections,
 	},
 	Net: NetConfig{
 		ListenHost:        p2p.DefaultListenHost,

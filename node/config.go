@@ -116,7 +116,8 @@ func (c ProducerConfig) Format(f fmt.State, verb rune) {
 // WebSocket servers are enabled, the host and port each listens on,
 // the set of API endpoints to expose, the allowed virtual hosts, CORS
 // domains and WebSocket origins, the subscription and per-IP WebSocket
-// connection limits, and the HTTP request and connection limits.
+// connection limits, the HTTP request limit and the connection caps of
+// the two listeners.
 type RPCConfig struct {
 	EnableHTTP bool
 	EnableWS   bool
@@ -143,10 +144,17 @@ type RPCConfig struct {
 	MaxSubscriptions        int
 	// MaxWSConnectionsPerIP bounds concurrent WebSocket connections from a
 	// single remote IP address; connections in excess are refused with HTTP
-	// 429. Zero means no per-IP limit. This composes with the per-connection
-	// subscription limit: with MaxSubscriptionsPerConn subscriptions per
-	// connection and MaxWSConnectionsPerIP connections, one address can hold
-	// at most their product in subscriptions.
+	// 429. Zero, the default, or a negative value means no per-IP limit.
+	// This composes with the per-connection subscription limit: with
+	// MaxSubscriptionsPerConn subscriptions per connection and
+	// MaxWSConnectionsPerIP connections, one address can hold at most their
+	// product in subscriptions. Without it one address can open enough
+	// connections to hold every slot of MaxSubscriptions, so a node that
+	// clients reach directly should set it. The address is that of the TCP
+	// peer and forwarded headers are not read: behind a reverse proxy every
+	// client has the proxy's address and the value limits all clients
+	// together, so there it should stay off and the proxy should limit
+	// connections per client.
 	MaxWSConnectionsPerIP int
 	// MaxConcurrentHTTPRequests bounds the JSON-RPC requests served over
 	// HTTP at once, across all clients. A request counts from before its
@@ -168,6 +176,22 @@ type RPCConfig struct {
 	// MaxConcurrentHTTPRequests, room for idle keep-alive clients. A
 	// negative value removes the cap.
 	MaxHTTPConnections int
+	// MaxWSConnections bounds the TCP connections the WebSocket listener
+	// holds open at once when WebSocket has a port of its own, which is the
+	// default layout. It counts every connection the listener has accepted,
+	// whether or not it has completed the WebSocket handshake. Once it is
+	// reached the listener stops accepting, and further connections wait in
+	// the operating system's accept queue until one closes. An established
+	// WebSocket connection is not subject to the HTTP timeouts and stays
+	// open for as long as its client keeps it, so without a cap the
+	// listener could take the file descriptors the rest of the node needs.
+	// The cap is shared by all clients; MaxWSConnectionsPerIP, or a proxy
+	// in front of the node, limits how many established WebSocket
+	// connections one client holds of it. Zero selects the built-in
+	// default, 1024, the same number as the default MaxHTTPConnections. A
+	// negative value removes the cap. When WebSocket shares the HTTP port,
+	// MaxHTTPConnections bounds that listener and this setting is not used.
+	MaxWSConnections int
 }
 
 // NetConfig configures the node's p2p networking: the listen host and

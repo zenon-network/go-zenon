@@ -44,7 +44,12 @@ type wsConfig struct {
 	// MaxConnectionsPerIP bounds concurrent WebSocket connections from a
 	// single remote IP address. Zero means no per-IP limit.
 	MaxConnectionsPerIP int
-	prefix              string // path prefix on which to mount ws handler
+	// MaxConnections bounds the connections a listener that serves only
+	// WebSocket holds open at once. Zero selects DefaultMaxWSConnections; a
+	// negative value removes the cap. A listener shared with HTTP-RPC takes
+	// httpConfig.MaxConnections instead.
+	MaxConnections int
+	prefix         string // path prefix on which to mount ws handler
 }
 
 type rpcHandler struct {
@@ -97,9 +102,34 @@ var defaultMaxHTTPConnections = DefaultMaxHTTPConnections
 // the listener uses: zero selects defaultMaxHTTPConnections and a negative
 // value means no cap, reported as zero.
 func effectiveMaxHTTPConnections(n int) int {
+	return effectiveMaxConnections(n, defaultMaxHTTPConnections)
+}
+
+// DefaultMaxWSConnections is the connection cap of a listener that serves
+// only WebSocket when the configuration leaves it at zero. It is the same
+// number as DefaultMaxHTTPConnections, so by default the two RPC listeners
+// together hold at most 2048 connections.
+const DefaultMaxWSConnections = 1024
+
+// defaultMaxWSConnections is the cap a zero configuration selects. It is
+// DefaultMaxWSConnections; tests lower it to exercise the default path
+// without opening a thousand connections.
+var defaultMaxWSConnections = DefaultMaxWSConnections
+
+// effectiveMaxWSConnections maps a configured connection cap to the one a
+// WebSocket-only listener uses: zero selects defaultMaxWSConnections and a
+// negative value means no cap, reported as zero.
+func effectiveMaxWSConnections(n int) int {
+	return effectiveMaxConnections(n, defaultMaxWSConnections)
+}
+
+// effectiveMaxConnections maps a configured connection cap to the one a
+// listener uses: zero selects def and a negative value means no cap,
+// reported as zero.
+func effectiveMaxConnections(n, def int) int {
 	switch {
 	case n == 0:
-		return defaultMaxHTTPConnections
+		return def
 	case n < 0:
 		return 0
 	default:
@@ -185,11 +215,20 @@ func (h *httpServer) start() error {
 		h.disableWS()
 		return err
 	}
-	// The connection cap belongs to HTTP-RPC: a server that only carries
-	// WebSocket is bounded per IP by its handler instead.
+	// Every RPC listener is capped. One that carries HTTP-RPC takes the
+	// HTTP cap, which then counts the WebSocket connections on a shared
+	// port as well. One that only carries WebSocket takes the WebSocket
+	// cap: an upgraded connection is no longer subject to the HTTP server's
+	// timeouts and stays open for as long as its peer keeps it, so without
+	// a cap the listener could take the file descriptors the rest of the
+	// node needs. The per-IP limit of the WebSocket handler is separate and
+	// counts only connections that ask for the upgrade.
 	maxConns := 0
-	if h.rpcAllowed() {
+	switch {
+	case h.rpcAllowed():
 		maxConns = effectiveMaxHTTPConnections(h.httpConfig.MaxConnections)
+	case h.wsAllowed():
+		maxConns = effectiveMaxWSConnections(h.wsConfig.MaxConnections)
 	}
 	if maxConns > 0 {
 		listener = netutil.LimitListener(listener, maxConns)
@@ -203,7 +242,7 @@ func (h *httpServer) start() error {
 		if h.wsConfig.prefix != "" {
 			url += h.wsConfig.prefix
 		}
-		h.log.Info("WebSocket enabled", "url", url)
+		h.log.Info("WebSocket enabled", "url", url, "maxconns", maxConns)
 	}
 	// if server is websocket only, return after logging
 	if !h.rpcAllowed() {
