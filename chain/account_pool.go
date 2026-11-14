@@ -1184,18 +1184,46 @@ func (ap *accountPool) GetUncommittedAccountBlocksByAddress(address types.Addres
 
 	return ap.getUncommittedAccountBlocksByAddress(address)
 }
-func (ap *accountPool) getUncommittedAccountBlocksByAddress(address types.Address) []*nom.AccountBlock {
-	blocks := make([]*nom.AccountBlock, 0)
 
-	stable := ap.getStableAccountStore(address)
-	frontier := ap.getFrontierAccountStore(address)
+// getUncommittedAccountBlocksByAddress lists, lowest height first, the
+// blocks the address's manager holds above the committed state.
+//
+// The committed height is read from the momentum store at the time of the
+// call, while the manager holds the blocks above the committed state it
+// was created on or last rebased to. The momentum pool moves the store
+// first and tells this pool afterwards, and readers such as the peer
+// handshake do not hold the insert lock, so the two can disagree here:
+//   - after a momentum is popped and before DeleteMomentum, the store is
+//     below the manager's base, and the block in between is in neither;
+//   - after a momentum is inserted and before InsertMomentum, the store is
+//     above the manager's base, and the manager still holds blocks that
+//     are confirmed now;
+//   - a manager created by this call is based on a second read of the
+//     store, which can be above or below the first.
+//
+// The walk therefore starts at the manager's frontier and goes down for
+// as long as the manager holds the height and the height is above the
+// committed one. With the two in agreement that is every height between
+// them. Otherwise it is the part of the manager's own chain that is not
+// committed, which is also what the pool's frontier store shows for the
+// address until the pending event is handled.
+func (ap *accountPool) getUncommittedAccountBlocksByAddress(address types.Address) []*nom.AccountBlock {
+	stableHeight := ap.getStableAccountStore(address).Identifier().Height
 	manager := ap.getAccountManager(address)
-	for i := stable.Identifier().Height + 1; i <= frontier.Identifier().Height; i += 1 {
-		block, err := manager.BlockByHeight(i)
-		common.DealWithErr(err)
-		blocks = append(blocks, block)
+	frontierHeight := db.GetFrontierIdentifier(manager.db.Frontier()).Height
+
+	first := frontierHeight + 1
+	for first > stableHeight+1 {
+		if _, ok := manager.blocks[first-1]; !ok {
+			break
+		}
+		first -= 1
 	}
 
+	blocks := make([]*nom.AccountBlock, 0, frontierHeight+1-first)
+	for height := first; height <= frontierHeight; height += 1 {
+		blocks = append(blocks, manager.blocks[height].Copy())
+	}
 	return blocks
 }
 
