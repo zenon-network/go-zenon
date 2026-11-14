@@ -497,6 +497,10 @@ func (a *BridgeApi) GetAllWrapTokenRequestsByToAddress(toAddress string, pageInd
 // GetAllWrapTokenRequestsByToAddress applies. Count is the number of
 // matching requests.
 //
+// With an empty toAddress every stored wrap request is decoded on each
+// call, since the network is only known after decoding; bounding that
+// would need a storage-side index (issue #264).
+//
 // JSON-RPC: embedded.bridge.getAllWrapTokenRequestsByToAddressNetworkClassAndChainId
 func (a *BridgeApi) GetAllWrapTokenRequestsByToAddressNetworkClassAndChainId(toAddress string, networkClass, chainId uint32, pageIndex, pageSize uint32) (*WrapTokenRequestList, error) {
 	if pageSize > api.RpcMaxPageSize {
@@ -529,6 +533,10 @@ func (a *BridgeApi) GetAllWrapTokenRequestsByToAddressNetworkClassAndChainId(toA
 // orchestrator has not signed yet (empty signature), oldest first
 // (ascending creation momentum height). Count is the total number of
 // unsigned requests.
+//
+// Every stored wrap request is decoded on each call, since the
+// signature is only known after decoding; bounding that would need a
+// storage-side index (issue #264).
 //
 // JSON-RPC: embedded.bridge.getAllUnsignedWrapTokenRequests
 func (a *BridgeApi) GetAllUnsignedWrapTokenRequests(pageIndex, pageSize uint32) (*WrapTokenRequestList, error) {
@@ -870,6 +878,11 @@ func filterActiveUnwrapRequests(context vm_context.AccountVmContext, requests []
 // index. Requests whose token pair or network has since been removed
 // from the configuration are filtered out before counting and paging,
 // so Count is the number of requests that still resolve.
+//
+// Every stored unwrap request is decoded on each call: storage keys are
+// ordered by source transaction hash, not by height, and the pair filter
+// needs the decoded request. Bounding that would need a storage-side
+// index (issue #264).
 //
 // JSON-RPC: embedded.bridge.getAllUnwrapTokenRequests
 func (a *BridgeApi) GetAllUnwrapTokenRequests(pageIndex, pageSize uint32) (*UnwrapTokenRequestList, error) {
