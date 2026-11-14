@@ -276,9 +276,11 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 		// Like a batch that does not chain they are not a verdict on the
 		// head, let alone on the first momentum of the batch, which may be
 		// one the node already has; see refuseBatch. Unlike a batch that
-		// does not chain they also depend on the local chain, which another
-		// import path can have moved since the batch was requested, so they
-		// are reported as misplaced and not as rejected.
+		// does not chain, where the batch attaches and how deep also depend
+		// on the local chain, which another import path can have moved
+		// since the batch was requested, so the first three are reported as
+		// misplaced and not as rejected. The fourth is reported as
+		// inconclusive, for the reason given there.
 		if target == nil {
 			return refuseBatch(batch, start, &BatchRejected{Verdict: downloader.ErrBatchMisplaced, Cause: errors.Errorf("can't link momentums to insert. No momentum at height %d to link head %v (frontier %v)", head.Height-1, head.Identifier(), ourFrontier.Identifier())})
 		}
