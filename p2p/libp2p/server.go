@@ -85,6 +85,18 @@ const (
 	// slow enough that the dial loop isn't constantly active on a
 	// healthy node already at peer capacity.
 	dhtDiscoveryInterval = 15 * time.Second
+
+	// inboundOriginDivisor and minInboundPerOrigin size the per-origin
+	// bound on adopted inbound peers (see maxInboundPerOrigin): one origin
+	// group may hold at most 1/inboundOriginDivisor of the inbound slots,
+	// and never fewer than minInboundPerOrigin. A quarter means the inbound
+	// slots cannot be filled from fewer than four origin groups, while
+	// honest peers that share a hosting provider's prefix still fit: with
+	// the default limits that is 11 peers from one IPv4 /16. The floor
+	// keeps a small MaxPeers from turning the bound into one peer per
+	// prefix.
+	inboundOriginDivisor = 4
+	minInboundPerOrigin  = 2
 )
 
 var errServerStopped = errors.New("server stopped")
@@ -96,9 +108,16 @@ type Server struct {
 
 	// MaxPeers is the maximum number of peers that can be connected.
 	// Must be greater than zero; Start() returns an error otherwise.
+	// Inbound peers can hold MaxPeers minus the outbound reservation (see
+	// MinConnectedPeers); outbound peers can hold any free slot.
 	MaxPeers int
 
-	// MinConnectedPeers is the minimum number of peers that can be connected.
+	// MinConnectedPeers is the number of outbound peers the node dials
+	// for. The bootstrap and discovery loops run while fewer peers than
+	// this were dialled by this node, however many inbound peers it has,
+	// which is how the legacy backend counts its dial target. The same
+	// number of slots, at most half of MaxPeers, is kept free of inbound
+	// peers (see reservedOutbound). Zero disables both.
 	MinConnectedPeers int
 
 	// MaxPendingPeers is the maximum number of peers that can be
@@ -271,6 +290,125 @@ func (srv *Server) PeerCount() int {
 	srv.peerMu.RLock()
 	defer srv.peerMu.RUnlock()
 	return len(srv.peerMap)
+}
+
+// reservedOutbound is the number of peer slots inbound peers cannot
+// occupy. It follows the dial target, MinConnectedPeers, so the slots the
+// node dials for are the slots it keeps: without the reservation one
+// source with many identities could take every slot inbound and leave no
+// room for a peer this node chose. It is capped at half of MaxPeers so a
+// MaxPeers set near or below MinConnectedPeers still admits inbound
+// peers, and it is zero for a node that never dials.
+func (srv *Server) reservedOutbound() int {
+	if srv.NoDial || srv.MinConnectedPeers <= 0 {
+		return 0
+	}
+	reserved := srv.MinConnectedPeers
+	if half := srv.MaxPeers / 2; reserved > half {
+		reserved = half
+	}
+	return reserved
+}
+
+// maxInboundPeers is the number of slots inbound peers can hold.
+func (srv *Server) maxInboundPeers() int {
+	return srv.MaxPeers - srv.reservedOutbound()
+}
+
+// maxInboundPerOrigin is the number of inbound peers one origin group can
+// hold (see inboundOriginGroup and the inboundOriginDivisor constant).
+func (srv *Server) maxInboundPerOrigin() int {
+	n := srv.maxInboundPeers() / inboundOriginDivisor
+	if n < minInboundPerOrigin {
+		n = minInboundPerOrigin
+	}
+	return n
+}
+
+// inboundOriginGroup returns the origin group an inbound peer counts
+// against, or "" when the per-origin bound does not apply to it. The
+// group is the peer database's diversity key (subnetKey: IPv4 /16, IPv6
+// /48) of the address the connection was observed from, which the peer
+// cannot choose the way it chooses its advertised addresses. Relayed
+// connections share one group and connections with no IP origin another.
+//
+// Two kinds of peer are not bounded. A loopback, private or link-local
+// source can only be reached from the operator's own host or network,
+// and behind a local proxy or container network every inbound peer shows
+// the same such address, so bounding it would cap those nodes (and any
+// single-host test network) at a few inbound peers without limiting a
+// remote source. A peer listed in BootstrapPeers was chosen by the
+// operator and is authenticated by its key.
+func (srv *Server) inboundOriginGroup(pid peer.ID, s network.Stream) string {
+	for _, pi := range srv.BootstrapPeers {
+		if pi.ID == pid {
+			return ""
+		}
+	}
+	origin := observedOrigin(streamOrigin(s))
+	if origin == relayedOrigin {
+		return relayedOrigin
+	}
+	ip := net.ParseIP(origin)
+	if ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
+		return ""
+	}
+	return subnetKey(ip)
+}
+
+// inboundRefusalLocked decides whether an inbound peer in the given
+// origin group can be adopted, returning the reason it cannot or "". It
+// applies the peer limit, then the inbound share of it, then the
+// per-origin bound. The counts are taken from peerMap on each call rather
+// than kept in counters, so a peer that leaves the map by any path frees
+// what it held. The caller must hold peerMu.
+func (srv *Server) inboundRefusalLocked(group string) string {
+	if len(srv.peerMap) >= srv.MaxPeers {
+		return "max peers reached"
+	}
+	inbound, inGroup := 0, 0
+	for _, p := range srv.peerMap {
+		if !p.inbound {
+			continue
+		}
+		inbound++
+		if group != "" && p.originGroup == group {
+			inGroup++
+		}
+	}
+	if inbound >= srv.maxInboundPeers() {
+		return "max inbound peers reached"
+	}
+	if group != "" && inGroup >= srv.maxInboundPerOrigin() {
+		return "max inbound peers from one origin reached"
+	}
+	return ""
+}
+
+// outboundDeficit reports how many more outbound peers the dial loops
+// should try for, along with the peer counts it was computed from. The
+// deficit is MinConnectedPeers minus the peers this node dialled, limited
+// to the free slots. Inbound peers do not count toward the target: a node
+// whose slots were taken inbound would otherwise stop dialling and never
+// replace a peer it chose.
+func (srv *Server) outboundDeficit() (deficit, peers, outbound int) {
+	srv.peerMu.RLock()
+	peers = len(srv.peerMap)
+	for _, p := range srv.peerMap {
+		if !p.inbound {
+			outbound++
+		}
+	}
+	srv.peerMu.RUnlock()
+
+	deficit = srv.MinConnectedPeers - outbound
+	if free := srv.MaxPeers - peers; deficit > free {
+		deficit = free
+	}
+	if deficit < 0 {
+		deficit = 0
+	}
+	return deficit, peers, outbound
 }
 
 // AddPeer connects to the given node and maintains the connection.
@@ -914,6 +1052,8 @@ func (srv *Server) handleStream(s network.Stream) {
 	// already-adopted peer's extra stream is always Reset rather than
 	// closed, even when the server is at capacity.
 	p := newPeerFromStream(rw, s, remoteID, phs.Caps, phs.Name, srv.Protocols)
+	p.inbound = true
+	p.originGroup = srv.inboundOriginGroup(remotePeer, s)
 	srv.peerMu.Lock()
 	if srv.shuttingDown {
 		srv.peerMu.Unlock()
@@ -932,7 +1072,12 @@ func (srv *Server) handleStream(s network.Stream) {
 		s.Reset()
 		return
 	}
-	if len(srv.peerMap) >= srv.MaxPeers {
+	// An inbound peer is refused at the peer limit, at the inbound share
+	// of it (the rest is reserved for peers this node dials) and at the
+	// per-origin bound. All three are refused the same way and send no
+	// disconnect frame: this side has already sent its handshake, so the
+	// remote sees the reset whichever limit applied.
+	if refusal := srv.inboundRefusalLocked(p.originGroup); refusal != "" {
 		// The duplicate check ruled out an adopted peer, but our own
 		// outbound dial may still share this connection. Reset only this
 		// stream while that dial is in flight; close genuinely untracked
@@ -943,7 +1088,7 @@ func (srv *Server) handleStream(s network.Stream) {
 			_ = srv.host.Network().ClosePeer(remotePeer)
 		}
 		srv.peerMu.Unlock()
-		common.P2PLogger.Debug("max peers reached, rejecting connection")
+		common.P2PLogger.Debug(refusal + ", rejecting connection")
 		s.Reset()
 		return
 	}
@@ -1036,7 +1181,9 @@ func (srv *Server) dialPeer(info peer.AddrInfo) error {
 
 	// Reserve the dialing slot under the write lock, plus run the
 	// peerMap/MaxPeers pre-check atomically with it so the slot reservation
-	// observes a consistent peer-set snapshot.
+	// observes a consistent peer-set snapshot. An outbound peer can take
+	// any free slot; only inbound peers are held to a share of MaxPeers
+	// (see inboundRefusalLocked).
 	srv.peerMu.Lock()
 	if len(srv.peerMap) >= srv.MaxPeers {
 		srv.peerMu.Unlock()
@@ -1297,7 +1444,8 @@ func (srv *Server) recordDialSuccess(peerID string) {
 	srv.backoffMu.Unlock()
 }
 
-// peerMaintenanceLoop periodically checks peer count and dials bootstrap peers if needed.
+// peerMaintenanceLoop periodically redials bootstrap peers while the node
+// has fewer outbound peers than it dials for.
 func (srv *Server) peerMaintenanceLoop() {
 	ticker := time.NewTicker(refreshPeersInterval)
 	defer ticker.Stop()
@@ -1307,53 +1455,59 @@ func (srv *Server) peerMaintenanceLoop() {
 		case <-srv.ctx.Done():
 			return
 		case <-ticker.C:
-			if srv.NoDial {
-				continue
-			}
-			srv.peerMu.RLock()
-			numPeers := len(srv.peerMap)
-			srv.peerMu.RUnlock()
-
-			if numPeers < srv.MinConnectedPeers && len(srv.BootstrapPeers) > 0 {
-				dialing, suppressed := 0, 0
-				for _, pi := range srv.BootstrapPeers {
-					pi := pi
-					peerKey := pi.ID.String()
-					srv.peerMu.RLock()
-					_, connected := srv.peerMap[peerKey]
-					srv.peerMu.RUnlock()
-					if connected {
-						continue
-					}
-					// Respect the exponential-backoff schedule so 100
-					// nodes restarting after an outage don't all hit
-					// the bootstrap at the same 30s cadence.
-					if !srv.shouldDial(peerKey) {
-						suppressed++
-						continue
-					}
-					dialing++
-					go func() {
-						if err := srv.dialPeer(pi); err != nil {
-							srv.recordDialFailure(peerKey)
-							common.P2PLogger.Debug(fmt.Sprintf("dial %s failed: %v", pi.ID, err))
-						} else {
-							srv.recordDialSuccess(peerKey)
-						}
-					}()
-				}
-				// One Info line per tick while below the peer minimum,
-				// so an operator can see redial progress (and backoff
-				// suppression) without enabling debug logging. Silent
-				// on healthy nodes — this branch isn't reached at all
-				// once numPeers >= MinConnectedPeers.
-				if dialing > 0 || suppressed > 0 {
-					common.P2PLogger.Info("bootstrap redial sweep",
-						"peers", numPeers, "min", srv.MinConnectedPeers,
-						"dialing", dialing, "backoff-suppressed", suppressed)
-				}
-			}
+			srv.redialBootstrapPeers()
 		}
+	}
+}
+
+// redialBootstrapPeers is one peerMaintenanceLoop tick: while the node is
+// short of outbound peers (see outboundDeficit) it dials every bootstrap
+// peer that is not connected and not in backoff.
+func (srv *Server) redialBootstrapPeers() {
+	if srv.NoDial {
+		return
+	}
+	deficit, numPeers, outbound := srv.outboundDeficit()
+	if deficit <= 0 || len(srv.BootstrapPeers) == 0 {
+		return
+	}
+
+	dialing, suppressed := 0, 0
+	for _, pi := range srv.BootstrapPeers {
+		pi := pi
+		peerKey := pi.ID.String()
+		srv.peerMu.RLock()
+		_, connected := srv.peerMap[peerKey]
+		srv.peerMu.RUnlock()
+		if connected {
+			continue
+		}
+		// Respect the exponential-backoff schedule so 100
+		// nodes restarting after an outage don't all hit
+		// the bootstrap at the same 30s cadence.
+		if !srv.shouldDial(peerKey) {
+			suppressed++
+			continue
+		}
+		dialing++
+		go func() {
+			if err := srv.dialPeer(pi); err != nil {
+				srv.recordDialFailure(peerKey)
+				common.P2PLogger.Debug(fmt.Sprintf("dial %s failed: %v", pi.ID, err))
+			} else {
+				srv.recordDialSuccess(peerKey)
+			}
+		}()
+	}
+	// One Info line per tick while below the outbound target, so an
+	// operator can see redial progress (and backoff suppression)
+	// without enabling debug logging. Silent on healthy nodes — this
+	// point isn't reached at all once the node has dialled
+	// MinConnectedPeers peers.
+	if dialing > 0 || suppressed > 0 {
+		common.P2PLogger.Info("bootstrap redial sweep",
+			"peers", numPeers, "outbound", outbound, "min", srv.MinConnectedPeers,
+			"dialing", dialing, "backoff-suppressed", suppressed)
 	}
 }
 
@@ -1363,29 +1517,32 @@ func (srv *Server) peerMaintenanceLoop() {
 // The DHT (created in Start) populates its routing table passively as a
 // side effect of bootstrap walks and the libp2p Identify exchange on
 // each connection. On a small/private network that passive trickle can
-// be too slow: a node below MinConnectedPeers has no way to reach peers
-// its table hasn't heard about yet. So each tick below MinConnectedPeers
-// also kicks off an active RefreshRoutingTable() walk (fire-and-forget,
-// deduplicated by refreshingDHT) that issues real FIND_NODE queries
-// against the DHT to pull in peers beyond whatever Identify happened to
-// deliver — the result lands in the routing table for a later tick to
-// dial. We can't use provider-record rendezvous discovery
-// (routing.NewRoutingDiscovery) here since the DHT is started with
-// DisableProviders/DisableValues; RefreshRoutingTable operates purely at
-// the peer-routing layer, which stays enabled.
+// be too slow: a node short of outbound peers has no way to reach peers
+// its table hasn't heard about yet. So each tick below the outbound
+// target also kicks off an active RefreshRoutingTable() walk
+// (fire-and-forget, deduplicated by refreshingDHT) that issues real
+// FIND_NODE queries against the DHT to pull in peers beyond whatever
+// Identify happened to deliver — the result lands in the routing table
+// for a later tick to dial. We can't use provider-record rendezvous
+// discovery (routing.NewRoutingDiscovery) here since the DHT is started
+// with DisableProviders/DisableValues; RefreshRoutingTable operates
+// purely at the peer-routing layer, which stays enabled.
 //
 // Without any of this, the Zenon peer set would be effectively
 // bootstrap-only after activation; if a node's configured bootstrap
 // entries went down, it would never discover replacements.
 //
 // The loop is bounded:
-//   - Only runs when len(peerMap) < MinConnectedPeers, so a healthy
-//     node at capacity doesn't dial or query unnecessarily.
+//   - Only runs while the node has dialled fewer than MinConnectedPeers
+//     of its peers and has a free slot (see outboundDeficit), so a node
+//     at its outbound target doesn't dial or query unnecessarily. Inbound
+//     peers do not count: a node whose peers all connected to it keeps
+//     looking for peers of its own choosing.
 //   - Defers to dialPeer's own dedup (peerMap + dialing set) and
 //     respects the per-peer backoff machinery via shouldDial, so a
 //     peer that just failed isn't immediately retried.
-//   - Caps work per tick at (MinConnectedPeers - peerCount) so we
-//     don't fan out to the entire routing table on a fresh node.
+//   - Caps work per tick at the outbound deficit so we don't fan out
+//     to the entire routing table on a fresh node.
 func (srv *Server) dhtDiscoveryLoop() {
 	ticker := time.NewTicker(dhtDiscoveryInterval)
 	defer ticker.Stop()
@@ -1395,74 +1552,75 @@ func (srv *Server) dhtDiscoveryLoop() {
 		case <-srv.ctx.Done():
 			return
 		case <-ticker.C:
-			if srv.NoDial {
-				continue
-			}
-
-			srv.peerMu.RLock()
-			numPeers := len(srv.peerMap)
-			srv.peerMu.RUnlock()
-			if numPeers >= srv.MinConnectedPeers {
-				continue
-			}
-			needed := srv.MinConnectedPeers - numPeers
-
-			srv.triggerDHTRefresh()
-
-			// Snapshot the routing table. ListPeers returns peer.IDs
-			// the DHT has been able to talk to; we still need a full
-			// libp2p Connect for each (handled inside dialPeer).
-			candidates := srv.dht.RoutingTable().ListPeers()
-			selfID := srv.host.ID()
-			dialed := 0
-			for _, pid := range candidates {
-				if dialed >= needed {
-					break
-				}
-				if pid == selfID {
-					continue
-				}
-				peerKey := pid.String()
-
-				srv.peerMu.RLock()
-				_, connected := srv.peerMap[peerKey]
-				_, dialing := srv.dialing[peerKey]
-				srv.peerMu.RUnlock()
-				if connected || dialing {
-					continue
-				}
-				if !srv.shouldDial(peerKey) {
-					continue
-				}
-
-				// Pull the multiaddrs the libp2p peerstore knows for
-				// this peer — populated by Identify on first contact.
-				addrs := srv.host.Peerstore().Addrs(pid)
-				if len(addrs) == 0 {
-					// No addresses known yet; the DHT will fill these
-					// in soon via its own routing-table refresh.
-					continue
-				}
-				info := peer.AddrInfo{ID: pid, Addrs: addrs}
-				dialed++
-				go func(info peer.AddrInfo) {
-					if err := srv.dialPeer(info); err != nil {
-						srv.recordDialFailure(info.ID.String())
-						common.P2PLogger.Debug(fmt.Sprintf("dht-discovered dial to %s failed: %v", info.ID, err))
-					} else {
-						srv.recordDialSuccess(info.ID.String())
-					}
-				}(info)
-			}
-			// Mirror of the maintenance loop's summary: visible at the
-			// default log level only while the node is hunting for
-			// peers, so DHT-driven discovery progress is observable.
-			if dialed > 0 {
-				common.P2PLogger.Info("dht discovery: dialing candidates",
-					"dialing", dialed, "table", len(candidates),
-					"peers", numPeers, "min", srv.MinConnectedPeers)
-			}
+			srv.dialDHTCandidates()
 		}
+	}
+}
+
+// dialDHTCandidates is one dhtDiscoveryLoop tick.
+func (srv *Server) dialDHTCandidates() {
+	if srv.NoDial {
+		return
+	}
+	needed, numPeers, outbound := srv.outboundDeficit()
+	if needed <= 0 {
+		return
+	}
+
+	srv.triggerDHTRefresh()
+
+	// Snapshot the routing table. ListPeers returns peer.IDs
+	// the DHT has been able to talk to; we still need a full
+	// libp2p Connect for each (handled inside dialPeer).
+	candidates := srv.dht.RoutingTable().ListPeers()
+	selfID := srv.host.ID()
+	dialed := 0
+	for _, pid := range candidates {
+		if dialed >= needed {
+			break
+		}
+		if pid == selfID {
+			continue
+		}
+		peerKey := pid.String()
+
+		srv.peerMu.RLock()
+		_, connected := srv.peerMap[peerKey]
+		_, dialing := srv.dialing[peerKey]
+		srv.peerMu.RUnlock()
+		if connected || dialing {
+			continue
+		}
+		if !srv.shouldDial(peerKey) {
+			continue
+		}
+
+		// Pull the multiaddrs the libp2p peerstore knows for
+		// this peer — populated by Identify on first contact.
+		addrs := srv.host.Peerstore().Addrs(pid)
+		if len(addrs) == 0 {
+			// No addresses known yet; the DHT will fill these
+			// in soon via its own routing-table refresh.
+			continue
+		}
+		info := peer.AddrInfo{ID: pid, Addrs: addrs}
+		dialed++
+		go func(info peer.AddrInfo) {
+			if err := srv.dialPeer(info); err != nil {
+				srv.recordDialFailure(info.ID.String())
+				common.P2PLogger.Debug(fmt.Sprintf("dht-discovered dial to %s failed: %v", info.ID, err))
+			} else {
+				srv.recordDialSuccess(info.ID.String())
+			}
+		}(info)
+	}
+	// Mirror of the maintenance loop's summary: visible at the
+	// default log level only while the node is hunting for
+	// peers, so DHT-driven discovery progress is observable.
+	if dialed > 0 {
+		common.P2PLogger.Info("dht discovery: dialing candidates",
+			"dialing", dialed, "table", len(candidates),
+			"peers", numPeers, "outbound", outbound, "min", srv.MinConnectedPeers)
 	}
 }
 
