@@ -131,16 +131,17 @@ func requireServed(t *testing.T, pending <-chan wsDialResult, what string) *webs
 		if r.err != nil {
 			t.Fatalf("%s: handshake failed: %v", what, r.err)
 		}
-		req := []byte(`{"jsonrpc":"2.0","id":1,"method":"probe.ping","params":[]}`)
-		if err := r.conn.WriteMessage(websocket.TextMessage, req); err != nil {
+		if err := r.conn.WriteMessage(websocket.TextMessage, []byte(defaultsPingRequest)); err != nil {
 			t.Fatalf("%s: write: %v", what, err)
 		}
 		if err := r.conn.SetReadDeadline(time.Now().Add(stackTestTimeout)); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := r.conn.ReadMessage(); err != nil {
+		_, msg, err := r.conn.ReadMessage()
+		if err != nil {
 			t.Fatalf("%s: read: %v", what, err)
 		}
+		requirePong(t, what, msg)
 		return r.conn
 	case <-time.After(stackTestTimeout):
 		t.Fatalf("%s: handshake still pending", what)

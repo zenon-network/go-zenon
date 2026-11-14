@@ -181,16 +181,20 @@ type RPCConfig struct {
 	// default layout. It counts every connection the listener has accepted,
 	// whether or not it has completed the WebSocket handshake. Once it is
 	// reached the listener stops accepting, and further connections wait in
-	// the operating system's accept queue until one closes. An established
-	// WebSocket connection is not subject to the HTTP timeouts and stays
-	// open for as long as its client keeps it, so without a cap the
-	// listener could take the file descriptors the rest of the node needs.
-	// The cap is shared by all clients; MaxWSConnectionsPerIP, or a proxy
-	// in front of the node, limits how many established WebSocket
-	// connections one client holds of it. Zero selects the built-in
-	// default, 1024, the same number as the default MaxHTTPConnections. A
-	// negative value removes the cap. When WebSocket shares the HTTP port,
-	// MaxHTTPConnections bounds that listener and this setting is not used.
+	// the operating system's accept queue until one closes. That queue is
+	// bounded as well, and a client that waits longer than its own
+	// handshake timeout gives up. An established WebSocket connection is
+	// not subject to the HTTP timeouts and stays open for as long as its
+	// client keeps it, so without a cap the listener could take the file
+	// descriptors the rest of the node needs. The cap bounds what the
+	// listener takes and reserves nothing: the process's descriptor limit
+	// has to leave room for it. The cap is shared by all clients;
+	// MaxWSConnectionsPerIP, or a proxy in front of the node, limits how
+	// many established WebSocket connections one client holds of it. Zero
+	// selects the built-in default, 1024, the same number as the default
+	// MaxHTTPConnections. A negative value removes the cap. When WebSocket
+	// shares the HTTP port, MaxHTTPConnections bounds that listener and
+	// this setting is not used.
 	MaxWSConnections int
 }
 
