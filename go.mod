@@ -30,7 +30,6 @@ require (
 	google.golang.org/protobuf v1.32.0
 	gopkg.in/karalabe/cookiejar.v2 v2.0.0-20150724131613-8dcd6a7f4951
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
-	gopkg.in/natefinch/npipe.v2 v2.0.0-20160621034901-c1b8fa8bdcce
 )
 
 require (

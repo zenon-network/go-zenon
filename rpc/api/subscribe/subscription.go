@@ -81,7 +81,7 @@ func NewMomentumsSubscription() *subscriptionOptions {
 
 // Subscription pairs an installed event stream with the rpc/server
 // subscription that delivers it: the options select which events match,
-// the notifier pushes payloads onto the originating websocket or ipc
+// the notifier pushes payloads onto the originating websocket
 // connection, and the wrapped rpc subscription carries the id the
 // client uses to unsubscribe.
 type Subscription struct {
