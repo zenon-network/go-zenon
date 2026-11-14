@@ -59,6 +59,8 @@ type queue struct {
 	blockCache  []*Block              // Downloaded but not yet delivered blocks
 	blockOffset uint64                // Offset of the first cached block in the block-chain
 
+	sessionPeer string // Peer whose hash list the current session schedules; tags every delivered block
+
 	lock sync.RWMutex
 }
 
@@ -87,6 +89,19 @@ func (q *queue) Reset() {
 	q.blockPool = make(map[types.Hash]uint64)
 	q.blockOffset = 0
 	q.blockCache = make([]*Block, blockCacheLimit)
+
+	q.sessionPeer = ""
+}
+
+// SetSessionPeer records the peer the session synchronises with, the source
+// of the hashes scheduled from here on. Deliver tags every block with it.
+// Reset clears it together with the cache, under the same lock, so the
+// blocks in the cache always carry the peer of the session that filed them.
+func (q *queue) SetSessionPeer(id string) {
+	q.lock.Lock()
+	defer q.lock.Unlock()
+
+	q.sessionPeer = id
 }
 
 // Size retrieves the number of hashes in the queue, returning separately for
@@ -418,8 +433,9 @@ func (q *queue) Deliver(id string, blocks []*nom.DetailedMomentum) (err error) {
 		}
 		// Otherwise merge the block and mark the hash block
 		q.blockCache[index] = &Block{
-			RawBlock:   detailed,
-			OriginPeer: id,
+			RawBlock:    detailed,
+			OriginPeer:  id,
+			SessionPeer: q.sessionPeer,
 		}
 		delete(request.Hashes, hash)
 		delete(q.hashPool, hash)

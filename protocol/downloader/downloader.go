@@ -101,6 +101,27 @@ var (
 	errStallCacheFull = errors.New("block download stalled: cache full behind a missing head")
 )
 
+// A chain insert error can be a verdict on the batch as a whole instead of
+// on the block at the returned index: the blocks are each what their hash
+// names, and together they are not a chain the node can take. Blocks are
+// requested by hash from whichever peer is idle, so the peers that
+// delivered them served what they were asked for, and none of them is
+// dropped for such an error. The insert says which of two kinds it is by
+// returning an error that matches, through errors.Is, one of these.
+var (
+	// ErrBatchRejected: the batch fails for a reason its hashes decide, for
+	// example two of them at consecutive heights do not chain. The list of
+	// hashes came from the peer the session synchronises with; that peer
+	// is dropped, as it is for any other hash chain a session cannot use.
+	ErrBatchRejected = errors.New("batch rejected")
+	// ErrBatchInconclusive: the batch fails for a reason its hashes do not
+	// decide, namely that it is too short to act on. A batch is whatever
+	// run of blocks has arrived, so it can be the beginning of a chain
+	// that would have been taken. Nobody is dropped; the session ends, as
+	// after any failed import.
+	ErrBatchInconclusive = errors.New("batch inconclusive")
+)
+
 // hashCheckFn is a callback type for verifying a hash's presence in the local chain.
 type hashCheckFn func(types.Hash) bool
 
@@ -111,6 +132,9 @@ type blockRetrievalFn func(types.Hash) *nom.DetailedMomentum
 type headRetrievalFn func() *nom.Momentum
 
 // chainInsertFn is a callback type to insert a batch of blocks into the local chain.
+// On failure it returns the index of the block the failure belongs to, whose
+// deliverer is dropped, unless the error matches ErrBatchRejected or
+// ErrBatchInconclusive.
 type chainInsertFn func([]*nom.DetailedMomentum) (int, error)
 
 // peerDropFn is a callback type for dropping a peer detected as malicious.
@@ -198,10 +222,14 @@ type Downloader struct {
 	wg sync.WaitGroup
 }
 
-// Block is an origin-tagged blockchain block.
+// Block is an origin-tagged blockchain block. OriginPeer is the peer that
+// delivered it. SessionPeer is the peer the session that requested it
+// synchronises with, whose hash list named it; it is empty when the block
+// was not delivered inside a session.
 type Block struct {
-	RawBlock   *nom.DetailedMomentum
-	OriginPeer string
+	RawBlock    *nom.DetailedMomentum
+	OriginPeer  string
+	SessionPeer string
 }
 
 // New creates a new downloader to fetch hashes and blocks from remote peers.
@@ -417,6 +445,10 @@ func (d *Downloader) syncWithPeer(p *peer, hash types.Hash, td uint64) (err erro
 	}()
 
 	log.Info("Synchronizing with the zenon network", "peer-id", p.id, "version", p.version)
+	// Every block this session files is tagged with the peer whose hash
+	// list it follows, so an import that outlives the session still knows
+	// whose list a batch came from.
+	d.queue.SetSessionPeer(p.id)
 	switch p.version {
 	case eth61:
 		// New eth/61, use forward, concurrent hash and block retrieval algorithm
@@ -984,19 +1016,47 @@ func (d *Downloader) process() {
 			for _, block := range blocks[:max] {
 				raw = append(raw, block.RawBlock)
 			}
-			// Try to inset the blocks, drop the originating peer if there's an error
+			// Try to insert the blocks, drop the peer the failure belongs to if there's an error
 			index, err := d.insertChain(raw)
 			if err != nil {
 				log.Info("Block import failed", "momentum-height", raw[index].Momentum.Height, "reason", err)
-				if d.rejectPeer != nil {
-					d.rejectPeer(blocks[index].OriginPeer, err)
-				}
-				d.dropPeer(blocks[index].OriginPeer)
+				d.dropForImportFailure(blocks[index], err)
 				d.cancel()
 				return
 			}
 			blocks = blocks[max:]
 		}
+	}
+}
+
+// dropForImportFailure drops the peer an import failure belongs to, if
+// there is one. block is the one at the index the insert reported.
+//
+// Ordinarily that is the peer that delivered the block, after the failure
+// has been reported to rejectPeer. A verdict on the batch is different
+// (see ErrBatchRejected): every block is what its hash names, so every
+// deliverer served what it was asked for and none is dropped. When the
+// hashes decide the verdict, what failed is the list they came from, and
+// the peer the session synchronises with supplied it, so that peer is
+// dropped. The block carries the session peer it was requested under,
+// because the import can outlive its session and a later session may follow
+// another peer. When the verdict is inconclusive nobody is dropped. Neither
+// kind is reported to rejectPeer: nobody served a rejected block.
+func (d *Downloader) dropForImportFailure(block *Block, err error) {
+	switch {
+	case errors.Is(err, ErrBatchInconclusive):
+		log.Info("Import failure not attributed to a peer", "reason", err)
+	case errors.Is(err, ErrBatchRejected):
+		if block.SessionPeer == "" {
+			return
+		}
+		log.Info("Removing peer", "peer-id", block.SessionPeer, "reason", err)
+		d.dropPeer(block.SessionPeer)
+	default:
+		if d.rejectPeer != nil {
+			d.rejectPeer(block.OriginPeer, err)
+		}
+		d.dropPeer(block.OriginPeer)
 	}
 }
 
