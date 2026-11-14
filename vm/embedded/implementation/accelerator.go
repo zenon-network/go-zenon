@@ -297,8 +297,45 @@ func (p *AddPhaseMethod) ReceiveBlock(context vm_context.AccountVmContext, sendB
 	return nil, nil
 }
 
-func checkAcceleratorVotes(context vm_context.AccountVmContext, id types.Hash, numPillars uint32) bool {
-	breakdown := definition.GetVoteBreakdown(context.Storage(), id)
+// acceleratorElectorate is the set of pillars whose votes decide a
+// tally, taken once per update from the momentum store's active
+// pillar list: names is the eligibility set and numPillars its size,
+// the turnout denominator.
+type acceleratorElectorate struct {
+	names      map[string]struct{}
+	numPillars uint32
+}
+
+// newAcceleratorElectorate builds the electorate from the active
+// pillar list.
+func newAcceleratorElectorate(pillarList []*definition.PillarInfo) *acceleratorElectorate {
+	names := make(map[string]struct{}, len(pillarList))
+	for _, pillar := range pillarList {
+		names[pillar.Name] = struct{}{}
+	}
+	return &acceleratorElectorate{
+		names:      names,
+		numPillars: uint32(len(pillarList)),
+	}
+}
+
+// checkAcceleratorVotes reports whether the votes on id pass: Yes
+// must outnumber No and Total must exceed
+// constants.VoteAcceptanceThreshold percent of the electorate.
+//
+// Post-spork (Dynamic Plasma) only votes cast by pillars in the
+// electorate count, so the numerator and the denominator describe
+// the same set: a pillar that voted and later revoked no longer
+// counts toward Yes, No or Total. Pre-spork every stored vote
+// counts, as before, while the denominator is still the active
+// pillar count.
+func checkAcceleratorVotes(context vm_context.AccountVmContext, id types.Hash, electorate *acceleratorElectorate) bool {
+	var breakdown *definition.VoteBreakdown
+	if context.IsDynamicPlasmaSporkEnforced() {
+		breakdown = definition.GetVoteBreakdownForPillars(context.Storage(), id, electorate.names)
+	} else {
+		breakdown = definition.GetVoteBreakdown(context.Storage(), id)
+	}
 
 	ok := true
 	// Test majority
@@ -306,7 +343,7 @@ func checkAcceleratorVotes(context vm_context.AccountVmContext, id types.Hash, n
 		ok = false
 	}
 	// Test enough votes
-	if breakdown.Total*100 <= numPillars*constants.VoteAcceptanceThreshold {
+	if breakdown.Total*100 <= electorate.numPillars*constants.VoteAcceptanceThreshold {
 		ok = false
 	}
 
@@ -354,6 +391,9 @@ func (p *UpdateEmbeddedAcceleratorMethod) ValidateSendBlock(block *nom.AccountBl
 //     window is still open becomes active when its votes pass
 //     checkAcceleratorVotes; once the window has passed it is closed
 //     (post-spork a final tally decides between active and closed)
+//   - every tally in one update is taken against the same electorate,
+//     the active pillar list at update time; post-spork only those
+//     pillars' votes count (see checkAcceleratorVotes)
 //   - an active project's current phase in voting is paid when its
 //     votes pass, the phase budget is consistent, the contract's
 //     balance covers both the ZNN and QSR needs and fewer than
@@ -387,7 +427,7 @@ func (p *UpdateEmbeddedAcceleratorMethod) ReceiveBlock(context vm_context.Accoun
 	if err != nil {
 		return nil, err
 	}
-	numPillars := uint32(len(pillarList))
+	electorate := newAcceleratorElectorate(pillarList)
 	frontierMomentum, err := context.GetFrontierMomentum()
 	if err != nil {
 		return nil, err
@@ -425,7 +465,7 @@ func (p *UpdateEmbeddedAcceleratorMethod) ReceiveBlock(context vm_context.Accoun
 		if project.Status == definition.VotingStatus {
 			// Check if project voting period has ended
 			if project.CreationTimestamp+constants.AcceleratorProjectVotingPeriod >= frontierMomentum.Timestamp.Unix() {
-				ok := checkAcceleratorVotes(context, project.Id, numPillars)
+				ok := checkAcceleratorVotes(context, project.Id, electorate)
 				acceleratorLog.Debug("project in voting period", "project-id", project.Id, "passed-votes", ok)
 				if ok {
 					project.Status = definition.ActiveStatus
@@ -436,7 +476,7 @@ func (p *UpdateEmbeddedAcceleratorMethod) ReceiveBlock(context vm_context.Accoun
 				// Post-spork: do a final tally on the expired window so a
 				// project whose stored votes would pass is not permanently
 				// closed just because no update ran before the deadline.
-				ok := checkAcceleratorVotes(context, project.Id, numPillars)
+				ok := checkAcceleratorVotes(context, project.Id, electorate)
 				acceleratorLog.Debug("project voting period expired, final tally", "project-id", project.Id, "passed-votes", ok)
 				if ok {
 					project.Status = definition.ActiveStatus
@@ -456,7 +496,7 @@ func (p *UpdateEmbeddedAcceleratorMethod) ReceiveBlock(context vm_context.Accoun
 			}
 			// Mark current phase as Paid if possible
 			if phase.Status == definition.VotingStatus {
-				if checkAcceleratorVotes(context, phase.Id, numPillars) && len(blocks) < constants.MaxBlocksPerUpdate {
+				if checkAcceleratorVotes(context, phase.Id, electorate) && len(blocks) < constants.MaxBlocksPerUpdate {
 					if err := checkPhaseFunds(context, project); err != nil {
 						continue
 					}
