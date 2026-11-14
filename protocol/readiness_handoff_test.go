@@ -40,6 +40,11 @@ type handoffDownloader struct {
 	// reads is answered: something that happened in the downloader after
 	// the predicate was entered and before it looked.
 	beforeFirstRead func()
+	// workerFinishesBeforeProcessingRead, when set, runs once before
+	// Processing is answered and leaves the downloader idle: the worker
+	// that held a batch at the Stats read has imported it and lowered its
+	// flag by the time the flag is read.
+	workerFinishesBeforeProcessingRead func()
 }
 
 func (d *handoffDownloader) entered() {
@@ -69,6 +74,12 @@ func (d *handoffDownloader) Stats() (pending int, cached int, importing int, est
 
 func (d *handoffDownloader) Processing() bool {
 	d.entered()
+	if d.workerFinishesBeforeProcessingRead != nil {
+		finish := d.workerFinishesBeforeProcessingRead
+		d.workerFinishesBeforeProcessingRead = nil
+		finish()
+		d.stage = stageIdle
+	}
 	defer d.afterRead("Processing")
 	return d.stage == stageTaken || d.stage == stageImporting
 }
@@ -164,27 +175,45 @@ func TestReadyToProduce_SeesAWorkerStartingBetweenTheReads(t *testing.T) {
 	}
 }
 
-// An import that finishes while the predicate runs, after it was entered
-// with the window expired and before it reads the downloader, leaves the
-// worker idle and the queue empty by the time they are read. The window is
-// read after them, so the import is seen and the node, still behind, is
-// held. This fails if the window is sampled before the downloader reads.
+// An import that finishes while the predicate runs, with the window
+// expired when it was entered, leaves the worker idle and the queue empty
+// by the time they are read. The window is read after the worker's flag,
+// so the import is seen and the node, still behind, is held. The import
+// lands either before the downloader is read at all, or after Stats has
+// looked past a batch the worker had taken and before the flag is read.
+// This fails if the window is sampled before any of the downloader reads.
 func TestReadyToProduce_SeesAnImportThatFinishedDuringTheReads(t *testing.T) {
-	clock := useReadinessClock(t)
-	pm, bridge := newReadinessManager(t, 1, 10)
-	addPeer(t, pm, 1, 12)
-	clock.t = clock.t.Add(producerStallWindow)
-	if !pm.readyToProduce(&handoffDownloader{session: true}) {
-		t.Fatal("not ready past the window with a session that imported nothing")
-	}
+	for _, landing := range []string{"before the first read", "between Stats and Processing"} {
+		t.Run(landing, func(t *testing.T) {
+			clock := useReadinessClock(t)
+			pm, bridge := newReadinessManager(t, 1, 10)
+			addPeer(t, pm, 1, 12)
+			clock.t = clock.t.Add(producerStallWindow)
+			if !pm.readyToProduce(&handoffDownloader{session: true}) {
+				t.Fatal("not ready past the window with a session that imported nothing")
+			}
 
-	bridge.moved = true
-	work := &handoffDownloader{session: true, beforeFirstRead: func() {
-		if _, err := pm.insertFromDownload(nil); err != nil {
-			t.Fatal(err)
-		}
-	}}
-	if pm.readyToProduce(work) {
-		t.Fatal("ready although a download import landed before the downloader was read")
+			bridge.moved = true
+			imported := func() {
+				if _, err := pm.insertFromDownload(nil); err != nil {
+					t.Error(err)
+				}
+			}
+			work := &handoffDownloader{session: true}
+			if landing == "before the first read" {
+				work.beforeFirstRead = imported
+			} else {
+				// Taken and not yet published: Stats sees nothing, and
+				// the worker is done before its flag is read.
+				work.stage = stageTaken
+				work.workerFinishesBeforeProcessingRead = imported
+			}
+			if pm.readyToProduce(work) {
+				t.Fatalf("ready although a download import landed %s", landing)
+			}
+			if len(work.reads) != 2 || work.reads[1] != "Processing" {
+				t.Fatalf("the predicate did not read the worker's flag after the queue, got %v", work.reads)
+			}
+		})
 	}
 }
