@@ -8,11 +8,12 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 )
 
-// producerStallWindow is how long a best peer's advertised height may keep
-// production blocked without a download session importing anything. A
-// failing session (hash fetch, block fetch and import) completes well
-// inside it, so two attempts fit before the node concludes the target is
-// not reachable from its peers.
+// producerStallWindow is how long anything short of an import may keep
+// production blocked: a best peer's advertised height, a download session
+// against it, and blocks a session has fetched that the import worker has
+// not taken. A failing session (hash fetch, block fetch and import)
+// completes well inside it, so two attempts fit before the node concludes
+// the target is not reachable from its peers.
 const producerStallWindow = 60 * time.Second
 
 // producerProgress records the last time a download session imported a
@@ -74,16 +75,22 @@ type importWork interface {
 // current slot. It is the producer's gate; SyncInfo stays the telemetry
 // and keeps its meaning.
 //
-// Production is blocked while fewer than minPeers peers are connected,
-// while a download session is running, its import worker owns blocks, or
-// its import queue is draining (the frontier is about to move, whatever
-// the advertised target says), and otherwise, while the node is behind the
-// best peer's advertised height, until no session has imported a batch for
-// producerStallWindow.
-// An advertised height is a claim, not a verified chain: once the window
-// has passed without an import the claim no longer holds production,
-// whatever peers connect or reconnect in the meantime, until a session
-// does import a batch again.
+// Production is blocked while fewer than minPeers peers are connected and
+// while the import worker owns blocks (the frontier is about to move,
+// whatever the advertised target says). Otherwise it is blocked while the
+// node is behind the best peer's advertised height, while a download
+// session is running, or while fetched blocks wait in the queue, until no
+// session has imported a batch for producerStallWindow.
+//
+// An advertised height is a claim, not a verified chain, and so is
+// everything a peer can do with it short of serving momentums that import:
+// a session lasts as long as its origin answers, and the queue files a
+// delivered block before anything has checked it. Once the window has
+// passed without an import none of these holds production, whatever peers
+// connect or reconnect and however many sessions start in the meantime,
+// until a session does import a batch again. A session that is importing
+// renews the window with every batch, so it holds from its first import
+// until the window after its last.
 func (pm *ProtocolManager) ReadyToProduce() bool {
 	return pm.readyToProduce(pm.downloader)
 }
@@ -94,22 +101,35 @@ func (pm *ProtocolManager) readyToProduce(work importWork) bool {
 	if info.State == NotEnoughPeers {
 		return false
 	}
-	if work.Synchronising() {
-		return false
-	}
+	session := work.Synchronising()
 	// Stats before Processing, in that order: a delivered batch sits in the
 	// queue, where Stats counts it, until the worker takes it, and the
 	// worker sets its flag before it takes anything. Read the other way
 	// round, a worker starting between the two reads could take the batch
-	// before Stats looked and both checks would come back empty.
-	if _, cached, importing, _ := work.Stats(); cached > 0 || importing > 0 {
+	// before Stats looked and both checks would come back empty. Past the
+	// stall window the cached count holds nothing (see below), and a batch
+	// is first seen when the worker raises its flag.
+	_, cached, importing, _ := work.Stats()
+	// Blocks the worker has taken hold production on their own: the node
+	// is inserting them and the frontier may move under a producer at any
+	// moment. That lasts as long as the node's own insert, not as long as
+	// a peer likes.
+	if importing > 0 {
 		return false
 	}
 	if work.Processing() {
 		return false
 	}
-	if info.State == SyncDone {
+	// The window is read after the worker's flag: the worker records an
+	// import before it lowers the flag, so an import that finished while
+	// the reads above were made is seen here.
+	if pm.progress.idleFor() >= producerStallWindow {
+		// Nothing has been imported for the window. A running session and
+		// blocks left in the queue are then no more than the claim that
+		// led to them: a peer can start sessions back to back, keep each
+		// one going and park blocks behind a head it never serves, all
+		// without an import.
 		return true
 	}
-	return pm.progress.idleFor() >= producerStallWindow
+	return info.State == SyncDone && !session && cached == 0
 }
