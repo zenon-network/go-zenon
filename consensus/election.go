@@ -90,11 +90,19 @@ type electionManager struct {
 //     schedule and the delegations it was computed from.
 //   - DelegationsByTick returns the detailed per-backer delegations
 //     at the tick's proof momentum.
+//
+// The exported methods resolve the proof momentum on the frontier; the
+// At variants resolve it on the momentum store they are given, so a
+// caller pinned to one store (a period point, a FixedPillarReader) gets
+// the proof momentum of that store's chain.
 type ElectionReader interface {
 	common.Ticker
 	ElectionByTime(t time.Time) (*electionResult, error)
 	ElectionByTick(tick uint64) (*electionResult, error)
 	DelegationsByTick(tick uint64) ([]*types.PillarDelegationDetail, error)
+
+	electionByTickAt(momentumStore store.Momentum, tick uint64) (*electionResult, error)
+	delegationsByTickAt(momentumStore store.Momentum, tick uint64) ([]*types.PillarDelegationDetail, error)
 }
 
 func (em *electionManager) ElectionByTime(t time.Time) (*electionResult, error) {
@@ -117,6 +125,9 @@ func (em *electionManager) electionByTimeAt(momentumStore store.Momentum, t time
 func (em *electionManager) electionByTickAt(momentumStore store.Momentum, tick uint64) (*electionResult, error) {
 	if int64(tick) < 0 {
 		return nil, ErrElectionBeforeGenesis
+	}
+	if momentumStore == nil {
+		return nil, errors.Errorf("no momentum store to read the election of tick %v from", tick)
 	}
 	proofTime := em.genProofTime(tick)
 	proofBlock, err := getMomentumBeforeTime(momentumStore, proofTime)
@@ -153,15 +164,27 @@ func (em *electionManager) electionByTickAt(momentumStore store.Momentum, tick u
 	return result, nil
 }
 func (em *electionManager) DelegationsByTick(tick uint64) ([]*types.PillarDelegationDetail, error) {
+	return em.delegationsByTickAt(em.chain.GetFrontierMomentumStore(), tick)
+}
+
+// delegationsByTickAt returns the detailed delegations at the proof
+// momentum of tick as momentumStore's chain sees it.
+func (em *electionManager) delegationsByTickAt(momentumStore store.Momentum, tick uint64) ([]*types.PillarDelegationDetail, error) {
+	if momentumStore == nil {
+		return nil, errors.Errorf("no momentum store to read the delegations of tick %v from", tick)
+	}
 	proofTime := em.genProofTime(tick)
-	proofBlock, err := getMomentumBeforeTime(em.chain.GetFrontierMomentumStore(), proofTime)
+	proofBlock, err := getMomentumBeforeTime(momentumStore, proofTime)
 	if err != nil {
 		em.log.Error("GetMomentumBeforeTime failed", "reason", err)
 		return nil, err
 	}
-	store := em.chain.GetMomentumStore(proofBlock.Identifier())
+	proofStore := em.chain.GetMomentumStore(proofBlock.Identifier())
+	if proofStore == nil {
+		return nil, errors.Errorf("no momentum store at proof momentum %v of tick %v", proofBlock.Identifier(), tick)
+	}
 
-	return store.ComputePillarDelegations()
+	return proofStore.ComputePillarDelegations()
 }
 func (em *electionManager) genProofTime(tick uint64) time.Time {
 	if tick < 2 {
@@ -173,7 +196,6 @@ func (em *electionManager) genProofTime(tick uint64) time.Time {
 
 func (em *electionManager) generateProducers(proofBlock *nom.Momentum) (*storage.ElectionData, error) {
 	hashH := types.HashHeight{Hash: proofBlock.Hash, Height: proofBlock.Height}
-	store := em.chain.GetMomentumStore(proofBlock.Identifier())
 	// load from cache
 	cached, err := em.db.GetElectionResultByHash(hashH.Hash)
 	if err != nil {
@@ -185,7 +207,11 @@ func (em *electionManager) generateProducers(proofBlock *nom.Momentum) (*storage
 	}
 
 	// get delegations
-	delegationsDetailed, err := store.ComputePillarDelegations()
+	proofStore := em.chain.GetMomentumStore(proofBlock.Identifier())
+	if proofStore == nil {
+		return nil, errors.Errorf("no momentum store at proof momentum %v", proofBlock.Identifier())
+	}
+	delegationsDetailed, err := proofStore.ComputePillarDelegations()
 	if err != nil {
 		return nil, err
 	}
