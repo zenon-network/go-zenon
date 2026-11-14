@@ -67,6 +67,42 @@ func (e *SideChainRejected) Error() string {
 
 func (e *SideChainRejected) Unwrap() error { return e.Cause }
 
+// BatchRejected is returned by InsertChain when a batch is refused for its
+// shape and every candidate in it is the momentum its hash names: the
+// candidates do not chain, or the batch does not attach to the local chain,
+// attaches more than the rollback limit below the frontier, or is not
+// longer than the local chain. It is a verdict on the batch and not on the
+// candidate at the returned index or on the peer that delivered it. Nothing
+// is remembered and nobody is quarantined for it. It reports its cause's
+// text unchanged.
+//
+// Since every candidate is what its hash names, the shape of the batch is
+// the shape of the list of hashes it was requested by. Verdict is the
+// downloader's sentinel for what else the refusal depends on, which is what
+// decides whom the downloader holds it against (see the sentinels, and
+// refuseBatch):
+//
+//   - downloader.ErrBatchRejected: nothing else. Whether the candidates
+//     chain is fixed by the list.
+//   - downloader.ErrBatchMisplaced: the local chain. Where the batch
+//     attaches and how far below the frontier is fixed by the list only
+//     for the chain it was requested against, and the frontier can have
+//     moved since.
+//   - downloader.ErrBatchInconclusive: how much of the list had arrived
+//     when the batch was handed over. A batch that is not longer than the
+//     local chain may be the beginning of one that is.
+type BatchRejected struct {
+	Cause   error
+	Verdict error
+}
+
+func (e *BatchRejected) Error() string { return e.Cause.Error() }
+
+func (e *BatchRejected) Unwrap() error { return e.Cause }
+
+// Is makes errors.Is hold for Verdict.
+func (e *BatchRejected) Is(target error) bool { return target == e.Verdict }
+
 // validationError marks an error raised while validating or applying a
 // momentum's content, as opposed to one raised while committing it. It
 // reports the wrapped error's text unchanged so logs do not change.

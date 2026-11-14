@@ -12,6 +12,7 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
+	"github.com/zenon-network/go-zenon/protocol/downloader"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm"
 )
@@ -190,11 +191,15 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 	// chain would otherwise have its content applied under the state the
 	// earlier ones left, and any verdict reached that way is a verdict on
 	// the batch, not on the candidate. This is structural, like the checks
-	// above: nothing is remembered and nothing is attributed to a peer.
+	// above: nothing is remembered and nobody is quarantined. The index of
+	// the candidate that does not link is not the index of the candidate at
+	// fault, which may be the one before it, or neither; refuseBatch
+	// decides what the failure is reported as.
+	batch := momentums
 	for index := 1; index < len(momentums); index++ {
 		if momentums[index].Momentum.Previous() != momentums[index-1].Momentum.Identifier() {
 			log.Error("momentums to insert do not chain", "index", index, "momentum-identifier", momentums[index].Momentum.Identifier(), "previous", momentums[index].Momentum.Previous(), "preceding", momentums[index-1].Momentum.Identifier())
-			return index, errors.Errorf("momentums to insert do not chain: %v does not extend %v", momentums[index].Momentum.Identifier(), momentums[index-1].Momentum.Identifier())
+			return refuseBatch(batch, index, &BatchRejected{Verdict: downloader.ErrBatchRejected, Cause: errors.Errorf("momentums to insert do not chain: %v does not extend %v", momentums[index].Momentum.Identifier(), momentums[index-1].Momentum.Identifier())})
 		}
 	}
 	a := momentums[0]
@@ -265,22 +270,39 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 		// store (e.g. a side-chain whose head is more than one above our frontier).
 		// Guard the nil before dereferencing it, matching the check in the loop
 		// above; the downloader turns this error into a peer drop + retry.
+		//
+		// This and the three refusals below are about the shape of the batch
+		// against the local chain: where it attaches, how deep, how long.
+		// Like a batch that does not chain they are not a verdict on the
+		// head, let alone on the first momentum of the batch, which may be
+		// one the node already has; see refuseBatch. Unlike a batch that
+		// does not chain, where the batch attaches and how deep also depend
+		// on the local chain, which another import path can have moved
+		// since the batch was requested, so the first three are reported as
+		// misplaced and not as rejected. The fourth is reported as
+		// inconclusive, for the reason given there.
 		if target == nil {
-			return 0, errors.Errorf("can't link momentums to insert. No momentum at height %d to link head %v (frontier %v)", head.Height-1, head.Identifier(), ourFrontier.Identifier())
+			return refuseBatch(batch, start, &BatchRejected{Verdict: downloader.ErrBatchMisplaced, Cause: errors.Errorf("can't link momentums to insert. No momentum at height %d to link head %v (frontier %v)", head.Height-1, head.Identifier(), ourFrontier.Identifier())})
 		}
 		if target.Identifier() != head.Previous() {
 			log.Error("can't link momentums to insert", "first")
-			return 0, errors.Errorf("can't link momentums to insert. First momentum Prev is %v but he have %v", head.Previous(), target.Identifier())
+			return refuseBatch(batch, start, &BatchRejected{Verdict: downloader.ErrBatchMisplaced, Cause: errors.Errorf("can't link momentums to insert. First momentum Prev is %v but he have %v", head.Previous(), target.Identifier())})
 		}
 
 		// check that the distance allows rollback
 		if ourFrontier.Height-target.Height > 30 {
-			return 0, errors.Errorf("can't rollback to %v. Too far. Frontier is %v. Wanted to be able to insert %v", target.Identifier(), ourFrontier.Identifier(), head.Identifier())
+			return refuseBatch(batch, start, &BatchRejected{Verdict: downloader.ErrBatchMisplaced, Cause: errors.Errorf("can't rollback to %v. Too far. Frontier is %v. Wanted to be able to insert %v", target.Identifier(), ourFrontier.Identifier(), head.Identifier())})
 		}
 
 		// check that current tail is longer than frontier
+		//
+		// How long the batch is does not follow from the hashes it was
+		// requested by at all: a caller that inserts a chain as it arrives
+		// hands over whatever prefix it has, and a prefix of a longer chain
+		// is refused here like a chain that ends too early. So this refusal
+		// is inconclusive.
 		if tail.Height <= ourFrontier.Height {
-			return 0, errors.Errorf("won't insert side-chain which is not longer")
+			return refuseBatch(batch, start, &BatchRejected{Verdict: downloader.ErrBatchInconclusive, Cause: errors.Errorf("won't insert side-chain which is not longer")})
 		}
 
 		// Everything that can be checked before any canonical momentum is
@@ -386,6 +408,42 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 		return failed + start, c.rejectIfValidation(momentums[failed], err)
 	}
 	return 0, nil
+}
+
+// refuseBatch reports a batch refused for its shape: its candidates do not
+// chain, or it does not attach to the local chain, attaches too deep, or
+// is not longer than the local chain. index is the candidate the refusal
+// was noticed at, verdict what was noticed.
+//
+// Such a refusal says nothing about the candidate at index, so it must not
+// be held against whoever delivered that candidate. The downloader fills a
+// batch from several peers, asking each for momentums by hash, and files
+// what it receives under the hash and height on the wire without
+// recomputing either. Two cases follow, and the bytes tell them apart:
+//
+//   - A candidate is not the momentum its hash names. Whoever delivered it
+//     answered a request for that hash with something else, and a batch
+//     built on it has whatever shape those bytes give it. The failure is
+//     that candidate's: its index is returned with verifier.ErrMHashInvalid,
+//     untyped, so the caller's ordinary import-failure handling applies to
+//     its deliverer. It is not a SideChainRejected: the batch was refused
+//     for its shape before any consensus check ran, nothing is remembered,
+//     and nobody is quarantined.
+//   - Every candidate is the momentum its hash names. Then every deliverer
+//     served what it was asked for, and no deliverer answers for the shape.
+//     The refusal is the BatchRejected passed in, a verdict on the batch
+//     (see BatchRejected for whom the downloader holds it against).
+//
+// The hashes are recomputed only on this path, for a batch that is being
+// refused anyway, and the work is linear in the batch.
+func refuseBatch(batch []*nom.DetailedMomentum, index int, verdict *BatchRejected) (int, error) {
+	for at, detailed := range batch {
+		if detailed.Momentum.ComputeHash() != detailed.Momentum.Hash {
+			log.Info("batch refused for its shape carries a momentum that is not what its hash names", "index", at, "momentum-identifier", detailed.Momentum.Identifier(), "reason", verdict.Cause)
+			return at, errors.Wrapf(verifier.ErrMHashInvalid, "momentum %v, in a batch refused for its shape (%v)", detailed.Momentum.Identifier(), verdict.Cause)
+		}
+	}
+	return index, verdict
 }
 
 // firstRemembered returns the index of the first candidate whose served
