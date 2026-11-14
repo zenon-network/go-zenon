@@ -10,7 +10,6 @@ import (
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
-	"github.com/zenon-network/go-zenon/protocol/downloader"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm/constants"
 )
@@ -78,34 +77,31 @@ func (e *SideChainRejected) Unwrap() error { return e.Cause }
 // text unchanged.
 //
 // Since every candidate is what its hash names, the shape of the batch is
-// the shape of the list of hashes it was requested by, set against the
-// local chain. Which momentums follow which, where the batch attaches and
-// how deep are all fixed by that list, so those refusals match
-// downloader.ErrBatchRejected, and the downloader holds them against the
-// peer that supplied the list. How long the batch is depends on how much of
-// the list had arrived when it was handed over, which no peer answers for:
-// that refusal is Inconclusive, matches downloader.ErrBatchInconclusive
-// instead, and costs nobody its connection. See refuseBatch.
+// the shape of the list of hashes it was requested by. Verdict is the
+// downloader's sentinel for what else the refusal depends on, which is what
+// decides whom the downloader holds it against (see the sentinels, and
+// refuseBatch):
+//
+//   - downloader.ErrBatchRejected: nothing else. Whether the candidates
+//     chain is fixed by the list.
+//   - downloader.ErrBatchMisplaced: the local chain. Where the batch
+//     attaches and how far below the frontier is fixed by the list only
+//     for the chain it was requested against, and the frontier can have
+//     moved since.
+//   - downloader.ErrBatchInconclusive: how much of the list had arrived
+//     when the batch was handed over. A batch that is not longer than the
+//     local chain may be the beginning of one that is.
 type BatchRejected struct {
-	Cause error
-	// Inconclusive marks a refusal that the hashes of the batch do not
-	// decide: the batch is not longer than the local chain, and may be the
-	// beginning of one that is.
-	Inconclusive bool
+	Cause   error
+	Verdict error
 }
 
 func (e *BatchRejected) Error() string { return e.Cause.Error() }
 
 func (e *BatchRejected) Unwrap() error { return e.Cause }
 
-// Is makes errors.Is hold for the downloader's sentinel that says whom the
-// refusal is held against.
-func (e *BatchRejected) Is(target error) bool {
-	if e.Inconclusive {
-		return target == downloader.ErrBatchInconclusive
-	}
-	return target == downloader.ErrBatchRejected
-}
+// Is makes errors.Is hold for Verdict.
+func (e *BatchRejected) Is(target error) bool { return target == e.Verdict }
 
 // validationError marks an error raised while validating or applying a
 // momentum's content, as opposed to one raised while committing it. It

@@ -23,6 +23,10 @@ type downloadRun struct {
 	t *testing.T
 	d *downloader.Downloader
 
+	// over is closed when the test ends; a scripted peer that withholds a
+	// reply waits on it.
+	over chan struct{}
+
 	mu          sync.Mutex
 	dropped     []string
 	quarantined []string
@@ -30,7 +34,7 @@ type downloadRun struct {
 
 func newDownloadRun(t *testing.T, bridge protocol.ChainBridge) *downloadRun {
 	t.Helper()
-	r := &downloadRun{t: t}
+	r := &downloadRun{t: t, over: make(chan struct{})}
 	r.d = downloader.New(
 		bridge.HasBlock,
 		bridge.GetBlock,
@@ -50,48 +54,44 @@ func newDownloadRun(t *testing.T, bridge protocol.ChainBridge) *downloadRun {
 			}
 		},
 	)
-	t.Cleanup(r.d.Terminate)
+	t.Cleanup(func() {
+		close(r.over)
+		r.d.Terminate()
+	})
 	return r
 }
 
-// register adds a peer that advertises the chain whose hash at height h is
-// chain[h-1], answering a hash request the way the protocol handler does
-// (clipped to its head, newest first), and that answers a block request
-// with serve. serve runs on its own goroutine and hands its reply to
-// deliver, which returns once the downloader has accepted the delivery; a
-// reply of no blocks tells the downloader the peer has none of the hashes.
-func (r *downloadRun) register(id string, chain []types.Hash, serve func(hashes []types.Hash, deliver func([]*nom.DetailedMomentum))) {
+// A scripted peer answers a request for count hashes from height from with
+// what its hashFn returns, and a request for blocks by calling deliver from
+// its blockFn, or by not calling it. Both run on a goroutine of their own
+// and may wait. deliver returns once the downloader has accepted the
+// delivery; the downloader takes deliveries in the order it accepted them.
+type (
+	hashFn  func(from uint64, count int) []types.Hash
+	blockFn func(hashes []types.Hash, deliver func([]*nom.DetailedMomentum))
+)
+
+func (r *downloadRun) register(id string, head types.Hash, hashes hashFn, blocks blockFn) {
 	r.t.Helper()
-	head := uint64(len(chain))
-	hashes := func(from uint64, count int) error {
-		var reply []types.Hash
-		if from <= head {
-			last := from + uint64(count) - 1
-			if last > head {
-				last = head
-			}
-			for h := last; h >= from && h >= 1; h-- {
-				reply = append(reply, chain[h-1])
-			}
-		}
-		_ = r.d.DeliverHashes(id, reply, nil)
-		return nil
-	}
-	blocks := func(hashes []types.Hash) error {
-		serve(hashes, func(reply []*nom.DetailedMomentum) { _ = r.d.DeliverBlocks(id, reply, nil) })
-		return nil
-	}
-	common.FailIfErr(r.t, r.d.RegisterPeer(id, int(protocol.ProtocolVersions[0]), chain[head-1], nil, hashes, blocks))
+	common.FailIfErr(r.t, r.d.RegisterPeer(id, int(protocol.ProtocolVersions[0]), head, nil,
+		func(from uint64, count int) error {
+			_ = r.d.DeliverHashes(id, hashes(from, count), nil)
+			return nil
+		},
+		func(hashes []types.Hash) error {
+			blocks(hashes, func(reply []*nom.DetailedMomentum) { _ = r.d.DeliverBlocks(id, reply, nil) })
+			return nil
+		}))
 }
 
 // synchronise runs one session against origin and returns the peers the
 // downloader dropped and the peers it reported for quarantine, once the
 // session and every import it started are over.
-func (r *downloadRun) synchronise(origin string, chain []types.Hash) (dropped, quarantined []string) {
+func (r *downloadRun) synchronise(origin string, head types.Hash, height uint64) (dropped, quarantined []string) {
 	r.t.Helper()
 	done := make(chan struct{})
 	go func() {
-		r.d.Synchronise(origin, chain[len(chain)-1], uint64(len(chain)))
+		r.d.Synchronise(origin, head, height)
 		close(done)
 	}()
 	select {
@@ -120,9 +120,30 @@ func (r *downloadRun) synchronise(origin string, chain []types.Hash) (dropped, q
 	return append([]string(nil), r.dropped...), append([]string(nil), r.quarantined...)
 }
 
-// serveFrom answers a block request with the momentums of have that were
-// asked for, or with no blocks when it has none of them.
-func serveFrom(have ...*nom.DetailedMomentum) func([]types.Hash, func([]*nom.DetailedMomentum)) {
+// advertise answers a hash request the way the protocol handler does for a
+// node whose hash at height h is chain[h-1]: clipped to its head, newest
+// first, nothing beyond the head.
+func advertise(chain []types.Hash) hashFn {
+	head := uint64(len(chain))
+	return func(from uint64, count int) []types.Hash {
+		if from > head {
+			return nil
+		}
+		last := from + uint64(count) - 1
+		if last > head {
+			last = head
+		}
+		var reply []types.Hash
+		for h := last; h >= from && h >= 1; h-- {
+			reply = append(reply, chain[h-1])
+		}
+		return reply
+	}
+}
+
+// serve answers a block request with the momentums of have that were asked
+// for. A peer registered with it must have every hash it can be asked for.
+func serve(have ...*nom.DetailedMomentum) blockFn {
 	return func(hashes []types.Hash, deliver func([]*nom.DetailedMomentum)) {
 		deliver(pick(hashes, have))
 	}
@@ -153,6 +174,20 @@ func localHashes(t *testing.T, z mock.MockZenon) []types.Hash {
 	return hashes
 }
 
+// withBranch returns the first shared hashes of chain followed by the
+// hashes of branch.
+func withBranch(chain []types.Hash, shared int, branch []*nom.DetailedMomentum) []types.Hash {
+	remote := append([]types.Hash(nil), chain[:shared]...)
+	for _, detailed := range branch {
+		remote = append(remote, detailed.Momentum.Hash)
+	}
+	return remote
+}
+
+func tip(chain []types.Hash) (types.Hash, uint64) {
+	return chain[len(chain)-1], uint64(len(chain))
+}
+
 const (
 	originPeer   = "origin"
 	supplierPeer = "supplier"
@@ -168,23 +203,31 @@ func TestDownload_GenuineExtensionFromTwoPeersDropsNobody(t *testing.T) {
 	_, bridge := newSideChainBridge(z)
 	run := newDownloadRun(t, bridge)
 
-	remote := append(localHashes(t, z), genuine[0].Momentum.Hash, genuine[1].Momentum.Hash)
-	run.register(originPeer, remote, serveFrom(genuine[0]))
-	run.register(supplierPeer, remote, serveFrom(genuine[1]))
+	remote := withBranch(localHashes(t, z), 6, genuine)
+	head, height := tip(remote)
+	run.register(originPeer, head, advertise(remote), serve(genuine...))
+	run.register(supplierPeer, head, advertise(remote), serve(genuine...))
 
-	dropped, quarantined := run.synchronise(originPeer, remote)
+	dropped, quarantined := run.synchronise(originPeer, head, height)
 	common.Expect(t, len(dropped), 0)
 	common.Expect(t, len(quarantined), 0)
 	expectFrontierAt(t, z.Chain(), genuine[1].Momentum)
 }
 
 // The session origin lists a hash of its own at height 7 followed by the
-// genuine hash at height 8, serves what it listed at 7 only after an honest
-// peer has delivered the genuine 8, and so makes both arrive in one batch.
-// The batch does not chain. The peer that delivered the genuine momentum
-// did nothing wrong and must stay; the origin must go, whether what it
-// served at 7 is bytes that do not hash to the listed hash or a momentum of
-// its own making that does.
+// genuine hash at height 8, and makes both momentums arrive in one batch,
+// the genuine one delivered by an honest peer. The batch does not chain.
+// The peer that delivered the genuine momentum did nothing wrong and must
+// stay; the origin must go, whether what it served at 7 is bytes that do
+// not hash to the listed hash or a momentum of its own making that does.
+//
+// The origin needs nothing but the timing of its own replies for this. It
+// lists the hash at 7 first and the hash at 8 only once it has been asked
+// for the momentum at 7, so that the request for 8 goes to another peer,
+// and it answers the request for 7 only after that peer has delivered. The
+// honest peer does not have the origin's hash at 7; should it be asked for
+// it first, it has nothing to deliver and the request moves on to the
+// origin.
 func TestDownload_BatchThatDoesNotChainIsNotBlamedOnTheHonestSupplier(t *testing.T) {
 	cases := map[string]func(frontier *nom.Momentum) *nom.Momentum{
 		"bytes that do not hash to the listed hash": func(frontier *nom.Momentum) *nom.Momentum {
@@ -207,28 +250,46 @@ func TestDownload_BatchThatDoesNotChainIsNotBlamedOnTheHonestSupplier(t *testing
 			before := snapshotChain(t, z.Chain())
 			run := newDownloadRun(t, bridge)
 
-			listed := append(localHashes(t, z), garbage.Momentum.Hash, genuine[1].Momentum.Hash)
+			local := localHashes(t, z)
+			head, height := genuine[1].Momentum.Hash, uint64(8)
+			askedForGarbage := make(chan struct{})
 			genuineDelivered := make(chan struct{})
-			run.register(originPeer, listed, func(hashes []types.Hash, deliver func([]*nom.DetailedMomentum)) {
-				reply := pick(hashes, []*nom.DetailedMomentum{garbage})
-				if len(reply) != 0 {
+			var asked, delivered sync.Once
+
+			run.register(originPeer, head,
+				func(from uint64, count int) []types.Hash {
+					switch {
+					case from <= 6:
+						return advertise(local)(from, count)
+					case from == 7:
+						return []types.Hash{garbage.Momentum.Hash}
+					case from == 8:
+						select {
+						case <-askedForGarbage:
+						case <-run.over:
+						}
+						return []types.Hash{genuine[1].Momentum.Hash}
+					}
+					return nil
+				},
+				func(hashes []types.Hash, deliver func([]*nom.DetailedMomentum)) {
+					asked.Do(func() { close(askedForGarbage) })
 					select {
 					case <-genuineDelivered:
-					case <-time.After(20 * time.Second):
+					case <-run.over:
 					}
-				}
-				deliver(reply)
-			})
-			var once sync.Once
-			run.register(supplierPeer, listed, func(hashes []types.Hash, deliver func([]*nom.DetailedMomentum)) {
-				reply := pick(hashes, []*nom.DetailedMomentum{genuine[1]})
-				deliver(reply)
-				if len(reply) != 0 {
-					once.Do(func() { close(genuineDelivered) })
-				}
-			})
+					deliver(pick(hashes, []*nom.DetailedMomentum{garbage}))
+				})
+			run.register(supplierPeer, head, advertise(withBranch(local, 6, genuine)),
+				func(hashes []types.Hash, deliver func([]*nom.DetailedMomentum)) {
+					reply := pick(hashes, genuine)
+					deliver(reply)
+					if len(reply) != 0 {
+						delivered.Do(func() { close(genuineDelivered) })
+					}
+				})
 
-			dropped, quarantined := run.synchronise(originPeer, listed)
+			dropped, quarantined := run.synchronise(originPeer, head, height)
 			for _, id := range dropped {
 				if id == supplierPeer {
 					t.Fatalf("the peer that delivered the genuine momentum was dropped (dropped: %v)", dropped)
@@ -257,18 +318,17 @@ func TestDownload_AlteredBytesUnderAListedHashAreBlamedOnTheirDeliverer(t *testi
 	_, bridge := newSideChainBridge(z)
 	run := newDownloadRun(t, bridge)
 
-	altered := make([]*nom.DetailedMomentum, len(genuine))
+	changed := make([]*nom.DetailedMomentum, len(genuine))
 	for i, detailed := range genuine {
-		momentum := *detailed.Momentum
-		momentum.PreviousHash = types.NewHash([]byte("not the previous momentum"))
-		altered[i] = &nom.DetailedMomentum{Momentum: &momentum, AccountBlocks: detailed.AccountBlocks}
+		changed[i] = altered(detailed, otherPrevious)
 	}
 
-	remote := append(localHashes(t, z), genuine[0].Momentum.Hash, genuine[1].Momentum.Hash)
-	run.register(originPeer, remote, serveFrom(genuine...))
-	run.register(supplierPeer, remote, serveFrom(altered...))
+	remote := withBranch(localHashes(t, z), 6, genuine)
+	head, height := tip(remote)
+	run.register(originPeer, head, advertise(remote), serve(genuine...))
+	run.register(supplierPeer, head, advertise(remote), serve(changed...))
 
-	dropped, quarantined := run.synchronise(originPeer, remote)
+	dropped, quarantined := run.synchronise(originPeer, head, height)
 	if len(dropped) != 1 || dropped[0] != supplierPeer {
 		t.Fatalf("expected exactly the peer that served altered bytes to be dropped, got %v", dropped)
 	}
@@ -276,10 +336,11 @@ func TestDownload_AlteredBytesUnderAListedHashAreBlamedOnTheirDeliverer(t *testi
 }
 
 // The origin is honest and on a longer branch that forks below the local
-// frontier. The first momentum of that branch arrives while the second is
-// still outstanding, so the import worker is handed a batch of one, which
-// is not longer than the local chain and is refused. Every peer did what it
-// was asked and the hash list is sound: the batch was simply not all of it.
+// frontier. It is slow to list the branch: the hash of the first momentum
+// arrives, that momentum is downloaded and handed to the import worker,
+// and the rest of the list is still outstanding. A batch of one is not
+// longer than the local chain and is refused. Every peer did what it was
+// asked and the hash list is sound: the batch was simply not all of it.
 // Nobody may be dropped for that, neither the peer that delivered the
 // first momentum nor the origin.
 func TestDownload_PrefixThatIsNotYetLongerDropsNobody(t *testing.T) {
@@ -291,22 +352,20 @@ func TestDownload_PrefixThatIsNotYetLongerDropsNobody(t *testing.T) {
 	before := snapshotChain(t, z.Chain())
 	run := newDownloadRun(t, bridge)
 
-	remote := append(localHashes(t, z)[:5], branch[0].Momentum.Hash, branch[1].Momentum.Hash)
-	sessionOver := make(chan struct{})
-	defer close(sessionOver)
-	run.register(originPeer, remote, serveFrom(branch[0]))
-	run.register(supplierPeer, remote, func(hashes []types.Hash, deliver func([]*nom.DetailedMomentum)) {
-		reply := pick(hashes, []*nom.DetailedMomentum{branch[1]})
-		if len(reply) != 0 {
-			// Slow, or withholding: the second momentum never arrives
-			// while the session lasts.
-			<-sessionOver
-			return
-		}
-		deliver(reply)
-	})
+	remote := withBranch(localHashes(t, z), 5, branch)
+	head, height := tip(remote)
+	run.register(originPeer, head,
+		func(from uint64, count int) []types.Hash {
+			if from == 7 {
+				<-run.over
+				return nil
+			}
+			return advertise(remote[:6])(from, count)
+		},
+		serve(branch...))
+	run.register(supplierPeer, head, advertise(remote), serve(branch...))
 
-	dropped, quarantined := run.synchronise(originPeer, remote)
+	dropped, quarantined := run.synchronise(originPeer, head, height)
 	common.Expect(t, len(dropped), 0)
 	common.Expect(t, len(quarantined), 0)
 	expectChainEquals(t, z.Chain(), before)
@@ -316,4 +375,68 @@ func TestDownload_PrefixThatIsNotYetLongerDropsNobody(t *testing.T) {
 	_, err := bridge.InsertChain(branch)
 	common.FailIfErr(t, err)
 	expectFrontierAt(t, z.Chain(), branch[1].Momentum)
+}
+
+// The origin is on a branch that forks further below the local frontier
+// than the node rolls back, and serves no momentums itself: the one request
+// it is sent goes unanswered. Another peer delivers the rest, the first
+// momentum of the branch among them. The batch is refused as too deep,
+// which is decided by where the origin's hash list attaches to a local
+// chain that did not move during the session: the origin goes, the peer
+// that delivered the momentums it was asked for stays.
+func TestDownload_BranchTooDeepIsBlamedOnTheOrigin(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(40)
+	branch := buildFork(t, z, 5, 41, 2)
+	_, bridge := newSideChainBridge(z)
+	before := snapshotChain(t, z.Chain())
+	run := newDownloadRun(t, bridge)
+
+	remote := withBranch(localHashes(t, z), 5, branch)
+	head, height := tip(remote)
+	run.register(originPeer, head, advertise(remote),
+		func([]types.Hash, func([]*nom.DetailedMomentum)) { <-run.over })
+	run.register(supplierPeer, head, advertise(remote), serve(branch...))
+
+	dropped, quarantined := run.synchronise(originPeer, head, height)
+	if len(dropped) != 1 || dropped[0] != originPeer {
+		t.Fatalf("expected exactly the origin to be dropped, got %v", dropped)
+	}
+	common.Expect(t, len(quarantined), 0)
+	expectChainEquals(t, z.Chain(), before)
+}
+
+// The origin's branch forks exactly as deep as the node still rolls back
+// when the session begins. While the branch is being downloaded the local
+// chain grows by a momentum of its own, by another import path, and the
+// branch is one too deep by the time it is imported. The origin's list
+// fitted the chain it was requested against, and both peers served what
+// they were asked for: nobody may be dropped.
+func TestDownload_BranchTooDeepOnlyBecauseTheLocalChainGrewDropsNobody(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(40)
+	branch := buildFork(t, z, 10, 42, 2)
+	_, bridge := newSideChainBridge(z)
+	run := newDownloadRun(t, bridge)
+
+	remote := withBranch(localHashes(t, z), 10, branch)
+	head, height := tip(remote)
+	// The local chain grows once the session is under way, before any
+	// momentum of the branch has been delivered, so before any import.
+	var grow sync.Once
+	growThenServe := func(hashes []types.Hash, deliver func([]*nom.DetailedMomentum)) {
+		grow.Do(func() { z.InsertMomentumsTo(41) })
+		deliver(pick(hashes, branch))
+	}
+	run.register(originPeer, head, advertise(remote), growThenServe)
+	run.register(supplierPeer, head, advertise(remote), growThenServe)
+
+	dropped, quarantined := run.synchronise(originPeer, head, height)
+	common.Expect(t, len(dropped), 0)
+	common.Expect(t, len(quarantined), 0)
+	if momentumAt(t, z.Chain(), 41).Hash == branch[30].Momentum.Hash {
+		t.Fatal("the branch was imported; the fixture did not make it too deep")
+	}
 }

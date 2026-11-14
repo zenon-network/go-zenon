@@ -12,6 +12,7 @@ import (
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
+	"github.com/zenon-network/go-zenon/protocol/downloader"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm"
 )
@@ -198,7 +199,7 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 	for index := 1; index < len(momentums); index++ {
 		if momentums[index].Momentum.Previous() != momentums[index-1].Momentum.Identifier() {
 			log.Error("momentums to insert do not chain", "index", index, "momentum-identifier", momentums[index].Momentum.Identifier(), "previous", momentums[index].Momentum.Previous(), "preceding", momentums[index-1].Momentum.Identifier())
-			return refuseBatch(batch, index, &BatchRejected{Cause: errors.Errorf("momentums to insert do not chain: %v does not extend %v", momentums[index].Momentum.Identifier(), momentums[index-1].Momentum.Identifier())})
+			return refuseBatch(batch, index, &BatchRejected{Verdict: downloader.ErrBatchRejected, Cause: errors.Errorf("momentums to insert do not chain: %v does not extend %v", momentums[index].Momentum.Identifier(), momentums[index-1].Momentum.Identifier())})
 		}
 	}
 	a := momentums[0]
@@ -274,29 +275,32 @@ func (c chainBridge) insertChain(momentums []*nom.DetailedMomentum, moved *bool)
 		// against the local chain: where it attaches, how deep, how long.
 		// Like a batch that does not chain they are not a verdict on the
 		// head, let alone on the first momentum of the batch, which may be
-		// one the node already has; see refuseBatch.
+		// one the node already has; see refuseBatch. Unlike a batch that
+		// does not chain they also depend on the local chain, which another
+		// import path can have moved since the batch was requested, so they
+		// are reported as misplaced and not as rejected.
 		if target == nil {
-			return refuseBatch(batch, start, &BatchRejected{Cause: errors.Errorf("can't link momentums to insert. No momentum at height %d to link head %v (frontier %v)", head.Height-1, head.Identifier(), ourFrontier.Identifier())})
+			return refuseBatch(batch, start, &BatchRejected{Verdict: downloader.ErrBatchMisplaced, Cause: errors.Errorf("can't link momentums to insert. No momentum at height %d to link head %v (frontier %v)", head.Height-1, head.Identifier(), ourFrontier.Identifier())})
 		}
 		if target.Identifier() != head.Previous() {
 			log.Error("can't link momentums to insert", "first")
-			return refuseBatch(batch, start, &BatchRejected{Cause: errors.Errorf("can't link momentums to insert. First momentum Prev is %v but he have %v", head.Previous(), target.Identifier())})
+			return refuseBatch(batch, start, &BatchRejected{Verdict: downloader.ErrBatchMisplaced, Cause: errors.Errorf("can't link momentums to insert. First momentum Prev is %v but he have %v", head.Previous(), target.Identifier())})
 		}
 
 		// check that the distance allows rollback
 		if ourFrontier.Height-target.Height > 30 {
-			return refuseBatch(batch, start, &BatchRejected{Cause: errors.Errorf("can't rollback to %v. Too far. Frontier is %v. Wanted to be able to insert %v", target.Identifier(), ourFrontier.Identifier(), head.Identifier())})
+			return refuseBatch(batch, start, &BatchRejected{Verdict: downloader.ErrBatchMisplaced, Cause: errors.Errorf("can't rollback to %v. Too far. Frontier is %v. Wanted to be able to insert %v", target.Identifier(), ourFrontier.Identifier(), head.Identifier())})
 		}
 
 		// check that current tail is longer than frontier
 		//
-		// Where the batch attaches and how deep follow from the hashes it
-		// was requested by. How long it is does not: a caller that inserts
-		// a chain as it arrives hands over whatever prefix it has, and a
-		// prefix of a longer chain is refused here like a chain that ends
-		// too early. So this refusal is inconclusive.
+		// How long the batch is does not follow from the hashes it was
+		// requested by at all: a caller that inserts a chain as it arrives
+		// hands over whatever prefix it has, and a prefix of a longer chain
+		// is refused here like a chain that ends too early. So this refusal
+		// is inconclusive.
 		if tail.Height <= ourFrontier.Height {
-			return refuseBatch(batch, start, &BatchRejected{Cause: errors.Errorf("won't insert side-chain which is not longer"), Inconclusive: true})
+			return refuseBatch(batch, start, &BatchRejected{Verdict: downloader.ErrBatchInconclusive, Cause: errors.Errorf("won't insert side-chain which is not longer")})
 		}
 
 		// Everything that can be checked before any canonical momentum is

@@ -106,19 +106,30 @@ var (
 // names, and together they are not a chain the node can take. Blocks are
 // requested by hash from whichever peer is idle, so the peers that
 // delivered them served what they were asked for, and none of them is
-// dropped for such an error. The insert says which of two kinds it is by
+// dropped for such an error. The insert says which of three kinds it is by
 // returning an error that matches, through errors.Is, one of these.
 var (
-	// ErrBatchRejected: the batch fails for a reason its hashes decide, for
-	// example two of them at consecutive heights do not chain. The list of
+	// ErrBatchRejected: the batch fails for a reason its hashes alone
+	// decide: two of them at consecutive heights do not chain. The list of
 	// hashes came from the peer the session synchronises with; that peer
 	// is dropped, as it is for any other hash chain a session cannot use.
 	ErrBatchRejected = errors.New("batch rejected")
+	// ErrBatchMisplaced: the batch is sound in itself and does not fit the
+	// local chain: it does not attach to it, or attaches too far below its
+	// head. The hash list decides that only together with the local chain,
+	// and the list was requested against the chain as it was when the
+	// session looked for the common ancestor. If the local chain is still
+	// where the session last knew it, the list is what does not fit and
+	// the session peer is dropped. If it has moved since, by another
+	// import path, the same list may have fitted before, and nobody is
+	// dropped.
+	ErrBatchMisplaced = errors.New("batch misplaced")
 	// ErrBatchInconclusive: the batch fails for a reason its hashes do not
 	// decide, namely that it is too short to act on. A batch is whatever
 	// run of blocks has arrived, so it can be the beginning of a chain
-	// that would have been taken. Nobody is dropped; the session ends, as
-	// after any failed import.
+	// that would have been taken. Nobody is dropped.
+	//
+	// Whichever kind it is, the session ends, as after any failed import.
 	ErrBatchInconclusive = errors.New("batch inconclusive")
 )
 
@@ -133,8 +144,8 @@ type headRetrievalFn func() *nom.Momentum
 
 // chainInsertFn is a callback type to insert a batch of blocks into the local chain.
 // On failure it returns the index of the block the failure belongs to, whose
-// deliverer is dropped, unless the error matches ErrBatchRejected or
-// ErrBatchInconclusive.
+// deliverer is dropped, unless the error matches ErrBatchRejected,
+// ErrBatchMisplaced or ErrBatchInconclusive.
 type chainInsertFn func([]*nom.DetailedMomentum) (int, error)
 
 // peerDropFn is a callback type for dropping a peer detected as malicious.
@@ -223,13 +234,48 @@ type Downloader struct {
 }
 
 // Block is an origin-tagged blockchain block. OriginPeer is the peer that
-// delivered it. SessionPeer is the peer the session that requested it
-// synchronises with, whose hash list named it; it is empty when the block
-// was not delivered inside a session.
+// delivered it. session is the session that requested it; it is nil when
+// the block was not delivered inside one.
 type Block struct {
-	RawBlock    *nom.DetailedMomentum
-	OriginPeer  string
-	SessionPeer string
+	RawBlock   *nom.DetailedMomentum
+	OriginPeer string
+	session    *session
+}
+
+// session is what a delivered block keeps of the session that requested
+// it. The import worker can still hold a batch after its session has ended
+// and another one, following another peer, has begun, so a verdict on the
+// batch is read against the session the batch belongs to and not against
+// whichever is running.
+type session struct {
+	// peer is the peer the session synchronises with. It supplied the
+	// list of hashes the session's blocks were requested by.
+	peer string
+
+	mu sync.Mutex
+	// head is the local head as the session last knew it: the head when
+	// the session began, before it looked for the common ancestor, and
+	// then the last momentum of each of its batches the worker imported.
+	head types.Hash
+}
+
+func newSession(peer string, head types.Hash) *session {
+	return &session{peer: peer, head: head}
+}
+
+// imported records that a batch of the session ending in hash was imported.
+func (s *session) imported(hash types.Hash) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.head = hash
+}
+
+// knowsHead reports whether hash is the local head as the session last
+// knew it.
+func (s *session) knowsHead(hash types.Hash) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.head == hash
 }
 
 // New creates a new downloader to fetch hashes and blocks from remote peers.
@@ -445,10 +491,12 @@ func (d *Downloader) syncWithPeer(p *peer, hash types.Hash, td uint64) (err erro
 	}()
 
 	log.Info("Synchronizing with the zenon network", "peer-id", p.id, "version", p.version)
-	// Every block this session files is tagged with the peer whose hash
-	// list it follows, so an import that outlives the session still knows
-	// whose list a batch came from.
-	d.queue.SetSessionPeer(p.id)
+	// Every block this session files is tagged with the session: the peer
+	// whose hash list it follows, and the local head that list is about to
+	// be requested against. An import that outlives the session still
+	// knows whose list a batch came from and what the chain looked like to
+	// it.
+	d.queue.SetSession(newSession(p.id, d.headBlock().Hash))
 	switch p.version {
 	case eth61:
 		// New eth/61, use forward, concurrent hash and block retrieval algorithm
@@ -1024,6 +1072,15 @@ func (d *Downloader) process() {
 				d.cancel()
 				return
 			}
+			// The chain now holds the batch. If nothing else moves it, its
+			// last momentum is the head, where this session's next batch
+			// attaches. If the chain already held the batch and reaches
+			// further, the session knows less than the chain holds, and a
+			// later batch that does not fit is put down to the chain having
+			// moved, which errs on the side of dropping nobody.
+			if s := blocks[max-1].session; s != nil {
+				s.imported(raw[max-1].Momentum.Hash)
+			}
 			blocks = blocks[max:]
 		}
 	}
@@ -1035,29 +1092,48 @@ func (d *Downloader) process() {
 // Ordinarily that is the peer that delivered the block, after the failure
 // has been reported to rejectPeer. A verdict on the batch is different
 // (see ErrBatchRejected): every block is what its hash names, so every
-// deliverer served what it was asked for and none is dropped. When the
-// hashes decide the verdict, what failed is the list they came from, and
-// the peer the session synchronises with supplied it, so that peer is
-// dropped. The block carries the session peer it was requested under,
-// because the import can outlive its session and a later session may follow
-// another peer. When the verdict is inconclusive nobody is dropped. Neither
-// kind is reported to rejectPeer: nobody served a rejected block.
+// deliverer served what it was asked for and none is dropped. Who is, if
+// anybody, depends on what decides the verdict:
+//
+//   - the batch's hashes alone: the list they came from failed, and the
+//     peer the block's session synchronises with supplied it. It is
+//     dropped.
+//   - the hashes set against the local chain: the same, provided the local
+//     chain is still where that session last knew it. If another import
+//     path has moved it since, the list may have fitted the chain it was
+//     requested against, and nobody is dropped.
+//   - neither, because the batch is too short to tell: nobody is dropped.
+//
+// None of the three is reported to rejectPeer: nobody served a rejected
+// block.
 func (d *Downloader) dropForImportFailure(block *Block, err error) {
 	switch {
 	case errors.Is(err, ErrBatchInconclusive):
-		log.Info("Import failure not attributed to a peer", "reason", err)
+		log.Info("Import failure not held against a peer", "reason", err)
 	case errors.Is(err, ErrBatchRejected):
-		if block.SessionPeer == "" {
+		d.dropSessionPeer(block.session, err)
+	case errors.Is(err, ErrBatchMisplaced):
+		if block.session != nil && !block.session.knowsHead(d.headBlock().Hash) {
+			log.Info("Import failure not held against a peer, the local chain moved during the session", "reason", err)
 			return
 		}
-		log.Info("Removing peer", "peer-id", block.SessionPeer, "reason", err)
-		d.dropPeer(block.SessionPeer)
+		d.dropSessionPeer(block.session, err)
 	default:
 		if d.rejectPeer != nil {
 			d.rejectPeer(block.OriginPeer, err)
 		}
 		d.dropPeer(block.OriginPeer)
 	}
+}
+
+// dropSessionPeer drops the peer s synchronises with. A block that was not
+// requested inside a session has nobody to drop.
+func (d *Downloader) dropSessionPeer(s *session, err error) {
+	if s == nil {
+		return
+	}
+	log.Info("Removing peer", "peer-id", s.peer, "reason", err)
+	d.dropPeer(s.peer)
 }
 
 // errPeerClosed is returned to a delivery whose peer shut down while it

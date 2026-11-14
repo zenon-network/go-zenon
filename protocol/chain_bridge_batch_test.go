@@ -15,20 +15,24 @@ import (
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
+// batchVerdicts are the downloader's sentinels for a verdict on a batch.
+var batchVerdicts = []error{downloader.ErrBatchRejected, downloader.ErrBatchMisplaced, downloader.ErrBatchInconclusive}
+
 // expectBatchVerdict asserts err is a verdict on the batch: typed as such,
 // carrying the text of what was noticed, recognised by the downloader as
-// the kind it holds against the peer that supplied the hash list or, when
-// inconclusive, as the kind it holds against nobody, and neither a
-// consensus rejection nor a reason to quarantine anybody.
-func expectBatchVerdict(t *testing.T, bridge protocol.ChainBridge, err error, text string, inconclusive bool) {
+// verdict and as no other kind, and neither a consensus rejection nor a
+// reason to quarantine anybody.
+func expectBatchVerdict(t *testing.T, bridge protocol.ChainBridge, err error, text string, verdict error) {
 	t.Helper()
 	var batch *protocol.BatchRejected
 	if !errors.As(err, &batch) {
 		t.Fatalf("expected a BatchRejected, got %v", err)
 	}
-	common.Expect(t, batch.Inconclusive, inconclusive)
-	common.Expect(t, errors.Is(err, downloader.ErrBatchRejected), !inconclusive)
-	common.Expect(t, errors.Is(err, downloader.ErrBatchInconclusive), inconclusive)
+	for _, kind := range batchVerdicts {
+		if errors.Is(err, kind) != (kind == verdict) {
+			t.Fatalf("expected the refusal to match %q and no other kind; it carries %q", verdict, batch.Verdict)
+		}
+	}
 	if !strings.Contains(err.Error(), text) {
 		t.Fatalf("expected the refusal to say %q, got %v", text, err)
 	}
@@ -47,8 +51,10 @@ func expectNotItsHash(t *testing.T, bridge protocol.ChainBridge, err error) {
 	if !errors.Is(err, verifier.ErrMHashInvalid) {
 		t.Fatalf("expected the candidate to be refused for its hash, got %v", err)
 	}
-	if errors.Is(err, downloader.ErrBatchRejected) || errors.Is(err, downloader.ErrBatchInconclusive) {
-		t.Fatalf("a candidate that is not its hash is its deliverer's doing, not a batch verdict: %v", err)
+	for _, kind := range batchVerdicts {
+		if errors.Is(err, kind) {
+			t.Fatalf("a candidate that is not its hash is its deliverer's doing, not a batch verdict: %v", err)
+		}
 	}
 	var rejected *protocol.SideChainRejected
 	if errors.As(err, &rejected) {
@@ -119,7 +125,7 @@ func TestInsertChain_BatchThatDoesNotChainIsBlamedOnWhatIsAtFault(t *testing.T) 
 			}
 			common.Expect(t, index, f.wantIndex)
 			if f.batchVerdict {
-				expectBatchVerdict(t, bridge, err, "do not chain", false)
+				expectBatchVerdict(t, bridge, err, "do not chain", downloader.ErrBatchRejected)
 			} else {
 				expectNotItsHash(t, bridge, err)
 			}
@@ -138,15 +144,16 @@ func TestInsertChain_BatchThatDoesNotChainIsBlamedOnWhatIsAtFault(t *testing.T) 
 // attach, attaches too deep, or is not longer) is refused with the index of
 // its first momentum the node does not have, never with the index of a
 // momentum the node already has, and as a verdict on the batch when every
-// candidate is what its hash names. Where it attaches and how deep are
-// decided by its hashes; how long it is depends on how much of the chain
-// was handed over, so only that refusal is inconclusive.
+// candidate is what its hash names. Where it attaches and how deep depend
+// on the local chain as well as on its hashes, so those refusals are
+// reported as misplaced; how long it is depends on how much of the chain
+// was handed over, so that one is inconclusive.
 func TestInsertChain_ShapeRefusalIsAVerdictOnTheBatch(t *testing.T) {
 	type fixture struct {
-		batch        []*nom.DetailedMomentum
-		wantIndex    int
-		text         string
-		inconclusive bool
+		batch     []*nom.DetailedMomentum
+		wantIndex int
+		text      string
+		verdict   error
 	}
 	cases := map[string]struct {
 		height uint64
@@ -155,20 +162,20 @@ func TestInsertChain_ShapeRefusalIsAVerdictOnTheBatch(t *testing.T) {
 		"not longer, behind a momentum the node has": {height: 6, build: func(t *testing.T, z mock.MockZenon) fixture {
 			known := prefetchAbove(t, z, 4, 5)
 			competing := buildFork(t, z, 5, 6, 2)
-			return fixture{batch: append(known, competing...), wantIndex: 1, text: "not longer", inconclusive: true}
+			return fixture{batch: append(known, competing...), wantIndex: 1, text: "not longer", verdict: downloader.ErrBatchInconclusive}
 		}},
 		"too deep, behind momentums the node has": {height: 40, build: func(t *testing.T, z mock.MockZenon) fixture {
 			known := prefetchAbove(t, z, 3, 5)
 			fork := buildFork(t, z, 5, 41, 2)
-			return fixture{batch: append(known, fork...), wantIndex: 2, text: "Too far"}
+			return fixture{batch: append(known, fork...), wantIndex: 2, text: "Too far", verdict: downloader.ErrBatchMisplaced}
 		}},
 		"head extends a momentum the node does not have at that height": {height: 6, build: func(t *testing.T, z mock.MockZenon) fixture {
 			fork := buildFork(t, z, 4, 6, 2)
-			return fixture{batch: fork[1:], wantIndex: 0, text: "can't link"}
+			return fixture{batch: fork[1:], wantIndex: 0, text: "can't link", verdict: downloader.ErrBatchMisplaced}
 		}},
 		"head is beyond the frontier": {height: 6, build: func(t *testing.T, z mock.MockZenon) fixture {
 			genuine := buildFork(t, z, 6, 8, 1)
-			return fixture{batch: genuine[1:], wantIndex: 0, text: "can't link"}
+			return fixture{batch: genuine[1:], wantIndex: 0, text: "can't link", verdict: downloader.ErrBatchMisplaced}
 		}},
 	}
 	for name, c := range cases {
@@ -185,7 +192,7 @@ func TestInsertChain_ShapeRefusalIsAVerdictOnTheBatch(t *testing.T) {
 				t.Fatal("expected the batch to be refused")
 			}
 			common.Expect(t, index, f.wantIndex)
-			expectBatchVerdict(t, bridge, err, f.text, f.inconclusive)
+			expectBatchVerdict(t, bridge, err, f.text, f.verdict)
 			common.Expect(t, counting.rollbacks, 0)
 			expectChainEquals(t, z.Chain(), before)
 		})
