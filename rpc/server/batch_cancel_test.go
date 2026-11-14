@@ -54,13 +54,18 @@ func (s *batchCancelService) Step(ctx context.Context) string {
 	return "later"
 }
 
-// Events creates a subscription and hands it to the test.
+// Events creates a subscription, sends one notification, which is buffered
+// until the subscription is activated, and hands the subscription to the
+// test.
 func (s *batchCancelService) Events(ctx context.Context) (*Subscription, error) {
 	notifier, ok := NotifierFromContext(ctx)
 	if !ok {
 		return nil, ErrNotificationsUnsupported
 	}
 	sub := notifier.CreateSubscription()
+	if err := notifier.Notify(sub.ID, "buffered"); err != nil {
+		return nil, err
+	}
 	s.subs <- sub
 	return sub, nil
 }
@@ -213,7 +218,8 @@ func (w *recordingWriter) written() []interface{} {
 
 // A batch that is stopped keeps what its executed calls did: their answers
 // are handed to the connection, and a subscription one of them created is
-// installed, so the connection's teardown ends it and its reservation is
+// installed and activated, so the notification it buffered is written after
+// the reply, the connection's teardown ends it and its reservation is
 // returned. The calls that were not started, a notification among them, are
 // neither run nor answered. Fails if the batch runs on after its context
 // ended, and if stopping it skips the bookkeeping that follows the loop.
@@ -228,6 +234,13 @@ func TestStoppedBatchKeepsWhatItRan(t *testing.T) {
 
 	w := &recordingWriter{done: make(chan interface{})}
 	h := newHandler(context.Background(), w, server.idgen, &server.services, 0)
+	// On every exit, a failure before close included, the batch is ended and
+	// joined. The deferred release above has run by then, so a later call
+	// that was started does not hold the wait.
+	t.Cleanup(func() {
+		h.cancelRoot()
+		h.callWG.Wait()
+	})
 	h.handleBatch([]*jsonrpcMessage{
 		{Version: vsn, ID: json.RawMessage("1"), Method: "batch.subscribe", Params: json.RawMessage(`["events"]`)},
 		{Version: vsn, ID: json.RawMessage("2"), Method: "batch.step"},
@@ -275,10 +288,15 @@ func TestStoppedBatchKeepsWhatItRan(t *testing.T) {
 		t.Fatalf("after close: %d reservations pending, %d subscriptions installed, want 0 and 0", pending, installed)
 	}
 
-	// One reply, holding the answers of the two calls that ran.
+	// One reply, holding the answers of the two calls that ran, and after
+	// it the notification the subscription buffered before it was activated.
 	msgs := w.written()
-	if len(msgs) != 1 {
-		t.Fatalf("handler wrote %d messages, want the one batch reply: %v", len(msgs), msgs)
+	if len(msgs) != 2 {
+		t.Fatalf("handler wrote %d messages, want the batch reply and one notification: %v", len(msgs), msgs)
+	}
+	note, ok := msgs[1].(*jsonrpcMessage)
+	if !ok || note.Method != "batch"+notificationMethodSuffix || !strings.Contains(string(note.Params), `"buffered"`) {
+		t.Fatalf("second message is %v, want the buffered notification of the batch's subscription", msgs[1])
 	}
 	answers, ok := msgs[0].([]*jsonrpcMessage)
 	if !ok {

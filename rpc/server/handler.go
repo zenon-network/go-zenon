@@ -141,9 +141,10 @@ func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *
 // for this batch (true when at least one message needed one).
 //
 // The calls run one after another. Before each one the batch looks at its
-// context and stops if it has ended, so a batch does not outlive its
-// connection by more than the call that was running when the connection
-// went.
+// context and stops if it has ended: once the end of the connection has been
+// observed no further call starts. The call running at that moment finishes,
+// and the answers and subscriptions of the calls that ran are handled as
+// usual.
 func (h *handler) handleBatch(msgs []*jsonrpcMessage, slotAcquired bool) {
 	// Emit error response for empty batches:
 	if len(msgs) == 0 {
