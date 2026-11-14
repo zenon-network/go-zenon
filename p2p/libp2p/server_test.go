@@ -43,6 +43,9 @@ type capacityTestConn struct {
 	remote peer.ID
 	done   chan struct{}
 	once   sync.Once
+	// addr is the address the connection is observed from; nil means
+	// loopback.
+	addr ma.Multiaddr
 }
 
 func (c *capacityTestConn) RemotePeer() peer.ID { return c.remote }
@@ -51,6 +54,9 @@ func (c *capacityTestConn) Close() error {
 	return nil
 }
 func (c *capacityTestConn) RemoteMultiaddr() ma.Multiaddr {
+	if c.addr != nil {
+		return c.addr
+	}
 	a, _ := ma.NewMultiaddr("/ip4/127.0.0.1/tcp/1")
 	return a
 }
@@ -123,6 +129,9 @@ type capacityTestNetwork struct {
 	mu         sync.Mutex
 	closeCount int
 	underLock  bool
+	// extra holds the connections of further remote peers (see
+	// newInboundTestPeer), closed by ClosePeer like conn.
+	extra map[peer.ID]*capacityTestConn
 }
 
 func (n *capacityTestNetwork) ClosePeer(id peer.ID) error {
@@ -133,9 +142,13 @@ func (n *capacityTestNetwork) ClosePeer(id peer.ID) error {
 	n.mu.Lock()
 	n.closeCount++
 	n.underLock = held
+	extra := n.extra[id]
 	n.mu.Unlock()
 	if id == n.conn.remote {
 		return n.conn.Close()
+	}
+	if extra != nil {
+		return extra.Close()
 	}
 	return fmt.Errorf("unexpected peer close: %s", id)
 }

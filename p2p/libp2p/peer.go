@@ -152,6 +152,16 @@ type Peer struct {
 	// pingC delivers the periodic ping ticks to pingLoop. It is nil for
 	// production peers, which use a ticker; tests supply their own.
 	pingC <-chan time.Time
+
+	// inbound reports that the remote opened the Zenon session and
+	// Server.handleStream adopted it; false means this node dialled the
+	// peer. originGroup is the origin group an inbound peer counts
+	// against (see Server.inboundOriginGroup), empty for outbound peers
+	// and for inbound peers the per-origin bound does not apply to. Both
+	// are set before the peer enters Server.peerMap and never change, so
+	// they are read under Server.peerMu like the map itself.
+	inbound     bool
+	originGroup string
 }
 
 // NewPeer returns a peer for testing purposes.
