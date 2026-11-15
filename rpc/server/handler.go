@@ -139,6 +139,12 @@ func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *
 // handleBatch executes all messages in a batch and returns the responses.
 // slotAcquired reports whether Client.read acquired a batch-level call slot
 // for this batch (true when at least one message needed one).
+//
+// The calls run one after another. Before each one the batch looks at its
+// context and stops if it has ended: once the end of the connection has been
+// observed no further call starts. The call running at that moment finishes,
+// and the answers and subscriptions of the calls that ran are handled as
+// usual.
 func (h *handler) handleBatch(msgs []*jsonrpcMessage, slotAcquired bool) {
 	// Emit error response for empty batches:
 	if len(msgs) == 0 {
@@ -168,6 +174,20 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage, slotAcquired bool) {
 		answers := make([]*jsonrpcMessage, 0, len(msgs))
 		responseBytes := 0
 		for i, msg := range calls {
+			// A batch whose context has ended starts no further call. The
+			// context ends when the connection is gone or is being torn
+			// down: over HTTP when the client's connection closes, on a
+			// connection-based transport when the handler is closed. The
+			// calls not yet started are neither executed nor answered,
+			// notifications among them. What the executed calls did
+			// stands: their answers and subscriptions are handled below
+			// as for a batch that ran to the end, so a reply, if one can
+			// still be written, holds fewer answers than the batch had
+			// calls.
+			if err := cp.ctx.Err(); err != nil {
+				h.log.Debug("Batch stopped, its context ended", "skipped", len(calls)-i, "err", err)
+				break
+			}
 			if answer := h.handleCallMsg(cp, msg); answer != nil {
 				answers = append(answers, answer)
 				responseBytes += answer.payloadSize()
@@ -177,6 +197,13 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage, slotAcquired bool) {
 			// have answered them, except that a call is not executed and
 			// gets the budget error instead of its result.
 			if responseBytes > maxBatchResponseBytes {
+				// A batch whose context ended during the call that crossed
+				// the budget is stopped like any other: the elements after
+				// it get no answer, the budget error included.
+				if err := cp.ctx.Err(); err != nil {
+					h.log.Debug("Batch stopped, its context ended", "skipped", len(calls)-i-1, "err", err)
+					break
+				}
 				h.log.Warn("Batch response too large", "responseBytes", responseBytes, "skipped", len(calls)-i-1)
 				for _, rest := range calls[i+1:] {
 					switch {
