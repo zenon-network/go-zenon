@@ -38,9 +38,8 @@ type Protocol struct {
 	// The peer connection is closed when Start returns. It should return
 	// any protocol-level error (such as an I/O error) that is
 	// encountered.
-	// peer is passed as an interface so the legacy and libp2p backends
-	// can supply their own concrete Peer types without coupling
-	// protocol-layer code to a specific transport.
+	// peer is passed as an interface so protocol-layer code does not
+	// couple to the concrete Peer type of the transport.
 	Run func(peer Peer, rw MsgReadWriter) error
 }
 

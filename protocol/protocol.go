@@ -56,8 +56,7 @@ const (
 	// reply. The handler stops appending blocks once the encoded reply
 	// exceeds this limit, which bounds the read and encode work a single
 	// request can cause. It is not a hard wire cap: the reply is one message,
-	// and both transports reject frames above their own limit (10 MiB in
-	// libp2p; 10 MiB plus a frame header on legacy RLPx).
+	// and the libp2p transport rejects frames above 10 MiB.
 	SoftResponseLimit = 2 * 1024 * 1024 // 2 MB, matching go-ethereum
 
 	// MaxDetailedMomentumWireSize is the largest RLP-encoded DetailedMomentum

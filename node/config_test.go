@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/zenon-network/go-zenon/p2p"
@@ -73,7 +74,6 @@ func TestConfigClone(t *testing.T) {
 			WSOrigins:        []string{"http://localhost"},
 		},
 		Net: NetConfig{
-			Seeders:        []string{"enode://a", "enode://b"},
 			BootstrapPeers: []string{"/ip4/1.2.3.4/tcp/4001"},
 			PeerstoreDir:   strPtr("/peerstore"),
 		},
@@ -86,7 +86,6 @@ func TestConfigClone(t *testing.T) {
 	clone.RPC.HTTPVirtualHosts[0] = "MUTATED"
 	clone.RPC.HTTPCors[0] = "MUTATED"
 	clone.RPC.WSOrigins[0] = "MUTATED"
-	clone.Net.Seeders[0] = "MUTATED"
 	clone.Net.BootstrapPeers[0] = "MUTATED"
 	*clone.Net.PeerstoreDir = "MUTATED"
 	clone.Producer.Address = "MUTATED"
@@ -103,9 +102,6 @@ func TestConfigClone(t *testing.T) {
 	}
 	if original.RPC.WSOrigins[0] == "MUTATED" {
 		t.Error("Clone: mutating clone.RPC.WSOrigins affected original")
-	}
-	if original.Net.Seeders[0] == "MUTATED" {
-		t.Error("Clone: mutating clone.Net.Seeders affected original")
 	}
 	if original.Net.BootstrapPeers[0] == "MUTATED" {
 		t.Error("Clone: mutating clone.Net.BootstrapPeers affected original")
@@ -126,8 +122,8 @@ func TestConfigClone_NilSlices(t *testing.T) {
 	if clone.RPC.Endpoints != nil {
 		t.Error("Clone: nil Endpoints became non-nil")
 	}
-	if clone.Net.Seeders != nil {
-		t.Error("Clone: nil Seeders became non-nil")
+	if clone.Net.BootstrapPeers != nil {
+		t.Error("Clone: nil BootstrapPeers became non-nil")
 	}
 	if clone.Net.PeerstoreDir != nil {
 		t.Error("Clone: nil PeerstoreDir became non-nil")
@@ -146,7 +142,7 @@ func TestJSONOverlayDoesNotMutateDefaults(t *testing.T) {
 	// Snapshot the defaults before the overlay. Copy independently —
 	// using Clone for the snapshot would alias the defaults under a
 	// shallow Clone and mask the mutation being tested.
-	beforeSeeders := append([]string(nil), DefaultNodeConfig.Net.Seeders...)
+	beforePeers := append([]string(nil), DefaultNodeConfig.Net.BootstrapPeers...)
 	beforeHosts := append([]string(nil), DefaultNodeConfig.RPC.HTTPVirtualHosts...)
 	beforeName := DefaultNodeConfig.Name
 
@@ -154,7 +150,7 @@ func TestJSONOverlayDoesNotMutateDefaults(t *testing.T) {
 	overlay := `{
 		"Name": "overlay-node",
 		"RPC": {"HTTPVirtualHosts": ["example.com"]},
-		"Net": {"Seeders": ["enode://1.2.3.4:35995"]}
+		"Net": {"BootstrapPeers": ["/ip4/1.2.3.4/tcp/35995"]}
 	}`
 	cfg := DefaultNodeConfig.Clone()
 	if err := json.Unmarshal([]byte(overlay), cfg); err != nil {
@@ -168,8 +164,8 @@ func TestJSONOverlayDoesNotMutateDefaults(t *testing.T) {
 	if cfg.RPC.HTTPVirtualHosts[0] != "example.com" {
 		t.Errorf("HTTPVirtualHosts[0] = %q, want %q", cfg.RPC.HTTPVirtualHosts[0], "example.com")
 	}
-	if cfg.Net.Seeders[0] != "enode://1.2.3.4:35995" {
-		t.Errorf("Seeders[0] = %q, want %q", cfg.Net.Seeders[0], "enode://1.2.3.4:35995")
+	if cfg.Net.BootstrapPeers[0] != "/ip4/1.2.3.4/tcp/35995" {
+		t.Errorf("BootstrapPeers[0] = %q, want %q", cfg.Net.BootstrapPeers[0], "/ip4/1.2.3.4/tcp/35995")
 	}
 
 	// The package-level defaults must be unchanged.
@@ -177,9 +173,9 @@ func TestJSONOverlayDoesNotMutateDefaults(t *testing.T) {
 		t.Errorf("DefaultNodeConfig.RPC.HTTPVirtualHosts mutated: %v, want %v",
 			DefaultNodeConfig.RPC.HTTPVirtualHosts, beforeHosts)
 	}
-	if !reflect.DeepEqual(DefaultNodeConfig.Net.Seeders, beforeSeeders) {
-		t.Errorf("DefaultNodeConfig.Net.Seeders mutated: %v, want %v",
-			DefaultNodeConfig.Net.Seeders, beforeSeeders)
+	if !slices.Equal(DefaultNodeConfig.Net.BootstrapPeers, beforePeers) {
+		t.Errorf("DefaultNodeConfig.Net.BootstrapPeers mutated: %v, want %v",
+			DefaultNodeConfig.Net.BootstrapPeers, beforePeers)
 	}
 	if DefaultNodeConfig.Name != beforeName {
 		t.Errorf("DefaultNodeConfig.Name mutated: %q, want %q", DefaultNodeConfig.Name, beforeName)
@@ -190,7 +186,7 @@ func TestJSONOverlayDoesNotMutateDefaults(t *testing.T) {
 // malformed JSON overlay returns an error and does not modify the
 // package-level defaults.
 func TestRejectedJSONOverlayLeavesDefaultsUnchanged(t *testing.T) {
-	beforeSeeders := append([]string(nil), DefaultNodeConfig.Net.Seeders...)
+	beforePeers := append([]string(nil), DefaultNodeConfig.Net.BootstrapPeers...)
 	beforeHosts := append([]string(nil), DefaultNodeConfig.RPC.HTTPVirtualHosts...)
 	beforeName := DefaultNodeConfig.Name
 
@@ -206,9 +202,9 @@ func TestRejectedJSONOverlayLeavesDefaultsUnchanged(t *testing.T) {
 		t.Errorf("DefaultNodeConfig.RPC.HTTPVirtualHosts mutated by rejected overlay: %v, want %v",
 			DefaultNodeConfig.RPC.HTTPVirtualHosts, beforeHosts)
 	}
-	if !reflect.DeepEqual(DefaultNodeConfig.Net.Seeders, beforeSeeders) {
-		t.Errorf("DefaultNodeConfig.Net.Seeders mutated by rejected overlay: %v, want %v",
-			DefaultNodeConfig.Net.Seeders, beforeSeeders)
+	if !slices.Equal(DefaultNodeConfig.Net.BootstrapPeers, beforePeers) {
+		t.Errorf("DefaultNodeConfig.Net.BootstrapPeers mutated by rejected overlay: %v, want %v",
+			DefaultNodeConfig.Net.BootstrapPeers, beforePeers)
 	}
 	if DefaultNodeConfig.Name != beforeName {
 		t.Errorf("DefaultNodeConfig.Name mutated by rejected overlay: %q, want %q",
@@ -219,18 +215,18 @@ func TestRejectedJSONOverlayLeavesDefaultsUnchanged(t *testing.T) {
 // TestConfigClone_RejectedOverlayLeavesDefaultsUnchanged verifies that
 // when a syntactically valid JSON overlay with a type error in a later
 // field is rejected by encoding/json, the package-level defaults are not
-// mutated. The overlay writes into a mutable field (Seeders) before the
+// mutated. The overlay writes into a mutable field (BootstrapPeers) before the
 // type error is hit, so without Clone the defaults' backing array would
 // be modified (edgepillar's review comment).
 func TestConfigClone_RejectedOverlayLeavesDefaultsUnchanged(t *testing.T) {
-	beforeSeeders := append([]string(nil), DefaultNodeConfig.Net.Seeders...)
+	beforePeers := append([]string(nil), DefaultNodeConfig.Net.BootstrapPeers...)
 	beforeHTTPPort := DefaultNodeConfig.RPC.HTTPPort
 
 	cfg := DefaultNodeConfig.Clone()
-	// Valid JSON syntax; Seeders is a valid mutable-field overlay, but
+	// Valid JSON syntax; BootstrapPeers is a valid mutable-field overlay, but
 	// HTTPPort has a type error (string instead of int). encoding/json
-	// processes fields in order, so Seeders is decoded before the error.
-	overlay := `{"Net": {"Seeders": ["valid-seeder"]}, "RPC": {"HTTPPort": "not-a-number"}}`
+	// processes fields in order, so BootstrapPeers is decoded before the error.
+	overlay := `{"Net": {"BootstrapPeers": ["valid-peer"]}, "RPC": {"HTTPPort": "not-a-number"}}`
 	err := json.Unmarshal([]byte(overlay), cfg)
 	if err == nil {
 		t.Fatal("expected a type error for HTTPPort, got nil")
@@ -239,18 +235,18 @@ func TestConfigClone_RejectedOverlayLeavesDefaultsUnchanged(t *testing.T) {
 	if !errors.As(err, &typeErr) {
 		t.Errorf("expected *json.UnmarshalTypeError, got %T: %v", err, err)
 	}
-	// Seeders was decoded before the type error, so the clone's slice
+	// BootstrapPeers was decoded before the type error, so the clone's slice
 	// must have the overlay value — proving the overlay was applied to
 	// the clone, not rejected outright.
-	if len(cfg.Net.Seeders) == 0 || cfg.Net.Seeders[0] != "valid-seeder" {
-		t.Errorf("cfg.Net.Seeders = %v, want [valid-seeder] (overlay applied before type error)", cfg.Net.Seeders)
+	if len(cfg.Net.BootstrapPeers) == 0 || cfg.Net.BootstrapPeers[0] != "valid-peer" {
+		t.Errorf("cfg.Net.BootstrapPeers = %v, want [valid-peer] (overlay applied before type error)", cfg.Net.BootstrapPeers)
 	}
 
 	// The package-level defaults must be untouched even though the overlay
 	// was syntactically valid and wrote into a mutable field before failing.
-	if !reflect.DeepEqual(DefaultNodeConfig.Net.Seeders, beforeSeeders) {
-		t.Errorf("DefaultNodeConfig.Net.Seeders mutated by rejected overlay: %v, want %v",
-			DefaultNodeConfig.Net.Seeders, beforeSeeders)
+	if !slices.Equal(DefaultNodeConfig.Net.BootstrapPeers, beforePeers) {
+		t.Errorf("DefaultNodeConfig.Net.BootstrapPeers mutated by rejected overlay: %v, want %v",
+			DefaultNodeConfig.Net.BootstrapPeers, beforePeers)
 	}
 	if DefaultNodeConfig.RPC.HTTPPort != beforeHTTPPort {
 		t.Errorf("DefaultNodeConfig.RPC.HTTPPort mutated by rejected overlay: %v, want %v",

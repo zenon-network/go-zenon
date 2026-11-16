@@ -347,9 +347,8 @@ func (pm *ProtocolManager) handle(p *peer) error {
 // the encoded reply exceeds SoftResponseLimit, which bounds the read and
 // encode work a single request can cause (issue #124). It is a soft bound on
 // this handler's work, not a guarantee that the transport accepts what
-// follows: the reply is still one message, and both transports reject frames
-// above their own cap (10 MiB in libp2p; 10 MiB plus a frame header on legacy
-// RLPx).
+// follows: the reply is still one message, and the libp2p transport rejects
+// frames above 10 MiB.
 func gatherBlocksForReply(msgStream *rlp.Stream, getBlock func(types.Hash) *nom.DetailedMomentum) (blocks []*nom.DetailedMomentum, hashCount int, err error) {
 	blocks, hashCount, _, err = gatherBlocksForReplyBudgeted(msgStream, getBlock, nil)
 	return blocks, hashCount, err

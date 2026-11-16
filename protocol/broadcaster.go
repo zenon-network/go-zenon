@@ -2,8 +2,7 @@
 // of the network and relays locally produced blocks to it.
 //
 // The package speaks the eth/61 wire protocol (protocol.go) over the
-// transport provided by package p2p — the legacy devp2p stack or
-// libp2p, chosen by the transport switcher. After exchanging StatusMsg
+// libp2p transport provided by package p2p. After exchanging StatusMsg
 // handshakes — which must agree on protocol version, network id and
 // genesis hash — peers gossip account blocks (TxMsg), announce new
 // momentums by hash (NewBlockHashesMsg), propagate full momentums
