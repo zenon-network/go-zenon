@@ -58,6 +58,7 @@ func (ctx *testLiquidityContext) IsHtlcSporkEnforced() bool               { retu
 func (ctx *testLiquidityContext) IsBridgeAndLiquiditySporkEnforced() bool { return true }
 func (ctx *testLiquidityContext) IsDynamicPlasmaSporkEnforced() bool      { return true }
 func (ctx *testLiquidityContext) IsPtlcSporkEnforced() bool               { return false }
+func (ctx *testLiquidityContext) IsPillarJailSporkEnforced() bool         { return false }
 
 func (ctx *testLiquidityContext) GetPillarWeights() (map[string]*big.Int, error) {
 	return nil, nil
@@ -69,6 +70,9 @@ func (ctx *testLiquidityContext) EpochStats(epoch uint64) (*api.EpochStats, erro
 	return nil, nil
 }
 func (ctx *testLiquidityContext) GetPillarDelegationsByEpoch(epoch uint64) (map[string]*types.PillarDelegationDetail, error) {
+	return nil, nil
+}
+func (ctx *testLiquidityContext) FinishedPeriodStats(count uint64) ([]*api.PeriodStats, error) {
 	return nil, nil
 }
 

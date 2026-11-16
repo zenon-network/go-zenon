@@ -544,6 +544,10 @@ func (ctx *testPtlcContext) IsPtlcSporkEnforced() bool {
 	return true
 }
 
+func (ctx *testPtlcContext) IsPillarJailSporkEnforced() bool {
+	return false
+}
+
 func (ctx *testPtlcContext) GetPillarWeights() (map[string]*big.Int, error) {
 	return nil, nil
 }
@@ -557,6 +561,10 @@ func (ctx *testPtlcContext) EpochStats(epoch uint64) (*api.EpochStats, error) {
 }
 
 func (ctx *testPtlcContext) GetPillarDelegationsByEpoch(epoch uint64) (map[string]*types.PillarDelegationDetail, error) {
+	return nil, nil
+}
+
+func (ctx *testPtlcContext) FinishedPeriodStats(count uint64) ([]*api.PeriodStats, error) {
 	return nil, nil
 }
 

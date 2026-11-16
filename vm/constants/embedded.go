@@ -121,6 +121,14 @@ var (
 	// PillarNameLengthMax is the maximum length of a pillar name, in
 	// bytes.
 	PillarNameLengthMax = 40
+	// PillarUnjailAmount is the ZNN (100 ZNN, in smallest units) a
+	// pillar owner sends with Unjail to clear the pillar's jail; it is
+	// burned.
+	PillarUnjailAmount = big.NewInt(100 * Decimals)
+	// PillarJailWindowPeriods is the number of finished election ticks
+	// (one hour at the 300-second tick) over which the pillar contract
+	// judges whether a pillar produced its expected momentums.
+	PillarJailWindowPeriods = uint64(12)
 
 	/// === Sentinel constants ===
 

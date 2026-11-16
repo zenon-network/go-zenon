@@ -48,6 +48,7 @@ const (
 		{"type":"function","name":"Delegate", "inputs":[{"name":"name","type":"string"}]},
 		{"type":"function","name":"Undelegate","inputs":[]},
 		{"type":"function","name":"CollectReward","inputs":[]},
+		{"type":"function","name":"Unjail","inputs":[{"name":"name","type":"string"}]},
 
 		{"type":"variable","name":"pillarInfo","inputs":[
 			{"name":"name","type":"string"},
@@ -80,6 +81,11 @@ const (
 		{"type":"variable","name":"pillarEpochTerms","inputs":[
 			{"name":"giveBlockRewardPercentage","type":"uint8"},
 			{"name":"giveDelegateRewardPercentage","type":"uint8"}
+		]},
+		{"type":"variable","name":"pillarJail","inputs":[
+			{"name":"name","type":"string"},
+			{"name":"jailed","type":"bool"},
+			{"name":"since","type":"int64"}
 		]}
 	]`
 
@@ -104,6 +110,10 @@ const (
 	// UndelegateMethodName names the method that removes the caller's
 	// delegation.
 	UndelegateMethodName = "Undelegate"
+	// UnjailMethodName names the method by which a pillar's owner
+	// clears the pillar's jail for constants.PillarUnjailAmount ZNN.
+	// The method exists only once types.PillarJailSpork is enforced.
+	UnjailMethodName = "Unjail"
 
 	pillarInfoVariableName          = "pillarInfo"
 	producingPillarNameVariableName = "producingPillarName"
@@ -111,6 +121,7 @@ const (
 	delegationInfoVariableName      = "delegationInfo"
 	pillarEpochHistoryVariableName  = "pillarEpochHistory"
 	pillarEpochTermsVariableName    = "pillarEpochTerms"
+	pillarJailVariableName          = "pillarJail"
 )
 
 var (
@@ -123,6 +134,7 @@ var (
 	delegationInfoKeyPrefix      = []byte{4}
 	pillarEpochHistoryKeyPrefix  = []byte{5}
 	pillarEpochTermsKeyPrefix    = []byte{6}
+	pillarJailKeyPrefix          = []byte{7}
 
 	// AnyPillarType matches every pillar type when filtering with
 	// GetPillarsList.
@@ -253,6 +265,83 @@ func GetPillarsList(context db.DB, onlyActive bool, pillarType uint8) ([]*Pillar
 			if (!onlyActive || pillar.RevokeTime == 0) && (pillarType == AnyPillarType || pillarType == pillar.PillarType) {
 				list = append(list, pillar)
 			}
+		} else if err == constants.ErrDataNonExistent {
+			continue
+		} else {
+			return nil, err
+		}
+	}
+	return list, nil
+}
+
+// PillarJail is the jail state of a pillar. A record exists only once
+// the pillar has been jailed; Jailed is the current state and Since is
+// the unix time of the momentum at which the pillar was last jailed or
+// unjailed. Records are stored under pillarJailKeyPrefix (7) followed
+// by the SHA3-256 hash of the name, with the name packed in the value.
+type PillarJail struct {
+	Name   string
+	Jailed bool
+	Since  int64
+}
+
+// Save stores the jail state under its name key, returning any pack or
+// put error.
+func (jail *PillarJail) Save(context db.DB) error {
+	data, err := ABIPillars.PackVariable(
+		pillarJailVariableName,
+		jail.Name,
+		jail.Jailed,
+		jail.Since,
+	)
+	if err != nil {
+		return err
+	}
+	return context.Put(getPillarJailKey(jail.Name), data)
+}
+
+func getPillarJailKey(name string) []byte {
+	return common.JoinBytes(pillarJailKeyPrefix, types.NewHash([]byte(name)).Bytes())
+}
+func parsePillarJail(data []byte) (*PillarJail, error) {
+	if len(data) > 0 {
+		jail := new(PillarJail)
+		if err := ABIPillars.UnpackVariable(jail, pillarJailVariableName, data); err != nil {
+			return nil, err
+		}
+		return jail, nil
+	} else {
+		return nil, constants.ErrDataNonExistent
+	}
+}
+
+// GetPillarJail returns the jail record of the pillar called name, or
+// constants.ErrDataNonExistent if the pillar has none.
+func GetPillarJail(context db.DB, name string) (*PillarJail, error) {
+	key := getPillarJailKey(name)
+	if data, err := context.Get(key); err != nil {
+		return nil, err
+	} else {
+		return parsePillarJail(data)
+	}
+}
+
+// GetPillarJailList returns every stored jail record in storage-key
+// order (by hash of name, not alphabetical).
+func GetPillarJailList(context db.DB) ([]*PillarJail, error) {
+	iterator := context.NewIterator(pillarJailKeyPrefix)
+	defer iterator.Release()
+	list := make([]*PillarJail, 0)
+	for {
+		if !iterator.Next() {
+			if iterator.Error() != nil {
+				return nil, iterator.Error()
+			}
+			break
+		}
+
+		if jail, err := parsePillarJail(iterator.Value()); err == nil {
+			list = append(list, jail)
 		} else if err == constants.ErrDataNonExistent {
 			continue
 		} else {

@@ -12,8 +12,8 @@
 // The available method set grows with the enforced sporks. Starting
 // from the genesis contracts (getOrigin), each spork that changes the
 // surface — accelerator, bridge and liquidity, HTLC, Dynamic Plasma,
-// PTLC — adds or replaces methods, and the registry for each
-// combination is built lazily, once, on first use. GetEmbeddedMethod
+// PTLC, pillar jail — adds or replaces methods, and the registry for
+// each combination is built lazily, once, on first use. GetEmbeddedMethod
 // looks up the registry keyed by the sporks enforced at the context's
 // momentum, so the same call is resolved against whatever method set
 // is active at that height.
@@ -76,6 +76,10 @@ func applyPtlcDiffs(contracts map[types.Address]*embeddedImplementation) {
 		},
 		cabi.ABIPtlc,
 	}
+}
+
+func applyPillarJailDiffs(contracts map[types.Address]*embeddedImplementation) {
+	contracts[types.PillarContract].m[cabi.UnjailMethodName] = &implementation.UnjailMethod{MethodName: cabi.UnjailMethodName}
 }
 
 func applyHtlcDiffs(contracts map[types.Address]*embeddedImplementation) {
@@ -248,6 +252,7 @@ const (
 	htlcSporkBit
 	dynamicPlasmaSporkBit
 	ptlcSporkBit
+	pillarJailSporkBit
 
 	embeddedVariantCombinations
 )
@@ -258,7 +263,7 @@ var (
 )
 
 // buildEmbeddedVariants precomputes the merged contract map for every
-// combination of the 5 sporks GetEmbeddedMethod consults, so a call
+// combination of the 6 sporks GetEmbeddedMethod consults, so a call
 // only ever does an array lookup rather than rebuilding the map (10
 // contracts, ~60 method structs) from scratch every time. Runs once,
 // lazily, guarded by embeddedVariantsOnce. sporkVariantKey never returns
@@ -282,6 +287,9 @@ func buildEmbeddedVariants() {
 		if key&ptlcSporkBit != 0 {
 			applyPtlcDiffs(contractsMap)
 		}
+		if key&pillarJailSporkBit != 0 {
+			applyPillarJailDiffs(contractsMap)
+		}
 		embeddedVariants[key] = contractsMap
 	}
 }
@@ -303,8 +311,8 @@ func buildEmbeddedVariants() {
 // before BridgeAndLiquidity, and a block is checked against the sporks
 // enforced at the momentum it acknowledges. The key therefore closes the
 // ladder downwards, so that a lower rung is set whenever a higher one is.
-// The Dynamic Plasma and PTLC sporks came after the ladder and are
-// independent bits.
+// The Dynamic Plasma, PTLC and pillar jail sporks came after the ladder
+// and are independent bits.
 func sporkVariantKey(context vm_context.AccountVmContext) int {
 	key := 0
 	if context.IsAcceleratorSporkEnforced() {
@@ -321,6 +329,9 @@ func sporkVariantKey(context vm_context.AccountVmContext) int {
 	}
 	if context.IsPtlcSporkEnforced() {
 		key |= ptlcSporkBit
+	}
+	if context.IsPillarJailSporkEnforced() {
+		key |= pillarJailSporkBit
 	}
 	if key&htlcSporkBit != 0 {
 		key |= bridgeAndLiquiditySporkBit

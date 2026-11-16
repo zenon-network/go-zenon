@@ -168,6 +168,11 @@ type mockZenon struct {
 	// its own goroutine and waits for it, so a write from the test
 	// goroutine before that call is ordered ahead of every read.
 	failInsertFor *types.Address
+
+	// offline holds the producer addresses whose slots InsertNewMomentum
+	// skips: no momentum is produced for a slot whose elected producer
+	// is in the set. Test-only, like failInsertFor.
+	offline map[types.Address]bool
 }
 
 func (zenon *mockZenon) SyncInfo() *protocol.SyncInfo {
@@ -216,6 +221,12 @@ func (zenon *mockZenon) CreateAccountBlock(accountBlockTransaction *nom.AccountB
 	return err
 }
 
+// maxSkippedSlots bounds how many consecutive slots InsertNewMomentum
+// skips for offline producers before it fails the test.
+const maxSkippedSlots = 120
+
+// InsertNewMomentum produces one momentum in the first slot after the
+// frontier whose elected producer is not offline.
 func (zenon *mockZenon) InsertNewMomentum() {
 	store := zenon.chain.GetFrontierMomentumStore()
 	previousMomentum, err := store.GetFrontierMomentum()
@@ -225,6 +236,19 @@ func (zenon *mockZenon) InsertNewMomentum() {
 	common.DealWithErr(err)
 	if expected == nil {
 		panic("nil expected")
+	}
+	skipped := 0
+	for zenon.offline[*expected] {
+		if skipped == maxSkippedSlots {
+			zenon.t.Fatalf("every producer elected in %d consecutive slots after momentum %d is offline, last skipped slot %v", maxSkippedSlots, previousMomentum.Height, t.Add(-time.Second*10))
+		}
+		skipped++
+		t = t.Add(time.Second * 10)
+		expected, err = zenon.consensus.GetMomentumProducer(t)
+		common.DealWithErr(err)
+		if expected == nil {
+			panic("nil expected")
+		}
 	}
 
 	for _, pillarE := range zenon.pillars {
@@ -236,6 +260,16 @@ func (zenon *mockZenon) InsertNewMomentum() {
 				Name:      "",
 			}).Wait()
 		}
+	}
+}
+
+// SetProducerOffline marks producer as offline or online. Call it
+// between momentum rounds, never while one is running.
+func (zenon *mockZenon) SetProducerOffline(producer types.Address, offline bool) {
+	if offline {
+		zenon.offline[producer] = true
+	} else {
+		delete(zenon.offline, producer)
 	}
 }
 func (zenon *mockZenon) InsertMomentumsTo(targetHeight uint64) {
@@ -466,6 +500,7 @@ func newMockZenon(t common.T, customEpochDuration time.Duration) MockZenon {
 		handlers:             handlers,
 		initialEpochDuration: initialEpochDuration,
 		initialClock:         initialClock,
+		offline:              map[types.Address]bool{},
 	}
 
 	common.Clock = &mockClock{

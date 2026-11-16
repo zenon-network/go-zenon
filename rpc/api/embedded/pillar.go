@@ -137,6 +137,12 @@ func (a *PillarApi) GetQsrRegistrationCost() (string, error) {
 // flips (until revocation opens while locked, until it closes while
 // revocable).
 //
+// IsJailed reports whether the pillar contract holds a jail record for
+// the pillar with Jailed set, read from contract state at the
+// account-pool frontier. A jailed pillar keeps its weight and
+// delegations but is left out of producer elections whose proof
+// momentum confirms the jail. Its owner clears the jail with Unjail.
+//
 // Rank, Weight and CurrentStats come from the consensus cache: Rank is
 // the 0-based position after sorting by descending weight, Weight is
 // the pillar's voting weight in producer elections, and CurrentStats
@@ -155,6 +161,7 @@ type PillarInfo struct {
 	CanBeRevoked   bool  `json:"isRevocable"`
 	RevokeCooldown int64 `json:"revokeCooldown"`
 	RevokeTime     int64 `json:"revokeTimestamp"`
+	IsJailed       bool  `json:"isJailed"`
 
 	GiveMomentumRewardPercentage uint8 `json:"giveMomentumRewardPercentage"`
 	GiveDelegateRewardPercentage uint8 `json:"giveDelegateRewardPercentage"`
@@ -179,6 +186,7 @@ type PillarInfoMarshal struct {
 	CanBeRevoked   bool  `json:"isRevocable"`
 	RevokeCooldown int64 `json:"revokeCooldown"`
 	RevokeTime     int64 `json:"revokeTimestamp"`
+	IsJailed       bool  `json:"isJailed"`
 
 	GiveMomentumRewardPercentage uint8 `json:"giveMomentumRewardPercentage"`
 	GiveDelegateRewardPercentage uint8 `json:"giveDelegateRewardPercentage"`
@@ -200,6 +208,7 @@ func (p *PillarInfo) ToPillarInfoMarshal() *PillarInfoMarshal {
 		CanBeRevoked:                 p.CanBeRevoked,
 		RevokeCooldown:               p.RevokeCooldown,
 		RevokeTime:                   p.RevokeTime,
+		IsJailed:                     p.IsJailed,
 		GiveMomentumRewardPercentage: p.GiveMomentumRewardPercentage,
 		GiveDelegateRewardPercentage: p.GiveDelegateRewardPercentage,
 		CurrentStats:                 p.CurrentStats,
@@ -232,6 +241,7 @@ func (p *PillarInfo) UnmarshalJSON(data []byte) error {
 	p.CanBeRevoked = aux.CanBeRevoked
 	p.RevokeCooldown = aux.RevokeCooldown
 	p.RevokeTime = aux.RevokeTime
+	p.IsJailed = aux.IsJailed
 	p.GiveMomentumRewardPercentage = aux.GiveMomentumRewardPercentage
 	p.GiveDelegateRewardPercentage = aux.GiveDelegateRewardPercentage
 	p.CurrentStats = aux.CurrentStats
@@ -301,6 +311,16 @@ func (a *PillarApi) GetAll(pageIndex, pageSize uint32) (*PillarInfoList, error) 
 		return nil, err
 	}
 
+	// jail state
+	jailList, err := definition.GetPillarJailList(context.Storage())
+	if err != nil {
+		return nil, err
+	}
+	jailed := make(map[string]bool, len(jailList))
+	for _, jail := range jailList {
+		jailed[jail.Name] = jail.Jailed
+	}
+
 	targetList := make([]*PillarInfo, len(candidateList))
 
 	for index, pillar := range candidateList {
@@ -314,6 +334,7 @@ func (a *PillarApi) GetAll(pageIndex, pageSize uint32) (*PillarInfoList, error) 
 			BlockProducingAddress:        pillar.BlockProducingAddress,
 			RewardWithdrawAddress:        pillar.RewardWithdrawAddress,
 			RevokeTime:                   pillar.RevokeTime,
+			IsJailed:                     jailed[pillar.Name],
 			GiveMomentumRewardPercentage: pillar.GiveBlockRewardPercentage,
 			GiveDelegateRewardPercentage: pillar.GiveDelegateRewardPercentage,
 			CanBeRevoked:                 canBeRevoked,

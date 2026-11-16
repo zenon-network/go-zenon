@@ -69,6 +69,7 @@ func (ctx *testFinalTallyContext) IsHtlcSporkEnforced() bool               { ret
 func (ctx *testFinalTallyContext) IsBridgeAndLiquiditySporkEnforced() bool { return true }
 func (ctx *testFinalTallyContext) IsDynamicPlasmaSporkEnforced() bool      { return ctx.dynPlasmaEnforced }
 func (ctx *testFinalTallyContext) IsPtlcSporkEnforced() bool               { return false }
+func (ctx *testFinalTallyContext) IsPillarJailSporkEnforced() bool         { return false }
 
 func (ctx *testFinalTallyContext) GetPillarWeights() (map[string]*big.Int, error) {
 	return nil, nil
@@ -80,6 +81,9 @@ func (ctx *testFinalTallyContext) EpochStats(epoch uint64) (*api.EpochStats, err
 	return nil, nil
 }
 func (ctx *testFinalTallyContext) GetPillarDelegationsByEpoch(epoch uint64) (map[string]*types.PillarDelegationDetail, error) {
+	return nil, nil
+}
+func (ctx *testFinalTallyContext) FinishedPeriodStats(count uint64) ([]*api.PeriodStats, error) {
 	return nil, nil
 }
 

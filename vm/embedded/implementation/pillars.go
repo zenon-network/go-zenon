@@ -1075,6 +1075,10 @@ func (p *UpdateEmbeddedPillarMethod) ValidateSendBlock(block *nom.AccountBlock) 
 // crediting RewardDeposit entries collectable via CollectReward.
 // After the Dynamic Plasma spork, at most MaxRewardEpochsPerCall
 // epochs settle per call; remaining epochs drain in subsequent calls.
+// Once types.PillarJailSpork is enforced it then jails every active
+// pillar that produced none of the momentums it was elected to over
+// the last constants.PillarJailWindowPeriods finished election ticks
+// (jailInactivePillars).
 func (p *UpdateEmbeddedPillarMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -1086,6 +1090,11 @@ func (p *UpdateEmbeddedPillarMethod) ReceiveBlock(context vm_context.AccountVmCo
 
 	if err := updatePillarRewards(context); err != nil {
 		return nil, err
+	}
+	if context.IsPillarJailSporkEnforced() {
+		if err := jailInactivePillars(context); err != nil {
+			return nil, err
+		}
 	}
 	return nil, nil
 }
