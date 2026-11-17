@@ -86,6 +86,11 @@ type chainInsertFn func([]*nom.DetailedMomentum) (int, error)
 // peerDropFn is a callback type for dropping a peer detected as malicious.
 type peerDropFn func(id string)
 
+// peerRejectFn is a callback type reporting that a batch served by the
+// peer failed to import, with the import error, before the peer is
+// dropped. It may be nil.
+type peerRejectFn func(id string, err error)
+
 type blockPack struct {
 	peerId string
 	blocks []*nom.DetailedMomentum
@@ -115,12 +120,18 @@ type Downloader struct {
 	importDone  int       // Number of taken blocks already imported from the last batch
 	importLock  sync.Mutex
 
+	// processHook, when set, runs in process after a batch has been taken
+	// from the queue and before it is published as importQueue. Tests use
+	// it to hold the worker inside that handoff.
+	processHook func(blocks []*Block)
+
 	// Callbacks
 	hasBlock    hashCheckFn      // Checks if a block is present in the chain
 	getBlock    blockRetrievalFn // Retrieves a block from the chain
 	headBlock   headRetrievalFn  // Retrieves the head block from the chain
 	insertChain chainInsertFn    // Injects a batch of blocks into the chain
 	dropPeer    peerDropFn       // Drops a peer for misbehaving
+	rejectPeer  peerRejectFn     // Reports an import failure attributed to a peer (optional)
 
 	// Status
 	synchroniseMock func(id string, hash types.Hash) error // Replacement for synchronise during testing
@@ -147,7 +158,7 @@ type Block struct {
 }
 
 // New creates a new downloader to fetch hashes and blocks from remote peers.
-func New(hasBlock hashCheckFn, getBlock blockRetrievalFn, headBlock headRetrievalFn, insertChain chainInsertFn, dropPeer peerDropFn) *Downloader {
+func New(hasBlock hashCheckFn, getBlock blockRetrievalFn, headBlock headRetrievalFn, insertChain chainInsertFn, dropPeer peerDropFn, rejectPeer peerRejectFn) *Downloader {
 	// Create the base downloader
 	downloader := &Downloader{
 		queue:       newQueue(),
@@ -157,6 +168,7 @@ func New(hasBlock hashCheckFn, getBlock blockRetrievalFn, headBlock headRetrieva
 		headBlock:   headBlock,
 		insertChain: insertChain,
 		dropPeer:    dropPeer,
+		rejectPeer:  rejectPeer,
 		newPeerCh:   make(chan *peer, 1),
 		hashCh:      make(chan hashPack, 1),
 		blockCh:     make(chan blockPack, 1),
@@ -194,6 +206,16 @@ func (d *Downloader) Stats() (pending int, cached int, importing int, estimate t
 // Synchronising returns whether the downloader is currently retrieving blocks.
 func (d *Downloader) Synchronising() bool {
 	return atomic.LoadInt32(&d.synchronising) > 0
+}
+
+// Processing returns whether the import worker owns blocks: from the moment
+// it takes a batch out of the queue until it has imported it or given up.
+// Stats does not see a batch between being taken and being published as
+// importQueue, and a session may already have ended by then, so callers
+// that must not act while blocks are about to change the frontier check
+// this as well.
+func (d *Downloader) Processing() bool {
+	return atomic.LoadInt32(&d.processing) > 0
 }
 
 // RegisterPeer injects a new download peer into the set of block source to be
@@ -707,17 +729,17 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 // process takes blocks from the queue and tries to import them into the chain.
 //
 // The algorithmic flow is as follows:
-//  - The `processing` flag is swapped to 1 to ensure singleton access
-//  - The current `cancel` channel is retrieved to detect sync abortions
-//  - Blocks are iteratively taken from the cache and inserted into the chain
-//  - When the cache becomes empty, insertion stops
-//  - The `processing` flag is swapped back to 0
-//  - A post-exit check is made whether new blocks became available
-//     - This step is important: it handles a potential race condition between
-//       checking for no more work, and releasing the processing "mutex". In
-//       between these state changes, a block may have arrived, but a processing
-//       attempt denied, so we need to re-enter to ensure the block isn't left
-//       to idle in the cache.
+//   - The `processing` flag is swapped to 1 to ensure singleton access
+//   - The current `cancel` channel is retrieved to detect sync abortions
+//   - Blocks are iteratively taken from the cache and inserted into the chain
+//   - When the cache becomes empty, insertion stops
+//   - The `processing` flag is swapped back to 0
+//   - A post-exit check is made whether new blocks became available
+//   - This step is important: it handles a potential race condition between
+//     checking for no more work, and releasing the processing "mutex". In
+//     between these state changes, a block may have arrived, but a processing
+//     attempt denied, so we need to re-enter to ensure the block isn't left
+//     to idle in the cache.
 func (d *Downloader) process() {
 	// Make sure only one goroutine is ever allowed to process blocks at once
 	if !atomic.CompareAndSwapInt32(&d.processing, 0, 1) {
@@ -749,6 +771,9 @@ func (d *Downloader) process() {
 		if len(blocks) == 0 {
 			return
 		}
+		if d.processHook != nil {
+			d.processHook(blocks)
+		}
 		// Reset the import statistics
 		d.importLock.Lock()
 		d.importStart = time.Now()
@@ -773,6 +798,9 @@ func (d *Downloader) process() {
 			index, err := d.insertChain(raw)
 			if err != nil {
 				log.Info("Block import failed", "momentum-height", raw[index].Momentum.Height, "reason", err)
+				if d.rejectPeer != nil {
+					d.rejectPeer(blocks[index].OriginPeer, err)
+				}
 				d.dropPeer(blocks[index].OriginPeer)
 				d.cancel()
 				return

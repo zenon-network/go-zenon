@@ -129,6 +129,24 @@ func (f *restoreFixture) tamperedMomentum() *nom.DetailedMomentum {
 	return &nom.DetailedMomentum{Momentum: f.detailed.Momentum, AccountBlocks: []*nom.AccountBlock{block}}
 }
 
+// rejectedSideChain returns a two-momentum branch that forks at the fixture's
+// fork point and is one momentum longer than the fixture's own momentum, so
+// the bridge rolls back to the fork point to insert it; its first momentum
+// carries the tampered block and is rejected there. Only linkage and length
+// are inspected before the rollback decision, so the momentums need no valid
+// hashes or signatures.
+func (f *restoreFixture) rejectedSideChain() []*nom.DetailedMomentum {
+	tampered := f.tamperedMomentum()
+	head := *f.detailed.Momentum
+	head.Hash = types.NewHash([]byte("rejected side-chain head"))
+	tail := &nom.Momentum{Version: 1, ChainIdentifier: 1, Height: head.Height + 1, PreviousHash: head.Hash}
+	tail.Hash = types.NewHash([]byte("rejected side-chain tail"))
+	return []*nom.DetailedMomentum{
+		{Momentum: &head, AccountBlocks: tampered.AccountBlocks},
+		{Momentum: tail, AccountBlocks: nil},
+	}
+}
+
 func (f *restoreFixture) expectPoolChain(t *testing.T, blocks ...*nom.AccountBlock) {
 	t.Helper()
 	f.expectPoolChainFor(t, g.User2.Address, blocks...)

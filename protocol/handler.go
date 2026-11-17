@@ -17,6 +17,7 @@
 package protocol
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -45,6 +46,17 @@ type ProtocolManager struct {
 	downloader *downloader.Downloader
 	fetcher    *fetcher.Fetcher
 	peers      *peerSet
+	// quarantine holds peers refused after serving a side-chain the
+	// bridge rejected on a consensus check; see rejectPeer.
+	quarantine *peerQuarantine
+	// admission serializes admitting a connection (the quarantine check
+	// and both registrations, see admit) with quarantining a node and
+	// removing its connection (rejectPeer, removePeer). A verdict on a
+	// node therefore lands either before its reconnection is admitted,
+	// and refuses it, or after, and finds it registered to remove.
+	admission sync.Mutex
+	// progress is what ReadyToProduce measures the stall window from.
+	progress *producerProgress
 
 	SubProtocols []p2p.Protocol
 
@@ -64,14 +76,16 @@ type ProtocolManager struct {
 func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *ProtocolManager {
 	// Create the protocol manager with the base fields
 	manager := &ProtocolManager{
-		minPeers:  minPeers,
-		txpool:    bridge,
-		chainman:  bridge,
-		peers:     newPeerSet(),
-		newPeerCh: make(chan *peer, 1),
-		txsyncCh:  make(chan *txsync),
-		quitSync:  make(chan struct{}),
-		netId:     int(networkId),
+		minPeers:   minPeers,
+		txpool:     bridge,
+		chainman:   bridge,
+		peers:      newPeerSet(),
+		quarantine: newPeerQuarantine(peerQuarantinePeriod, peerQuarantineCap),
+		progress:   newProducerProgress(),
+		newPeerCh:  make(chan *peer, 1),
+		txsyncCh:   make(chan *txsync),
+		quitSync:   make(chan struct{}),
+		netId:      int(networkId),
 	}
 	// Initiate a sub-protocol for every implemented version we can handle
 	manager.SubProtocols = make([]p2p.Protocol, len(ProtocolVersions))
@@ -94,8 +108,9 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 		manager.chainman.HasBlock,
 		manager.chainman.GetBlock,
 		manager.chainman.CurrentBlock,
-		manager.chainman.InsertChain,
-		manager.removePeer)
+		manager.insertFromDownload,
+		manager.removePeer,
+		manager.rejectPeer)
 
 	validator := func(block *nom.Momentum, parent *nom.Momentum) error {
 		//return core.ValidateHeader(pow, block.Headerr(), parent, true)
@@ -116,23 +131,91 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 	return manager
 }
 
+// rejectPeer is the downloader's import-failure hook. When the bridge
+// reports a SideChainRejected, the peer served a branch this node
+// refuses on a consensus check; it is quarantined, so it cannot restart
+// the download-and-reject cycle on the next sync interval or by
+// reconnecting, and removed. Any other failure is left to the caller's
+// existing handling.
+//
+// The fetcher has no such hook. It propagates a gossiped momentum
+// before importing it, so the peer that delivers one is usually an
+// honest relayer, not its author. The downloader fetches from the
+// serving peer's own chain, so its verdicts name the peer at fault.
+//
+// The import that reports the verdict may outlive the connection that
+// served the bytes: unregistering a peer does not join its import. The
+// node may have reconnected meanwhile, so the quarantine entry and the
+// removal are made under admission, together: a reconnection still in
+// its handshake is refused when it reaches admit, and one already
+// admitted is the connection removed here.
+func (pm *ProtocolManager) rejectPeer(id string, err error) {
+	var rejected *SideChainRejected
+	if !errors.As(err, &rejected) {
+		return
+	}
+	pm.admission.Lock()
+	pm.quarantine.add(id)
+	peer := pm.unregister(id)
+	pm.admission.Unlock()
+	log.Info("quarantining peer after rejected side-chain", "peer-id", id, "momentum-identifier", rejected.Momentum, "reason", rejected.Cause, "period", peerQuarantinePeriod)
+	if peer != nil {
+		peer.Peer.Disconnect(p2p.DiscUselessPeer)
+	}
+}
+
 func (pm *ProtocolManager) removePeer(id string) {
+	pm.admission.Lock()
+	peer := pm.unregister(id)
+	pm.admission.Unlock()
 	// Short circuit if the peer was already removed
-	peer := pm.peers.Peer(id)
 	if peer == nil {
 		return
 	}
 	log.Debug("removing peer", "peer-id", id)
+	// Hard disconnect at the networking layer
+	peer.Peer.Disconnect(p2p.DiscUselessPeer)
+}
 
-	// Unregister the peer from the downloader and Ethereum peer set
+// unregister removes the connection registered for id from the downloader
+// and the peer set and returns it, or nil when none is registered. The
+// caller holds admission, so the two registrations leave together, as
+// admit makes them.
+func (pm *ProtocolManager) unregister(id string) *peer {
+	peer := pm.peers.Peer(id)
+	if peer == nil {
+		return nil
+	}
 	pm.downloader.UnregisterPeer(id)
 	if err := pm.peers.Unregister(id); err != nil {
 		log.Error("peer removal failed", "peer-id", id, "reason", err)
 	}
-	// Hard disconnect at the networking layer
-	if peer != nil {
-		peer.Peer.Disconnect(p2p.DiscUselessPeer)
+	return peer
+}
+
+// admit registers p with the peer set and the downloader, unless p's
+// node is quarantined or the downloader refuses its head. The check and
+// both registrations happen under admission (see rejectPeer), so this is
+// the quarantine check that counts: a node quarantined while p's
+// handshake was in flight is refused here, and one quarantined after
+// admit returns is removed by rejectPeer. The check before the handshake
+// in handle only spares a refused node the round-trip.
+func (pm *ProtocolManager) admit(p *peer) error {
+	pm.admission.Lock()
+	defer pm.admission.Unlock()
+	if pm.quarantine.active(p.id) {
+		return errPeerQuarantined
 	}
+	if err := pm.peers.Register(p); err != nil {
+		return err
+	}
+	if err := pm.downloader.RegisterPeer(p.id, p.version, p.Head(), p.RequestHashes, p.RequestHashesFromNumber, p.RequestBlocks); err != nil {
+		if uerr := pm.peers.Unregister(p.id); uerr != nil {
+			log.Error("peer removal failed", "peer-id", p.id, "reason", uerr)
+		}
+		return err
+	}
+	return nil
 }
 
 func (pm *ProtocolManager) Start() {
@@ -171,6 +254,10 @@ func (pm *ProtocolManager) newPeer(pv, nv int, p *p2p.Peer, rw p2p.MsgReadWriter
 // handle is the callback invoked to manage the life cycle of an eth peer. When
 // this function terminates, the peer is disconnected.
 func (pm *ProtocolManager) handle(p *peer) error {
+	if pm.quarantine.active(p.id) {
+		log.Info("refusing quarantined peer", "peer-id", p.id, "address", p.RemoteAddr().String())
+		return errPeerQuarantined
+	}
 	log.Info("peer connected", "peer-id", p.id, "address", p.RemoteAddr().String(), "name", p.Name())
 
 	// Execute the Ethereum handshake
@@ -179,17 +266,18 @@ func (pm *ProtocolManager) handle(p *peer) error {
 		log.Info("handshake failed", "peer", p, "name", p.Name())
 		return err
 	}
-	// Register the peer locally
-	if err := pm.peers.Register(p); err != nil {
-		log.Error("peer addition failed", "peer-id", p.id, "reason", err)
+	// Register the peer locally and in the downloader. If the node was
+	// quarantined during the handshake or the downloader considers it
+	// banned, we disconnect.
+	if err := pm.admit(p); err != nil {
+		if errors.Is(err, errPeerQuarantined) {
+			log.Info("refusing peer quarantined during handshake", "peer-id", p.id, "address", p.RemoteAddr().String())
+		} else {
+			log.Error("peer addition failed", "peer-id", p.id, "reason", err)
+		}
 		return err
 	}
 	defer pm.removePeer(p.id)
-
-	// Register the peer in the downloader. If the downloader considers it banned, we disconnect
-	if err := pm.downloader.RegisterPeer(p.id, p.version, p.Head(), p.RequestHashes, p.RequestHashesFromNumber, p.RequestBlocks); err != nil {
-		return err
-	}
 	// Propagate existing transactions. new transactions appearing
 	// after this will be sent via broadcasts.
 	pm.syncTransactions(p)
@@ -251,16 +339,28 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		if request.Amount > uint64(downloader.MaxHashFetch) {
 			request.Amount = uint64(downloader.MaxHashFetch)
 		}
+		if request.Amount == 0 {
+			return p.SendBlockHashes(nil)
+		}
 		// Calculate the last block that should be retrieved, and short circuit if unavailable
 		last, err := pm.chainman.GetBlockByNumber(request.Number + request.Amount - 1)
 		if err != nil {
 			return err
 		}
 		if last == nil {
+			// The requested range runs past the frontier; clamp to the frontier and
+			// re-bound the count. Compare against the frontier before the subtraction
+			// so Height - Number cannot underflow, and re-cap to MaxHashFetch because
+			// the frontier can be far beyond the originally capped request.
 			last = pm.chainman.CurrentBlock()
+			if last.Height < request.Number {
+				return p.SendBlockHashes(nil)
+			}
 			request.Amount = last.Height - request.Number + 1
-		}
-		if last.Height < request.Number {
+			if request.Amount > uint64(downloader.MaxHashFetch) {
+				request.Amount = uint64(downloader.MaxHashFetch)
+			}
+		} else if last.Height < request.Number {
 			return p.SendBlockHashes(nil)
 		}
 		// Retrieve the hashes from the last block backwards, reverse and return
