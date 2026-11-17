@@ -618,7 +618,7 @@ func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMo
 			// already applied
 			continue
 		}
-		transaction, err := c.supervisor.ApplyBlock(block)
+		transaction, err := c.supervisor.ApplyBlockInMomentum(block, detailed.Momentum.Height)
 		if err != nil {
 			log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
 			return validationFailure(err)

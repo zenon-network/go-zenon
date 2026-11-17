@@ -201,3 +201,158 @@ func TestInsertChain_MixedBatchIsRefusedBeforeRollbackAndDoesNotPoisonTheExtensi
 	common.FailIfErr(t, err)
 	expectFrontierAt(t, z.Chain(), extension[0].Momentum)
 }
+
+// When a valid prefix of the replacement commits and a later candidate is
+// rejected, the prefix stays once it is longer than the branch it replaced,
+// and the rejected candidate is remembered. The retry skips the prefix the
+// node now has and offers the rejected candidate as an extension of it; the
+// memory refuses it there, before its content is applied. (A prefix that is
+// not longer is rolled back and the branch restored; see
+// TestInsertChain_RejectedSideChainIsRefusedBeforeRollbackOnRetry.)
+func TestInsertChain_RejectedCandidateAfterCommittedPrefixIsRefusedAsExtension(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(6)
+	fork := buildFork(t, z, 5, 7, 1)
+	counting, bridge := newSideChainBridge(z)
+
+	bad := attackerMomentum(fork[1].Momentum, 8)
+	batch := append(append([]*nom.DetailedMomentum{}, fork...), detailedOf(bad)...)
+
+	_, err := bridge.InsertChain(batch)
+	var rejected *protocol.SideChainRejected
+	if !errors.As(err, &rejected) {
+		t.Fatalf("expected a SideChainRejected, got %v", err)
+	}
+	common.Expect(t, rejected.Momentum, bad.Identifier())
+	common.Expect(t, counting.rollbacks, 1)
+	expectFrontierAt(t, z.Chain(), fork[1].Momentum)
+	withPrefix := snapshotChain(t, z.Chain())
+
+	_, err = bridge.InsertChain(batch)
+	if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+		t.Fatalf("expected the retry to be refused as known invalid, got %v", err)
+	}
+	if !errors.As(err, &rejected) {
+		t.Fatalf("the refusal must stay attributable to the peer, got %v", err)
+	}
+	common.Expect(t, counting.rollbacks, 1)
+	expectChainEquals(t, z.Chain(), withPrefix)
+}
+
+// A plain extension that fails a consensus check, with no rollback behind
+// it, is classified like a failed replacement: the verdict is attributed to
+// the serving peer and the served bytes are remembered, so the next offer is
+// refused before its content is applied. This is the path a node at a fork
+// point takes first: the other branch extends its frontier until its own
+// next momentum turns that branch into a side chain. The chain is left as it
+// was on both attempts.
+func TestInsertChain_RejectedExtensionIsRememberedAndAttributed(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(6)
+	counting, bridge := newSideChainBridge(z)
+	before := snapshotChain(t, z.Chain())
+
+	bad := attackerMomentum(momentumAt(t, z.Chain(), 6), 7)
+	batch := detailedOf(bad)
+
+	_, err := bridge.InsertChain(batch)
+	var rejected *protocol.SideChainRejected
+	if !errors.As(err, &rejected) {
+		t.Fatalf("expected a failed extension to be a SideChainRejected, got %v", err)
+	}
+	if !errors.Is(err, verifier.ErrMChangesHashInvalid) {
+		t.Fatalf("the rejection must keep its cause, got %v", err)
+	}
+	common.Expect(t, rejected.Momentum, bad.Identifier())
+	common.Expect(t, counting.rollbacks, 0)
+	expectChainEquals(t, z.Chain(), before)
+
+	_, err = bridge.InsertChain(batch)
+	if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+		t.Fatalf("expected the retry to be refused as known invalid, got %v", err)
+	}
+	if !errors.As(err, &rejected) {
+		t.Fatalf("the refusal must stay attributable to the peer, got %v", err)
+	}
+	common.Expect(t, counting.rollbacks, 0)
+	expectChainEquals(t, z.Chain(), before)
+
+	// A descendant batch carrying the remembered candidate is refused the
+	// same way, before anything is applied.
+	_, err = bridge.InsertChain(detailedOf(bad, attackerMomentum(bad, 8)))
+	if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+		t.Fatalf("expected a descendant batch to be refused as known invalid, got %v", err)
+	}
+	common.Expect(t, counting.rollbacks, 0)
+	expectChainEquals(t, z.Chain(), before)
+}
+
+// What the pool holds must not decide a remembered verdict. The momentum's
+// blocks are applied on top of the pool, and a block the pool already holds
+// with the same bytes is not applied again, so this pins that the pool can
+// neither turn a tampered copy into something other than its own verdict nor
+// get the genuine bytes remembered. The same tampered momentum is offered
+// against three pool states on the extension path, where nothing is rolled
+// back first: in each it is rejected with the same cause, remembered, and
+// refused on retry, the pool is left as it was, and the genuine momentum
+// then inserts on its first offer.
+func TestInsertChain_PoolStateDoesNotColourARememberedVerdict(t *testing.T) {
+	cases := []struct {
+		name string
+		seed func(t *testing.T, f *restoreFixture) []*nom.AccountBlock
+	}{
+		{"empty pool", func(t *testing.T, f *restoreFixture) []*nom.AccountBlock {
+			return nil
+		}},
+		{"genuine copy and descendant", func(t *testing.T, f *restoreFixture) []*nom.AccountBlock {
+			common.FailIfErr(t, f.bridge.AddAccountBlocks([]*nom.AccountBlock{f.receive.Block}))
+			descendant := f.generateReceive(t, f.sends[1])
+			f.addToPool(t, descendant)
+			return []*nom.AccountBlock{f.receive.Block, descendant.Block}
+		}},
+		{"competing chain and another account", func(t *testing.T, f *restoreFixture) []*nom.AccountBlock {
+			first := f.generateReceive(t, f.sends[1])
+			f.addToPool(t, first)
+			second := f.generateReceive(t, f.sends[0])
+			f.addToPool(t, second)
+			if first.Block.Hash == f.receive.Block.Hash {
+				t.Fatal("competing block unexpectedly has the same hash")
+			}
+			f.addToPool(t, f.generateSend(t))
+			return []*nom.AccountBlock{first.Block, second.Block}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRestoreFixture(t)
+			defer f.z.StopPanic()
+			pool := tc.seed(t, f)
+			tampered := f.tamperedMomentum()
+
+			_, err := f.bridge.InsertChain([]*nom.DetailedMomentum{tampered})
+			var rejected *protocol.SideChainRejected
+			if !errors.As(err, &rejected) {
+				t.Fatalf("expected the tampered copy to be rejected whatever the pool holds, got %v", err)
+			}
+			expectChangesHashError(t, err)
+			common.Expect(t, rejected.Momentum, f.detailed.Momentum.Identifier())
+			common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.previous)
+			if pool != nil {
+				f.expectPoolChain(t, pool...)
+			}
+
+			_, err = f.bridge.InsertChain([]*nom.DetailedMomentum{tampered})
+			if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
+				t.Fatalf("expected the same bytes to be refused as known invalid, got %v", err)
+			}
+
+			// The genuine bytes were never remembered, so they insert on
+			// their first offer.
+			_, err = f.bridge.InsertChain([]*nom.DetailedMomentum{f.detailed})
+			common.FailIfErr(t, err)
+			common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.detailed.Momentum.Identifier())
+		})
+	}
+}

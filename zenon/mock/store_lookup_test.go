@@ -9,7 +9,9 @@ import (
 
 // Lookups keyed by a value the caller supplies report an unknown key as
 // (nil, nil) rather than an error, so every caller has to handle the nil. These
-// cover the two lookups whose keys originate outside the node.
+// cover the two lookups whose keys originate outside the node. GetMomentumsByHash
+// in particular is reached with a hash supplied by a peer, so it must report an
+// unknown hash as an empty result rather than dereferencing a nil momentum.
 func TestMomentumStore_UnknownHashLookup(t *testing.T) {
 	z := NewMockZenon(t)
 	defer z.StopPanic()
@@ -25,10 +27,14 @@ func TestMomentumStore_UnknownHashLookup(t *testing.T) {
 		t.Fatalf("expected no momentum for an unknown hash, got %v", momentum.Identifier())
 	}
 
-	momentums, err := store.GetMomentumsByHash(unknown, true, 10)
-	common.FailIfErr(t, err)
-	if len(momentums) != 0 {
-		t.Fatalf("expected no momentums for an unknown hash, got %d", len(momentums))
+	// Both directions must survive the unknown hash: the GetBlockHashesMsg handler
+	// calls this with higher=false, which is the path a peer controls.
+	for _, higher := range []bool{true, false} {
+		momentums, err := store.GetMomentumsByHash(unknown, higher, 10)
+		common.FailIfErr(t, err)
+		if len(momentums) != 0 {
+			t.Fatalf("higher=%v: expected no momentums for an unknown hash, got %d", higher, len(momentums))
+		}
 	}
 }
 
