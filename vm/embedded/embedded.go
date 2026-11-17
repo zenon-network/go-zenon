@@ -12,7 +12,7 @@
 // The available method set grows with the enforced sporks. Starting
 // from the genesis contracts (getOrigin), each spork that changes the
 // surface — accelerator, bridge and liquidity, HTLC, Dynamic Plasma,
-// PTLC — adds or replaces methods, and the registry for each
+// PTLC, multisig — adds or replaces methods, and the registry for each
 // combination is built lazily, once, on first use. GetEmbeddedMethod
 // looks up the registry keyed by the sporks enforced at the context's
 // momentum, so the same call is resolved against whatever method set
@@ -75,6 +75,16 @@ func applyPtlcDiffs(contracts map[types.Address]*embeddedImplementation) {
 			cabi.ReclaimWithSignaturePtlcMethodName:  &implementation.ReclaimWithSignaturePtlcMethod{MethodName: cabi.ReclaimWithSignaturePtlcMethodName},
 		},
 		cabi.ABIPtlc,
+	}
+}
+
+func applyMultisigDiffs(contracts map[types.Address]*embeddedImplementation) {
+	contracts[types.MultisigContract] = &embeddedImplementation{
+		map[string]Method{
+			cabi.CreateMultisigMethodName: &implementation.CreateMultisigMethod{MethodName: cabi.CreateMultisigMethodName},
+			cabi.ChangePolicyMethodName:   &implementation.ChangePolicyMethod{MethodName: cabi.ChangePolicyMethodName},
+		},
+		cabi.ABIMultisig,
 	}
 }
 
@@ -248,6 +258,7 @@ const (
 	htlcSporkBit
 	dynamicPlasmaSporkBit
 	ptlcSporkBit
+	multisigSporkBit
 
 	embeddedVariantCombinations
 )
@@ -258,7 +269,7 @@ var (
 )
 
 // buildEmbeddedVariants precomputes the merged contract map for every
-// combination of the 5 sporks GetEmbeddedMethod consults, so a call
+// combination of the 6 sporks GetEmbeddedMethod consults, so a call
 // only ever does an array lookup rather than rebuilding the map (10
 // contracts, ~60 method structs) from scratch every time. Runs once,
 // lazily, guarded by embeddedVariantsOnce. sporkVariantKey never returns
@@ -282,6 +293,9 @@ func buildEmbeddedVariants() {
 		if key&ptlcSporkBit != 0 {
 			applyPtlcDiffs(contractsMap)
 		}
+		if key&multisigSporkBit != 0 {
+			applyMultisigDiffs(contractsMap)
+		}
 		embeddedVariants[key] = contractsMap
 	}
 }
@@ -303,8 +317,8 @@ func buildEmbeddedVariants() {
 // before BridgeAndLiquidity, and a block is checked against the sporks
 // enforced at the momentum it acknowledges. The key therefore closes the
 // ladder downwards, so that a lower rung is set whenever a higher one is.
-// The Dynamic Plasma and PTLC sporks came after the ladder and are
-// independent bits.
+// The Dynamic Plasma, PTLC and multisig sporks came after the ladder
+// and are independent bits.
 func sporkVariantKey(context vm_context.AccountVmContext) int {
 	key := 0
 	if context.IsAcceleratorSporkEnforced() {
@@ -321,6 +335,9 @@ func sporkVariantKey(context vm_context.AccountVmContext) int {
 	}
 	if context.IsPtlcSporkEnforced() {
 		key |= ptlcSporkBit
+	}
+	if context.IsMultisigSporkEnforced() {
+		key |= multisigSporkBit
 	}
 	if key&htlcSporkBit != 0 {
 		key |= bridgeAndLiquiditySporkBit

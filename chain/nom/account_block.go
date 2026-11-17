@@ -178,6 +178,46 @@ type AccountBlock struct {
 	producer  *types.Address    // not included in hash, for caching purpose only
 	PublicKey ed25519.PublicKey `json:"publicKey"` // not included in hash
 	Signature []byte            `json:"signature"` // not included in hash
+
+	MultisigAuth *MultisigAuth `json:"multisigAuth,omitempty" rlp:"optional"` // not included in hash
+}
+
+// MultisigAuth carries the threshold signatures for a protocol-level multisig
+// account block. It is excluded from ComputeHash, mirroring the singular
+// Signature field, so it attaches to an already-frozen, already-PoW'd block.
+type MultisigAuth struct {
+	Signatures [][]byte `json:"signatures"`
+}
+
+func (ma *MultisigAuth) Copy() *MultisigAuth {
+	if ma == nil {
+		return nil
+	}
+	cma := &MultisigAuth{
+		Signatures: make([][]byte, len(ma.Signatures)),
+	}
+	for index, sig := range ma.Signatures {
+		cma.Signatures[index] = make([]byte, len(sig))
+		copy(cma.Signatures[index], sig)
+	}
+	return cma
+}
+
+func (ma *MultisigAuth) Proto() *MultisigAuthProto {
+	if ma == nil {
+		return nil
+	}
+	return &MultisigAuthProto{
+		Signatures: ma.Signatures,
+	}
+}
+func DeProtoMultisigAuth(pb *MultisigAuthProto) *MultisigAuth {
+	if pb == nil {
+		return nil
+	}
+	return &MultisigAuth{
+		Signatures: pb.Signatures,
+	}
 }
 
 // Identifier returns the block's hash-height, which also names the
@@ -238,6 +278,10 @@ func (ab *AccountBlock) Copy() *AccountBlock {
 	if len(ab.PublicKey) > 0 {
 		cBlock.PublicKey = make([]byte, len(ab.PublicKey))
 		copy(cBlock.PublicKey, ab.PublicKey)
+	}
+
+	if ab.MultisigAuth != nil {
+		cBlock.MultisigAuth = ab.MultisigAuth.Copy()
 	}
 
 	cBlock.DescendantBlocks = make([]*AccountBlock, 0, len(ab.DescendantBlocks))
@@ -373,6 +417,8 @@ func (ab *AccountBlock) Proto() *AccountBlockProto {
 
 		PublicKey: ab.PublicKey,
 		Signature: ab.Signature,
+
+		MultisigAuth: ab.MultisigAuth.Proto(),
 	}
 
 	pb.DescendantBlocks = make([]*AccountBlockProto, 0, len(ab.DescendantBlocks))
@@ -453,6 +499,8 @@ func DeProtoAccountBlock(pb *AccountBlockProto) (*AccountBlock, error) {
 
 		PublicKey: pb.PublicKey,
 		Signature: pb.Signature,
+
+		MultisigAuth: DeProtoMultisigAuth(pb.MultisigAuth),
 	}
 
 	for index, dBlockProto := range pb.DescendantBlocks {
@@ -565,6 +613,8 @@ type AccountBlockMarshal struct {
 
 	PublicKey ed25519.PublicKey `json:"publicKey"` // not included in hash
 	Signature []byte            `json:"signature"` // not included in hash
+
+	MultisigAuth *MultisigAuth `json:"multisigAuth,omitempty"` // not included in hash
 }
 
 // ToNomMarshalJson converts the block to its JSON wire
@@ -596,6 +646,7 @@ func (ab *AccountBlock) ToNomMarshalJson() *AccountBlockMarshal {
 		ChangesHash:          ab.ChangesHash,
 		PublicKey:            ab.PublicKey,
 		Signature:            ab.Signature,
+		MultisigAuth:         ab.MultisigAuth,
 	}
 
 	aux.DescendantBlocks = make([]*AccountBlockMarshal, 0, len(ab.DescendantBlocks))
@@ -640,6 +691,7 @@ func (ab *AccountBlockMarshal) FromNomMarshalJson() *AccountBlock {
 		ChangesHash:          ab.ChangesHash,
 		PublicKey:            ab.PublicKey,
 		Signature:            ab.Signature,
+		MultisigAuth:         ab.MultisigAuth,
 	}
 	// ignore the error, it will just not set the nonce
 	aux.Nonce.UnmarshalText([]byte(ab.Nonce))

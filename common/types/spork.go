@@ -67,6 +67,14 @@ var (
 	// that were in force during the settled epoch.
 	EpochRewardTermsSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000007")
 
+	// MultisigSpork gates protocol-level mutable multisig accounts.
+	// Until this spork's EnforcementHeight is reached, the multisig
+	// contract has no methods and the verifier accepts no account block
+	// from a multisig address. A node halts at the spork's enforcement
+	// height unless the ID is in ImplementedSporksMap (see
+	// chain/momentum_pool.go).
+	MultisigSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000003")
+
 	// ImplementedSporksMap is the set of spork IDs this build knows
 	// how to enforce. After every momentum insertion the momentum pool
 	// checks each activated spork that has reached its enforcement
@@ -81,6 +89,7 @@ var (
 		DynamicPlasmaSpork.SporkId:      true,
 		EmbeddedRefundSpork.SporkId:     true,
 		EpochRewardTermsSpork.SporkId:   true,
+		MultisigSpork.SporkId:           true,
 	}
 )
 

@@ -309,6 +309,34 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 		blocksLookup[identifier] = block
 	}
 
+	// Multisig authorisation is verified LIVE against the policy active at this momentum's inclusion
+	// height. momentumStore is the committed state as of the previous momentum, so the read is
+	// deterministic and identical on every node. This is the single authoritative authorisation gate
+	// for multisig account blocks.
+	var registry db.DB
+	policyCache := make(map[types.Address]*definition.MultisigPolicy)
+	for _, block := range rmv.accountBlocks {
+		if types.IsMultisigAddress(block.Address) {
+			if registry == nil {
+				registry = rmv.momentumStore.GetAccountStore(types.MultisigContract).Storage()
+			}
+			var sigs [][]byte
+			if block.MultisigAuth != nil {
+				sigs = block.MultisigAuth.Signatures
+			}
+			policy, ok := policyCache[block.Address]
+			if !ok {
+				rec, err := definition.GetMultisigRecord(registry, block.Address)
+				common.DealWithErr(err)
+				policy = definition.ActivePolicyAtHeight(rec, rmv.momentum.Height)
+				policyCache[block.Address] = policy
+			}
+			if !definition.VerifyThresholdSignatures(policy, block.Hash.Bytes(), sigs) {
+				return errors.Errorf("multisig block authorization does not satisfy policy active at inclusion height")
+			}
+		}
+	}
+
 	// sizes are the same
 	if len(blocksLookup) != len(rmv.momentum.Content) {
 		return errors.Errorf("momentum content size is different than the size of the prefetched account-blocks")

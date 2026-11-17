@@ -37,6 +37,7 @@ func (ctx *testTrailingBytesContext) IsHtlcSporkEnforced() bool                 
 func (ctx *testTrailingBytesContext) IsBridgeAndLiquiditySporkEnforced() bool        { return true }
 func (ctx *testTrailingBytesContext) IsDynamicPlasmaSporkEnforced() bool             { return ctx.dpEnforced }
 func (ctx *testTrailingBytesContext) IsPtlcSporkEnforced() bool                      { return true }
+func (ctx *testTrailingBytesContext) IsMultisigSporkEnforced() bool                  { return false }
 func (ctx *testTrailingBytesContext) GetPillarWeights() (map[string]*big.Int, error) {
 	return nil, nil
 }
