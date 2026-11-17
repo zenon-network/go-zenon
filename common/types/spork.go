@@ -70,9 +70,10 @@ var (
 	// PillarJailSpork gates the inactivity jail for pillars. Until this
 	// spork's EnforcementHeight is reached, the pillar contract jails no
 	// pillar and has no Unjail method; at activation, its Update jails
-	// an active pillar that was expected to produce momentums in the
-	// last finished election ticks and produced none, and Unjail lets
-	// the pillar's owner clear the jail for 100 ZNN, which is burned.
+	// an active pillar that has missed several eligible slots in a row
+	// over at least an hour without producing, elections leave jailed
+	// pillars out, and Unjail lets the pillar's owner clear the jail for
+	// 100 ZNN, which is burned.
 	// A node halts at the spork's enforcement height unless the ID is
 	// in ImplementedSporksMap (see chain/momentum_pool.go).
 	PillarJailSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000008")

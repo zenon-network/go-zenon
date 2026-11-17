@@ -40,8 +40,9 @@ import (
 // header in a momentum's content; the resulting writes become the
 // Changes patch of the nom.MomentumTransaction.
 //
-// GetJailedPillars returns the names of the pillars whose
-// pillar-contract jail record has Jailed set.
+// GetJailedPillars returns the names of the active pillars whose
+// pillar-contract jail record has Jailed set. A revoked pillar is never
+// reported, whatever its record says.
 type Momentum interface {
 	Genesis
 

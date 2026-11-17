@@ -85,7 +85,12 @@ const (
 		{"type":"variable","name":"pillarJail","inputs":[
 			{"name":"name","type":"string"},
 			{"name":"jailed","type":"bool"},
-			{"name":"since","type":"int64"}
+			{"name":"since","type":"int64"},
+			{"name":"missedSlots","type":"uint64"},
+			{"name":"firstMissTick","type":"uint64"}
+		]},
+		{"type":"variable","name":"pillarJailCursor","inputs":[
+			{"name":"nextTick","type":"uint64"}
 		]}
 	]`
 
@@ -122,6 +127,7 @@ const (
 	pillarEpochHistoryVariableName  = "pillarEpochHistory"
 	pillarEpochTermsVariableName    = "pillarEpochTerms"
 	pillarJailVariableName          = "pillarJail"
+	pillarJailCursorVariableName    = "pillarJailCursor"
 )
 
 var (
@@ -135,6 +141,7 @@ var (
 	pillarEpochHistoryKeyPrefix  = []byte{5}
 	pillarEpochTermsKeyPrefix    = []byte{6}
 	pillarJailKeyPrefix          = []byte{7}
+	pillarJailCursorKey          = []byte{9}
 
 	// AnyPillarType matches every pillar type when filtering with
 	// GetPillarsList.
@@ -274,15 +281,21 @@ func GetPillarsList(context db.DB, onlyActive bool, pillarType uint8) ([]*Pillar
 	return list, nil
 }
 
-// PillarJail is the jail state of a pillar. A record exists only once
-// the pillar has been jailed; Jailed is the current state and Since is
-// the unix time of the momentum at which the pillar was last jailed or
-// unjailed. Records are stored under pillarJailKeyPrefix (7) followed
-// by the SHA3-256 hash of the name, with the name packed in the value.
+// PillarJail is the jail state of a pillar. A record exists once the
+// pillar has been jailed or has missed a slot it was eligible for.
+// Jailed is the current state and Since is the unix time of the
+// momentum at which the pillar was last jailed or unjailed, 0 if it
+// never was. MissedSlots counts the eligible slots the pillar has
+// missed since it last produced a momentum, and FirstMissTick is the
+// election tick of the first of them; both are 0 when there is no such
+// miss. Records are stored under pillarJailKeyPrefix (7) followed by
+// the SHA3-256 hash of the name, with the name packed in the value.
 type PillarJail struct {
-	Name   string
-	Jailed bool
-	Since  int64
+	Name          string
+	Jailed        bool
+	Since         int64
+	MissedSlots   uint64
+	FirstMissTick uint64
 }
 
 // Save stores the jail state under its name key, returning any pack or
@@ -293,11 +306,52 @@ func (jail *PillarJail) Save(context db.DB) error {
 		jail.Name,
 		jail.Jailed,
 		jail.Since,
+		jail.MissedSlots,
+		jail.FirstMissTick,
 	)
 	if err != nil {
 		return err
 	}
 	return context.Put(getPillarJailKey(jail.Name), data)
+}
+
+// Delete removes the jail record of the pillar, returning any delete
+// error.
+func (jail *PillarJail) Delete(context db.DB) error {
+	return context.Delete(getPillarJailKey(jail.Name))
+}
+
+// PillarJailCursor is the first election tick the jail rule has not
+// judged yet. It is stored under pillarJailCursorKey (9); before the
+// first judgement there is no record.
+type PillarJailCursor struct {
+	NextTick uint64
+}
+
+// Save stores the cursor, returning any pack or put error.
+func (cursor *PillarJailCursor) Save(context db.DB) error {
+	data, err := ABIPillars.PackVariable(pillarJailCursorVariableName, cursor.NextTick)
+	if err != nil {
+		return err
+	}
+	return context.Put(pillarJailCursorKey, data)
+}
+
+// GetPillarJailCursor returns the jail cursor, or
+// constants.ErrDataNonExistent before the first judgement.
+func GetPillarJailCursor(context db.DB) (*PillarJailCursor, error) {
+	data, err := context.Get(pillarJailCursorKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, constants.ErrDataNonExistent
+	}
+	cursor := new(PillarJailCursor)
+	if err := ABIPillars.UnpackVariable(cursor, pillarJailCursorVariableName, data); err != nil {
+		return nil, err
+	}
+	return cursor, nil
 }
 
 func getPillarJailKey(name string) []byte {

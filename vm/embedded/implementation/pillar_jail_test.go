@@ -16,220 +16,166 @@ import (
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
-// jailTick builds the stats of the tick starting at start. Each count
-// is {produced, expected}.
-func jailTick(start int64, counts map[string][2]uint64) *api.PeriodStats {
-	pillars := make(map[string]*api.PeriodPillarStats, len(counts))
-	for name, c := range counts {
-		pillars[name] = &api.PeriodPillarStats{BlockNum: c[0], ExpectedBlockNum: c[1]}
-	}
-	return &api.PeriodStats{StartTime: start, Pillars: pillars}
+// jailCount is one pillar's line in a tick: produced and expected
+// slots, and whether the pillar was jailed at the tick's proof.
+type jailCount struct {
+	produced, expected uint64
+	jailedAtProof      bool
 }
 
-// jailTicks builds n ticks with StartTime 300*i. When withB is set,
-// pillar B produces in every tick, so every tick holds a momentum
-// unless fill removes B. fill adds the counts of tick i.
-func jailTicks(n int, withB bool, fill func(i int, counts map[string][2]uint64)) []*api.PeriodStats {
-	list := make([]*api.PeriodStats, 0, n)
-	for i := 0; i < n; i++ {
-		counts := map[string][2]uint64{}
-		if withB {
-			counts["B"] = [2]uint64{3, 3}
-		}
-		fill(i, counts)
-		list = append(list, jailTick(int64(300*i), counts))
+// jailTick builds the stats of election tick tick.
+func jailTick(tick uint64, counts map[string]jailCount) *api.PeriodStats {
+	pillars := make(map[string]*api.PeriodPillarStats, len(counts))
+	for name, c := range counts {
+		pillars[name] = &api.PeriodPillarStats{BlockNum: c.produced, ExpectedBlockNum: c.expected, Eligible: !c.jailedAtProof}
+	}
+	return &api.PeriodStats{Tick: tick, StartTime: int64(300 * tick), Pillars: pillars}
+}
+
+// jailTicks builds ticks from to to-1. B produces in every tick, so
+// every tick holds a momentum; fill adds the counts of each tick.
+func jailTicks(from, to uint64, fill func(tick uint64, counts map[string]jailCount)) []*api.PeriodStats {
+	list := make([]*api.PeriodStats, 0, to-from)
+	for tick := from; tick < to; tick++ {
+		counts := map[string]jailCount{"B": {produced: 3, expected: 3}}
+		fill(tick, counts)
+		list = append(list, jailTick(tick, counts))
 	}
 	return list
 }
 
-func TestInactivePillars(t *testing.T) {
-	zero := map[string]int64{"A": 0, "B": 0}
-	only := func(ticks ...int) func(i int, counts map[string][2]uint64) {
-		return func(i int, counts map[string][2]uint64) {
-			for _, tick := range ticks {
-				if tick == i {
-					counts["A"] = [2]uint64{0, 3}
-				}
-			}
-		}
-	}
-
-	stall := func() []*api.PeriodStats {
-		return jailTicks(14, false, func(i int, counts map[string][2]uint64) {
-			switch i {
-			case 0, 1:
-				counts["A"] = [2]uint64{3, 3}
-				counts["U"] = [2]uint64{3, 3}
-			case 4, 5, 8, 9, 12, 13:
-				counts["J"] = [2]uint64{3, 3}
-				counts["A"] = [2]uint64{0, 3}
-				counts["U"] = [2]uint64{0, 3}
-			}
-		})
-	}
-
-	for _, tc := range []struct {
+func TestAdvanceJailStreaks(t *testing.T) {
+	miss := jailCount{expected: 2}
+	cases := []struct {
 		name    string
+		start   jailStreak
 		periods []*api.PeriodStats
-		since   map[string]int64
-		want    []string
+		want    jailStreak
 	}{
-		{
-			"expected and none produced is selected",
-			jailTicks(3, true, func(i int, c map[string][2]uint64) { c["A"] = [2]uint64{0, 3} }),
-			zero, []string{"A"},
-		},
-		{
-			"one production in a counted tick clears",
-			jailTicks(3, true, func(i int, c map[string][2]uint64) {
-				c["A"] = [2]uint64{uint64(i % 2), 3}
-			}),
-			zero, []string{},
-		},
-		{
-			"zero expected is not a miss",
-			jailTicks(3, true, func(i int, c map[string][2]uint64) { c["A"] = [2]uint64{0, 0} }),
-			zero, []string{},
-		},
-		{
-			"absent from every tick is not a miss",
-			jailTicks(3, true, func(i int, c map[string][2]uint64) {}),
-			zero, []string{},
-		},
-		{
-			"tick without momentums counts for no one",
-			jailTicks(3, true, func(i int, c map[string][2]uint64) {
-				if i == 1 {
-					delete(c, "B")
-					c["A"] = [2]uint64{0, 3}
-				}
-			}),
-			zero, []string{},
-		},
-		{
-			"unelected producer name is ignored",
-			jailTicks(3, true, func(i int, c map[string][2]uint64) {
-				c[""] = [2]uint64{2, 0}
-				c["A"] = [2]uint64{1, 3}
-			}),
-			zero, []string{},
-		},
-		{
-			"names absent from since are ignored",
-			jailTicks(3, true, func(i int, c map[string][2]uint64) { c["C"] = [2]uint64{0, 3} }),
-			zero, []string{},
-		},
-		{
-			"output is sorted by name",
-			jailTicks(3, true, func(i int, c map[string][2]uint64) {
-				c["c"] = [2]uint64{0, 3}
-				c["a"] = [2]uint64{0, 3}
-				c["b"] = [2]uint64{0, 3}
-				c["D"] = [2]uint64{3, 3}
-			}),
-			map[string]int64{"a": 0, "b": 0, "c": 0, "D": 0}, []string{"a", "b", "c"},
-		},
-		{
-			"only the last window of ticks counts",
-			jailTicks(14, true, func(i int, c map[string][2]uint64) {
-				if i < 2 {
-					c["A"] = [2]uint64{1, 3}
-				} else {
-					c["A"] = [2]uint64{0, 3}
-				}
-			}),
-			zero, []string{"A"},
-		},
-		{
-			"production before the window does not protect and misses before it do not count",
-			jailTicks(14, true, only(0, 1)),
-			zero, []string{},
-		},
-		{
-			"ticks whose T-2 started before the unjail do not count",
-			jailTicks(6, true, only(2, 3)),
-			map[string]int64{"A": 310, "B": 0}, []string{},
-		},
-		{
-			"a counted tick whose T-2 started after the unjail selects",
-			jailTicks(6, true, only(2, 3, 4)),
-			map[string]int64{"A": 310, "B": 0}, []string{"A"},
-		},
-		{
-			"unjail exactly at a tick start counts from two ticks later",
-			jailTicks(5, true, only(4)),
-			map[string]int64{"A": 600, "B": 0}, []string{"A"},
-		},
-		{
-			"stale tick counts for an unjailed pillar whose proof tick started after the unjail",
-			jailTicks(5, true, func(i int, c map[string][2]uint64) {
-				if i == 2 {
-					delete(c, "B")
-				}
-				if i == 4 {
-					c["A"] = [2]uint64{0, 3}
-				}
-			}),
-			map[string]int64{"A": 100, "B": 0}, []string{"A"},
-		},
-		{
-			"stale tick whose proof tick started before the unjail does not count",
-			jailTicks(5, true, func(i int, c map[string][2]uint64) {
-				if i == 2 {
-					delete(c, "B")
-				}
-				if i == 4 {
-					c["A"] = [2]uint64{0, 3}
-				}
-			}),
-			map[string]int64{"A": 310, "B": 0}, []string{},
-		},
-		{
-			"ticks 0 and 1 do not count for an unjailed pillar",
-			jailTicks(2, true, only(0, 1)),
-			map[string]int64{"A": 1, "B": 0}, []string{},
-		},
-		{
-			"a tick whose proof lies before periods does not count for an unjailed pillar",
-			jailTicks(14, true, func(i int, c map[string][2]uint64) {
-				if i == 0 {
-					delete(c, "B")
-				}
-				if i == 2 {
-					c["A"] = [2]uint64{0, 3}
-				}
-			}),
-			map[string]int64{"A": 1, "B": 0}, []string{},
-		},
-		{
-			"the same tick counts for a never-jailed pillar",
-			jailTicks(14, true, func(i int, c map[string][2]uint64) {
-				if i == 0 {
-					delete(c, "B")
-				}
-				if i == 2 {
-					c["A"] = [2]uint64{0, 3}
-				}
-			}),
-			zero, []string{"A"},
-		},
-		{
-			"a jail-induced stall judges never-jailed and unjailed offline pillars alike",
-			stall(),
-			map[string]int64{"A": 0, "U": 100}, []string{"A", "U"},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := inactivePillars(tc.periods, tc.since)
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("inactivePillars = %v, want %v", got, tc.want)
+		{"an eligible miss starts a streak", jailStreak{},
+			[]*api.PeriodStats{jailTick(7, map[string]jailCount{"A": miss, "B": {produced: 1}})},
+			jailStreak{missed: 2, first: 7}},
+		{"misses accumulate and keep the first tick", jailStreak{missed: 1, first: 3},
+			[]*api.PeriodStats{jailTick(7, map[string]jailCount{"A": miss, "B": {produced: 1}}), jailTick(8, map[string]jailCount{"A": {expected: 1}, "B": {produced: 1}})},
+			jailStreak{missed: 4, first: 3}},
+		{"production resets the streak", jailStreak{missed: 5, first: 3},
+			[]*api.PeriodStats{jailTick(7, map[string]jailCount{"A": {produced: 1, expected: 2}})},
+			jailStreak{}},
+		{"production while jailed at the proof resets the streak", jailStreak{missed: 5, first: 3},
+			[]*api.PeriodStats{jailTick(7, map[string]jailCount{"A": {produced: 1, expected: 1, jailedAtProof: true}})},
+			jailStreak{}},
+		{"a miss while jailed at the proof is not counted", jailStreak{},
+			[]*api.PeriodStats{jailTick(7, map[string]jailCount{"A": {expected: 3, jailedAtProof: true}, "B": {produced: 1}})},
+			jailStreak{}},
+		{"a tick with no momentum is skipped", jailStreak{missed: 1, first: 3},
+			[]*api.PeriodStats{jailTick(7, map[string]jailCount{"A": miss, "B": {expected: 3}})},
+			jailStreak{missed: 1, first: 3}},
+		{"a tick that does not list the pillar leaves the streak", jailStreak{missed: 1, first: 3},
+			[]*api.PeriodStats{jailTick(7, map[string]jailCount{"B": {produced: 1}})},
+			jailStreak{missed: 1, first: 3}},
+		{"an unelected tick leaves the streak", jailStreak{missed: 1, first: 3},
+			[]*api.PeriodStats{jailTick(7, map[string]jailCount{"A": {}, "B": {produced: 1}})},
+			jailStreak{missed: 1, first: 3}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			streak := c.start
+			advanceJailStreaks(c.periods, map[string]*jailStreak{"A": &streak})
+			if streak != c.want {
+				t.Fatalf("streak = %+v, want %+v", streak, c.want)
 			}
 		})
 	}
 }
 
-// jailUpdateContext records the counts its FinishedPeriodStats is
-// asked for.
+func TestStreakJails(t *testing.T) {
+	window := constants.PillarJailWindowPeriods
+	min := constants.PillarJailMinMissedSlots
+	cases := []struct {
+		name   string
+		streak jailStreak
+		last   uint64
+		want   bool
+	}{
+		{"enough slots over the full window", jailStreak{missed: min, first: 10}, 10 + window - 1, true},
+		{"enough slots one tick short of the window", jailStreak{missed: min, first: 10}, 10 + window - 2, false},
+		{"one slot short over the full window", jailStreak{missed: min - 1, first: 10}, 10 + window - 1, false},
+		{"no streak", jailStreak{}, 10 + window, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := streakJails(&c.streak, c.last); got != c.want {
+				t.Fatalf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// A pillar outside the top 30 is elected about twice an hour. One
+// missed slot does not jail it; it is jailed once it has missed enough
+// slots, however many judgements that takes.
+func TestAdvanceJailStreaks_SparselyScheduledPillar(t *testing.T) {
+	streak := &jailStreak{}
+	streaks := map[string]*jailStreak{"A": streak}
+
+	oneSlot := jailTicks(0, 12, func(tick uint64, counts map[string]jailCount) {
+		if tick == 5 {
+			counts["A"] = jailCount{expected: 1}
+		}
+	})
+	advanceJailStreaks(oneSlot, streaks)
+	if streakJails(streak, 11) {
+		t.Fatal("one missed slot in an hour jailed the pillar")
+	}
+
+	// Offline for the next hours, elected once every five ticks.
+	var last uint64
+	for from := uint64(12); from < 12*6; from += 12 {
+		advanceJailStreaks(jailTicks(from, from+12, func(tick uint64, counts map[string]jailCount) {
+			if tick%5 == 0 {
+				counts["A"] = jailCount{expected: 1}
+			}
+		}), streaks)
+		last = from + 11
+		if streakJails(streak, last) {
+			break
+		}
+	}
+	if !streakJails(streak, last) {
+		t.Fatalf("an offline, sparsely elected pillar was never jailed: %+v", streak)
+	}
+	if streak.first != 5 {
+		t.Fatalf("streak starts at tick %d, want 5", streak.first)
+	}
+}
+
+// After an unjail in tick 23, the pillar produces in tick 25 and then
+// stops. Its production counts, so it is not jailed until a full window
+// after its first missed slot in tick 26.
+func TestAdvanceJailStreaks_ProductionAfterUnjailCounts(t *testing.T) {
+	streak := &jailStreak{}
+	ticks := jailTicks(23, 40, func(tick uint64, counts map[string]jailCount) {
+		switch {
+		case tick < 25:
+			counts["A"] = jailCount{expected: 1, jailedAtProof: true}
+		case tick == 25:
+			counts["A"] = jailCount{produced: 10, expected: 10}
+		default:
+			counts["A"] = jailCount{expected: 1}
+		}
+	})
+	for _, tick := range ticks {
+		advanceJailStreaks([]*api.PeriodStats{tick}, map[string]*jailStreak{"A": streak})
+		jailed := streakJails(streak, tick.Tick)
+		want := tick.Tick >= 26+constants.PillarJailWindowPeriods-1
+		if jailed != want {
+			t.Fatalf("after tick %d: jailed %v, want %v; streak %+v", tick.Tick, jailed, want, streak)
+		}
+	}
+}
+
+// jailUpdateContext answers FinishedPeriodStats(count) with the last
+// count entries of periodStats and records each count it is asked for.
 type jailUpdateContext struct {
 	*testEpochBoundContext
 	requested []uint64
@@ -237,9 +183,15 @@ type jailUpdateContext struct {
 
 func (ctx *jailUpdateContext) FinishedPeriodStats(count uint64) ([]*api.PeriodStats, error) {
 	ctx.requested = append(ctx.requested, count)
-	return ctx.periodStats, nil
+	if count > uint64(len(ctx.periodStats)) {
+		return ctx.periodStats, nil
+	}
+	return ctx.periodStats[uint64(len(ctx.periodStats))-count:], nil
 }
 
+// newJailUpdateContext stores pillars a to f, e revoked, with c jailed
+// and d and f unjailed before, and ticks 0 to 13. a, c and e miss from
+// tick 1 on, d and f miss in tick 13 only, and b produces throughout.
 func newJailUpdateContext(t *testing.T, enforced bool) *jailUpdateContext {
 	t.Helper()
 	frontierTime := time.Unix(100000, 0)
@@ -279,15 +231,16 @@ func newJailUpdateContext(t *testing.T, enforced bool) *jailUpdateContext {
 		common.FailIfErr(t, jail.Save(ctx.Storage()))
 	}
 
-	ctx.periodStats = jailTicks(4, true, func(i int, counts map[string][2]uint64) {
-		if i >= 1 {
+	ctx.periodStats = jailTicks(0, 14, func(tick uint64, counts map[string]jailCount) {
+		counts["pillar-b"] = jailCount{produced: 1, expected: 1}
+		if tick >= 1 {
 			for _, name := range []string{"pillar-a", "pillar-c", "pillar-e"} {
-				counts[name] = [2]uint64{0, 3}
+				counts[name] = jailCount{expected: 3}
 			}
 		}
-		if i == 3 {
-			counts["pillar-d"] = [2]uint64{0, 3}
-			counts["pillar-f"] = [2]uint64{0, 3}
+		if tick == 13 {
+			counts["pillar-d"] = jailCount{expected: 3}
+			counts["pillar-f"] = jailCount{expected: 3}
 		}
 	})
 	return ctx
@@ -308,13 +261,22 @@ func expectNamedJail(t *testing.T, ctx *jailUpdateContext, name string, want *de
 	got, err := definition.GetPillarJail(ctx.Storage(), name)
 	if want == nil {
 		if err != constants.ErrDataNonExistent {
-			t.Fatalf("%s jail record err = %v, want %v", name, err, constants.ErrDataNonExistent)
+			t.Fatalf("%s jail record = %+v, %v; want none", name, got, err)
 		}
 		return
 	}
 	common.FailIfErr(t, err)
-	if got.Name != want.Name || got.Jailed != want.Jailed || got.Since != want.Since {
+	if *got != *want {
 		t.Fatalf("%s jail record = %+v, want %+v", name, got, want)
+	}
+}
+
+func expectJailCursor(t *testing.T, ctx *jailUpdateContext, want uint64) {
+	t.Helper()
+	cursor, err := definition.GetPillarJailCursor(ctx.Storage())
+	common.FailIfErr(t, err)
+	if cursor.NextTick != want {
+		t.Fatalf("jail cursor = %d, want %d", cursor.NextTick, want)
 	}
 }
 
@@ -336,6 +298,9 @@ func TestUpdate_WritesNoJailBeforeSpork(t *testing.T) {
 	if len(ctx.requested) != 0 {
 		t.Fatalf("FinishedPeriodStats requested %v, want no request", ctx.requested)
 	}
+	if _, err := definition.GetPillarJailCursor(ctx.Storage()); err != constants.ErrDataNonExistent {
+		t.Fatalf("jail cursor err = %v, want none stored", err)
+	}
 }
 
 func TestUpdate_JailsInactivePillarsUnderSpork(t *testing.T) {
@@ -347,13 +312,68 @@ func TestUpdate_JailsInactivePillarsUnderSpork(t *testing.T) {
 	if blocks != nil {
 		t.Fatalf("descendant blocks = %v, want none", blocks)
 	}
+	// The first judgement covers ticks 2 to 13.
 	expectNamedJail(t, ctx, "pillar-a", &definition.PillarJail{Name: "pillar-a", Jailed: true, Since: 100000})
 	expectNamedJail(t, ctx, "pillar-b", nil)
 	expectNamedJail(t, ctx, "pillar-c", &definition.PillarJail{Name: "pillar-c", Jailed: true, Since: 42})
-	expectNamedJail(t, ctx, "pillar-d", &definition.PillarJail{Name: "pillar-d", Jailed: false, Since: 700})
+	expectNamedJail(t, ctx, "pillar-d", &definition.PillarJail{Name: "pillar-d", Since: 700, MissedSlots: 3, FirstMissTick: 13})
 	expectNamedJail(t, ctx, "pillar-e", nil)
-	expectNamedJail(t, ctx, "pillar-f", &definition.PillarJail{Name: "pillar-f", Jailed: true, Since: 100000})
-	if want := []uint64{14}; !reflect.DeepEqual(ctx.requested, want) {
+	expectNamedJail(t, ctx, "pillar-f", &definition.PillarJail{Name: "pillar-f", Since: 1, MissedSlots: 3, FirstMissTick: 13})
+	expectJailCursor(t, ctx, 14)
+	if want := []uint64{1, constants.PillarJailWindowPeriods}; !reflect.DeepEqual(ctx.requested, want) {
 		t.Fatalf("FinishedPeriodStats requested %v, want %v", ctx.requested, want)
 	}
+}
+
+// A later judgement reads only the ticks finished since the last one,
+// and streaks carry over.
+func TestJailInactivePillars_JudgesOnlyNewTicks(t *testing.T) {
+	ctx := newJailUpdateContext(t, true)
+	common.FailIfErr(t, jailInactivePillars(ctx))
+
+	// d keeps missing for a full window after tick 13; f produces.
+	ctx.periodStats = append(ctx.periodStats, jailTicks(14, 25, func(tick uint64, counts map[string]jailCount) {
+		counts["pillar-b"] = jailCount{produced: 1, expected: 1}
+		counts["pillar-d"] = jailCount{expected: 1}
+		counts["pillar-f"] = jailCount{produced: 1, expected: 1}
+	})...)
+	ctx.requested = nil
+	common.FailIfErr(t, jailInactivePillars(ctx))
+
+	if want := []uint64{1, 11}; !reflect.DeepEqual(ctx.requested, want) {
+		t.Fatalf("FinishedPeriodStats requested %v, want %v", ctx.requested, want)
+	}
+	expectNamedJail(t, ctx, "pillar-d", &definition.PillarJail{Name: "pillar-d", Jailed: true, Since: 100000})
+	expectNamedJail(t, ctx, "pillar-f", &definition.PillarJail{Name: "pillar-f", Since: 1})
+	expectJailCursor(t, ctx, 25)
+
+	// With no newly finished tick only the latest tick is read.
+	ctx.requested = nil
+	common.FailIfErr(t, jailInactivePillars(ctx))
+	if want := []uint64{1}; !reflect.DeepEqual(ctx.requested, want) {
+		t.Fatalf("FinishedPeriodStats requested %v, want %v", ctx.requested, want)
+	}
+}
+
+// A never-jailed pillar whose streak ends keeps no record.
+func TestJailInactivePillars_DeletesAClearedStreakOfANeverJailedPillar(t *testing.T) {
+	ctx := newJailUpdateContext(t, true)
+	common.FailIfErr(t, (&definition.PillarJail{Name: "pillar-b", MissedSlots: 2, FirstMissTick: 1}).Save(ctx.Storage()))
+	common.FailIfErr(t, (&definition.PillarJailCursor{NextTick: 13}).Save(ctx.Storage()))
+
+	common.FailIfErr(t, jailInactivePillars(ctx))
+	expectNamedJail(t, ctx, "pillar-b", nil)
+}
+
+// Older unjudged ticks beyond the cap are skipped.
+func TestJailInactivePillars_CapsTheTicksJudged(t *testing.T) {
+	ctx := newJailUpdateContext(t, true)
+	ctx.periodStats = jailTicks(0, 400, func(tick uint64, counts map[string]jailCount) {})
+	common.FailIfErr(t, (&definition.PillarJailCursor{NextTick: 0}).Save(ctx.Storage()))
+
+	common.FailIfErr(t, jailInactivePillars(ctx))
+	if want := []uint64{1, constants.PillarJailMaxTicksPerUpdate}; !reflect.DeepEqual(ctx.requested, want) {
+		t.Fatalf("FinishedPeriodStats requested %v, want %v", ctx.requested, want)
+	}
+	expectJailCursor(t, ctx, 400)
 }

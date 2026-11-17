@@ -29,6 +29,43 @@ func TestPillarJail_SaveAndGetRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPillarJail_StreakRoundTripAndDelete(t *testing.T) {
+	store := db.DisableNotFound(db.NewMemDB())
+
+	want := PillarJail{Name: "pillar-a", MissedSlots: 4, FirstMissTick: 1234}
+	common.FailIfErr(t, want.Save(store))
+	got, err := GetPillarJail(store, "pillar-a")
+	common.FailIfErr(t, err)
+	if *got != want {
+		t.Fatalf("got record %+v, want %+v", got, want)
+	}
+
+	common.FailIfErr(t, got.Delete(store))
+	if _, err := GetPillarJail(store, "pillar-a"); err != constants.ErrDataNonExistent {
+		t.Fatalf("after delete got error %v, want %v", err, constants.ErrDataNonExistent)
+	}
+}
+
+func TestPillarJailCursor_RoundTripAndAbsence(t *testing.T) {
+	store := db.DisableNotFound(db.NewMemDB())
+
+	if _, err := GetPillarJailCursor(store); err != constants.ErrDataNonExistent {
+		t.Fatalf("got error %v, want %v", err, constants.ErrDataNonExistent)
+	}
+	common.FailIfErr(t, (&PillarJailCursor{NextTick: 288}).Save(store))
+	got, err := GetPillarJailCursor(store)
+	common.FailIfErr(t, err)
+	if got.NextTick != 288 {
+		t.Fatalf("got cursor %d, want 288", got.NextTick)
+	}
+
+	list, err := GetPillarJailList(store)
+	common.FailIfErr(t, err)
+	if len(list) != 0 {
+		t.Fatalf("the cursor shows up as %d jail records", len(list))
+	}
+}
+
 func TestPillarJail_GetUnknownNameIsNonExistent(t *testing.T) {
 	store := db.DisableNotFound(db.NewMemDB())
 

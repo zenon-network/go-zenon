@@ -7,6 +7,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
@@ -30,7 +31,17 @@ func (ms *momentumStore) GetJailedPillars() (map[string]bool, error) {
 	}
 	jailed := make(map[string]bool)
 	for _, jail := range list {
-		if jail.Jailed {
+		if !jail.Jailed {
+			continue
+		}
+		pillar, err := definition.GetPillarInfo(sd.Storage(), jail.Name)
+		if err == constants.ErrDataNonExistent {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if pillar.IsActive() {
 			jailed[jail.Name] = true
 		}
 	}

@@ -38,7 +38,7 @@ func TestElection_NoJailRecordsMatchesPlainSelection(t *testing.T) {
 	}
 }
 
-// Jails apply on the first two ticks, which are never stale.
+// Jails apply on the first two ticks, which never fall back.
 func TestElection_JailAppliesOnTicksZeroAndOne(t *testing.T) {
 	useJailTestConsensus(t)
 	em, _ := newJailTestElection(newJailTestChain(1, "pillar-c"))
@@ -69,8 +69,8 @@ func (c *jailTestFailingChain) GetMomentumStore(id types.HashHeight) store.Momen
 	return &jailTestFailingStore{jailTestStore: s.(*jailTestStore), err: c.err}
 }
 
-// A failed jail read fails the election on a stale tick and on a
-// non-stale tick, and stores no result.
+// A failed jail read fails the election on a fallback tick and on a
+// normal tick, and stores no result.
 func TestElection_JailReadErrorFailsElection(t *testing.T) {
 	useJailTestConsensus(t)
 	ch := newJailTestChain(3, "pillar-c")

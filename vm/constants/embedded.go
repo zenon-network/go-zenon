@@ -125,10 +125,18 @@ var (
 	// pillar owner sends with Unjail to clear the pillar's jail; it is
 	// burned.
 	PillarUnjailAmount = big.NewInt(100 * Decimals)
-	// PillarJailWindowPeriods is the number of finished election ticks
-	// (one hour at the 300-second tick) over which the pillar contract
-	// judges whether a pillar produced its expected momentums.
+	// PillarJailWindowPeriods is the number of election ticks (one hour
+	// at the 300-second tick) a pillar must go without producing, from
+	// its first missed eligible slot, before it can be jailed.
 	PillarJailWindowPeriods = uint64(12)
+	// PillarJailMinMissedSlots is the number of eligible slots a pillar
+	// must miss in a row, with no momentum produced in between, before
+	// it can be jailed.
+	PillarJailMinMissedSlots = uint64(3)
+	// PillarJailMaxTicksPerUpdate caps the finished election ticks one
+	// pillar Update judges (one day at the 300-second tick). Older
+	// unjudged ticks are skipped.
+	PillarJailMaxTicksPerUpdate = uint64(288)
 
 	/// === Sentinel constants ===
 

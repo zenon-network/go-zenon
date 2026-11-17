@@ -50,7 +50,8 @@ func (p *UnjailMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 // be owned by the sender, its stake address
 // (constants.ErrPermissionDenied), and be jailed
 // (constants.ErrPillarNotJailed). The jail record is saved with Jailed
-// false and Since set to the frontier momentum time, and one
+// false, Since set to the frontier momentum time and no missed-slot
+// streak, and one
 // descendant send burns the fee at the token contract. ZNN is
 // burnable, so the burn is accepted: on mainnet the token contract
 // owns ZNN and its isBurnable flag is set at genesis.
@@ -90,6 +91,8 @@ func (p *UnjailMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 	common.DealWithErr(err)
 	jail.Jailed = false
 	jail.Since = momentum.Timestamp.Unix()
+	jail.MissedSlots = 0
+	jail.FirstMissTick = 0
 	common.DealWithErr(jail.Save(context.Storage()))
 
 	return []*nom.AccountBlock{

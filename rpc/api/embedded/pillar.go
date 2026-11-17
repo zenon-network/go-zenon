@@ -139,7 +139,7 @@ func (a *PillarApi) GetQsrRegistrationCost() (string, error) {
 //
 // IsJailed reports whether the pillar contract holds a jail record for
 // the pillar with Jailed set, read from contract state at the
-// account-pool frontier. A jailed pillar keeps its weight and
+// account-pool frontier. A revoked pillar always reports false. A jailed pillar keeps its weight and
 // delegations but is left out of producer elections whose proof
 // momentum confirms the jail. Its owner clears the jail with Unjail.
 //
@@ -334,7 +334,7 @@ func (a *PillarApi) GetAll(pageIndex, pageSize uint32) (*PillarInfoList, error) 
 			BlockProducingAddress:        pillar.BlockProducingAddress,
 			RewardWithdrawAddress:        pillar.RewardWithdrawAddress,
 			RevokeTime:                   pillar.RevokeTime,
-			IsJailed:                     jailed[pillar.Name],
+			IsJailed:                     jailed[pillar.Name] && pillar.IsActive(),
 			GiveMomentumRewardPercentage: pillar.GiveBlockRewardPercentage,
 			GiveDelegateRewardPercentage: pillar.GiveDelegateRewardPercentage,
 			CanBeRevoked:                 canBeRevoked,

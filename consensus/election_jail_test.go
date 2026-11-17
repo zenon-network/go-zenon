@@ -13,6 +13,7 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus/storage"
 	"github.com/zenon-network/go-zenon/vm/constants"
+	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
 // useJailTestConsensus sets a 5-slot election with 50 s ticks and
@@ -42,13 +43,35 @@ var jailTestPillars = []jailTestPillar{
 }
 
 // jailTestStore is a momentum store that reports a fixed jailed set and
-// three pillars as delegations.
+// three pillars as delegations. delegationCalls, if set, counts the
+// delegation computations.
 type jailTestStore struct {
 	*pinTestStore
-	jailed map[string]bool
+	jailed          map[string]bool
+	delegationCalls *int
+}
+
+func (s *jailTestStore) GetActivePillars() ([]*definition.PillarInfo, error) {
+	result := make([]*definition.PillarInfo, 0, len(jailTestPillars))
+	for _, p := range jailTestPillars {
+		result = append(result, &definition.PillarInfo{Name: p.name, BlockProducingAddress: p.addr})
+	}
+	return result, nil
+}
+
+func (s *jailTestStore) GetMomentumByHash(hash types.Hash) (*nom.Momentum, error) {
+	for _, m := range s.momentums {
+		if m.Hash == hash {
+			return pinTestCopy(m), nil
+		}
+	}
+	return nil, nil
 }
 
 func (s *jailTestStore) ComputePillarDelegations() ([]*types.PillarDelegationDetail, error) {
+	if s.delegationCalls != nil {
+		*s.delegationCalls++
+	}
 	result := make([]*types.PillarDelegationDetail, 0, len(jailTestPillars))
 	for _, p := range jailTestPillars {
 		result = append(result, &types.PillarDelegationDetail{
@@ -87,8 +110,15 @@ func (c *jailTestChain) GetMomentumStore(id types.HashHeight) store.Momentum {
 	return s
 }
 
-// jailTestMomentum builds momentum hN at the given offset from genesis.
+// jailTestMomentum builds momentum hN at the given offset from genesis,
+// produced by pillar-a.
 func jailTestMomentum(height uint64, offset time.Duration) *nom.Momentum {
+	return jailTestMomentumBy(height, offset, pinTestKey(0x1a))
+}
+
+// jailTestMomentumBy builds momentum hN at the given offset from
+// genesis, signed with key.
+func jailTestMomentumBy(height uint64, offset time.Duration, key []byte) *nom.Momentum {
 	ts := pinTestGenesisTime.Add(offset)
 	var hash types.Hash
 	hash[0] = 0x77
@@ -98,20 +128,30 @@ func jailTestMomentum(height uint64, offset time.Duration) *nom.Momentum {
 		Height:        height,
 		Timestamp:     &ts,
 		TimestampUnix: uint64(ts.Unix()),
-		PublicKey:     pinTestKey(0x1a),
+		PublicKey:     key,
 	}
 }
 
 // newJailTestChain builds h1 (tick 0), h2 (tick 1), h3 (tick 2), h4
-// (tick 4) and h5 (tick 5), with no momentum in tick 3. Stores at
-// heights from jailedFrom up report the jailed names.
+// (tick 4) and h5 (tick 5), with no momentum in tick 3, all produced by
+// pillar-a. Stores at heights from jailedFrom up report the jailed
+// names.
 func newJailTestChain(jailedFrom uint64, jailed ...string) *jailTestChain {
 	offsets := []time.Duration{0, 55 * time.Second, 105 * time.Second, 205 * time.Second, 255 * time.Second}
+	return newJailTestChainOf(offsets, nil, jailedFrom, jailed...)
+}
+
+// newJailTestChainOf builds one momentum per offset. keys[i], when
+// given, signs the momentum at offsets[i]; pillar-a signs the others.
+func newJailTestChainOf(offsets []time.Duration, keys [][]byte, jailedFrom uint64, jailed ...string) *jailTestChain {
 	all := make([]*nom.Momentum, 0, len(offsets))
 	ch := &jailTestChain{}
 	for i, offset := range offsets {
 		height := uint64(i + 1)
 		m := jailTestMomentum(height, offset)
+		if i < len(keys) && keys[i] != nil {
+			m = jailTestMomentumBy(height, offset, keys[i])
+		}
 		if i > 0 {
 			m.PreviousHash = all[i-1].Hash
 		}
@@ -233,35 +273,66 @@ func TestExcludeJailed(t *testing.T) {
 	}
 }
 
-func TestProofIsStale(t *testing.T) {
+func TestJailFallback(t *testing.T) {
 	useJailTestConsensus(t)
-	em := &electionManager{Context: *NewConsensusContext(pinTestGenesisTime)}
-	at := func(d time.Duration) *nom.Momentum {
-		return jailTestMomentum(1, d)
-	}
+	keyA, keyC := pinTestKey(0x1a), pinTestKey(0x1c)
+	// h1 tick 0 (a), h2 tick 1 (a), h3 tick 2 (c), h4 tick 2 (a),
+	// h5 tick 4 (c), h6 tick 4 (c); tick 3 is empty.
+	offsets := []time.Duration{0, 55 * time.Second, 101 * time.Second, 105 * time.Second, 201 * time.Second, 205 * time.Second}
+	keys := [][]byte{keyA, keyA, keyC, keyA, keyC, keyC}
 	cases := []struct {
-		name  string
-		tick  uint64
-		proof *nom.Momentum
-		want  bool
+		name   string
+		jailed []string
+		tick   uint64
+		want   bool
 	}{
-		{"tick 0", 0, at(0), false},
-		{"tick 1", 1, at(0), false},
-		{"tick 4 proof at start of tick 2", 4, at(100 * time.Second), false},
-		{"tick 4 proof inside tick 2", 4, at(105 * time.Second), false},
-		{"tick 4 proof before tick 2", 4, at(99 * time.Second), true},
-		{"tick 5 proof in tick 2", 5, at(105 * time.Second), true},
+		{"no jailed pillar", nil, 5, false},
+		{"tick 1 never falls back", []string{"pillar-a", "pillar-b"}, 1, false},
+		{"kept pillar produced in tick-2", []string{"pillar-c"}, 4, false},
+		{"tick-2 empty", []string{"pillar-c"}, 5, true},
+		{"only jailed pillars produced in tick-2", []string{"pillar-c"}, 6, true},
+		{"a kept pillar produced earlier in tick-2", []string{"pillar-b"}, 4, false},
+		{"every producer of tick-2 jailed", []string{"pillar-a", "pillar-c"}, 4, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := em.proofIsStale(c.tick, c.proof); got != c.want {
+			ch := newJailTestChainOf(offsets, keys, 1, c.jailed...)
+			em, _ := newJailTestElection(ch)
+			proofBlock, err := getMomentumBeforeTime(ch.live, em.genProofTime(c.tick))
+			common.FailIfErr(t, err)
+			proofStore := ch.GetMomentumStore(proofBlock.Identifier())
+			jailed, err := proofStore.GetJailedPillars()
+			common.FailIfErr(t, err)
+			got, err := em.jailFallback(proofStore, c.tick, proofBlock, jailed)
+			common.FailIfErr(t, err)
+			if got != c.want {
 				t.Fatalf("got %v, want %v", got, c.want)
 			}
 		})
 	}
 }
 
-func TestElection_OneProofHashServesStaleAndNonStaleTicks(t *testing.T) {
+// When every kept pillar is offline, the fallback lets the jailed
+// pillars produce, and their momentums keep the fallback on: no tick
+// goes back to the jail-filtered schedule while only jailed pillars
+// produce.
+func TestElection_FallbackKeepsProducingThroughJailedPillars(t *testing.T) {
+	useJailTestConsensus(t)
+	keyC := pinTestKey(0x1c)
+	// pillar-a produces through tick 2, then only jailed pillar-c
+	// produces, in ticks 6 to 9.
+	offsets := []time.Duration{0, 55 * time.Second, 105 * time.Second, 305 * time.Second, 355 * time.Second, 405 * time.Second, 455 * time.Second}
+	keys := [][]byte{nil, nil, nil, keyC, keyC, keyC, keyC}
+	ch := newJailTestChainOf(offsets, keys, 1, "pillar-c")
+	em, _ := newJailTestElection(ch)
+
+	expectPillarC(t, em, 4, false)
+	for tick := uint64(6); tick <= 11; tick++ {
+		expectPillarC(t, em, tick, true)
+	}
+}
+
+func TestElection_OneProofHashServesFallbackAndNormalTicks(t *testing.T) {
 	useJailTestConsensus(t)
 	ch := newJailTestChain(3, "pillar-c")
 	h3 := ch.momentum(3)
@@ -292,10 +363,68 @@ func TestElection_OneProofHashServesStaleAndNonStaleTicks(t *testing.T) {
 	stored, err := consensusDB.GetElectionResultByHash(h3.Hash)
 	common.FailIfErr(t, err)
 	if stored != nil {
-		t.Fatal("stale tick wrote a result under h3")
+		t.Fatal("fallback tick wrote a result under h3")
+	}
+	fallback, err := consensusDB.GetFallbackElectionResult(h3.Hash, 5)
+	common.FailIfErr(t, err)
+	if fallback == nil || !jailTestHas(fallback.Producers, jailTestPillarC) {
+		t.Fatalf("fallback result under (h3, 5) is %+v, want one with pillar-c", fallback)
 	}
 	expectPillarC(t, em, 4, false)
 	checkStored(consensusDB)
+}
+
+// Repeated fallback elections of one tick compute the delegations
+// once.
+func TestElection_FallbackComputedOnce(t *testing.T) {
+	useJailTestConsensus(t)
+	ch := newJailTestChain(3, "pillar-c")
+	calls := 0
+	for _, s := range ch.stores {
+		s.delegationCalls = &calls
+	}
+	em, _ := newJailTestElection(ch)
+	for i := 0; i < 20; i++ {
+		expectPillarC(t, em, 5, true)
+	}
+	if calls != 1 {
+		t.Fatalf("20 fallback elections computed the delegations %d times, want 1", calls)
+	}
+}
+
+// While the proof momentum stops moving, each fallback tick draws its
+// own schedule, so every candidate is eventually elected.
+func TestElection_FallbackScheduleRotatesWhileProofIsStuck(t *testing.T) {
+	saved := constants.ConsensusConfig
+	constants.ConsensusConfig = &constants.Consensus{BlockTime: 10, NodeCount: 2, RandCount: 1, CountingZTS: types.ZnnTokenStandard}
+	t.Cleanup(func() { constants.ConsensusConfig = saved })
+
+	offsets := []time.Duration{0, 25 * time.Second, 45 * time.Second}
+	stuck := newJailTestChainOf(offsets, nil, 1, "pillar-b")
+	em, _ := newJailTestElection(stuck)
+
+	// Tick 4 is proved by h3, a kept pillar's momentum in tick 2; from
+	// tick 5 on tick-2 is empty and the proof stays h3.
+	seen := map[types.Address]bool{}
+	schedules := map[string]bool{}
+	for tick := uint64(5); tick <= 40; tick++ {
+		r, err := em.ElectionByTick(tick)
+		common.FailIfErr(t, err)
+		key := ""
+		for _, p := range r.Producers {
+			seen[p.Producer] = true
+			key += p.Producer.String()
+		}
+		schedules[key] = true
+	}
+	for _, p := range jailTestPillars {
+		if !seen[p.addr] {
+			t.Fatalf("%s was never elected over 36 stuck fallback ticks", p.name)
+		}
+	}
+	if len(schedules) < 2 {
+		t.Fatal("every stuck fallback tick drew the same schedule")
+	}
 }
 
 func TestElection_PrecomputeDoesNotLeakIntoStallPath(t *testing.T) {
@@ -303,11 +432,18 @@ func TestElection_PrecomputeDoesNotLeakIntoStallPath(t *testing.T) {
 	ch := newJailTestChain(3, "pillar-c")
 	em, consensusDB := newJailTestElection(ch)
 
+	// h4 completes tick 3, so the precompute elects tick 5 from h3, and
+	// tick 3 is empty: a fallback election.
 	em.InsertMomentum(&nom.DetailedMomentum{Momentum: ch.momentum(4)})
-	stored, err := consensusDB.GetElectionResultByHash(ch.momentum(3).Hash)
+	stored, err := consensusDB.GetFallbackElectionResult(ch.momentum(3).Hash, 5)
 	common.FailIfErr(t, err)
-	if stored == nil || jailTestHas(stored.Producers, jailTestPillarC) {
-		t.Fatalf("precomputed result under h3 is %+v, want one without pillar-c", stored)
+	if stored == nil || !jailTestHas(stored.Producers, jailTestPillarC) {
+		t.Fatalf("precomputed fallback result under (h3, 5) is %+v, want one with pillar-c", stored)
+	}
+	normal, err := consensusDB.GetElectionResultByHash(ch.momentum(3).Hash)
+	common.FailIfErr(t, err)
+	if normal != nil {
+		t.Fatal("the fallback precompute wrote a result under h3")
 	}
 
 	expectPillarC(t, em, 5, true)
@@ -355,32 +491,38 @@ func TestElection_ColdAndWarmCacheAgree(t *testing.T) {
 	}
 }
 
+// With every pillar jailed no kept pillar can produce, so every tick
+// from 2 on is a fallback election over the full delegation list.
 func TestElection_AllJailedFallsBackToFullList(t *testing.T) {
 	useJailTestConsensus(t)
-	allJailed, _ := newJailTestElection(newJailTestChain(3, "pillar-a", "pillar-b", "pillar-c"))
-	noJail, _ := newJailTestElection(newJailTestChain(0))
+	ch := newJailTestChain(1, "pillar-a", "pillar-b", "pillar-c")
+	em, consensusDB := newJailTestElection(ch)
 
-	for tick := uint64(4); tick <= 7; tick++ {
-		got := jailTestProducers(t, jailTestElect(t, allJailed, tick))
-		want := jailTestProducers(t, jailTestElect(t, noJail, tick))
+	for tick := uint64(2); tick <= 7; tick++ {
+		got := jailTestProducers(t, jailTestElect(t, em, tick))
+
+		proofBlock, err := getMomentumBeforeTime(ch.live, em.genProofTime(tick))
+		common.FailIfErr(t, err)
+		detailed, err := ch.GetMomentumStore(proofBlock.Identifier()).ComputePillarDelegations()
+		common.FailIfErr(t, err)
+		hashH := types.HashHeight{Hash: proofBlock.Hash, Height: proofBlock.Height}
+		offset := tick - em.ToTick(*proofBlock.Timestamp)
+		want, err := em.algo.SelectProducers(newFallbackAlgorithmContext(types.ToPillarDelegation(detailed), &hashH, offset))
+		common.FailIfErr(t, err)
 		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("tick %d slot %d: got %v, want %v", tick, i, got[i], want[i])
+			if got[i] != want[i].Producing {
+				t.Fatalf("tick %d slot %d: got %v, want %v", tick, i, got[i], want[i].Producing)
 			}
 		}
-	}
-
-	ch := newJailTestChain(3, "pillar-a", "pillar-b", "pillar-c")
-	em, consensusDB := newJailTestElection(ch)
-	jailTestElect(t, em, 4)
-	stored, err := consensusDB.GetElectionResultByHash(ch.momentum(3).Hash)
-	common.FailIfErr(t, err)
-	if stored == nil {
-		t.Fatal("no result stored under h3")
+		stored, err := consensusDB.GetFallbackElectionResult(proofBlock.Hash, tick)
+		common.FailIfErr(t, err)
+		if stored == nil {
+			t.Fatalf("tick %d stored no fallback result", tick)
+		}
 	}
 }
 
-func TestElection_StaleTickWithoutJailUsesCache(t *testing.T) {
+func TestElection_EmptyTickTwoBackWithoutJailUsesCache(t *testing.T) {
 	useJailTestConsensus(t)
 	ch := newJailTestChain(0)
 	h3 := ch.momentum(3)
@@ -390,7 +532,7 @@ func TestElection_StaleTickWithoutJailUsesCache(t *testing.T) {
 	stored, err := consensusDB.GetElectionResultByHash(h3.Hash)
 	common.FailIfErr(t, err)
 	if stored == nil {
-		t.Fatal("stale tick without jail wrote no result under h3")
+		t.Fatal("a tick with an empty tick-2 and no jail wrote no result under h3")
 	}
 
 	em, consensusDB = newJailTestElection(ch)

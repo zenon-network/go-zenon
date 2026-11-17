@@ -92,8 +92,9 @@ type electionManager struct {
 //     at the tick's proof momentum.
 //
 // Producers are drawn from the active pillars minus those jailed at the
-// proof momentum, except when every active pillar is jailed or tick-2
-// held no momentum. The delegations always list every active pillar.
+// proof momentum, except when every active pillar is jailed or no
+// momentum of tick-2 came from a pillar the election would keep (see
+// jailFallback). The delegations always list every active pillar.
 //
 // The exported methods resolve the proof momentum on the frontier; the
 // At variants resolve it on the momentum store they are given, so a
@@ -107,6 +108,7 @@ type ElectionReader interface {
 
 	electionByTickAt(momentumStore store.Momentum, tick uint64) (*electionResult, error)
 	delegationsByTickAt(momentumStore store.Momentum, tick uint64) ([]*types.PillarDelegationDetail, error)
+	jailedAtProof(momentumStore store.Momentum, tick uint64) (map[string]bool, error)
 }
 
 func (em *electionManager) ElectionByTime(t time.Time) (*electionResult, error) {
@@ -142,7 +144,7 @@ func (em *electionManager) electionByTickAt(momentumStore store.Momentum, tick u
 
 	em.log.Debug("election", "tick", tick, "hash", proofBlock.Hash, "time", proofTime)
 
-	data, err := em.generateProducers(proofBlock, em.proofIsStale(tick, proofBlock))
+	data, err := em.generateProducers(proofBlock, tick)
 	if err != nil {
 		em.log.Error("generateProducers failed", "reason", err)
 		return nil, err
@@ -215,77 +217,104 @@ func excludeJailed(delegations []*types.PillarDelegation, jailed map[string]bool
 	return kept
 }
 
-// proofIsStale reports whether tick-2 held no momentum: the proof
-// block is earlier than the start of tick-2. Ticks 0 and 1 are never
-// stale.
-func (em *electionManager) proofIsStale(tick uint64, proofBlock *nom.Momentum) bool {
-	if tick < 2 {
-		return false
+// jailFallback reports whether the election of tick, proved by
+// proofBlock, ignores pillar jails. It does when a pillar is jailed at
+// the proof and no momentum of tick-2 up to the proof was produced by a
+// pillar that is active and not jailed there: the pillars the election
+// would keep have shown no sign of producing. With every active pillar
+// jailed no pillar is kept, so the election always falls back. A
+// fallback election keeps producing through the jailed pillars until
+// one of the kept pillars produces again. Ticks 0 and 1 never fall
+// back. The answer depends only on the chain up to proofBlock.
+func (em *electionManager) jailFallback(proofStore store.Momentum, tick uint64, proofBlock *nom.Momentum, jailed map[string]bool) (bool, error) {
+	if tick < 2 || len(jailed) == 0 {
+		return false, nil
 	}
+	pillars, err := proofStore.GetActivePillars()
+	if err != nil {
+		return false, err
+	}
+	kept := make(map[types.Address]bool, len(pillars))
+	for _, pillar := range pillars {
+		if !jailed[pillar.Name] {
+			kept[pillar.BlockProducingAddress] = true
+		}
+	}
+
 	start, _ := em.ToTime(tick - 2)
-	return proofBlock.Timestamp.Before(start)
+	momentum := proofBlock
+	for steps := 0; steps <= int(em.NodeCount); steps++ {
+		if momentum.Timestamp.Before(start) {
+			return true, nil
+		}
+		if kept[momentum.Producer()] {
+			return false, nil
+		}
+		if momentum.Height <= 1 {
+			return true, nil
+		}
+		momentum, err = proofStore.GetMomentumByHash(momentum.PreviousHash)
+		if err != nil {
+			return false, err
+		}
+		if momentum == nil {
+			return false, errors.Errorf("missing momentum before %v while checking the fallback of tick %v", proofBlock.Identifier(), tick)
+		}
+	}
+	return true, nil
 }
 
-// generateProducers returns the election computed from proofBlock.
-// Producers are selected from the active pillars minus those jailed at
-// proofBlock (all of them when every pillar is jailed), and that result
-// is cached under the proof hash. With ignoreJail set and a jailed
-// pillar present, producers are selected from every active pillar and
-// the result is not cached: one proof block can serve a tick that
-// ignores jails and a tick that applies them, and the cache key is the
-// proof hash alone. Delegations always list every active pillar.
-func (em *electionManager) generateProducers(proofBlock *nom.Momentum, ignoreJail bool) (*storage.ElectionData, error) {
+// generateProducers returns the election of tick computed from
+// proofBlock. Delegations always list every active pillar.
+//
+// Normally producers are selected from the active pillars minus those
+// jailed at proofBlock, and the result is cached under the proof hash. When jailFallback holds,
+// producers are selected from every active pillar with the seed offset
+// by the ticks between the proof and tick, so a proof that stops
+// moving draws a new schedule every tick. That result is cached under
+// the proof hash and tick in its own namespace.
+func (em *electionManager) generateProducers(proofBlock *nom.Momentum, tick uint64) (*storage.ElectionData, error) {
 	hashH := types.HashHeight{Hash: proofBlock.Hash, Height: proofBlock.Height}
 
-	var proofStore store.Momentum
-	var jailed map[string]bool
-	loadProofStore := func() error {
-		proofStore = em.chain.GetMomentumStore(proofBlock.Identifier())
-		if proofStore == nil {
-			return errors.Errorf("no momentum store at proof momentum %v", proofBlock.Identifier())
-		}
-		var err error
-		jailed, err = proofStore.GetJailedPillars()
-		return err
-	}
-	if ignoreJail {
-		if err := loadProofStore(); err != nil {
-			return nil, err
-		}
-		// Without a jailed pillar both selections are equal, so the
-		// cached result serves this tick too.
-		ignoreJail = len(jailed) > 0
-	}
-
-	if !ignoreJail {
-		// load from cache
-		cached, err := em.db.GetElectionResultByHash(hashH.Hash)
-		if err != nil {
-			return nil, err
-		}
-		if cached != nil {
-			em.log.Debug("hit cache for compute producers", "hash", hashH.Height)
-			return cached, nil
-		}
-	}
-
-	// get delegations
+	proofStore := em.chain.GetMomentumStore(proofBlock.Identifier())
 	if proofStore == nil {
-		if err := loadProofStore(); err != nil {
-			return nil, err
-		}
+		return nil, errors.Errorf("no momentum store at proof momentum %v", proofBlock.Identifier())
 	}
+	jailed, err := proofStore.GetJailedPillars()
+	if err != nil {
+		return nil, err
+	}
+	fallback, err := em.jailFallback(proofStore, tick, proofBlock, jailed)
+	if err != nil {
+		return nil, err
+	}
+
+	var cached *storage.ElectionData
+	if fallback {
+		cached, err = em.db.GetFallbackElectionResult(hashH.Hash, tick)
+	} else {
+		cached, err = em.db.GetElectionResultByHash(hashH.Hash)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if cached != nil {
+		em.log.Debug("hit cache for compute producers", "hash", hashH.Height, "fallback", fallback)
+		return cached, nil
+	}
+
 	delegationsDetailed, err := proofStore.ComputePillarDelegations()
 	if err != nil {
 		return nil, err
 	}
 	delegations := types.ToPillarDelegation(delegationsDetailed)
 
-	candidates := delegations
-	if !ignoreJail {
-		candidates = excludeJailed(delegations, jailed)
+	var context *AlgorithmConfig
+	if fallback {
+		context = newFallbackAlgorithmContext(delegations, &hashH, tick-em.ToTick(*proofBlock.Timestamp))
+	} else {
+		context = NewAlgorithmContext(excludeJailed(delegations, jailed), &hashH)
 	}
-	context := NewAlgorithmContext(candidates, &hashH)
 	finalProducers, err := em.algo.SelectProducers(context)
 	if err != nil {
 		return nil, err
@@ -295,18 +324,36 @@ func (em *electionManager) generateProducers(proofBlock *nom.Momentum, ignoreJai
 		producers = append(producers, v.Producing)
 	}
 
-	em.log.Info("computed producers", "proof-hash", hashH.Hash, "proof-height", hashH.Height, "delegations", delegations, "producers", producers)
+	em.log.Info("computed producers", "proof-hash", hashH.Hash, "proof-height", hashH.Height, "fallback", fallback, "delegations", delegations, "producers", producers)
 
 	electionData := storage.GenElectionData(producers, delegations)
-	if ignoreJail {
-		return electionData, nil
+	if fallback {
+		err = em.db.StoreFallbackElectionResult(hashH.Hash, tick, electionData)
+	} else {
+		err = em.db.StoreElectionResultByHash(hashH.Hash, electionData)
 	}
-	// update cache
-	err = em.db.StoreElectionResultByHash(hashH.Hash, electionData)
 	if err != nil {
 		return nil, err
 	}
 	return electionData, nil
+}
+
+// jailedAtProof returns the pillars jailed at the proof momentum of
+// tick as momentumStore's chain sees it: the pillars the election of
+// tick excluded unless it fell back.
+func (em *electionManager) jailedAtProof(momentumStore store.Momentum, tick uint64) (map[string]bool, error) {
+	if momentumStore == nil {
+		return nil, errors.Errorf("no momentum store to read the jailed pillars of tick %v from", tick)
+	}
+	proofBlock, err := getMomentumBeforeTime(momentumStore, em.genProofTime(tick))
+	if err != nil {
+		return nil, err
+	}
+	proofStore := em.chain.GetMomentumStore(proofBlock.Identifier())
+	if proofStore == nil {
+		return nil, errors.Errorf("no momentum store at proof momentum %v of tick %v", proofBlock.Identifier(), tick)
+	}
+	return proofStore.GetJailedPillars()
 }
 
 // InsertMomentum pre-computes electionData when a tick is completed
@@ -318,7 +365,8 @@ func (em *electionManager) InsertMomentum(detailed *nom.DetailedMomentum) {
 		return
 	}
 
-	// tick - 1 is completed - cache election results for later use
+	// tick - 1 is completed - cache the election of tick + 1, whose
+	// proof is the last momentum of tick - 1
 	_, eTime := em.ToTime(tick - 1)
 	header, err := em.chain.GetFrontierMomentumStore().GetMomentumBeforeTime(&eTime)
 
@@ -327,7 +375,7 @@ func (em *electionManager) InsertMomentum(detailed *nom.DetailedMomentum) {
 		return
 	}
 
-	_, err = em.generateProducers(header, false)
+	_, err = em.generateProducers(header, tick+1)
 	if err != nil {
 		em.log.Error("failed to generateProducers", "reason", err)
 		return

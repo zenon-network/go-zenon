@@ -169,6 +169,9 @@ type pinTestElection struct {
 	common.Ticker
 	chain         *pinTestChain
 	afterElection func()
+	// jailProofProducer makes the pillar that produced a tick's proof
+	// momentum count as jailed at that proof.
+	jailProofProducer bool
 }
 
 func (e *pinTestElection) proofPillar(momentumStore store.Momentum, tick uint64) (pinTestPillar, error) {
@@ -212,6 +215,17 @@ func (e *pinTestElection) electionByTickAt(momentumStore store.Momentum, tick ui
 		hook()
 	}
 	return result, nil
+}
+
+func (e *pinTestElection) jailedAtProof(momentumStore store.Momentum, tick uint64) (map[string]bool, error) {
+	if !e.jailProofProducer {
+		return map[string]bool{}, nil
+	}
+	pillar, err := e.proofPillar(momentumStore, tick)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]bool{pillar.name: true}, nil
 }
 
 func (e *pinTestElection) DelegationsByTick(tick uint64) ([]*types.PillarDelegationDetail, error) {
@@ -462,6 +476,36 @@ func TestFixedReader_FinishedPeriodStatsAnswerFromOlderMomentum(t *testing.T) {
 	}
 	if describePeriodStats(got) != describePeriodStats(want) {
 		t.Fatalf("FinishedPeriodStats(3) fixed at h5 with h7 live\n got %s\nwant %s", describePeriodStats(got), describePeriodStats(want))
+	}
+}
+
+// FinishedPeriodStats numbers each tick and marks a pillar ineligible in
+// exactly the ticks whose proof momentum, on the reader's chain, has it
+// jailed.
+func TestFinishedPeriodStats_TickAndEligibilityFollowTheProof(t *testing.T) {
+	live := pinTestBranch(0xa, pinTestBranchA, 7)
+	f := newPinTestFixture(live)
+	f.election.jailProofProducer = true
+
+	stats, err := f.reader(live).FinishedPeriodStats(12)
+	if err != nil {
+		t.Fatalf("FinishedPeriodStats(12): %v", err)
+	}
+	if len(stats) == 0 {
+		t.Fatal("FinishedPeriodStats(12) returned no ticks")
+	}
+	first := pinTestPeriod.ToTick(time.Unix(stats[0].StartTime, 0))
+	for i, tick := range stats {
+		if tick.Tick != first+uint64(i) {
+			t.Fatalf("entry %d has tick %d, want %d", i, tick.Tick, first+uint64(i))
+		}
+		jailed, err := f.election.jailedAtProof(live, tick.Tick)
+		common.FailIfErr(t, err)
+		for name, s := range tick.Pillars {
+			if s.Eligible == jailed[name] {
+				t.Fatalf("tick %d pillar %q: eligible %v, jailed at proof %v", tick.Tick, name, s.Eligible, jailed[name])
+			}
+		}
 	}
 }
 

@@ -96,8 +96,10 @@ func (obj *API) EpochStats(epoch uint64) (*api.EpochStats, error) {
 
 // FinishedPeriodStats returns the statistics of the last count election
 // ticks that ended at or before the store's frontier momentum, oldest
-// first. Every tick is read from its period point at momentumStore, so
-// the result depends only on the chain up to that momentum.
+// first. Every tick is read from its period point at momentumStore, and
+// each pillar's eligibility from the jailed pillars at the tick's proof
+// momentum on the same chain, so the result depends only on the chain
+// up to that momentum.
 func (obj *API) FinishedPeriodStats(count uint64) ([]*api.PeriodStats, error) {
 	if obj.momentumStore == nil {
 		return nil, errNoMomentumStore
@@ -121,8 +123,13 @@ func (obj *API) FinishedPeriodStats(count uint64) ([]*api.PeriodStats, error) {
 		if point == nil {
 			return nil, errors.Errorf("no period point for tick %v at momentum %v", tick, frontier.Identifier())
 		}
+		jailed, err := obj.er.jailedAtProof(obj.momentumStore, tick)
+		if err != nil {
+			return nil, err
+		}
 		start, _ := period.ToTime(tick)
 		tickStats := &api.PeriodStats{
+			Tick:      tick,
 			StartTime: start.Unix(),
 			Pillars:   make(map[string]*api.PeriodPillarStats, len(point.Pillars)),
 		}
@@ -130,6 +137,7 @@ func (obj *API) FinishedPeriodStats(count uint64) ([]*api.PeriodStats, error) {
 			tickStats.Pillars[name] = &api.PeriodPillarStats{
 				BlockNum:         uint64(v.FactualNum),
 				ExpectedBlockNum: uint64(v.ExpectedNum),
+				Eligible:         !jailed[name],
 			}
 		}
 		stats = append(stats, tickStats)

@@ -32,19 +32,24 @@ type EpochStats struct {
 }
 
 // PeriodPillarStats is one pillar's production in one election tick:
-// the momentums it produced and the slots it was elected to.
+// the momentums it produced and the slots it was elected to. Eligible
+// is false when the pillar was jailed at the tick's proof momentum, so
+// the election excluded it unless the election fell back to every
+// active pillar.
 type PeriodPillarStats struct {
 	BlockNum         uint64
 	ExpectedBlockNum uint64
+	Eligible         bool
 }
 
 // PeriodStats is the production of one election tick by pillar name.
-// StartTime is the tick's start in unix seconds. A momentum whose
-// producer is not elected in the tick counts under the name "". Every
-// pillar in the tick's election delegations appears, with
-// ExpectedBlockNum 0 when it was not elected, for example an unelected
-// or jailed pillar.
+// Tick is the election tick and StartTime its start in unix seconds. A
+// momentum whose producer is not elected in the tick counts under the
+// name "". Every pillar in the tick's election delegations appears,
+// with ExpectedBlockNum 0 when it was not elected, for example an
+// unelected or jailed pillar.
 type PeriodStats struct {
+	Tick      uint64
 	StartTime int64
 	Pillars   map[string]*PeriodPillarStats
 }

@@ -539,9 +539,16 @@ func TestPillarJail_LifecycleMatchesColdReplay(t *testing.T) {
 		}
 	}
 
-	// 6. Convergence without an unjail.
+	// 6. Convergence without an unjail. Until the Update jails the
+	// offline pillars, the fallback keeps jailed Pillar2 producing in
+	// every tick.
 	insertUntilPillarUpdate(t, z, o5+12, 2500)
 	j6 := frontierOf(t, z)
+	for tick := o5 + 2; tick < tickOf(z, *j6.Timestamp); tick++ {
+		if len(tickMomentums(t, z, tick)) == 0 {
+			t.Fatalf("tick %d between the first fallback momentum and the Update holds no momentum", tick)
+		}
+	}
 	jail1 := expectJailRecord(t, z, g.Pillar1Name, true)
 	jail3 := expectJailRecord(t, z, g.Pillar3Name, true)
 	if jail1.Since != jail3.Since || jail1.Since < tickStart(z, o5+12).Unix() {

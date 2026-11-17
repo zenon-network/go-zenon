@@ -11,7 +11,7 @@ import (
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
-func TestGetJailedPillars_ReturnsOnlyJailedNames(t *testing.T) {
+func TestGetJailedPillars_ReturnsOnlyJailedActiveNames(t *testing.T) {
 	ms := &momentumStore{DB: db.NewMemDB()}
 
 	jailed, err := ms.GetJailedPillars()
@@ -23,7 +23,13 @@ func TestGetJailedPillars_ReturnsOnlyJailedNames(t *testing.T) {
 	storage := account.NewAccountStore(types.PillarContract, ms.DB.Subset(getAccountStorePrefix(types.PillarContract))).Storage()
 	common.FailIfErr(t, (&definition.PillarJail{Name: "pillar-a", Jailed: true, Since: 10}).Save(storage))
 	common.FailIfErr(t, (&definition.PillarJail{Name: "pillar-b", Jailed: false, Since: 20}).Save(storage))
-	common.FailIfErr(t, (&definition.PillarInfo{Name: "pillar-c", Amount: big.NewInt(1)}).Save(storage))
+	common.FailIfErr(t, (&definition.PillarJail{Name: "pillar-d", Jailed: true, Since: 30}).Save(storage))
+	common.FailIfErr(t, (&definition.PillarJail{Name: "pillar-e", Jailed: true, Since: 40}).Save(storage))
+	for _, name := range []string{"pillar-a", "pillar-b", "pillar-c"} {
+		common.FailIfErr(t, (&definition.PillarInfo{Name: name, Amount: big.NewInt(1)}).Save(storage))
+	}
+	// pillar-d is revoked; pillar-e has no pillar record at all.
+	common.FailIfErr(t, (&definition.PillarInfo{Name: "pillar-d", Amount: big.NewInt(1), RevokeTime: 50}).Save(storage))
 
 	jailed, err = ms.GetJailedPillars()
 	common.FailIfErr(t, err)
