@@ -196,6 +196,28 @@ func TestGetBlockHashesFromNumber_ClampsToFrontier(t *testing.T) {
 	}
 }
 
+// A range that starts above genesis and crosses the frontier is clamped to the
+// hashes from its start height to the frontier. A start of zero cannot tell
+// that count apart from the frontier height plus one.
+func TestGetBlockHashesFromNumber_ClampsToFrontierFromPositiveStart(t *testing.T) {
+	const frontier = 10
+	const start = 8
+	chain := &boundRecordingChain{height: frontier}
+
+	res, err := serveBlockHashesFromNumber(t, chain, start, uint64(downloader.MaxHashFetch))
+	if err != nil {
+		t.Fatalf("handleMsg: %v", err)
+	}
+	// Heights 8, 9 and 10.
+	const wantAvailable = frontier - start + 1
+	if chain.lastFetchAmount != wantAvailable {
+		t.Fatalf("sink asked for %d hashes, want the %d available", chain.lastFetchAmount, wantAvailable)
+	}
+	if len(res.hashes) != wantAvailable {
+		t.Fatalf("reply carried %d hashes, want %d", len(res.hashes), wantAvailable)
+	}
+}
+
 // A range fully inside the chain serves exactly the requested count.
 func TestGetBlockHashesFromNumber_InRangeServesRequested(t *testing.T) {
 	chain := &boundRecordingChain{height: 100}

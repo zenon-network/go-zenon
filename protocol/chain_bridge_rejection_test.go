@@ -4,8 +4,10 @@ import (
 	"errors"
 	"testing"
 
+	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/protocol"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/zenon/mock"
@@ -329,6 +331,19 @@ func TestInsertChain_PoolStateDoesNotColourARememberedVerdict(t *testing.T) {
 			f := newRestoreFixture(t)
 			defer f.z.StopPanic()
 			pool := tc.seed(t, f)
+			// The pool frontier of the account the momentum's block belongs
+			// to, which is also what an empty pool is compared by.
+			poolFrontier := func() types.HashHeight {
+				return f.z.Chain().GetFrontierAccountStore(g.User2.Address).Identifier()
+			}
+			poolBefore := poolFrontier()
+			expectPoolUnchanged := func() {
+				t.Helper()
+				common.Expect(t, poolFrontier(), poolBefore)
+				if pool != nil {
+					f.expectPoolChain(t, pool...)
+				}
+			}
 			tampered := f.tamperedMomentum()
 
 			_, err := f.bridge.InsertChain([]*nom.DetailedMomentum{tampered})
@@ -339,14 +354,13 @@ func TestInsertChain_PoolStateDoesNotColourARememberedVerdict(t *testing.T) {
 			expectChangesHashError(t, err)
 			common.Expect(t, rejected.Momentum, f.detailed.Momentum.Identifier())
 			common.Expect(t, f.z.Chain().GetFrontierMomentumStore().Identifier(), f.previous)
-			if pool != nil {
-				f.expectPoolChain(t, pool...)
-			}
+			expectPoolUnchanged()
 
 			_, err = f.bridge.InsertChain([]*nom.DetailedMomentum{tampered})
 			if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
 				t.Fatalf("expected the same bytes to be refused as known invalid, got %v", err)
 			}
+			expectPoolUnchanged()
 
 			// The genuine bytes were never remembered, so they insert on
 			// their first offer.
