@@ -14,7 +14,9 @@ var (
 	// computed hash differs from the served hash even though the
 	// changes-hash matches: the block was produced under other rules or
 	// other state, so the mismatch is deterministic for the block's
-	// bytes and the candidate can be remembered.
+	// bytes and the candidate can be remembered. It is returned only
+	// when the local generation succeeded; a failed local generation
+	// carries no sentinel.
 	ErrAutoReceiveHashMismatch = errors.New("auto-received block has different hash")
 
 	// ErrNothingToWithdraw rejects a reward-collect or refund call

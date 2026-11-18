@@ -185,6 +185,15 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 		}
 		computed := generated.ComputeHash()
 		if computed != block.Hash {
+			if executionErr != nil {
+				// Same reasoning as the changes-hash branch: a failed
+				// local generation is not a verdict on the block. A
+				// zero-amount send whose successful execution writes
+				// nothing produces a rollback patch byte-identical to
+				// the success patch, so the changes-hash can match even
+				// though the local read failed.
+				return errors.Errorf("auto-received block has different hash expected %v but got %v (local generation failed: %v)", computed, block.Hash, executionErr)
+			}
 			return errors.Wrapf(constants.ErrAutoReceiveHashMismatch, "expected %v but got %v", computed, block.Hash)
 		}
 		return nil
