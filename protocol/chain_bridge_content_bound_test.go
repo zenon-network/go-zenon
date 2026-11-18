@@ -301,10 +301,17 @@ type countingBridge struct {
 }
 
 func newCountingBridge(z mock.MockZenon) *countingBridge {
+	return newCountingBridgeWithPlasma(z, vm.CanonicalBasePlasma)
+}
+
+// newCountingBridgeWithPlasma wires the bridge with an explicit canonical
+// plasma function, so a test can stand in for a failing read inside the
+// verifier's dynamic-plasma content check.
+func newCountingBridgeWithPlasma(z mock.MockZenon, plasma verifier.CanonicalBasePlasmaFunc) *countingBridge {
 	pool := &snapshotCountingChain{Chain: z.Chain()}
 	rollbacks := &rollbackCountingChain{Chain: pool}
 	supervisor := vm.NewSupervisor(z.Chain(), z.Consensus())
-	verifying := &countingVerifier{Verifier: verifier.NewVerifier(rollbacks, z.Consensus(), vm.CanonicalBasePlasma)}
+	verifying := &countingVerifier{Verifier: verifier.NewVerifier(rollbacks, z.Consensus(), plasma)}
 	return &countingBridge{
 		chain:    rollbacks,
 		pool:     pool,
@@ -585,10 +592,63 @@ func TestInsertChain_RememberedVerdictRefusesRetry(t *testing.T) {
 	common.Expect(t, b.verifier.momentums, 1)
 	expectUntouched(t, z, original, b)
 
+	snapshots := b.pool.snapshots
 	_, err = b.bridge.InsertChain(listing)
 	if !errors.Is(err, protocol.ErrSideChainKnownInvalid) {
 		t.Fatalf("expected the remembered verdict to refuse the retry, got %v", err)
 	}
 	common.Expect(t, b.verifier.momentums, 1)
+	// The retry is refused before any pool work, so it cannot have taken
+	// a new read-only snapshot either.
+	common.Expect(t, b.pool.snapshots, snapshots)
+	expectUntouched(t, z, original, b)
+}
+
+// TestInsertChain_StoreErrorInsideContentCheckStaysUnclassified pins that a
+// store-style failure inside the verifier's dynamic-plasma content check —
+// one of the reads its price loop depends on: the plasma variables, the
+// previous momentum, or the canonical plasma recomputation — is not a
+// verdict on the candidate. The raw error comes back untyped, the bytes
+// are not remembered, and a later offer of the same candidate takes the
+// full path again (the control 0x3639 asked for on #311).
+func TestInsertChain_StoreErrorInsideContentCheckStaysUnclassified(t *testing.T) {
+	lowerLegacyCount(t, 2)
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	activateDynamicPlasma(t, z, 30)
+	enforced := enforcementHeight(t, z)
+	original := snapshotChain(t, z.Chain())
+	n := chain.MaxAccountBlocksInMomentum + 1
+
+	errStoreRead := errors.New("test: momentum store read failed")
+	armed := true
+	b := newCountingBridgeWithPlasma(z, func(c chain.Chain, block *nom.AccountBlock) (uint64, error) {
+		if armed {
+			return 0, errStoreRead
+		}
+		return vm.CanonicalBasePlasma(c, block)
+	})
+	listing := sideChainListing(t, z, momentumAt(t, z.Chain(), enforced), n)
+
+	// The failing read is not a verdict on the candidate: the error comes
+	// back untyped and the chain, the cache and the pool are untouched.
+	_, err := b.bridge.InsertChain(listing)
+	if !errors.Is(err, errStoreRead) {
+		t.Fatalf("expected the raw store error, got %v", err)
+	}
+	var rejected *protocol.SideChainRejected
+	if errors.As(err, &rejected) {
+		t.Fatalf("a store error must not be typed as a consensus rejection: %v", err)
+	}
+	common.Expect(t, b.verifier.momentums, 1)
+	expectUntouched(t, z, original, b)
+
+	// With the read healthy again, the same bytes take the full path: the
+	// refusal is not remembered, the bridge re-verifies, and the listing is
+	// now refused on the verdict its bytes carry, the missing plasma.
+	armed = false
+	_, err = b.bridge.InsertChain(listing)
+	expectRefusedOnBlocks(t, err)
+	common.Expect(t, b.verifier.momentums, 2)
 	expectUntouched(t, z, original, b)
 }
