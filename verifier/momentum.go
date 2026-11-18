@@ -343,7 +343,7 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 			if types.IsEmbeddedAddress(block.Address) {
 				contractBlockCount++
 				if contractBlockCount > plasma.MaxContractBlocksInMomentum() {
-					return errors.Errorf("exceeded maximum allowed contract account blocks in momentum")
+					return errors.Wrapf(ErrMContractBlocksTooMany, "%d exceeds %d", contractBlockCount, plasma.MaxContractBlocksInMomentum())
 				}
 			} else {
 				canonical, err := rmv.canonicalBasePlasma(rmv.chain, block)
@@ -359,7 +359,7 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 				priced := *block
 				priced.BasePlasma = canonical
 				if !plasma.ValidPrice(&priced) {
-					return errors.Errorf("block price is too small")
+					return ErrMBlockPriceTooSmall
 				}
 				basePlasma.Add(plasma.ComputeBasePlasma(&priced))
 				if basePlasma.Total() > config.MaxBasePlasmaInMomentum {
@@ -370,12 +370,12 @@ func (rmv *rawMomentumVerifier) content(isDynamicPlasmaActive bool) error {
 
 		nextFusionPrice := plasma.NextFusionPrice(basePlasma.Fusion)
 		if nextFusionPrice != rmv.momentum.NextFusionPrice {
-			return errors.Errorf("mismatch in momentum fusion price: have %d, want %d", nextFusionPrice, rmv.momentum.NextFusionPrice)
+			return errors.Wrapf(ErrMFusionPriceMismatch, "have %d, want %d", nextFusionPrice, rmv.momentum.NextFusionPrice)
 		}
 
 		nextWorkPrice := plasma.NextWorkPrice(basePlasma.Pow)
 		if nextWorkPrice != rmv.momentum.NextWorkPrice {
-			return errors.Errorf("mismatch in momentum work price: have %d, want %d", nextWorkPrice, rmv.momentum.NextWorkPrice)
+			return errors.Wrapf(ErrMWorkPriceMismatch, "have %d, want %d", nextWorkPrice, rmv.momentum.NextWorkPrice)
 		}
 	}
 

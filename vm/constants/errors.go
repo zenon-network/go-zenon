@@ -10,6 +10,12 @@ var (
 	// whose changes-hash differs from the one this node generates for the
 	// same send: the block was produced under other rules or other state.
 	ErrAutoReceiveChangesHashMismatch = errors.New("auto-received block has different changes-hash")
+	// ErrAutoReceiveHashMismatch rejects a contract-receive block whose
+	// computed hash differs from the served hash even though the
+	// changes-hash matches: the block was produced under other rules or
+	// other state, so the mismatch is deterministic for the block's
+	// bytes and the candidate can be remembered.
+	ErrAutoReceiveHashMismatch = errors.New("auto-received block has different hash")
 
 	// ErrNothingToWithdraw rejects a reward-collect or refund call
 	// when the address has no accumulated balance to send back.

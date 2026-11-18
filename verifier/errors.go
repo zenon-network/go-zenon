@@ -101,6 +101,10 @@ var (
 	ErrMPreviousMissing         = errors.New("momentum previous momentum is missing")
 	ErrMMinimumValueInvalid     = errors.New("momentum minimum value is invalid")
 	ErrMStaleAcknowledgement    = errors.New("momentum content has an account-block whose momentum-acknowledged predates a spork enforced at the parent momentum")
+	ErrMContractBlocksTooMany   = errors.New("exceeded maximum allowed contract account blocks in momentum")
+	ErrMBlockPriceTooSmall      = errors.New("block price is too small")
+	ErrMFusionPriceMismatch     = errors.New("mismatch in momentum fusion price")
+	ErrMWorkPriceMismatch       = errors.New("mismatch in momentum work price")
 )
 
 // validationErrors lists every validation verdict declared above, the
@@ -176,6 +180,10 @@ var validationErrors = []error{
 	ErrMPreviousMissing,
 	ErrMMinimumValueInvalid,
 	ErrMStaleAcknowledgement,
+	ErrMContractBlocksTooMany,
+	ErrMBlockPriceTooSmall,
+	ErrMFusionPriceMismatch,
+	ErrMWorkPriceMismatch,
 }
 
 // IsValidationError reports whether err is, or wraps, one of the
