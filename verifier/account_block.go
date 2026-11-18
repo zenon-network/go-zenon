@@ -11,6 +11,7 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/pow"
+	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/wallet"
 )
 
@@ -53,7 +54,14 @@ func isContractReceive(block *nom.AccountBlock) bool {
 // producer once the block has been embedded in a transaction.
 type AccountBlockVerifier interface {
 	AccountBlock(block *nom.AccountBlock) error
+	// AccountBlockTransaction verifies a transaction that is being admitted
+	// to the account pool or generated locally. Every rule applies.
 	AccountBlockTransaction(transaction *nom.AccountBlockTransaction) error
+	// AccountBlockTransactionInMomentum verifies a transaction as part of
+	// the momentum with the given height being inserted. Rules that were
+	// introduced at a height apply only when the momentum is at or above
+	// it, so that every node judges a momentum the same way.
+	AccountBlockTransactionInMomentum(transaction *nom.AccountBlockTransaction, momentumHeight uint64) error
 }
 
 type accountVerifier struct {
@@ -133,6 +141,12 @@ func (av *accountVerifier) AccountBlock(block *nom.AccountBlock) error {
 	}).all()
 }
 func (av *accountVerifier) AccountBlockTransaction(transaction *nom.AccountBlockTransaction) error {
+	return av.verifyTransaction(transaction, true)
+}
+func (av *accountVerifier) AccountBlockTransactionInMomentum(transaction *nom.AccountBlockTransaction, momentumHeight uint64) error {
+	return av.verifyTransaction(transaction, momentumHeight >= definition.CommunitySporkAddressRenewalStartHeight)
+}
+func (av *accountVerifier) verifyTransaction(transaction *nom.AccountBlockTransaction, contractReceiveRules bool) error {
 	if transaction.Block.BlockType == nom.BlockTypeContractSend {
 		return ErrABTypeInvalidExternal
 	}
@@ -143,11 +157,12 @@ func (av *accountVerifier) AccountBlockTransaction(transaction *nom.AccountBlock
 	}
 
 	return (&accountBlockTransactionVerifier{
-		transaction:   transaction,
-		accountStore:  accountStore,
-		momentumStore: momentumStore,
-		frontierStore: av.chain.GetFrontierMomentumStore(),
-		chain:         av.chain,
+		transaction:          transaction,
+		accountStore:         accountStore,
+		momentumStore:        momentumStore,
+		frontierStore:        av.chain.GetFrontierMomentumStore(),
+		chain:                av.chain,
+		contractReceiveRules: contractReceiveRules,
 	}).all()
 }
 
@@ -545,6 +560,17 @@ type accountBlockTransactionVerifier struct {
 	momentumStore store.Momentum
 	frontierStore store.Momentum
 	chain         chain.Chain
+	// contractReceiveRules says whether the contract-receive rules apply
+	// to this verification. They always apply when a block is admitted to
+	// the pool through publication or gossip, or generated locally: that
+	// is not a consensus decision, and it keeps a block that fails them out
+	// of the uncommitted state an upgraded node could later reuse or
+	// produce from. When a block is verified as part of a momentum being
+	// inserted they apply from the community spork renewal height, so that
+	// every node judges a momentum the same way; the caller decides from
+	// the momentum's height. A momentum below that height is committed as
+	// every node committed it before the rules existed, blocks included.
+	contractReceiveRules bool
 }
 
 func (abvt *accountBlockTransactionVerifier) all() error {
@@ -557,10 +583,33 @@ func (abvt *accountBlockTransactionVerifier) all() error {
 	if err := abvt.producer(); err != nil {
 		return err
 	}
+	if err := abvt.plasmaFields(); err != nil {
+		return err
+	}
 	if err := abvt.descendantBlocks(); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func (abvt *accountBlockTransactionVerifier) contractReceiveRulesActive() bool {
+	return abvt.contractReceiveRules
+}
+func (abvt *accountBlockTransactionVerifier) plasmaFields() error {
+	if !abvt.contractReceiveRulesActive() {
+		return nil
+	}
+	block := abvt.transaction.Block
+	// BasePlasma and TotalPlasma are serialized but excluded from ComputeHash,
+	// so the hash check above does not bind them. A contract receive is produced
+	// by the VM, which never sets either field; a peer could raise them under an
+	// honest hash, and a node that stored the altered copy would then compute a
+	// divergent momentum changes-hash. Require both to be zero. The parent's
+	// ChangesHash is legitimately non-zero and is already revalidated by the VM.
+	if isContractReceive(block) && (block.BasePlasma != 0 || block.TotalPlasma != 0) {
+		return ErrABPlasmaMustBeZero
+	}
 	return nil
 }
 func (abvt *accountBlockTransactionVerifier) signature() error {
@@ -628,6 +677,42 @@ func (abvt *accountBlockTransactionVerifier) descendantBlocks() error {
 			frontierStore: abvt.frontierStore,
 			chain:         abvt.chain,
 		}).all(); err != nil {
+			return DescendantVerifyError(err)
+		}
+		if !abvt.contractReceiveRulesActive() {
+			continue
+		}
+		// Bind the descendant's content and credentials to its hash, the same
+		// transaction-level checks the top-level block gets. The parent only
+		// commits to each descendant's hash, not its content, so without this a
+		// peer can change a descendant's amount, recipient, or data (or pad its
+		// signature/public key) while keeping its hash.
+		child := &accountBlockTransactionVerifier{
+			transaction:          &nom.AccountBlockTransaction{Block: dBlock},
+			accountStore:         abvt.accountStore,
+			momentumStore:        abvt.momentumStore,
+			frontierStore:        abvt.frontierStore,
+			chain:                abvt.chain,
+			contractReceiveRules: abvt.contractReceiveRules,
+		}
+		if err := child.hash(); err != nil {
+			return DescendantVerifyError(err)
+		}
+		if err := child.signature(); err != nil {
+			return DescendantVerifyError(err)
+		}
+		if err := child.producer(); err != nil {
+			return DescendantVerifyError(err)
+		}
+		// ComputeHash excludes ChangesHash, BasePlasma and TotalPlasma, so the
+		// hash check above does not bind them. A descendant is always a contract
+		// send the VM generates with these zero, so require that; otherwise a
+		// peer could alter these serialized fields under an honest hash and
+		// poison the stored patch.
+		if dBlock.ChangesHash != types.ZeroHash || dBlock.BasePlasma != 0 || dBlock.TotalPlasma != 0 {
+			return DescendantVerifyError(errors.Errorf("descendant carries a non-canonical changes-hash or plasma field"))
+		}
+		if err := child.descendantBlocks(); err != nil {
 			return DescendantVerifyError(err)
 		}
 	}
