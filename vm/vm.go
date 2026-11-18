@@ -185,7 +185,7 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 		}
 		computed := generated.ComputeHash()
 		if computed != block.Hash {
-			return errors.Wrapf(constants.ErrAutoReceiveHashMismatch, "expected %v but got %v", computed, generated)
+			return errors.Wrapf(constants.ErrAutoReceiveHashMismatch, "expected %v but got %v", computed, block.Hash)
 		}
 		return nil
 	default:

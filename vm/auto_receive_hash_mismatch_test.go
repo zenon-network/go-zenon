@@ -12,6 +12,7 @@ import (
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/vm/constants"
+	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/vm/vm_context"
 )
 
@@ -23,18 +24,23 @@ type noSporkCache struct {
 
 func (noSporkCache) IsSporkActive(*types.ImplementedSpork) (bool, error) { return false, nil }
 
-// autoReceiveMismatchSetup serves the send block and a frontier momentum,
-// the two lookups generateEmbeddedReceive makes, on a fresh context each
-// call so a failed applyBlock cannot leak changes into the next one.
+// autoReceiveMismatchSetup serves a DepositQsr send to the pillar
+// contract and a frontier momentum, the two lookups
+// generateEmbeddedReceive makes, on a fresh context each call so a
+// failed applyBlock cannot leak changes into the next one. DepositQsr
+// is used because its ReceiveBlock cannot fail past validation on a
+// fresh store, so the generated receive demonstrates agreement on a
+// successful execution (executionErr == nil), not on a rollback.
 func autoReceiveMismatchSetup() (vm_context.AccountVmContext, *nom.AccountBlock) {
-	contract := types.TokenContract
+	contract := types.PillarContract
 	sender := types.ParseAddressPanic("z1qzuej4d8292sstg38qpnca9tfpfmglqjryffpv")
 	sendBlock := &nom.AccountBlock{
 		BlockType:     nom.BlockTypeUserSend,
 		Address:       sender,
 		ToAddress:     contract,
 		Amount:        big.NewInt(10),
-		TokenStandard: types.ZnnTokenStandard,
+		TokenStandard: types.QsrTokenStandard,
+		Data:          definition.ABIPillars.PackMethodPanic(definition.DepositQsrMethodName),
 		Hash:          types.HexToHashPanic("03aab631b44daf47f68810a416bea4ed3695e89c0ab9668a0ab8acb834dfb902"),
 	}
 	momentumStore := &rollbackMomentumStore{
@@ -55,14 +61,19 @@ func autoReceiveMismatchSetup() (vm_context.AccountVmContext, *nom.AccountBlock)
 // constants.ErrAutoReceiveHashMismatch so the protocol layer classifies
 // it (remember the bytes, quarantine the peer). With the pre-#299 plain
 // errors.Errorf the errors.Is assertion fails, so a revert of the
-// production change is caught. The control applies the unmodified
-// generated block on a fresh context.
+// production change is caught. The fixture uses a successful method
+// call (DepositQsr), asserting executionErr == nil, so the tampered
+// hash is judged against a real execution and the control applies the
+// unmodified generated block on a fresh context.
 func TestApplyBlock_AutoReceiveHashMismatch(t *testing.T) {
 	generatedFor := func(t *testing.T) *nom.AccountBlock {
 		t.Helper()
 		ctx, sendBlock := autoReceiveMismatchSetup()
-		generated, _, processErr := NewVM(ctx, nil).generateEmbeddedReceive(sendBlock.Hash)
+		generated, executionErr, processErr := NewVM(ctx, nil).generateEmbeddedReceive(sendBlock.Hash)
 		common.FailIfErr(t, processErr)
+		if executionErr != nil {
+			t.Fatalf("DepositQsr generation must succeed: %v", executionErr)
+		}
 		if generated == nil {
 			t.Fatal("no receive generated")
 		}
