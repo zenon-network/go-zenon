@@ -93,6 +93,7 @@ func (p *UnjailMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlo
 	jail.Since = momentum.Timestamp.Unix()
 	jail.MissedSlots = 0
 	jail.FirstMissTick = 0
+	jail.LastMissTick = 0
 	common.DealWithErr(jail.Save(context.Storage()))
 
 	return []*nom.AccountBlock{

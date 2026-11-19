@@ -324,7 +324,7 @@ func TestPillarJail_NoSporkOfflinePillarKeepsItsSlots(t *testing.T) {
 	defer z.StopPanic()
 
 	o := offlineFromNextTick(t, z, g.Pillar3.Address)
-	insertUntilPillarUpdate(t, z, o+12, 1500)
+	insertUntilPillarUpdate(t, z, o+constants.PillarJailWindowPeriods, 4500)
 
 	expectNoJailRecord(t, z, g.Pillar3Name)
 	if rpcIsJailed(t, z, g.Pillar3Name) {
@@ -359,7 +359,7 @@ func TestPillarJail_MassOfflineJailedInOneUpdate(t *testing.T) {
 	}
 	o := offlineFromNextTick(t, z, addresses...)
 	activatePillarJailSpork(t, z)
-	insertUntilPillarUpdate(t, z, o+12, 2500)
+	insertUntilPillarUpdate(t, z, o+constants.PillarJailWindowPeriods, 7500)
 	j := frontierOf(t, z)
 
 	var since int64
@@ -372,8 +372,8 @@ func TestPillarJail_MassOfflineJailedInOneUpdate(t *testing.T) {
 			t.Fatalf("jail record of %s has Since %d, want the shared %d", name, jail.Since, since)
 		}
 	}
-	if since < tickStart(z, o+12).Unix() || since > j.Timestamp.Unix() {
-		t.Fatalf("Since %d is outside [%d, %d]", since, tickStart(z, o+12).Unix(), j.Timestamp.Unix())
+	if since < tickStart(z, o+constants.PillarJailWindowPeriods).Unix() || since > j.Timestamp.Unix() {
+		t.Fatalf("Since %d is outside [%d, %d]", since, tickStart(z, o+constants.PillarJailWindowPeriods).Unix(), j.Timestamp.Unix())
 	}
 	expectNoJailRecord(t, z, g.Pillar1Name)
 	expectNoJailRecord(t, z, g.Pillar2Name)
@@ -410,12 +410,12 @@ func TestPillarJail_LifecycleMatchesColdReplay(t *testing.T) {
 
 	// 1. Jail.
 	o := offlineFromNextTick(t, z, g.Pillar3.Address)
-	insertUntilPillarUpdate(t, z, o+12, 1500)
+	insertUntilPillarUpdate(t, z, o+constants.PillarJailWindowPeriods, 4500)
 	j1 := frontierOf(t, z)
 	jail := expectJailRecord(t, z, g.Pillar3Name, true)
 	s1 := jail.Since
-	if s1 < tickStart(z, o+12).Unix() {
-		t.Fatalf("Since %d is before tick %d starts", s1, o+12)
+	if s1 < tickStart(z, o+constants.PillarJailWindowPeriods).Unix() {
+		t.Fatalf("Since %d is before tick %d starts", s1, o+constants.PillarJailWindowPeriods)
 	}
 	expectNoJailRecord(t, z, g.Pillar1Name)
 	expectNoJailRecord(t, z, g.Pillar2Name)
@@ -469,7 +469,7 @@ func TestPillarJail_LifecycleMatchesColdReplay(t *testing.T) {
 
 	// 3. Re-jail after paying while offline.
 	o3 := offlineFromNextTick(t, z, g.Pillar3.Address)
-	insertUntilPillarUpdate(t, z, o3+12, 1500)
+	insertUntilPillarUpdate(t, z, o3+constants.PillarJailWindowPeriods, 4500)
 	expectJailRecord(t, z, g.Pillar3Name, true)
 	unjailAndConfirm(t, z, g.Pillar3, g.Pillar3Name)
 	jail = expectJailRecord(t, z, g.Pillar3Name, false)
@@ -483,18 +483,20 @@ func TestPillarJail_LifecycleMatchesColdReplay(t *testing.T) {
 	if f+2 > next {
 		next = f + 2
 	}
-	insertUntilPillarUpdate(t, z, next+1, 1500)
+	// Only misses from tick tMin on count, so the re-jail needs them to
+	// span a full window from there.
+	insertUntilPillarUpdate(t, z, next+constants.PillarJailWindowPeriods, 7500)
 	jail = expectJailRecord(t, z, g.Pillar3Name, true)
 	s5 := jail.Since
-	if s5 < tickStart(z, tMin+1).Unix() {
-		t.Fatalf("re-jail Since %d is before tick %d starts", s5, tMin+1)
+	if s5 < tickStart(z, tMin+constants.PillarJailWindowPeriods).Unix() {
+		t.Fatalf("re-jail Since %d is before tick %d starts", s5, tMin+constants.PillarJailWindowPeriods)
 	}
 	j3 := frontierOf(t, z)
 
 	// 4. Jail a second pillar.
 	insertPastTick(t, z, tickOf(z, *j3.Timestamp)+1)
 	o4 := offlineFromNextTick(t, z, g.Pillar2.Address)
-	insertUntilPillarUpdate(t, z, o4+12, 1500)
+	insertUntilPillarUpdate(t, z, o4+constants.PillarJailWindowPeriods, 4500)
 	j4 := frontierOf(t, z)
 	expectJailRecord(t, z, g.Pillar2Name, true)
 	if got := expectJailRecord(t, z, g.Pillar3Name, true); got.Since != s5 {
@@ -542,7 +544,7 @@ func TestPillarJail_LifecycleMatchesColdReplay(t *testing.T) {
 	// 6. Convergence without an unjail. Until the Update jails the
 	// offline pillars, the fallback keeps jailed Pillar2 producing in
 	// every tick.
-	insertUntilPillarUpdate(t, z, o5+12, 2500)
+	insertUntilPillarUpdate(t, z, o5+constants.PillarJailWindowPeriods, 7500)
 	j6 := frontierOf(t, z)
 	for tick := o5 + 2; tick < tickOf(z, *j6.Timestamp); tick++ {
 		if len(tickMomentums(t, z, tick)) == 0 {
@@ -551,8 +553,8 @@ func TestPillarJail_LifecycleMatchesColdReplay(t *testing.T) {
 	}
 	jail1 := expectJailRecord(t, z, g.Pillar1Name, true)
 	jail3 := expectJailRecord(t, z, g.Pillar3Name, true)
-	if jail1.Since != jail3.Since || jail1.Since < tickStart(z, o5+12).Unix() {
-		t.Fatalf("Pillar1 and Pillar3 Since = %d and %d, want one shared value from tick %d", jail1.Since, jail3.Since, o5+12)
+	if jail1.Since != jail3.Since || jail1.Since < tickStart(z, o5+constants.PillarJailWindowPeriods).Unix() {
+		t.Fatalf("Pillar1 and Pillar3 Since = %d and %d, want one shared value from tick %d", jail1.Since, jail3.Since, o5+constants.PillarJailWindowPeriods)
 	}
 	expectJailRecord(t, z, g.Pillar2Name, true)
 	t6 := tickOf(z, *j6.Timestamp)

@@ -10,19 +10,25 @@ import (
 )
 
 // jailStreak is a pillar's run of missed eligible slots: missed counts
-// them and first is the election tick of the first. missed is 0 when
-// the pillar has no such run.
+// them, and first and last are the election ticks of the first and the
+// last. missed is 0 when the pillar has no such run. A tick that
+// started before notBefore, the unix time of the pillar's last unjail,
+// adds no miss.
 type jailStreak struct {
-	missed uint64
-	first  uint64
+	missed    uint64
+	first     uint64
+	last      uint64
+	notBefore int64
 }
 
 // advanceJailStreaks walks periods, oldest first, and updates the
 // streak of every pillar in streaks. A tick in which no momentum was
 // produced is skipped. A pillar that produced in a tick loses its
-// streak. A pillar that was eligible and elected in a tick and produced
-// nothing adds its elected slots to its streak, and the first such tick
-// starts the streak. Names absent from streaks are ignored.
+// streak. A pillar that was eligible and elected in a tick that started
+// at or after its notBefore, and produced nothing, adds its elected
+// slots to its streak; the tick becomes the streak's last, and its
+// first when the streak was empty. Names absent from streaks are
+// ignored.
 func advanceJailStreaks(periods []*api.PeriodStats, streaks map[string]*jailStreak) {
 	for _, period := range periods {
 		var blocks uint64
@@ -38,38 +44,42 @@ func advanceJailStreaks(periods []*api.PeriodStats, streaks map[string]*jailStre
 				continue
 			}
 			if s.BlockNum > 0 {
-				*streak = jailStreak{}
+				streak.missed, streak.first, streak.last = 0, 0, 0
 				continue
 			}
-			if s.Eligible && s.ExpectedBlockNum > 0 {
+			if s.Eligible && s.ExpectedBlockNum > 0 && period.StartTime >= streak.notBefore {
 				if streak.missed == 0 {
 					streak.first = period.Tick
 				}
+				streak.last = period.Tick
 				streak.missed += s.ExpectedBlockNum
 			}
 		}
 	}
 }
 
-// streakJails reports whether a streak jails its pillar once the ticks
-// up to lastTick are judged: at least constants.PillarJailMinMissedSlots
-// missed slots, the first of them at least
-// constants.PillarJailWindowPeriods ticks before the end of lastTick.
-func streakJails(streak *jailStreak, lastTick uint64) bool {
+// streakJails reports whether a streak jails its pillar: at least
+// constants.PillarJailMinMissedSlots missed slots, from a first to a
+// last miss that span at least constants.PillarJailWindowPeriods ticks.
+func streakJails(streak *jailStreak) bool {
 	return streak.missed >= constants.PillarJailMinMissedSlots &&
-		lastTick+1-streak.first >= constants.PillarJailWindowPeriods
+		streak.last+1-streak.first >= constants.PillarJailWindowPeriods
 }
 
 // jailInactivePillars judges the finished election ticks the jail rule
-// has not judged yet, at most constants.PillarJailMaxTicksPerUpdate of
-// them, and jails every active, non-jailed pillar whose streak then
-// jails it (see advanceJailStreaks and streakJails). The first
-// judgement covers the last constants.PillarJailWindowPeriods finished
-// ticks. A jailed pillar's record is saved with Jailed set, Since set
-// to the context's momentum time and its streak cleared. Other records
-// are saved when their streak changes, and a record left with no jail
-// history and no streak is deleted. Records are written in sorted name
-// order. Storage and reader errors are returned.
+// has not judged yet and jails every active, non-jailed pillar whose
+// streak then jails it (see advanceJailStreaks and streakJails). The
+// first judgement covers the last constants.PillarJailWindowPeriods
+// finished ticks. When more than constants.PillarJailMaxTicksPerUpdate
+// ticks are unjudged, only the newest of them are judged and every
+// carried streak is cleared first, since the skipped ticks may hold
+// production. A pillar's misses count only in ticks that started at or
+// after its Since, so an unjail is never followed by a jail for misses
+// from before it. A jailed pillar's record is saved with Jailed set,
+// Since set to the context's momentum time and its streak cleared.
+// Other records are saved when their streak changes, and a record left
+// with no jail history and no streak is deleted. Records are written in
+// sorted name order. Storage and reader errors are returned.
 func jailInactivePillars(context vm_context.AccountVmContext) error {
 	latestStats, err := context.FinishedPeriodStats(1)
 	if err != nil {
@@ -94,8 +104,10 @@ func jailInactivePillars(context vm_context.AccountVmContext) error {
 		return nil
 	}
 	count := end - next
+	skipped := false
 	if count > constants.PillarJailMaxTicksPerUpdate {
 		count = constants.PillarJailMaxTicksPerUpdate
+		skipped = true
 	}
 	periods, err := context.FinishedPeriodStats(count)
 	if err != nil {
@@ -124,9 +136,14 @@ func jailInactivePillars(context vm_context.AccountVmContext) error {
 
 	streaks := make(map[string]*jailStreak, len(records))
 	for name, record := range records {
-		if !record.Jailed {
-			streaks[name] = &jailStreak{missed: record.MissedSlots, first: record.FirstMissTick}
+		if record.Jailed {
+			continue
 		}
+		streak := &jailStreak{notBefore: record.Since}
+		if !skipped {
+			streak.missed, streak.first, streak.last = record.MissedSlots, record.FirstMissTick, record.LastMissTick
+		}
+		streaks[name] = streak
 	}
 	advanceJailStreaks(periods, streaks)
 
@@ -143,16 +160,14 @@ func jailInactivePillars(context vm_context.AccountVmContext) error {
 		record := records[name]
 		streak := streaks[name]
 		switch {
-		case streakJails(streak, end-1):
+		case streakJails(streak):
 			record.Jailed = true
 			record.Since = frontier.Timestamp.Unix()
-			record.MissedSlots = 0
-			record.FirstMissTick = 0
-		case streak.missed == record.MissedSlots && streak.first == record.FirstMissTick:
+			record.MissedSlots, record.FirstMissTick, record.LastMissTick = 0, 0, 0
+		case streak.missed == record.MissedSlots && streak.first == record.FirstMissTick && streak.last == record.LastMissTick:
 			continue
 		default:
-			record.MissedSlots = streak.missed
-			record.FirstMissTick = streak.first
+			record.MissedSlots, record.FirstMissTick, record.LastMissTick = streak.missed, streak.first, streak.last
 		}
 		if !record.Jailed && record.Since == 0 && record.MissedSlots == 0 {
 			if stored[name] {

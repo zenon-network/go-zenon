@@ -87,7 +87,8 @@ const (
 			{"name":"jailed","type":"bool"},
 			{"name":"since","type":"int64"},
 			{"name":"missedSlots","type":"uint64"},
-			{"name":"firstMissTick","type":"uint64"}
+			{"name":"firstMissTick","type":"uint64"},
+			{"name":"lastMissTick","type":"uint64"}
 		]},
 		{"type":"variable","name":"pillarJailCursor","inputs":[
 			{"name":"nextTick","type":"uint64"}
@@ -286,9 +287,9 @@ func GetPillarsList(context db.DB, onlyActive bool, pillarType uint8) ([]*Pillar
 // Jailed is the current state and Since is the unix time of the
 // momentum at which the pillar was last jailed or unjailed, 0 if it
 // never was. MissedSlots counts the eligible slots the pillar has
-// missed since it last produced a momentum, and FirstMissTick is the
-// election tick of the first of them; both are 0 when there is no such
-// miss. Records are stored under pillarJailKeyPrefix (7) followed by
+// missed since it last produced a momentum, and FirstMissTick and
+// LastMissTick are the election ticks of the first and the last of
+// them; all three are 0 when there is no such miss. Records are stored under pillarJailKeyPrefix (7) followed by
 // the SHA3-256 hash of the name, with the name packed in the value.
 type PillarJail struct {
 	Name          string
@@ -296,6 +297,7 @@ type PillarJail struct {
 	Since         int64
 	MissedSlots   uint64
 	FirstMissTick uint64
+	LastMissTick  uint64
 }
 
 // Save stores the jail state under its name key, returning any pack or
@@ -308,6 +310,7 @@ func (jail *PillarJail) Save(context db.DB) error {
 		jail.Since,
 		jail.MissedSlots,
 		jail.FirstMissTick,
+		jail.LastMissTick,
 	)
 	if err != nil {
 		return err

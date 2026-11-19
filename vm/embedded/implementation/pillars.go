@@ -1078,8 +1078,8 @@ func (p *UpdateEmbeddedPillarMethod) ValidateSendBlock(block *nom.AccountBlock) 
 // Once types.PillarJailSpork is enforced it then judges the finished
 // election ticks it has not judged yet and jails every active pillar
 // that has missed at least constants.PillarJailMinMissedSlots eligible
-// slots, with nothing produced, for at least
-// constants.PillarJailWindowPeriods ticks (jailInactivePillars).
+// slots, with nothing produced, from a first to a last miss at least
+// constants.PillarJailWindowPeriods ticks apart (jailInactivePillars).
 func (p *UpdateEmbeddedPillarMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err

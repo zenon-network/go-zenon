@@ -49,6 +49,7 @@ type jailTestStore struct {
 	*pinTestStore
 	jailed          map[string]bool
 	delegationCalls *int
+	jailReads       *int
 }
 
 func (s *jailTestStore) GetActivePillars() ([]*definition.PillarInfo, error) {
@@ -87,6 +88,9 @@ func (s *jailTestStore) ComputePillarDelegations() ([]*types.PillarDelegationDet
 }
 
 func (s *jailTestStore) GetJailedPillars() (map[string]bool, error) {
+	if s.jailReads != nil {
+		*s.jailReads++
+	}
 	if s.jailed == nil {
 		return map[string]bool{}, nil
 	}
@@ -389,6 +393,33 @@ func TestElection_FallbackComputedOnce(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("20 fallback elections computed the delegations %d times, want 1", calls)
+	}
+}
+
+// Repeated elections and statistics of the same ticks read the jailed
+// set once per proof momentum and the delegations once per election.
+func TestElection_CachedElectionsReadNoHistoricState(t *testing.T) {
+	useJailTestConsensus(t)
+	ch := newJailTestChain(3, "pillar-c")
+	jailReads, delegations := 0, 0
+	for _, s := range ch.stores {
+		s.jailReads, s.delegationCalls = &jailReads, &delegations
+	}
+	em, _ := newJailTestElection(ch)
+	for tick := uint64(0); tick <= 7; tick++ {
+		jailTestElect(t, em, tick)
+	}
+	firstJailReads, firstDelegations := jailReads, delegations
+	for round := 0; round < 5; round++ {
+		for tick := uint64(0); tick <= 7; tick++ {
+			jailTestElect(t, em, tick)
+			_, err := em.jailedAtProof(ch.live, tick)
+			common.FailIfErr(t, err)
+		}
+	}
+	if jailReads != firstJailReads || delegations != firstDelegations {
+		t.Fatalf("repeated elections read %d jailed sets and %d delegations beyond the first round, want 0 and 0",
+			jailReads-firstJailReads, delegations-firstDelegations)
 	}
 }
 

@@ -88,4 +88,10 @@ func TestElection_JailReadErrorFailsElection(t *testing.T) {
 	if stored != nil {
 		t.Fatal("a failed election stored a result")
 	}
+
+	// A failed read caches no decision: once the read succeeds, both
+	// ticks elect normally.
+	em.chain = ch
+	expectPillarC(t, em, 4, false)
+	expectPillarC(t, em, 5, true)
 }

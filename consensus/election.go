@@ -3,6 +3,7 @@ package consensus
 import (
 	"time"
 
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/pkg/errors"
 
 	"github.com/zenon-network/go-zenon/chain"
@@ -75,6 +76,24 @@ type electionManager struct {
 	chain chain.Chain
 	algo  ElectionAlgorithm
 	db    *storage.DB
+
+	// jailCache holds the jailed set read at a proof momentum, by the
+	// proof hash. fallbackCache holds whether the election of a tick
+	// falls back, by proof hash and tick. Both are fixed by the proof,
+	// so neither is ever invalidated; a failed read is not cached.
+	jailCache     *lru.Cache
+	fallbackCache *lru.Cache
+}
+
+// electionStateCacheSize bounds the in-memory jail and fallback
+// caches, about two weeks of election ticks.
+const electionStateCacheSize = 4096
+
+// fallbackDecisionKey identifies the fallback decision of one tick's
+// election.
+type fallbackDecisionKey struct {
+	hash types.Hash
+	tick uint64
 }
 
 // ElectionReader exposes election results on the election-tick
@@ -275,32 +294,51 @@ func (em *electionManager) jailFallback(proofStore store.Momentum, tick uint64, 
 // the proof hash and tick in its own namespace.
 func (em *electionManager) generateProducers(proofBlock *nom.Momentum, tick uint64) (*storage.ElectionData, error) {
 	hashH := types.HashHeight{Hash: proofBlock.Hash, Height: proofBlock.Height}
+	decisionKey := fallbackDecisionKey{hash: hashH.Hash, tick: tick}
+
+	lookup := func(fallback bool) (*storage.ElectionData, error) {
+		if fallback {
+			return em.db.GetFallbackElectionResult(hashH.Hash, tick)
+		}
+		return em.db.GetElectionResultByHash(hashH.Hash)
+	}
+
+	var fallback bool
+	known, decided := em.fallbackCache.Get(decisionKey)
+	if decided {
+		fallback = known.(bool)
+		cached, err := lookup(fallback)
+		if err != nil {
+			return nil, err
+		}
+		if cached != nil {
+			em.log.Debug("hit cache for compute producers", "hash", hashH.Height, "fallback", fallback)
+			return cached, nil
+		}
+	}
 
 	proofStore := em.chain.GetMomentumStore(proofBlock.Identifier())
 	if proofStore == nil {
 		return nil, errors.Errorf("no momentum store at proof momentum %v", proofBlock.Identifier())
 	}
-	jailed, err := proofStore.GetJailedPillars()
+	jailed, err := em.jailedAt(proofStore, hashH.Hash)
 	if err != nil {
 		return nil, err
 	}
-	fallback, err := em.jailFallback(proofStore, tick, proofBlock, jailed)
-	if err != nil {
-		return nil, err
-	}
-
-	var cached *storage.ElectionData
-	if fallback {
-		cached, err = em.db.GetFallbackElectionResult(hashH.Hash, tick)
-	} else {
-		cached, err = em.db.GetElectionResultByHash(hashH.Hash)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if cached != nil {
-		em.log.Debug("hit cache for compute producers", "hash", hashH.Height, "fallback", fallback)
-		return cached, nil
+	if !decided {
+		fallback, err = em.jailFallback(proofStore, tick, proofBlock, jailed)
+		if err != nil {
+			return nil, err
+		}
+		em.fallbackCache.Add(decisionKey, fallback)
+		cached, err := lookup(fallback)
+		if err != nil {
+			return nil, err
+		}
+		if cached != nil {
+			em.log.Debug("hit cache for compute producers", "hash", hashH.Height, "fallback", fallback)
+			return cached, nil
+		}
 	}
 
 	delegationsDetailed, err := proofStore.ComputePillarDelegations()
@@ -340,7 +378,8 @@ func (em *electionManager) generateProducers(proofBlock *nom.Momentum, tick uint
 
 // jailedAtProof returns the pillars jailed at the proof momentum of
 // tick as momentumStore's chain sees it: the pillars the election of
-// tick excluded unless it fell back.
+// tick excluded unless it fell back. The jailed set is read through
+// jailCache. The returned map is shared and must not be modified.
 func (em *electionManager) jailedAtProof(momentumStore store.Momentum, tick uint64) (map[string]bool, error) {
 	if momentumStore == nil {
 		return nil, errors.Errorf("no momentum store to read the jailed pillars of tick %v from", tick)
@@ -349,11 +388,29 @@ func (em *electionManager) jailedAtProof(momentumStore store.Momentum, tick uint
 	if err != nil {
 		return nil, err
 	}
+	if cached, ok := em.jailCache.Get(proofBlock.Hash); ok {
+		return cached.(map[string]bool), nil
+	}
 	proofStore := em.chain.GetMomentumStore(proofBlock.Identifier())
 	if proofStore == nil {
 		return nil, errors.Errorf("no momentum store at proof momentum %v of tick %v", proofBlock.Identifier(), tick)
 	}
-	return proofStore.GetJailedPillars()
+	return em.jailedAt(proofStore, proofBlock.Hash)
+}
+
+// jailedAt returns the pillars jailed at proofStore, the momentum store
+// at the proof momentum with hash proofHash, reading through jailCache.
+// The returned map is shared and must not be modified.
+func (em *electionManager) jailedAt(proofStore store.Momentum, proofHash types.Hash) (map[string]bool, error) {
+	if cached, ok := em.jailCache.Get(proofHash); ok {
+		return cached.(map[string]bool), nil
+	}
+	jailed, err := proofStore.GetJailedPillars()
+	if err != nil {
+		return nil, err
+	}
+	em.jailCache.Add(proofHash, jailed)
+	return jailed, nil
 }
 
 // InsertMomentum pre-computes electionData when a tick is completed
@@ -388,11 +445,21 @@ func (em *electionManager) DeleteMomentum(*nom.DetailedMomentum) {
 
 func newElectionManager(chain chain.Chain, db *storage.DB) *electionManager {
 	context := NewConsensusContext(*chain.GetGenesisMomentum().Timestamp)
+	jailCache, err := lru.New(electionStateCacheSize)
+	if err != nil {
+		panic(err)
+	}
+	fallbackCache, err := lru.New(electionStateCacheSize)
+	if err != nil {
+		panic(err)
+	}
 	return &electionManager{
-		Context: *context,
-		chain:   chain,
-		algo:    NewElectionAlgorithm(context),
-		db:      db,
-		log:     common.ConsensusLogger.New("submodule", "election-manager"),
+		Context:       *context,
+		chain:         chain,
+		algo:          NewElectionAlgorithm(context),
+		db:            db,
+		log:           common.ConsensusLogger.New("submodule", "election-manager"),
+		jailCache:     jailCache,
+		fallbackCache: fallbackCache,
 	}
 }
