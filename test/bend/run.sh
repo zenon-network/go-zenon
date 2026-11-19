@@ -80,7 +80,14 @@ echo "== 3. mutants"
 # needed (expected) and what the faulty model gives (observed).
 : > "$OUT/mutants.log"; : > "$OUT/mutants-detail.log"
 for rule in $RULES; do
-  python3 "$HERE/mutants.py" --list "$rule" | while IFS="$(printf '\t')" read -r name what; do
+  # The list goes to a file first: in a pipeline the status of the listing
+  # would be lost, and a rule whose mutants could not be listed would pass.
+  list="$SCRATCH/mutants-$rule.tsv"
+  if ! python3 "$HERE/mutants.py" --list "$rule" > "$list" || [ ! -s "$list" ]; then
+    echo "MISSED   $rule: its mutants could not be listed, or it has none" | tee -a "$OUT/mutants.log"
+    continue
+  fi
+  while IFS="$(printf '\t')" read -r name what; do
     dir="$SCRATCH/mutant-$rule-$name"
     rm -rf "$dir"; mkdir -p "$dir"
     # every rule directory goes into the copy, since a rule may import another
@@ -95,7 +102,7 @@ for rule in $RULES; do
     fi
     { echo "=== $rule/$name: $what"; (cd "$dir" && diff "$HERE/$rule" "$rule" | grep '^[<>]' | sed 's/^</  model :/; s/^>/  mutant:/'); echo "$res"; echo; } >> "$OUT/mutants-detail.log"
     rm -rf "$dir"
-  done
+  done < "$list"
 done
 if grep -q '^MISSED' "$OUT/mutants.log" || ! grep -q '^caught' "$OUT/mutants.log"; then echo "FAIL: mutants"; fail=1; fi
 
@@ -124,7 +131,12 @@ echo "== 6. exhaustive"
 DEPTH="${DEPTH:-2}"; SHARDS="${SHARDS:-1}"
 # Whole numbers only, and at least one shard: with none, no sequence would
 # run and nothing would be there to fail.
-case "$DEPTH$SHARDS" in *[!0-9]*|"") echo "DEPTH and SHARDS must be whole numbers"; exit 1;; esac
+# Two digits at most, so that the comparisons below are within what every
+# shell can count: a number too long for the shell made them all false and
+# the loops run no shard.
+for v in "$DEPTH" "$SHARDS"; do
+  case "$v" in ""|*[!0-9]*|???*) echo "DEPTH and SHARDS must be whole numbers below 100"; exit 1;; esac
+done
 if [ "$DEPTH" != 0 ] && [ "$SHARDS" -lt 1 ]; then echo "SHARDS must be at least 1"; exit 1; fi
 if [ "$DEPTH" = 0 ]; then
   echo "skipped (DEPTH=0)" | tee "$OUT/exhaustive.log"
@@ -145,10 +157,12 @@ else
     pids="$pids $!"
     i=$((i + 1))
   done
-  shards_ok=1
+  shards_ok=1; started=0
   for pid in $pids; do
+    started=$((started + 1))
     wait "$pid" || shards_ok=0
   done
+  [ "$started" = "$SHARDS" ] || { echo "started $started of $SHARDS shards"; shards_ok=0; }
   : > "$OUT/exhaustive.log"
   i=0
   while [ "$i" -lt "$SHARDS" ]; do

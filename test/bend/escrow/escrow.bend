@@ -113,6 +113,11 @@ def Entries.here(+ok: Bool, +to: Nat, +amount: Nat, +t: +List<Entry>) -> Found:
 def Entries.may_unlock(+key: Bool, +now: Nat, +expiry: Nat) -> Bool:
   Bool.and(key, Nat.is_lt(now, expiry))
 
+# A claim is allowed when the signature is valid and the entry has not
+# expired.
+def Entries.may_claim(+key: Bool, +now: Nat, +expiry: Nat) -> Bool:
+  Bool.and(key, Nat.is_lt(now, expiry))
+
 # Reclaim is allowed when the caller made the entry and it has expired.
 def Entries.may_reclaim(+from: Nat, +maker: Nat, +now: Nat, +expiry: Nat) -> Bool:
   Bool.and(Nat.is_eq(from, maker), Nat.is_ge(now, expiry))
@@ -131,7 +136,7 @@ def Entries.claim(+es: +List<Entry>, +want: Nat, +key: Bool, +to: Nat, +now: Nat
     case Nil{}:
       Gone{}
     case Con{Entry{id, maker, payee, amount, expiry}, t}:
-      Entries.pick(Nat.is_eq(id, want), Entries.here(Entries.may_unlock(key, now, expiry), to, amount, t), Entries.skip(Entry{id, maker, payee, amount, expiry}, Entries.claim(t, want, key, to, now)))
+      Entries.pick(Nat.is_eq(id, want), Entries.here(Entries.may_claim(key, now, expiry), to, amount, t), Entries.skip(Entry{id, maker, payee, amount, expiry}, Entries.claim(t, want, key, to, now)))
 
 # Reclaim: the maker is paid.
 def Entries.reclaim(+es: +List<Entry>, +want: Nat, +from: Nat, +now: Nat) -> Found:

@@ -271,7 +271,7 @@ func (n *htlcNode) fail(c call) (accepted, settled bool) {
 		return amount
 	}
 	before := held()
-	_, err := n.sendTo(users[c.from], types.SentinelContract, definition.ABISentinel.PackMethodPanic(definition.RegisterSentinelMethodName), c.amount)
+	b, err := n.sendTo(users[c.from], types.SentinelContract, definition.ABISentinel.PackMethodPanic(definition.RegisterSentinelMethodName), c.amount)
 	if err != nil {
 		if !errors.Is(err, constants.ErrInsufficientBalance) {
 			n.t.Errorf("%v: refused for a reason outside the rule: %v", c, err)
@@ -279,6 +279,10 @@ func (n *htlcNode) fail(c call) (accepted, settled bool) {
 		return false, false
 	}
 	all := n.settle()
+	if executed(n.t, n.ledger, c, b.Hash) {
+		n.t.Errorf("%v: the contract accepted a registration without the deposit", c)
+		return false, true
+	}
 	got := all[c.from]
 	for i, blocks := range all {
 		if i != c.from && len(blocks) != 0 {
@@ -300,9 +304,12 @@ func (n *htlcNode) fail(c call) (accepted, settled bool) {
 	return true, true
 }
 
-// do makes one call on the node. accepted says whether the contract
-// accepted it, judged by what the contract holds afterwards. settled is
-// false when the VM refused the block before any momentum was made.
+// do makes one call on the node. accepted is the status the contract wrote
+// into its receive block for the call. What the contract holds afterwards is
+// checked against that status separately, so that a call the contract
+// executed without effect, or refused with one, fails the test instead of
+// passing as one or the other. settled is false when the VM refused the
+// block before any momentum was made.
 func (n *htlcNode) do(c call) (accepted, settled bool) {
 	switch c.kind {
 	case 'T':
@@ -329,7 +336,11 @@ func (n *htlcNode) do(c call) (accepted, settled bool) {
 			return false, false
 		}
 		n.settle()
-		if !n.held(b.Hash) {
+		ok := executed(n.t, n.ledger, c, b.Hash)
+		if held := n.held(b.Hash); held != ok {
+			n.t.Errorf("%v: the contract's status says accepted=%v, but it holds the entry: %v", c, ok, held)
+		}
+		if !ok {
 			return false, true
 		}
 		n.entries = append(n.entries, b.Hash)
@@ -361,12 +372,18 @@ func (n *htlcNode) do(c call) (accepted, settled bool) {
 	} else {
 		data = definition.ABIHtlc.PackMethodPanic(definition.ReclaimHtlcMethodName, n.entryHash(c.id))
 	}
-	if _, err := n.send(users[c.from], data, 0); err != nil {
+	b, err := n.send(users[c.from], data, 0)
+	if err != nil {
 		n.t.Errorf("%v: refused for a reason outside the rule: %v", c, err)
 		return false, false
 	}
 	n.settle()
-	return before && !n.exists(c.id), true
+	ok := executed(n.t, n.ledger, c, b.Hash)
+	// accepted: the entry was there and is gone; refused: it is as it was
+	if after := n.exists(c.id); ok && !(before && !after) || !ok && after != before {
+		n.t.Errorf("%v: the contract's status says accepted=%v, but the entry was held before: %v, after: %v", c, ok, before, after)
+	}
+	return ok, true
 }
 
 type escrowResult struct {

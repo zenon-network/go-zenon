@@ -45,8 +45,10 @@ law reclaim_takes_the_entry:
   for +now: Nat
   {left(E.Entries.reclaim(es, want, from, now), E.Entries.count(es)) == E.Entries.count(es) : Nat}
 
-# LAW 4. At no time can an entry be both unlocked and reclaimed: unlock
-# needs the time to be before the expiry, reclaim needs it not to be.
+# LAW 4. "Before the expiry" and "from the expiry on" never hold together.
+# This is a fact about the two comparisons, not about the contract; that
+# the contract's unlock, claim, reclaim and cancel keep to those two windows
+# is LAWS 26 to 29.
 law windows_do_not_overlap:
   for +now: Nat
   for +expiry: Nat
@@ -137,6 +139,9 @@ law cancel_empties_the_entry:
   for +now: Nat
   {holds_after(E.Entries.cancel(es, want, from, now), want) == 0n : Nat}
 
+# LAW 13 says what is left after a failed call, not that the call went
+# through: LAW 32 states that separately.
+#
 # LAW 13. A call that fails changes nothing. Take any vault, any account
 # and any amount. A call that carries the amount to a contract and is
 # refused there leaves every balance, every entry and the time exactly as
@@ -276,3 +281,99 @@ law early_cancel_refused:
 
 law cancel_by_another_refused:
   {E.step(E.run([E.Create{0n, 0n, 6n, 120n}, E.Tick{}, E.Tick{}], start()), E.Cancel{2n, 0n}) == E.Refused{} : E.Out}
+
+# Whether the entry asked for is still before its expiry; False when there
+# is no such entry.
+def in_time(+es: +List<E.Entry>, +want: Nat, +now: Nat) -> Bool:
+  match es:
+    case Nil{}:
+      False{}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      Bool.pick(Bool, Nat.is_eq(id, want), Nat.is_lt(now, expiry), in_time(t, want, now))
+
+# Whether the entry asked for has reached its expiry.
+def due(+es: +List<E.Entry>, +want: Nat, +now: Nat) -> Bool:
+  match es:
+    case Nil{}:
+      False{}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      Bool.pick(Bool, Nat.is_eq(id, want), Nat.is_ge(now, expiry), due(t, want, now))
+
+# Whether the entry asked for was made by this account.
+def made_by(+es: +List<E.Entry>, +want: Nat, +from: Nat) -> Bool:
+  match es:
+    case Nil{}:
+      False{}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      Bool.pick(Bool, Nat.is_eq(id, want), Nat.is_eq(from, maker), made_by(t, want, from))
+
+def nothing_paid(+f: E.Found) -> Bool:
+  match f:
+    case E.Gone{}:
+      True{}
+    case E.Paid{to, amount, entries}:
+      False{}
+
+# LAWS 26 to 29. The windows, stated about the contract's own operations,
+# for every set of entries, every entry asked for, every caller and every
+# time. Each law reads "the condition holds, or nothing is paid".
+#
+# An unlock or a claim pays only before the entry's expiry, with the right
+# preimage or signature or without.
+law unlock_only_in_time:
+  for +es: +List<E.Entry>
+  for +want: Nat
+  for +key: Bool
+  for +now: Nat
+  {Bool.or(in_time(es, want, now), nothing_paid(E.Entries.unlock(es, want, key, now))) == True{} : Bool}
+
+law claim_only_in_time:
+  for +es: +List<E.Entry>
+  for +want: Nat
+  for +key: Bool
+  for +to: Nat
+  for +now: Nat
+  {Bool.or(in_time(es, want, now), nothing_paid(E.Entries.claim(es, want, key, to, now))) == True{} : Bool}
+
+# A reclaim or a stake cancel pays only from the entry's expiry on.
+law reclaim_only_when_due:
+  for +es: +List<E.Entry>
+  for +want: Nat
+  for +from: Nat
+  for +now: Nat
+  {Bool.or(due(es, want, now), nothing_paid(E.Entries.reclaim(es, want, from, now))) == True{} : Bool}
+
+law cancel_only_when_due:
+  for +es: +List<E.Entry>
+  for +want: Nat
+  for +from: Nat
+  for +now: Nat
+  {Bool.or(due(es, want, now), nothing_paid(E.Entries.cancel(es, want, from, now))) == True{} : Bool}
+
+# LAWS 30 and 31. A reclaim or a stake cancel pays only when the caller
+# made the entry, at any time.
+law reclaim_only_by_the_maker:
+  for +es: +List<E.Entry>
+  for +want: Nat
+  for +from: Nat
+  for +now: Nat
+  {Bool.or(made_by(es, want, from), nothing_paid(E.Entries.reclaim(es, want, from, now))) == True{} : Bool}
+
+law cancel_only_by_the_maker:
+  for +es: +List<E.Entry>
+  for +want: Nat
+  for +from: Nat
+  for +now: Nat
+  {Bool.or(made_by(es, want, from), nothing_paid(E.Entries.cancel(es, want, from, now))) == True{} : Bool}
+
+# LAW 32. A failed call that the balance covers goes through: it is
+# accepted, and the vault afterwards is the vault before. (LAW 13 alone
+# would also hold if such a call were simply refused.)
+law covered_failed_call_is_accepted:
+  {E.step(start(), E.Failed{0n, 6n}) == E.Accepted{start()} : E.Out}
+
+# LAW 33. The second cancel of a cancelled stake is accepted, pays zero and
+# leaves the vault as the first cancel left it. (LAW 11 alone would also
+# hold if the second cancel were refused.)
+law second_cancel_is_accepted:
+  {E.step(E.run([E.Create{0n, 0n, 6n, 120n}, E.Tick{}, E.Tick{}, E.Cancel{0n, 0n}], start()), E.Cancel{0n, 0n}) == E.Accepted{E.Vault{[10n, 0n, 0n], [E.Entry{0n, 0n, 0n, 0n, 120n}], 120n, 1n}} : E.Out}

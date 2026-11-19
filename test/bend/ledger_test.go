@@ -15,6 +15,7 @@ package bend
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
@@ -30,6 +31,7 @@ import (
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm"
 	"github.com/zenon-network/go-zenon/vm/constants"
@@ -100,6 +102,40 @@ func natList(vs []uint64) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
+// The status a contract writes into its receive block (vm/vm.go:
+// resultSuccess and resultFail).
+const (
+	statusSuccess = 1
+	statusFail    = 2
+)
+
+// executed finds the contract's receive block for a call and returns the
+// status the contract wrote into it. A call with no receive after it was
+// settled, or with a status that is neither of the two, fails the test:
+// what the contract did is then not known, and the call must not be counted
+// as refused just because nothing changed.
+func executed(t *testing.T, ledger *api.LedgerApi, what fmt.Stringer, send types.Hash) (ok bool) {
+	block, err := ledger.GetAccountBlockByHash(send)
+	if err != nil || block == nil || block.PairedAccountBlock == nil {
+		t.Errorf("%v: the contract has not answered the call (%v)", what, err)
+		return false
+	}
+	data := block.PairedAccountBlock.Data
+	if len(data) != 8 {
+		t.Errorf("%v: the contract's receive block carries %d bytes, want the 8 of a status", what, len(data))
+		return false
+	}
+	switch status := binary.BigEndian.Uint64(data); status {
+	case statusSuccess:
+		return true
+	case statusFail:
+		return false
+	default:
+		t.Errorf("%v: the contract's receive block carries status %d", what, status)
+		return false
+	}
+}
+
 // envCount reads a whole number of at least min from the environment, or
 // def when the variable is not set. A value that is not such a number
 // fails the test: a mistyped count must not turn into a run that tries
@@ -127,8 +163,17 @@ type node struct {
 
 func newNode(t *testing.T) *node {
 	z := mock.NewMockZenon(t)
+	// If the first momentums fail, the test ends from inside this function
+	// and the caller never gets the node to stop: stop it here then.
+	ready := false
+	defer func() {
+		if !ready {
+			z.StopPanic()
+		}
+	}()
 	n := &node{t: t, z: z, sup: vm.NewSupervisor(z.Chain(), z.Consensus()), token: znn}
 	z.InsertMomentumsTo(3)
+	ready = true
 	return n
 }
 

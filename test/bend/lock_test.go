@@ -121,9 +121,11 @@ func (n *lockNode) settle() (blocks []int, paid []uint64) {
 	return blocks, paid
 }
 
-// do makes one call on the node. A lock is accepted when the contract has
-// the entry afterwards. A cancel is accepted when the contract answered it
-// with a block to the caller, whatever amount that block carries.
+// do makes one call on the node. accepted is the status the contract wrote
+// into its receive block. Its effect is checked against that status: an
+// accepted lock leaves an entry and a refused one does not; an accepted
+// cancel is answered with one block to the caller, whatever amount it
+// carries, and a refused one with none.
 func (n *lockNode) do(c call) (accepted, settled bool, note string) {
 	switch c.kind {
 	case 'T':
@@ -144,8 +146,12 @@ func (n *lockNode) do(c call) (accepted, settled bool, note string) {
 			return false, false, err.Error()
 		}
 		n.settle()
-		if !n.held(b.Hash, c.from) {
-			return false, true, "no entry"
+		ok := executed(n.t, n.ledger, c, b.Hash)
+		if held := n.held(b.Hash, c.from); held != ok {
+			n.t.Errorf("%v: the contract's status says accepted=%v, but it holds the entry: %v", c, ok, held)
+		}
+		if !ok {
+			return false, true, "refused by the contract"
 		}
 		n.entries = append(n.entries, b.Hash)
 		n.owners = append(n.owners, c.from)
@@ -161,12 +167,23 @@ func (n *lockNode) do(c call) (accepted, settled bool, note string) {
 	} else {
 		data = definition.ABIPlasma.PackMethodPanic(definition.CancelFuseMethodName, hash)
 	}
-	if _, err := n.send(users[c.from], data, 0); err != nil {
+	b, err := n.send(users[c.from], data, 0)
+	if err != nil {
 		n.t.Errorf("%v: refused for a reason outside the rule: %v", c, err)
 		return false, false, err.Error()
 	}
 	blocks, paid := n.settle()
-	return blocks[c.from] > 0, true, fmt.Sprintf("answered with %d block(s) carrying %d", blocks[c.from], paid[c.from])
+	ok := executed(n.t, n.ledger, c, b.Hash)
+	for i, count := range blocks {
+		want := 0
+		if ok && i == c.from {
+			want = 1
+		}
+		if count != want {
+			n.t.Errorf("%v: the contract's status says accepted=%v, and account %d received %d block(s), want %d", c, ok, i, count, want)
+		}
+	}
+	return ok, true, fmt.Sprintf("answered with %d block(s) carrying %d", blocks[c.from], paid[c.from])
 }
 
 type lockStep func(n *lockNode) call

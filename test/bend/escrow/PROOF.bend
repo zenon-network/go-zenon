@@ -86,7 +86,7 @@ def claim_exact(es, want, key, to, now):
     case Nil{}:
       {==}
     case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
-      pick_exact(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_unlock(key, now, expiry), to, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.claim(t, want, key, to, now)), Nat.add(E.Entries.held(t), amount), here_exact(E.Entries.may_unlock(key, now, expiry), to, amount, t), skip_exact(E.Entries.claim(t, want, key, to, now), id, maker, payee, amount, expiry, E.Entries.held(t), claim_exact(t, want, key, to, now)))
+      pick_exact(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_claim(key, now, expiry), to, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.claim(t, want, key, to, now)), Nat.add(E.Entries.held(t), amount), here_exact(E.Entries.may_claim(key, now, expiry), to, amount, t), skip_exact(E.Entries.claim(t, want, key, to, now), id, maker, payee, amount, expiry, E.Entries.held(t), claim_exact(t, want, key, to, now)))
 
 # A cancel pays what the entry holds and leaves it holding nothing.
 def cancel_here(+ok: Bool, +id: Nat, +maker: Nat, +payee: Nat, +amount: Nat, +expiry: Nat, +t: +List<E.Entry>) -> {found_after(E.Entries.here(ok, maker, amount, Con{E.Entry{id, maker, payee, 0n, expiry}, t}), Nat.add(E.Entries.held(t), amount)) == Nat.add(E.Entries.held(t), amount) : Nat}:
@@ -339,7 +339,7 @@ def Laws.claim_takes_the_entry(es, want, key, to, now):
     case Nil{}:
       {==}
     case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
-      pick_left(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_unlock(key, now, expiry), to, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.claim(t, want, key, to, now)), 1n+E.Entries.count(t), here_left(E.Entries.may_unlock(key, now, expiry), to, amount, t), skip_left(E.Entries.claim(t, want, key, to, now), E.Entry{id, maker, payee, amount, expiry}, E.Entries.count(t), Laws.claim_takes_the_entry(t, want, key, to, now)))
+      pick_left(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_claim(key, now, expiry), to, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.claim(t, want, key, to, now)), 1n+E.Entries.count(t), here_left(E.Entries.may_claim(key, now, expiry), to, amount, t), skip_left(E.Entries.claim(t, want, key, to, now), E.Entry{id, maker, payee, amount, expiry}, E.Entries.count(t), Laws.claim_takes_the_entry(t, want, key, to, now)))
 
 def Laws.claim_pays_once():
   {==}
@@ -423,7 +423,7 @@ def Laws.claim_pays_what_the_entry_holds(es, want, key, to, now):
     case Nil{}:
       {==}
     case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
-      holds_pick(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_unlock(key, now, expiry), to, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.claim(t, want, key, to, now)), amount, Laws.holds(t, want), holds_here(E.Entries.may_unlock(key, now, expiry), to, amount, t), holds_skip(E.Entries.claim(t, want, key, to, now), E.Entry{id, maker, payee, amount, expiry}, Laws.holds(t, want), Laws.claim_pays_what_the_entry_holds(t, want, key, to, now)))
+      holds_pick(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_claim(key, now, expiry), to, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.claim(t, want, key, to, now)), amount, Laws.holds(t, want), holds_here(E.Entries.may_claim(key, now, expiry), to, amount, t), holds_skip(E.Entries.claim(t, want, key, to, now), E.Entry{id, maker, payee, amount, expiry}, Laws.holds(t, want), Laws.claim_pays_what_the_entry_holds(t, want, key, to, now)))
 
 def Laws.reclaim_pays_what_the_entry_holds(es, want, from, now):
   match es:
@@ -478,7 +478,7 @@ def Laws.claim_leaves_the_others(es, want, key, to, now):
     case Nil{}:
       {==}
     case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
-      rest_pick(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_unlock(key, now, expiry), to, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.claim(t, want, key, to, now)), t, Con{E.Entry{id, maker, payee, amount, expiry}, Laws.without(t, want)}, rest_here(E.Entries.may_unlock(key, now, expiry), to, amount, t), rest_skip(E.Entries.claim(t, want, key, to, now), E.Entry{id, maker, payee, amount, expiry}, Laws.without(t, want), Laws.claim_leaves_the_others(t, want, key, to, now)))
+      rest_pick(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_claim(key, now, expiry), to, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.claim(t, want, key, to, now)), t, Con{E.Entry{id, maker, payee, amount, expiry}, Laws.without(t, want)}, rest_here(E.Entries.may_claim(key, now, expiry), to, amount, t), rest_skip(E.Entries.claim(t, want, key, to, now), E.Entry{id, maker, payee, amount, expiry}, Laws.without(t, want), Laws.claim_leaves_the_others(t, want, key, to, now)))
 
 def Laws.reclaim_leaves_the_others(es, want, from, now):
   match es:
@@ -528,4 +528,100 @@ def Laws.early_cancel_refused():
   {==}
 
 def Laws.cancel_by_another_refused():
+  {==}
+
+# LAWS 26 to 31
+# -------------
+# Each has the shape "cond or nothing paid". The three helpers below take
+# the condition as a Bool, so that one match settles each case.
+
+# The entry is another one: whatever holds further down holds here.
+def gone_skip(+c: Bool, +x: E.Entry, +f: E.Found, ih: {Bool.or(c, Laws.nothing_paid(f)) == True{} : Bool}) -> {Bool.or(c, Laws.nothing_paid(E.Entries.skip(x, f))) == True{} : Bool}:
+  match c f:
+    case True{} f:
+      {==}
+    case False{} E.Gone{}:
+      {==}
+    case False{} E.Paid{to, amount, es}:
+      Empty.absurd({False{} == True{} : Bool}, N.false_is_not_true(ih))
+
+def gone_pick(+hit: Bool, +a: Bool, +b: Bool, +here: E.Found, +other: E.Found, e1: {Bool.or(a, Laws.nothing_paid(here)) == True{} : Bool}, e2: {Bool.or(b, Laws.nothing_paid(other)) == True{} : Bool}) -> {Bool.or(Bool.pick(Bool, hit, a, b), Laws.nothing_paid(E.Entries.pick(hit, here, other))) == True{} : Bool}:
+  match hit:
+    case True{}:
+      e1
+    case False{}:
+      e2
+
+# The entry is the one asked for, and it pays only when both p and q hold:
+# so q holds, or nothing is paid. (q is the time; p is the key or the maker.)
+def gone_second(+p: Bool, +q: Bool, +to: Nat, +amount: Nat, +l: +List<E.Entry>) -> {Bool.or(q, Laws.nothing_paid(E.Entries.here(Bool.and(p, q), to, amount, l))) == True{} : Bool}:
+  match p q:
+    case True{} True{}:
+      {==}
+    case True{} False{}:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      {==}
+
+# The same for p.
+def gone_first(+p: Bool, +q: Bool, +to: Nat, +amount: Nat, +l: +List<E.Entry>) -> {Bool.or(p, Laws.nothing_paid(E.Entries.here(Bool.and(p, q), to, amount, l))) == True{} : Bool}:
+  match p q:
+    case True{} True{}:
+      {==}
+    case True{} False{}:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      {==}
+
+def Laws.unlock_only_in_time(es, want, key, now):
+  match es:
+    case Nil{}:
+      {==}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      gone_pick(Nat.is_eq(id, want), Nat.is_lt(now, expiry), Laws.in_time(t, want, now), E.Entries.here(E.Entries.may_unlock(key, now, expiry), payee, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.unlock(t, want, key, now)), gone_second(key, Nat.is_lt(now, expiry), payee, amount, t), gone_skip(Laws.in_time(t, want, now), E.Entry{id, maker, payee, amount, expiry}, E.Entries.unlock(t, want, key, now), Laws.unlock_only_in_time(t, want, key, now)))
+
+def Laws.claim_only_in_time(es, want, key, to, now):
+  match es:
+    case Nil{}:
+      {==}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      gone_pick(Nat.is_eq(id, want), Nat.is_lt(now, expiry), Laws.in_time(t, want, now), E.Entries.here(E.Entries.may_claim(key, now, expiry), to, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.claim(t, want, key, to, now)), gone_second(key, Nat.is_lt(now, expiry), to, amount, t), gone_skip(Laws.in_time(t, want, now), E.Entry{id, maker, payee, amount, expiry}, E.Entries.claim(t, want, key, to, now), Laws.claim_only_in_time(t, want, key, to, now)))
+
+def Laws.reclaim_only_when_due(es, want, from, now):
+  match es:
+    case Nil{}:
+      {==}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      gone_pick(Nat.is_eq(id, want), Nat.is_ge(now, expiry), Laws.due(t, want, now), E.Entries.here(E.Entries.may_reclaim(from, maker, now, expiry), maker, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.reclaim(t, want, from, now)), gone_second(Nat.is_eq(from, maker), Nat.is_ge(now, expiry), maker, amount, t), gone_skip(Laws.due(t, want, now), E.Entry{id, maker, payee, amount, expiry}, E.Entries.reclaim(t, want, from, now), Laws.reclaim_only_when_due(t, want, from, now)))
+
+def Laws.cancel_only_when_due(es, want, from, now):
+  match es:
+    case Nil{}:
+      {==}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      gone_pick(Nat.is_eq(id, want), Nat.is_ge(now, expiry), Laws.due(t, want, now), E.Entries.here(E.Entries.may_reclaim(from, maker, now, expiry), maker, amount, Con{E.Entry{id, maker, payee, 0n, expiry}, t}), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.cancel(t, want, from, now)), gone_second(Nat.is_eq(from, maker), Nat.is_ge(now, expiry), maker, amount, Con{E.Entry{id, maker, payee, 0n, expiry}, t}), gone_skip(Laws.due(t, want, now), E.Entry{id, maker, payee, amount, expiry}, E.Entries.cancel(t, want, from, now), Laws.cancel_only_when_due(t, want, from, now)))
+
+def Laws.reclaim_only_by_the_maker(es, want, from, now):
+  match es:
+    case Nil{}:
+      {==}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      gone_pick(Nat.is_eq(id, want), Nat.is_eq(from, maker), Laws.made_by(t, want, from), E.Entries.here(E.Entries.may_reclaim(from, maker, now, expiry), maker, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.reclaim(t, want, from, now)), gone_first(Nat.is_eq(from, maker), Nat.is_ge(now, expiry), maker, amount, t), gone_skip(Laws.made_by(t, want, from), E.Entry{id, maker, payee, amount, expiry}, E.Entries.reclaim(t, want, from, now), Laws.reclaim_only_by_the_maker(t, want, from, now)))
+
+def Laws.cancel_only_by_the_maker(es, want, from, now):
+  match es:
+    case Nil{}:
+      {==}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      gone_pick(Nat.is_eq(id, want), Nat.is_eq(from, maker), Laws.made_by(t, want, from), E.Entries.here(E.Entries.may_reclaim(from, maker, now, expiry), maker, amount, Con{E.Entry{id, maker, payee, 0n, expiry}, t}), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.cancel(t, want, from, now)), gone_first(Nat.is_eq(from, maker), Nat.is_ge(now, expiry), maker, amount, Con{E.Entry{id, maker, payee, 0n, expiry}, t}), gone_skip(Laws.made_by(t, want, from), E.Entry{id, maker, payee, amount, expiry}, E.Entries.cancel(t, want, from, now), Laws.cancel_only_by_the_maker(t, want, from, now)))
+
+# LAWS 32 and 33: both sides compute.
+def Laws.covered_failed_call_is_accepted():
+  {==}
+
+def Laws.second_cancel_is_accepted():
   {==}

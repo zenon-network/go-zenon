@@ -30,9 +30,13 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 
 # name, what the broken node does, file, text, replacement, test that must fail
 FAULTS = [
-    ("no-balance-check", "accepts a send above the balance", "vm/vm.go",
-     "\tif balance.Cmp(block.Amount) == -1 {\n\t\treturn false\n\t}",
-     "\tif false && balance.Cmp(block.Amount) == -1 {\n\t\treturn false\n\t}",
+    # The balance check alone is not what stops an overspend: with it gone,
+    # SubBalance panics on the negative balance and the block is still
+    # refused. So this fault makes the insufficient branch of applyTransfer
+    # succeed, which lets the send through without the debit.
+    ("overspend-accepted", "accepts a send above the balance", "vm/vm.go",
+     "\tif !enoughFunds(vm.context, block) {\n\t\treturn constants.ErrInsufficientBalance\n\t}\n\n\tvm.context.SubBalance(",
+     "\tif !enoughFunds(vm.context, block) {\n\t\treturn nil\n\t}\n\n\tvm.context.SubBalance(",
      "TestLedgerModelMatchesNode"),
     ("no-received-check", "lets an account receive a send it has received", "verifier/account_block.go",
      "\tif status {\n\t\treturn ErrABFromBlockAlreadyReceived",
@@ -45,6 +49,10 @@ FAULTS = [
     ("htlc-unlock-keeps-entry", "pays an HTLC unlock and keeps the entry", "vm/embedded/implementation/htlc.go",
      "\tcommon.DealWithErr(htlcInfo.Delete(context.Storage()))\n\thtlcLog.Debug(\"unlocked\"",
      "\thtlcLog.Debug(\"unlocked\"",
+     "TestEscrowModelMatchesHtlc"),
+    ("htlc-expired-unlock-succeeds", "reports an expired HTLC unlock as accepted, without paying", "vm/embedded/implementation/htlc.go",
+     "\t\treturn nil, constants.ErrExpired\n",
+     "\t\treturn nil, nil\n",
      "TestEscrowModelMatchesHtlc"),
     ("htlc-reclaim-before-expiry", "lets the maker reclaim an HTLC before it expires", "vm/embedded/implementation/htlc.go",
      "if momentum.Timestamp.Unix() < htlcInfo.ExpirationTime {",
@@ -77,6 +85,14 @@ FAULTS = [
 ]
 
 
+# What the comparison prints when it notices something wrong with the node:
+# a scenario on which node and model differ, or one of the direct checks on
+# the node. A test that fails without any of these failed for another
+# reason (a crash, an error the scenario did not expect), and that is not
+# the fault being noticed.
+NOTICED = r"the node and the model disagree|status says|came back|second time|the contract held|went to account|accepted a registration|has not answered"
+
+
 def first_evidence(out):
     """The first lines of the test's own output that show the failure."""
     keep = []
@@ -84,7 +100,7 @@ def first_evidence(out):
         if line.startswith("t="):  # the node's own log
             continue
         text = re.sub(r"^\s*[a-z_]+_test\.go:\d+: ", "", line)
-        if re.search(r"disagree|node:  |model: |outside the rule|came back|second time|the contract held|panic", line):
+        if re.search(NOTICED + r"|node:  |model: ", line):
             keep.append("    " + text.strip()[:200])
         if len(keep) >= 4:
             break
@@ -128,8 +144,14 @@ def run(out_dir, names):
             verdict = "ERROR   "
             bad += 1
             evidence = ["    " + l.strip()[:200] for l in out.splitlines() if "running the model:" in l or "the model printed" in l or "failed]" in l][:6]
-        elif proc.returncode != 0 and "--- FAIL: " + test in out and evidence:
+        elif proc.returncode != 0 and "--- FAIL: " + test in out and re.search(NOTICED, out):
             verdict = "caught  "
+        elif proc.returncode != 0:
+            verdict = "ERROR   "
+            bad += 1
+            evidence = ["    the test failed, but not on a difference or a check of the node:"] + [
+                "    " + re.sub(r"^\s*[a-z_]+_test\.go:\d+: ", "", l).strip()[:200]
+                for l in out.splitlines() if "outside the rule" in l or "panic" in l and not l.startswith("t=")][:4]
         else:
             verdict = "MISSED  "
             bad += 1
