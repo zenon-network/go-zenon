@@ -81,11 +81,11 @@ echo "== 3. mutants"
 : > "$OUT/mutants.log"; : > "$OUT/mutants-detail.log"
 for rule in $RULES; do
   python3 "$HERE/mutants.py" --list "$rule" | while IFS="$(printf '\t')" read -r name what; do
-    dir="$SCRATCH/mutant-$name"
+    dir="$SCRATCH/mutant-$rule-$name"
     rm -rf "$dir"; mkdir -p "$dir"
     # every rule directory goes into the copy, since a rule may import another
     for src in "$HERE"/*/LAWS.bend; do r="$(basename "$(dirname "$src")")"; mkdir -p "$dir/$r"; cp "$HERE/$r"/*.bend "$dir/$r/"; done
-    python3 "$HERE/mutants.py" --apply "$name" "$dir"
+    python3 "$HERE/mutants.py" --apply "$rule" "$name" "$dir"
     res="$(bend "$IMAGE" "$dir" "$rule/PROOF.bend" --check-only || true)"
     where="$(echo "$res" | sed -n 's/^Location: //p' | head -1)"
     if echo "$res" | grep -q '^SOME PROOFS FAIL'; then

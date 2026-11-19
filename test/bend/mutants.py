@@ -5,8 +5,10 @@ A law that is proven about a model says something only if a wrong model
 would fail it. Each mutant below puts one double-spend fault into a copy of
 the model; run.sh then requires `bend PROOF.bend` to print SOME PROOFS FAIL.
 
-    mutants.py --list <rule>                name<TAB>description, one per line
-    mutants.py --apply <name> <copy dir>    edit the copy of test/bend in place
+    mutants.py --list <rule>                       name<TAB>description, one per line
+    mutants.py --apply <rule> <name> <copy dir>    edit the copy of test/bend in place
+
+A mutant is named within its rule, so two rules may use the same name.
 
 A mutant is chosen so that a law is false with it, not merely so that the
 proof text no longer fits. A mutant replaces one exact piece of text. If the
@@ -93,20 +95,20 @@ def main():
         for name, what, *_ in MUTANTS.get(rule, []):
             print("%s\t%s" % (name, what))
         return 0
-    if len(sys.argv) == 4 and sys.argv[1] == "--apply":
-        for rule, mutants in MUTANTS.items():
-            for name, _, fname, old, new in mutants:
-                if name != sys.argv[2]:
-                    continue
-                path = os.path.join(sys.argv[3], rule, fname)
-                with open(path) as f:
-                    text = f.read()
-                if text.count(old) != 1:
-                    sys.exit("mutant %s: its text occurs %d times in %s, want 1" % (name, text.count(old), fname))
-                with open(path, "w") as f:
-                    f.write(text.replace(old, new))
-                return 0
-        sys.exit("no mutant named %s" % sys.argv[2])
+    if len(sys.argv) == 5 and sys.argv[1] == "--apply":
+        rule, want, copy = sys.argv[2], sys.argv[3], sys.argv[4]
+        for name, _, fname, old, new in MUTANTS.get(rule, []):
+            if name != want:
+                continue
+            path = os.path.join(copy, rule, fname)
+            with open(path) as f:
+                text = f.read()
+            if text.count(old) != 1:
+                sys.exit("mutant %s/%s: its text occurs %d times in %s, want 1" % (rule, name, text.count(old), fname))
+            with open(path, "w") as f:
+                f.write(text.replace(old, new))
+            return 0
+        sys.exit("no mutant named %s in rule %s" % (want, rule))
     sys.exit(__doc__)
 
 

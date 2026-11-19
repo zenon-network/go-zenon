@@ -32,7 +32,7 @@ VERDICT=0 test/bend/run.sh                         # without the second check an
 DEPTH=4 SHARDS=6 test/bend/run.sh                  # step 6 to length 4, in six processes: about an hour
 ```
 
-In CI the same script runs from `.github/workflows/bend.yml` on every pull request to `dev`: steps 1 and 3 to 6 always, step 2 when a file under `test/bend/` changed.
+In CI the same script runs from `.github/workflows/bend.yml` on every pull request to `dev`: steps 1 and 3 to 6 always, step 2 when a file under `test/bend/` changed, and step 6 at the default length. The workflow can also be started by hand with a `depth` and a number of `shards`, to take step 6 further.
 
 The first run builds two images. `go-zenon-bend:2.0.40` (290 MB) is the Bend release archive, checked against the SHA-256 that Bend's own installer carries for it. `go-zenon-bend:2.0.40-verdict` (4.4 GB, a few minutes) adds Lean 4.34.0, which Bend's second check needs. Bend always runs without a network and with the rule directory mounted read-only.
 
@@ -160,4 +160,4 @@ A pass means: the laws hold for the model, for all inputs; on this commit the no
 
 ## Adding a law or a rule
 
-To add a law to a rule: write it in `LAWS.bend` with its plain-words comment, run step 1, which now reports the law as open, and write the proof in `PROOF.bend` as `def Laws.<name>`. Add a mutant that the new law should catch. To add a rule: a new directory beside `ledger/` with the same four files (a rule may import another, as `escrow` imports `../ledger/ledger.bend`), a list of mutants under its name in `mutants.py`, its name in `RULES` in `run.sh`, and a Go test behind the `bendrules` tag. Step 3 copies every directory that has a `LAWS.bend` into each mutant's workspace, so a rule that imports another finds it there. Bend parameters can be used once unless marked `+`; `test/bend/plus.py <file>` marks them all. Bend has no proof search, so a proof is written out step by step; anything with division needs its own lemmas first.
+To add a law to a rule: write it in `LAWS.bend` with its plain-words comment, run step 1, which now reports the law as open, and write the proof in `PROOF.bend` as `def Laws.<name>`. Add a mutant that the new law should catch. To add a rule: a new directory beside `ledger/` with the same four files (a rule may import another, as `escrow` imports `../ledger/ledger.bend`), a list of mutants under its name in `mutants.py` (a mutant is named within its rule, so names need not differ between rules), its name in `RULES` in `run.sh`, and a Go test behind the `bendrules` tag. Step 3 copies every directory that has a `LAWS.bend` into each mutant's workspace, so a rule that imports another finds it there. Bend parameters can be used once unless marked `+`; `test/bend/plus.py <file>` marks them all. Bend has no proof search, so a proof is written out step by step; anything with division needs its own lemmas first.
