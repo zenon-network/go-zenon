@@ -1,0 +1,78 @@
+name: Bend laws
+
+# Checks the rules of test/bend (docs/BEND_LAWS.md): their proofs, and that
+# the node still behaves as the proven model says. It builds nothing that is
+# released and needs no secret.
+
+on:
+  pull_request:
+    branches:
+      - dev
+  # Run by hand to take step 6 further than a pull request does: every
+  # sequence of up to `depth` steps (one more for the lock cases).
+  workflow_dispatch:
+    inputs:
+      depth:
+        description: "Step 6: length of the sequences (4 takes about an hour)"
+        default: "4"
+        required: true
+      shards:
+        description: "Step 6: processes side by side"
+        default: "4"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bend:
+    name: Bend laws
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 300 || 60 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          # the merge commit and its first parent, the base branch
+          fetch-depth: 2
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+      - name: Did the Bend files change
+        id: changed
+        # The second check of the proofs needs Lean, a large download. A proof
+        # can only stop holding when a file under test/bend changes, so the
+        # check runs then; the comparison with the node runs always.
+        # A run by hand always includes it.
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && git diff --quiet HEAD^1 HEAD -- test/bend .github/workflows/bend.yml; then
+            echo "verdict=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Proofs, faults, comparison with the node
+        env:
+          VERDICT: ${{ steps.changed.outputs.verdict }}
+          OUT: ${{ runner.temp }}/bend
+          # empty on a pull request: run.sh then uses its defaults (2 and 1)
+          DEPTH_INPUT: ${{ inputs.depth }}
+          SHARDS_INPUT: ${{ inputs.shards }}
+        run: |
+          for v in "$DEPTH_INPUT" "$SHARDS_INPUT"; do
+            case "$v" in *[!0-9]*) echo "depth and shards must be whole numbers"; exit 1;; esac
+          done
+          DEPTH="${DEPTH_INPUT:-2}" SHARDS="${SHARDS_INPUT:-1}" test/bend/run.sh
+      - name: Logs
+        if: failure()
+        env:
+          OUT: ${{ runner.temp }}/bend
+        run: |
+          for f in proofs verdict mutants mutants-detail node-faults node-faults-detail exhaustive; do
+            if [ -f "$OUT/$f.log" ]; then echo "::group::$f.log"; cat "$OUT/$f.log"; echo "::endgroup::"; fi
+          done
