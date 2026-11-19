@@ -139,8 +139,15 @@ def run(out_dir, names):
         # (docker missing, the image gone). That is a failure of the tools,
         # not the fault being noticed.
         tooling = "[build failed]" in out or "[setup failed]" in out or "running the model:" in out or "the model printed" in out
+        # A test binary that panicked or ran out of time did not finish its
+        # comparison, whatever it had printed before: also not a catch.
+        crashed = re.search(r"^(panic: |fatal error: |panic: test timed out)|\*\*\* Test killed", out, re.M)
         evidence = first_evidence(out)
-        if tooling:
+        if crashed and not tooling:
+            verdict = "ERROR   "
+            bad += 1
+            evidence = ["    the test did not finish: " + crashed.group(0).strip()]
+        elif tooling:
             verdict = "ERROR   "
             bad += 1
             evidence = ["    " + l.strip()[:200] for l in out.splitlines() if "running the model:" in l or "the model printed" in l or "failed]" in l][:6]

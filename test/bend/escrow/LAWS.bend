@@ -366,14 +366,18 @@ law cancel_only_by_the_maker:
   for +now: Nat
   {Bool.or(made_by(es, want, from), nothing_paid(E.Entries.cancel(es, want, from, now))) == True{} : Bool}
 
-# LAW 32. A failed call that the balance covers goes through: it is
-# accepted, and the vault afterwards is the vault before. (LAW 13 alone
-# would also hold if such a call were simply refused.)
+# LAW 32. One example of a failed call that the balance covers: in the
+# start vault, account 0 makes one of 6. It is accepted, and the vault
+# afterwards is the vault before. (LAW 13 alone would also hold if such a
+# call were simply refused; this example shows the model does not do that.
+# It is one case, not a statement about every covered call.)
 law covered_failed_call_is_accepted:
   {E.step(start(), E.Failed{0n, 6n}) == E.Accepted{start()} : E.Out}
 
-# LAW 33. The second cancel of a cancelled stake is accepted, pays zero and
-# leaves the vault as the first cancel left it. (LAW 11 alone would also
-# hold if the second cancel were refused.)
+# LAW 33. One example of a second cancel: in the stake story of LAW 11 it
+# is accepted, pays zero and leaves the vault as the first cancel left it.
+# (LAW 11 alone would also hold if the second cancel were refused. That
+# every later cancel pays nothing is LAW 12; this is one case of it being
+# accepted.)
 law second_cancel_is_accepted:
   {E.step(E.run([E.Create{0n, 0n, 6n, 120n}, E.Tick{}, E.Tick{}, E.Cancel{0n, 0n}], start()), E.Cancel{0n, 0n}) == E.Accepted{E.Vault{[10n, 0n, 0n], [E.Entry{0n, 0n, 0n, 0n, 120n}], 120n, 1n}} : E.Out}

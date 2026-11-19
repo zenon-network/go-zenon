@@ -135,7 +135,9 @@ DEPTH="${DEPTH:-2}"; SHARDS="${SHARDS:-1}"
 # shell can count: a number too long for the shell made them all false and
 # the loops run no shard.
 for v in "$DEPTH" "$SHARDS"; do
-  case "$v" in ""|*[!0-9]*|???*) echo "DEPTH and SHARDS must be whole numbers below 100"; exit 1;; esac
+  # No leading zero either: "04" would count as four shards and then not
+  # equal the 4 that were started.
+  case "$v" in ""|*[!0-9]*|???*|0?*) echo "DEPTH and SHARDS must be whole numbers below 100, written without a leading zero"; exit 1;; esac
 done
 if [ "$DEPTH" != 0 ] && [ "$SHARDS" -lt 1 ]; then echo "SHARDS must be at least 1"; exit 1; fi
 if [ "$DEPTH" = 0 ]; then

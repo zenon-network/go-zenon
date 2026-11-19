@@ -296,6 +296,11 @@ func (n *htlcNode) fail(c call) (accepted, settled bool) {
 		n.t.Errorf("%v: %d block(s) came back, want one carrying the amount", c, len(got))
 		return false, true
 	}
+	// the one block is the contract's own refund, in the token that was sent
+	if got[0].Address != types.SentinelContract || got[0].TokenStandard != znn {
+		n.t.Errorf("%v: the block that came back is from %v in %v, want the Sentinel contract in ZNN", c, got[0].Address, got[0].TokenStandard)
+		return false, true
+	}
 	// the refund, received above, is asked for again
 	n.sends = []types.Hash{got[0].Hash}
 	if err := n.submit(n.block(op{kind: 'R', acc: c.from, id: 0, height: n.height(c.from) + 1})); !errors.Is(err, verifier.ErrABFromBlockAlreadyReceived) {
