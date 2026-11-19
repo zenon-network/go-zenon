@@ -6,12 +6,25 @@ on:
       - dev
       - testnet
       - master
+  # A pull request run tests the merge commit GitHub made for that event, with
+  # the base branch as it was then. Re-running it does not pick up a newer
+  # base. A push run tests the tip of the pushed branch, so the result of a
+  # merge is tested even when the base moved after the last pull request run.
+  push:
+    branches:
+      - dev
+      - testnet
+      - master
 
 permissions:
   contents: read
 
+# Pull request runs share a group per pull request, so a new push to the pull
+# request cancels the run it replaces. A push run gets a group of its own, so
+# it is never cancelled: not by the next merge, and not by the same commit
+# arriving on a second branch.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
