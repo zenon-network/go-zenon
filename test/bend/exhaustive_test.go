@@ -24,8 +24,8 @@ import (
 // alphabet is small and a lock needs more steps to run out.
 
 func depth(t *testing.T, extra int) int {
-	d, _ := strconv.Atoi(os.Getenv("BEND_DEPTH"))
-	if d <= 0 {
+	d := int(envCount(t, "BEND_DEPTH", 0, 0))
+	if d == 0 {
 		t.Skip("BEND_DEPTH is not set")
 	}
 	return d + extra

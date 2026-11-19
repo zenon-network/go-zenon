@@ -438,3 +438,94 @@ def Laws.cancel_pays_what_the_entry_holds(es, want, from, now):
       {==}
     case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
       holds_pick(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_reclaim(from, maker, now, expiry), maker, amount, Con{E.Entry{id, maker, payee, 0n, expiry}, t}), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.cancel(t, want, from, now)), amount, Laws.holds(t, want), holds_here(E.Entries.may_reclaim(from, maker, now, expiry), maker, amount, Con{E.Entry{id, maker, payee, 0n, expiry}, t}), holds_skip(E.Entries.cancel(t, want, from, now), E.Entry{id, maker, payee, amount, expiry}, Laws.holds(t, want), Laws.cancel_pays_what_the_entry_holds(t, want, from, now)))
+
+# LAWS 18 to 21
+# -------------
+
+# The entry is the one asked for: what is left is the list it was given.
+def rest_here(+ok: Bool, +to: Nat, +amount: Nat, +l: +List<E.Entry>) -> {Laws.rest(E.Entries.here(ok, to, amount, l), l) == l : +List<E.Entry>}:
+  match ok:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+# The entry is another one: it stays in front of what is left further down.
+def rest_skip(+f: E.Found, +x: E.Entry, +b: +List<E.Entry>, ih: {Laws.rest(f, b) == b : +List<E.Entry>}) -> {Laws.rest(E.Entries.skip(x, f), Con{x, b}) == Con{x, b} : +List<E.Entry>}:
+  match f:
+    case E.Gone{}:
+      {==}
+    case E.Paid{to, amount, es}:
+      %ih : {Con{x, es} == Con{x, _} : +List<E.Entry>}
+      {==}
+
+def rest_pick(+hit: Bool, +here: E.Found, +other: E.Found, +a: +List<E.Entry>, +b: +List<E.Entry>, e1: {Laws.rest(here, a) == a : +List<E.Entry>}, e2: {Laws.rest(other, b) == b : +List<E.Entry>}) -> {Laws.rest(E.Entries.pick(hit, here, other), Bool.pick(+List<E.Entry>, hit, a, b)) == Bool.pick(+List<E.Entry>, hit, a, b) : +List<E.Entry>}:
+  match hit:
+    case True{}:
+      e1
+    case False{}:
+      e2
+
+def Laws.unlock_leaves_the_others(es, want, key, now):
+  match es:
+    case Nil{}:
+      {==}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      rest_pick(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_unlock(key, now, expiry), payee, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.unlock(t, want, key, now)), t, Con{E.Entry{id, maker, payee, amount, expiry}, Laws.without(t, want)}, rest_here(E.Entries.may_unlock(key, now, expiry), payee, amount, t), rest_skip(E.Entries.unlock(t, want, key, now), E.Entry{id, maker, payee, amount, expiry}, Laws.without(t, want), Laws.unlock_leaves_the_others(t, want, key, now)))
+
+def Laws.claim_leaves_the_others(es, want, key, to, now):
+  match es:
+    case Nil{}:
+      {==}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      rest_pick(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_unlock(key, now, expiry), to, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.claim(t, want, key, to, now)), t, Con{E.Entry{id, maker, payee, amount, expiry}, Laws.without(t, want)}, rest_here(E.Entries.may_unlock(key, now, expiry), to, amount, t), rest_skip(E.Entries.claim(t, want, key, to, now), E.Entry{id, maker, payee, amount, expiry}, Laws.without(t, want), Laws.claim_leaves_the_others(t, want, key, to, now)))
+
+def Laws.reclaim_leaves_the_others(es, want, from, now):
+  match es:
+    case Nil{}:
+      {==}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      rest_pick(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_reclaim(from, maker, now, expiry), maker, amount, t), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.reclaim(t, want, from, now)), t, Con{E.Entry{id, maker, payee, amount, expiry}, Laws.without(t, want)}, rest_here(E.Entries.may_reclaim(from, maker, now, expiry), maker, amount, t), rest_skip(E.Entries.reclaim(t, want, from, now), E.Entry{id, maker, payee, amount, expiry}, Laws.without(t, want), Laws.reclaim_leaves_the_others(t, want, from, now)))
+
+def Laws.cancel_leaves_the_others(es, want, from, now):
+  match es:
+    case Nil{}:
+      {==}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      rest_pick(Nat.is_eq(id, want), E.Entries.here(E.Entries.may_reclaim(from, maker, now, expiry), maker, amount, Con{E.Entry{id, maker, payee, 0n, expiry}, t}), E.Entries.skip(E.Entry{id, maker, payee, amount, expiry}, E.Entries.cancel(t, want, from, now)), Con{E.Entry{id, maker, payee, 0n, expiry}, t}, Con{E.Entry{id, maker, payee, amount, expiry}, Laws.emptied(t, want)}, rest_here(E.Entries.may_reclaim(from, maker, now, expiry), maker, amount, Con{E.Entry{id, maker, payee, 0n, expiry}, t}), rest_skip(E.Entries.cancel(t, want, from, now), E.Entry{id, maker, payee, amount, expiry}, Laws.emptied(t, want), Laws.cancel_leaves_the_others(t, want, from, now)))
+
+# LAWS 22 and 23
+# --------------
+
+def none_both(+hit: Bool) -> {E.Entries.pick(hit, E.Gone{}, E.Gone{}) == E.Gone{} : E.Found}:
+  match hit:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+# Nothing is paid here and nothing further down: nothing is paid.
+def none_pick(+hit: Bool, +x: E.Entry, +f: E.Found, ih: {f == E.Gone{} : E.Found}) -> {E.Entries.pick(hit, E.Gone{}, E.Entries.skip(x, f)) == E.Gone{} : E.Found}:
+  %Equal.sym(E.Found, f, E.Gone{}, ih) : {E.Entries.pick(hit, E.Gone{}, E.Entries.skip(x, _)) == E.Gone{} : E.Found}
+  none_both(hit)
+
+def Laws.unlock_needs_the_preimage(es, want, now):
+  match es:
+    case Nil{}:
+      {==}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      none_pick(Nat.is_eq(id, want), E.Entry{id, maker, payee, amount, expiry}, E.Entries.unlock(t, want, False{}, now), Laws.unlock_needs_the_preimage(t, want, now))
+
+def Laws.claim_needs_the_signature(es, want, to, now):
+  match es:
+    case Nil{}:
+      {==}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      none_pick(Nat.is_eq(id, want), E.Entry{id, maker, payee, amount, expiry}, E.Entries.claim(t, want, False{}, to, now), Laws.claim_needs_the_signature(t, want, to, now))
+
+# LAWS 24 and 25: both sides compute.
+def Laws.early_cancel_refused():
+  {==}
+
+def Laws.cancel_by_another_refused():
+  {==}

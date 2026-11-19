@@ -96,6 +96,9 @@ def Bal.debit.tail(+h: Nat, +m: Maybe<&2, +List<Nat>>) -> Maybe<&2, +List<Nat>>:
       Some{Con{h, t}}
 
 # The balances with amt taken from account a, or None when a has less.
+# An account past the end of the list is one the ledger does not have: a
+# debit from it is refused whatever the amount, zero included. The
+# comparison with the node always lists every account it uses.
 def Bal.debit(+a: Nat, +bs: +List<Nat>, +amt: Nat) -> Maybe<&2, +List<Nat>>:
   match a bs:
     case 0n Nil{}:
@@ -239,9 +242,10 @@ def Step.rcv(+fits: Bool, +strict: Bool, +bals: +List<Nat>, +heights: +List<Nat>
     case True{}:
       Step.rcv.take(Sends.recv(sends, strict, acc, id), bals, heights, next, acc)
 
-# One block against the ledger. strict is the node's rule that only the
-# account a send is addressed to may receive it; every chain enforces it,
-# and the laws are stated with strict = True.
+# One block against the ledger. strict is the verifier's rule that only
+# the account a send is addressed to may receive it (the receiver check of
+# accountBlockVerifier.fromHash). The laws are stated with strict = True,
+# and so say nothing about a ledger on which that check is not applied.
 def step(+s: State, +strict: Bool, +b: Block) -> Next:
   match s b:
     case State{bals, heights, sends, next} Snd{from, height, to, amount}:

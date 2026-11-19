@@ -3,10 +3,16 @@ import ./ledger.bend as L
 
 # The rule: nothing can be spent twice on the go-zenon ledger.
 #
-# LAW 1. No value is created. Take any ledger and any sequence of blocks:
-# sends, receives and momentums, valid or not, in any order. After the node
-# has applied the ones it accepts and dropped the others, the value held by
-# the accounts plus the value in transit is what it was before.
+# LAW 1. No value is created. Take any ledger and any sequence of the
+# model's blocks: sends, receives and momentums, valid or not, in any order.
+# After the model has applied the ones it accepts and dropped the others,
+# the value held by the accounts plus the value in transit is what it was
+# before.
+#
+# This is a statement about the model (L.run). That the node treats the
+# same blocks the same way is what the comparison test checks, and one thing
+# the node does is not in the model at all: a second block at a height whose
+# block is still pending may replace it (TestReplacementSpendsOnce).
 #
 # A double spend, in any of its forms, would break this: a send above the
 # balance, two sends that each fit the balance but not together, a send

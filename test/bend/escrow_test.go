@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand"
-	"os"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -114,6 +112,14 @@ func newHtlcNode(t *testing.T, ptlc bool) *htlcNode {
 
 	n := newNode(t)
 	z := n.z
+	// a setup that fails ends the test from inside this function; stop the
+	// node then, since the caller never gets it
+	ready := false
+	defer func() {
+		if !ready {
+			z.StopPanic()
+		}
+	}()
 	z.InsertSendBlock(&nom.AccountBlock{
 		Address:   g.Spork.Address,
 		ToAddress: types.SporkContract,
@@ -140,6 +146,7 @@ func newHtlcNode(t *testing.T, ptlc bool) *htlcNode {
 	}
 	types.ImplementedSporksMap[id] = true
 	z.InsertMomentumsTo(20)
+	ready = true
 	return &htlcNode{node: n, ptlc: ptlc, contract: contract, htlc: embedded.NewHtlcApi(z), ptlcApi: embedded.NewPtlcApi(z), ledger: api.NewLedgerApi(z)}
 }
 
@@ -271,7 +278,13 @@ func (n *htlcNode) fail(c call) (accepted, settled bool) {
 		}
 		return false, false
 	}
-	got := n.settle()[c.from]
+	all := n.settle()
+	got := all[c.from]
+	for i, blocks := range all {
+		if i != c.from && len(blocks) != 0 {
+			n.t.Errorf("%v: %d block(s) went to account %d, which made no call", c, len(blocks), i)
+		}
+	}
 	if after := held(); after.Cmp(before) != 0 {
 		n.t.Errorf("%v: the contract held %v before and %v after", c, before, after)
 	}
@@ -509,13 +522,7 @@ func compareEscrow(t *testing.T, ptlc bool, id string) {
 	for _, name := range names {
 		results = append(results, runEscrow(t, ptlc, name, scripted[name]))
 	}
-	seed, count := int64(1), 40
-	if v := os.Getenv("BEND_SEED"); v != "" {
-		seed, _ = strconv.ParseInt(v, 10, 64)
-	}
-	if v := os.Getenv("BEND_RANDOM"); v != "" {
-		count, _ = strconv.Atoi(v)
-	}
+	seed, count := envCount(t, "BEND_SEED", 1, 0), int(envCount(t, "BEND_RANDOM", 40, 0))
 	for i := 0; i < count; i++ {
 		results = append(results, runEscrow(t, ptlc, fmt.Sprintf("random-%d", seed+int64(i)), escrowRandom(seed+int64(i), 14)))
 	}

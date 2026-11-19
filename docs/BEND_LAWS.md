@@ -41,7 +41,7 @@ The first run builds two images. `go-zenon-bend:2.0.40` (290 MB) is the Bend rel
 | `OUT` | `test/bend/.scratch/out` | where the logs go |
 | `RULES` | `ledger escrow` | the rules steps 1 to 3 run on; step 4 always runs every case |
 | `VERDICT` | `1` | `0` skips step 2 |
-| `BEND_RANDOM` | `40` | number of random scenarios per rule in step 4 |
+| `BEND_RANDOM` | `40` | number of random scenarios per rule in step 4; `0` runs the written ones only. A value that is not a whole number fails the test |
 | `BEND_SEED` | `1` | seed of the first random scenario; scenario `random-N` is seed N |
 | `BEND_IMAGE` | `go-zenon-bend:2.0.40` | the image with `bend` |
 | `NODE` | `1` | `0` skips step 4 |
@@ -126,7 +126,10 @@ The checker stops at the first proof that fails, so the report names one place, 
 | `second_cancel_pays_zero` | a stake computed to the end: a cancel before the expiry and one by another account are refused; the maker's cancel pays it back; a second cancel of the cancelled stake pays zero |
 | `cancel_empties_the_entry` | after any stake cancel that pays, the entry holds nothing, whatever it held and whatever else the contract holds; no later cancel of it can pay anything but zero |
 | `failed_call_changes_nothing` | for every vault, account and amount: a call that carries the amount and is refused by the contract leaves every balance, every entry and the time exactly as they were |
-| `unlock_pays_what_the_entry_holds`, and the same for `claim`, `reclaim` and `cancel` | whenever a payout is made, the amount is exactly what the entry asked for holds at that moment: not more, not less, and nothing from another entry. Nobody can take out of the contract more than the entry they are entitled to |
+| `unlock_pays_what_the_entry_holds`, and the same for `claim`, `reclaim` and `cancel` | whenever a payout is made, the amount is exactly what the entry asked for holds at that moment: not more and not less |
+| `unlock_leaves_the_others`, and the same for `claim`, `reclaim` and `cancel` | a payout touches its own entry and no other: afterwards the contract holds exactly the entries it held before without the one asked for (for a stake cancel: with that one emptied), each with its maker, payee, amount and expiry as they were |
+| `unlock_needs_the_preimage`, `claim_needs_the_signature` | without the preimage, or without a valid signature, no unlock pays, whatever the entries and the time |
+| `early_cancel_refused`, `cancel_by_another_refused` | the two refusals of the stake story, each stated on its own, so that its end state cannot hide a cancel that paid too early or to the wrong caller |
 | `claim_pays_once` | a PTLC unlock without a valid signature is refused; with one it pays the account the signature names, once; a second claim and a reclaim find nothing |
 
 | Case | What step 4 does | Places covered |
@@ -157,4 +160,4 @@ A pass means: the laws hold for the model, for all inputs; on this commit the no
 
 ## Adding a law or a rule
 
-To add a law to a rule: write it in `LAWS.bend` with its plain-words comment, run step 1, which now reports the law as open, and write the proof in `PROOF.bend` as `def Laws.<name>`. Add a mutant that the new law should catch. To add a rule: a new directory beside `ledger/` with the same four files (a rule may import another, as `escrow` imports `../ledger/ledger.bend`), a list of mutants under its name in `mutants.py`, its name in `RULES` in `run.sh`, and a Go test behind the `bendrules` tag. Bend parameters can be used once unless marked `+`; `test/bend/plus.py <file>` marks them all. Bend has no proof search, so a proof is written out step by step; anything with division needs its own lemmas first.
+To add a law to a rule: write it in `LAWS.bend` with its plain-words comment, run step 1, which now reports the law as open, and write the proof in `PROOF.bend` as `def Laws.<name>`. Add a mutant that the new law should catch. To add a rule: a new directory beside `ledger/` with the same four files (a rule may import another, as `escrow` imports `../ledger/ledger.bend`), a list of mutants under its name in `mutants.py`, its name in `RULES` in `run.sh`, and a Go test behind the `bendrules` tag. Step 3 copies every directory that has a `LAWS.bend` into each mutant's workspace, so a rule that imports another finds it there. Bend parameters can be used once unless marked `+`; `test/bend/plus.py <file>` marks them all. Bend has no proof search, so a proof is written out step by step; anything with division needs its own lemmas first.

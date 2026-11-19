@@ -119,13 +119,17 @@ def run(out_dir, names):
             ["go", "test", "-overlay", overlay, "-tags", "bendrules", "./test/bend/", "-run", "^%s$" % test, "-count=1", "-v", "-timeout", "20m"],
             cwd=ROOT, env=env, capture_output=True, text=True)
         out = proc.stdout + proc.stderr
-        if "[build failed]" in out or "[setup failed]" in out:
+        # The test can also fail because the model could not be run at all
+        # (docker missing, the image gone). That is a failure of the tools,
+        # not the fault being noticed.
+        tooling = "[build failed]" in out or "[setup failed]" in out or "running the model:" in out or "the model printed" in out
+        evidence = first_evidence(out)
+        if tooling:
             verdict = "ERROR   "
             bad += 1
-            evidence = ["    " + l for l in out.splitlines()[:6]]
-        elif proc.returncode != 0 and "--- FAIL: " + test in out:
+            evidence = ["    " + l.strip()[:200] for l in out.splitlines() if "running the model:" in l or "the model printed" in l or "failed]" in l][:6]
+        elif proc.returncode != 0 and "--- FAIL: " + test in out and evidence:
             verdict = "caught  "
-            evidence = first_evidence(out)
         else:
             verdict = "MISSED  "
             bad += 1

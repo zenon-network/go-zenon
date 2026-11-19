@@ -162,9 +162,8 @@ def paid(+f: E.Found, +other: Nat) -> Nat:
 
 # LAWS 14 to 17. No more comes out of an entry than it holds. Whenever an
 # unlock, a claim, a reclaim or a cancel pays, the amount is exactly what
-# the entry asked for holds at that moment: not more, not less, and nothing
-# from any other entry. Whatever the contract holds for others is out of
-# reach of the call.
+# the entry asked for holds at that moment: not more and not less. (That
+# the other entries are left alone is LAWS 18 to 21.)
 law unlock_pays_what_the_entry_holds:
   for +es: +List<E.Entry>
   for +want: Nat
@@ -193,3 +192,87 @@ law cancel_pays_what_the_entry_holds:
   for +from: Nat
   for +now: Nat
   {paid(E.Entries.cancel(es, want, from, now), holds(es, want)) == holds(es, want) : Nat}
+
+# The entries without the one asked for.
+def without(+es: +List<E.Entry>, +want: Nat) -> +List<E.Entry>:
+  match es:
+    case Nil{}:
+      Nil{}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      Bool.pick(+List<E.Entry>, Nat.is_eq(id, want), t, Con{E.Entry{id, maker, payee, amount, expiry}, without(t, want)})
+
+# The entries with the one asked for holding nothing.
+def emptied(+es: +List<E.Entry>, +want: Nat) -> +List<E.Entry>:
+  match es:
+    case Nil{}:
+      Nil{}
+    case Con{E.Entry{id, maker, payee, amount, expiry}, t}:
+      Bool.pick(+List<E.Entry>, Nat.is_eq(id, want), Con{E.Entry{id, maker, payee, 0n, expiry}, t}, Con{E.Entry{id, maker, payee, amount, expiry}, emptied(t, want)})
+
+# The entries a payout leaves; other when nothing was paid.
+def rest(+f: E.Found, +other: +List<E.Entry>) -> +List<E.Entry>:
+  match f:
+    case E.Gone{}:
+      other
+    case E.Paid{to, amount, entries}:
+      entries
+
+# LAWS 18 to 21. A payout touches its own entry and no other. After an
+# unlock, a claim or a reclaim that pays, the contract holds exactly the
+# entries it held before without the one asked for: every other entry is
+# still there, in place, with its maker, payee, amount and expiry as they
+# were. After a stake cancel that pays, it holds exactly the entries it held
+# before with the one asked for emptied.
+law unlock_leaves_the_others:
+  for +es: +List<E.Entry>
+  for +want: Nat
+  for +key: Bool
+  for +now: Nat
+  {rest(E.Entries.unlock(es, want, key, now), without(es, want)) == without(es, want) : +List<E.Entry>}
+
+law claim_leaves_the_others:
+  for +es: +List<E.Entry>
+  for +want: Nat
+  for +key: Bool
+  for +to: Nat
+  for +now: Nat
+  {rest(E.Entries.claim(es, want, key, to, now), without(es, want)) == without(es, want) : +List<E.Entry>}
+
+law reclaim_leaves_the_others:
+  for +es: +List<E.Entry>
+  for +want: Nat
+  for +from: Nat
+  for +now: Nat
+  {rest(E.Entries.reclaim(es, want, from, now), without(es, want)) == without(es, want) : +List<E.Entry>}
+
+law cancel_leaves_the_others:
+  for +es: +List<E.Entry>
+  for +want: Nat
+  for +from: Nat
+  for +now: Nat
+  {rest(E.Entries.cancel(es, want, from, now), emptied(es, want)) == emptied(es, want) : +List<E.Entry>}
+
+# LAWS 22 and 23. Without the preimage, or without a valid signature, no
+# unlock pays: whatever the entries, the time and the entry asked for.
+law unlock_needs_the_preimage:
+  for +es: +List<E.Entry>
+  for +want: Nat
+  for +now: Nat
+  {E.Entries.unlock(es, want, False{}, now) == E.Gone{} : E.Found}
+
+law claim_needs_the_signature:
+  for +es: +List<E.Entry>
+  for +want: Nat
+  for +to: Nat
+  for +now: Nat
+  {E.Entries.claim(es, want, False{}, to, now) == E.Gone{} : E.Found}
+
+# LAWS 24 and 25. The two refusals of LAW 11, each on its own, so that the
+# end state of LAW 11 cannot hide a cancel that paid too early or to the
+# wrong caller: a cancel before the expiry is refused, and so is a cancel
+# after it by an account that did not make the stake.
+law early_cancel_refused:
+  {E.step(E.run([E.Create{0n, 0n, 6n, 120n}], start()), E.Cancel{0n, 0n}) == E.Refused{} : E.Out}
+
+law cancel_by_another_refused:
+  {E.step(E.run([E.Create{0n, 0n, 6n, 120n}, E.Tick{}, E.Tick{}], start()), E.Cancel{2n, 0n}) == E.Refused{} : E.Out}

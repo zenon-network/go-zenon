@@ -83,7 +83,8 @@ for rule in $RULES; do
   python3 "$HERE/mutants.py" --list "$rule" | while IFS="$(printf '\t')" read -r name what; do
     dir="$SCRATCH/mutant-$name"
     rm -rf "$dir"; mkdir -p "$dir"
-    for r in ledger escrow; do mkdir -p "$dir/$r"; cp "$HERE/$r"/*.bend "$dir/$r/"; done
+    # every rule directory goes into the copy, since a rule may import another
+    for src in "$HERE"/*/LAWS.bend; do r="$(basename "$(dirname "$src")")"; mkdir -p "$dir/$r"; cp "$HERE/$r"/*.bend "$dir/$r/"; done
     python3 "$HERE/mutants.py" --apply "$name" "$dir"
     res="$(bend "$IMAGE" "$dir" "$rule/PROOF.bend" --check-only || true)"
     where="$(echo "$res" | sed -n 's/^Location: //p' | head -1)"
@@ -125,16 +126,34 @@ if [ "$DEPTH" = 0 ]; then
   echo "skipped (DEPTH=0)" | tee "$OUT/exhaustive.log"
 else
   (cd "$ROOT" && go test -tags bendrules -c -o "$SCRATCH/bend.test" ./test/bend/)
-  i=0
+  # One process per shard. Each writes "exit N" as its last line whatever
+  # happens to the test binary, and its own exit status is collected below:
+  # a shard that is killed part way must not leave a log that reads as a pass.
+  i=0; pids=""
   while [ "$i" -lt "$SHARDS" ]; do
-    (cd "$HERE" && BEND_IMAGE="$IMAGE" BEND_DEPTH="$DEPTH" BEND_SHARD="$i/$SHARDS" "$SCRATCH/bend.test" -test.run '^TestExhaustive' -test.v -test.timeout 12h > "$SCRATCH/exhaustive-$i.log" 2>&1; echo "exit $?" >> "$SCRATCH/exhaustive-$i.log") &
+    (
+      cd "$HERE"
+      rc=0
+      BEND_IMAGE="$IMAGE" BEND_DEPTH="$DEPTH" BEND_SHARD="$i/$SHARDS" "$SCRATCH/bend.test" -test.run '^TestExhaustive' -test.v -test.timeout 12h > "$SCRATCH/exhaustive-$i.log" 2>&1 || rc=$?
+      echo "exit $rc" >> "$SCRATCH/exhaustive-$i.log"
+      exit "$rc"
+    ) &
+    pids="$pids $!"
     i=$((i + 1))
   done
-  wait
+  shards_ok=1
+  for pid in $pids; do
+    wait "$pid" || shards_ok=0
+  done
   : > "$OUT/exhaustive.log"
   i=0
   while [ "$i" -lt "$SHARDS" ]; do
-    grep -E '^(--- |exit )|every sequence|disagree|node:  |model: |outside the rule' "$SCRATCH/exhaustive-$i.log" | sed "s/^ *[a-z_]*_test\.go:[0-9]*: //; s/^/shard $i: /" >> "$OUT/exhaustive.log"
+    grep -E '^(--- |exit )|every sequence|disagree|node:  |model: |outside the rule|running the model' "$SCRATCH/exhaustive-$i.log" | sed "s/^ *[a-z_]*_test\\.go:[0-9]*: //; s/^/shard $i: /" >> "$OUT/exhaustive.log"
+    # a shard counts only when it ended with exit 0 and every exhaustive test in it passed
+    tail -1 "$SCRATCH/exhaustive-$i.log" | grep -q '^exit 0$' || shards_ok=0
+    want="$(grep -c '^func TestExhaustive' "$HERE/exhaustive_test.go")"
+    have="$(grep -c -- '^--- PASS: TestExhaustive' "$SCRATCH/exhaustive-$i.log" || true)"
+    [ "$have" = "$want" ] || { echo "shard $i: $have of $want exhaustive tests passed" | tee -a "$OUT/exhaustive.log"; shards_ok=0; }
     i=$((i + 1))
   done
   python3 - "$OUT/exhaustive.log" "$DEPTH" <<'PY'
@@ -153,7 +172,7 @@ for line in open(sys.argv[1]):
 for name, (d, n, seqs, diff, ok) in tests.items():
     print("%-22s every sequence of up to %s of %s steps: %6d sequences, %d different  %s" % (name, d, n, seqs, diff, "PASS" if ok else "FAIL"))
 PY
-  if grep -q -E '^shard [0-9]+: (--- FAIL|exit [1-9])' "$OUT/exhaustive.log" || ! grep -q -- '--- PASS: TestExhaustive' "$OUT/exhaustive.log"; then echo "FAIL: exhaustive"; fail=1; fi
+  if [ "$shards_ok" = 0 ] || grep -q -E '^shard [0-9]+: (--- FAIL|exit [1-9])' "$OUT/exhaustive.log"; then echo "FAIL: exhaustive"; fail=1; fi
 fi
 
 echo

@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand"
-	"os"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -300,13 +298,7 @@ func compareLock(t *testing.T, stake bool, id string) {
 	for _, name := range names {
 		results = append(results, runLock(t, stake, name, scripted[name]))
 	}
-	seed, count := int64(1), 40
-	if v := os.Getenv("BEND_SEED"); v != "" {
-		seed, _ = strconv.ParseInt(v, 10, 64)
-	}
-	if v := os.Getenv("BEND_RANDOM"); v != "" {
-		count, _ = strconv.Atoi(v)
-	}
+	seed, count := envCount(t, "BEND_SEED", 1, 0), int(envCount(t, "BEND_RANDOM", 40, 0))
 	for i := 0; i < count; i++ {
 		results = append(results, runLock(t, stake, fmt.Sprintf("random-%d", seed+int64(i)), lockRandom(seed+int64(i), 14)))
 	}

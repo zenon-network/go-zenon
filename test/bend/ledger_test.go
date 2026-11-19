@@ -100,6 +100,22 @@ func natList(vs []uint64) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
+// envCount reads a whole number of at least min from the environment, or
+// def when the variable is not set. A value that is not such a number
+// fails the test: a mistyped count must not turn into a run that tries
+// nothing and passes.
+func envCount(t *testing.T, name string, def, min int64) int64 {
+	v := os.Getenv(name)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < min {
+		t.Fatalf("%s=%q: want a whole number, at least %d", name, v, min)
+	}
+	return n
+}
+
 // node drives one fresh in-process chain.
 type node struct {
 	t     *testing.T
@@ -410,6 +426,7 @@ func runBend(t *testing.T, name, program string, want int) []string {
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}
+	defer os.RemoveAll(dir)
 	models, err := filepath.Glob(filepath.Join(here, "*", "*.bend"))
 	if err != nil {
 		t.Fatal(err)
@@ -437,7 +454,11 @@ func runBend(t *testing.T, name, program string, want int) []string {
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--name", container, "--network", "none", "-v", dir+":/work:ro", image, "run.bend").CombinedOutput()
 	if err != nil {
-		_ = exec.Command("docker", "rm", "-f", container).Run()
+		// its own short limit: a daemon that stopped answering must not
+		// hold the failure message back
+		rmCtx, rmCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		_ = exec.CommandContext(rmCtx, "docker", "rm", "-f", container).Run()
+		rmCancel()
 		t.Fatalf("running the model: %v\n%s", err, out)
 	}
 	var lines []string
@@ -458,13 +479,7 @@ func TestLedgerModelMatchesNode(t *testing.T) {
 	for _, name := range names {
 		results = append(results, runScenario(t, name, scripted()[name]))
 	}
-	seed, count := int64(1), 40
-	if v := os.Getenv("BEND_SEED"); v != "" {
-		seed, _ = strconv.ParseInt(v, 10, 64)
-	}
-	if v := os.Getenv("BEND_RANDOM"); v != "" {
-		count, _ = strconv.Atoi(v)
-	}
+	seed, count := envCount(t, "BEND_SEED", 1, 0), int(envCount(t, "BEND_RANDOM", 40, 0))
 	for i := 0; i < count; i++ {
 		results = append(results, runScenario(t, fmt.Sprintf("random-%d", seed+int64(i)), random(seed+int64(i), 16)))
 	}
@@ -509,7 +524,17 @@ func TestLedgerModelMatchesNode(t *testing.T) {
 func TestReplacementSpendsOnce(t *testing.T) {
 	replaced, kept := 0, 0
 	for round := 0; round < 12; round++ {
+		replaced, kept = replacementRound(t, round, replaced, kept)
+	}
+	t.Logf("12 rounds: the pending block was replaced %d times and kept %d times", replaced, kept)
+}
+
+// replacementRound is one round on its own node, stopped when the round
+// ends however it ends.
+func replacementRound(t *testing.T, round, replaced, kept int) (int, int) {
+	{
 		n := newNode(t)
+		defer n.z.StopPanic()
 		before := n.balance(0)
 		h := n.height(0) + 1
 		first := n.block(op{kind: 'S', acc: 0, to: 1, amount: uint64(1000 + round), height: h})
@@ -559,9 +584,8 @@ func TestReplacementSpendsOnce(t *testing.T) {
 		if got, want := n.balance(winnerTo), toBefore+winner.Amount.Uint64(); got != want {
 			t.Errorf("round %d: receiver balance %d, want %d", round, got, want)
 		}
-		n.z.StopPanic()
 	}
-	t.Logf("12 rounds: the pending block was replaced %d times and kept %d times", replaced, kept)
+	return replaced, kept
 }
 
 // TestRollbackKeepsTotal is case BL-3. It checks on the node alone the
