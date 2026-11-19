@@ -122,6 +122,10 @@ fi
 echo
 echo "== 6. exhaustive"
 DEPTH="${DEPTH:-2}"; SHARDS="${SHARDS:-1}"
+# Whole numbers only, and at least one shard: with none, no sequence would
+# run and nothing would be there to fail.
+case "$DEPTH$SHARDS" in *[!0-9]*|"") echo "DEPTH and SHARDS must be whole numbers"; exit 1;; esac
+if [ "$DEPTH" != 0 ] && [ "$SHARDS" -lt 1 ]; then echo "SHARDS must be at least 1"; exit 1; fi
 if [ "$DEPTH" = 0 ]; then
   echo "skipped (DEPTH=0)" | tee "$OUT/exhaustive.log"
 else
