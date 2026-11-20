@@ -24,17 +24,20 @@ import (
 
 // MockZenon is the test harness a NewMockZenon node exposes. It embeds
 // the production Zenon interface and adds helpers for driving momentum
-// production, generating and cementing account blocks (including
-// InsertSendBlockRejected, which requires the pool to refuse a block),
-// calling embedded contracts and asserting on balances, cached fused
-// amounts and logs. Its accessors for the non-mocked subsystems
-// (Verifier, Protocol, Producer, Config) return nil.
+// production (including SetProducerOffline, which makes
+// InsertNewMomentum skip a pillar's slots), generating and cementing
+// account blocks (including InsertSendBlockRejected, which requires the
+// pool to refuse a block), calling embedded contracts and asserting on
+// balances, cached fused amounts and logs. Its accessors for the
+// non-mocked subsystems (Verifier, Protocol, Producer, Config) return
+// nil.
 type MockZenon interface {
 	zenon.Zenon
 	StopPanic()
 
 	InsertNewMomentum()
 	InsertMomentumsTo(targetHeight uint64)
+	SetProducerOffline(producer types.Address, offline bool)
 
 	CallContract(template *nom.AccountBlock) *common.Expecter
 	InsertSendBlock(template *nom.AccountBlock, expectedError error, expectedVmChanges string) *nom.AccountBlock
