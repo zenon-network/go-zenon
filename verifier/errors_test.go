@@ -53,6 +53,18 @@ func TestIsValidationError(t *testing.T) {
 	if !IsValidationError(errors.Wrap(ErrABSignatureInvalid, "context")) {
 		t.Fatal("a wrapped verdict must be recognised")
 	}
+	// The dynamic-plasma content verdicts (issue #299) must be recognised
+	// with their detail attached, exactly as momentum.go returns them.
+	for _, verdict := range []error{
+		errors.Wrapf(ErrMContractBlocksTooMany, "%d exceeds %d", 3, 2),
+		ErrMBlockPriceTooSmall,
+		errors.Wrapf(ErrMFusionPriceMismatch, "have %d, want %d", 1, 2),
+		errors.Wrapf(ErrMWorkPriceMismatch, "have %d, want %d", 1, 2),
+	} {
+		if !IsValidationError(verdict) {
+			t.Fatalf("dynamic-plasma verdict not recognised: %v", verdict)
+		}
+	}
 	if IsValidationError(InternalError(errors.New("store"))) {
 		t.Fatal("an internal failure is not a verdict")
 	}
