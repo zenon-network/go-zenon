@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
-	"runtime"
+	"net"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"testing"
@@ -43,39 +46,67 @@ func (s *teardownSubscribeService) Events(ctx context.Context) (*Subscription, e
 	return sub, nil
 }
 
-// teardownWaiters counts the goroutines that are inside handler.close
-// waiting for the call goroutines. A goroutine is only counted once it has
-// entered the wait, so everything handler.close does before the wait has
-// happened by then. It reads the goroutines' stacks, because the wait has
-// no other effect a test could observe: it fails by timing out in
-// awaitTeardownWait if handler.close is renamed or stops using the wait
-// group.
-func teardownWaiters() int {
-	buf := make([]byte, 1<<20)
-	for {
-		n := runtime.Stack(buf, true)
-		if n < len(buf) {
-			buf = buf[:n]
-			break
+// teardownLabel is the pprof label key under which serveLabelled tags the
+// goroutines of the connection it serves.
+const teardownLabel = "rpc-server-teardown-test"
+
+// serveLabelled is serveScripted for a test that has to find the
+// connection's own goroutines: it serves the connection from a goroutine
+// that carries a pprof label with the test's name, which the goroutines
+// started for the connection inherit. The serving goroutine is joined when
+// the test ends, so nothing of this connection outlives the test.
+func serveLabelled(t *testing.T, srv *Server) (*scriptedConn, net.Conn, *jsonCodec) {
+	t.Helper()
+	conn, client := newScriptedConn(t)
+	codec := NewCodec(conn).(*jsonCodec)
+	served := make(chan struct{})
+	go pprof.Do(context.Background(), pprof.Labels(teardownLabel, t.Name()), func(context.Context) {
+		defer close(served)
+		srv.ServeCodec(codec, 0)
+	})
+	// Registered before the test sets its gate, so it runs after the gate
+	// has been released and the teardown can finish.
+	t.Cleanup(func() {
+		codec.close()
+		select {
+		case <-served:
+		case <-time.After(teardownTestTimeout):
+			t.Error("the connection's serving goroutine did not finish")
 		}
-		buf = make([]byte, 2*len(buf))
-	}
-	count := 0
-	for _, stack := range strings.Split(string(buf), "\n\n") {
-		if strings.Contains(stack, "rpc/server.(*handler).close(") &&
-			strings.Contains(stack, "sync.(*WaitGroup).Wait(") {
-			count++
-		}
-	}
-	return count
+	})
+	return conn, client, codec
 }
 
-// awaitTeardownWait returns once more goroutines than before are waiting
-// in handler.close for the call goroutines.
-func awaitTeardownWait(t *testing.T, before int) {
+// teardownWaiting reports whether the dispatch goroutine of the connection
+// served by serveLabelled in this test is inside handler.close, waiting for
+// the call goroutines. It is only reported once it has entered the wait, so
+// everything handler.close does before the wait has happened by then. The
+// wait has no other effect a test could observe, which is why this reads
+// the goroutine profile; awaitTeardownWait times out if handler.close is
+// renamed or stops using the wait group.
+func teardownWaiting(t *testing.T) bool {
+	t.Helper()
+	var profile bytes.Buffer
+	if err := pprof.Lookup("goroutine").WriteTo(&profile, 1); err != nil {
+		t.Fatal(err)
+	}
+	label := fmt.Sprintf("%q:%q", teardownLabel, t.Name())
+	for _, stack := range strings.Split(profile.String(), "\n\n") {
+		if strings.Contains(stack, label) &&
+			strings.Contains(stack, "rpc/server.(*handler).close+") &&
+			strings.Contains(stack, "sync.(*WaitGroup).Wait+") {
+			return true
+		}
+	}
+	return false
+}
+
+// awaitTeardownWait returns once the teardown of this test's connection is
+// waiting in handler.close for the call goroutines.
+func awaitTeardownWait(t *testing.T) {
 	t.Helper()
 	deadline := time.Now().Add(teardownTestTimeout)
-	for teardownWaiters() <= before {
+	for !teardownWaiting(t) {
 		if time.Now().After(deadline) {
 			t.Fatal("the connection's teardown never reached the wait for the call goroutines")
 		}
@@ -107,7 +138,7 @@ func TestConnectionLossEndsSubscriptionsBeforeBlockedCallWriteReturns(t *testing
 				t.Fatal(err)
 			}
 			t.Cleanup(srv.Stop)
-			conn, client, codec := serveScripted(t, srv)
+			conn, client, codec := serveLabelled(t, srv)
 			// Decided by write number, before the request is sent, so the
 			// gate cannot race the write it is meant to hold.
 			reached, release := conn.gateWritesAfter(tc.replies)
@@ -129,7 +160,6 @@ func TestConnectionLossEndsSubscriptionsBeforeBlockedCallWriteReturns(t *testing
 				t.Fatal("the call's write never reached the gate")
 			}
 			sub := <-svc.created
-			waiting := teardownWaiters()
 
 			// The server's read loop sees the peer go and starts teardown.
 			client.Close()
@@ -147,7 +177,7 @@ func TestConnectionLossEndsSubscriptionsBeforeBlockedCallWriteReturns(t *testing
 			// write. Whatever it did before the wait has happened, so a
 			// teardown that closes the connection before the call has
 			// returned is seen here in every run.
-			awaitTeardownWait(t, waiting)
+			awaitTeardownWait(t)
 			select {
 			case <-codec.closed():
 				t.Fatal("the connection was closed while a call was still writing")

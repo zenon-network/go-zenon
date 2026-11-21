@@ -306,6 +306,12 @@ func calledFromDelivery() bool {
 // event that overtakes the activation of the notifier is written by the
 // subscribe call's goroutine and passes the gate. The client end must be
 // drained meanwhile, see drainClient.
+//
+// The broadcasts are made here, not queued for the worker with
+// InsertMomentum, so none is pending when this returns. A broadcast that
+// ran after the client had gone would find the subscription closed and
+// uninstall it, which is the worker's lazy path to the same release the
+// caller wants to see the watcher make.
 func gateDeliveryWrite(t *testing.T, server *Server, conn *signaledGateConn) {
 	t.Helper()
 	if !conn.deliveryOnly {
@@ -314,7 +320,7 @@ func gateDeliveryWrite(t *testing.T, server *Server, conn *signaledGateConn) {
 	conn.blockWrites()
 	deadline := time.After(5 * time.Second)
 	for height := uint64(1); ; height++ {
-		server.InsertMomentum(momentumAt(height))
+		server.broadcastMomentums(&Momentum{Hash: momentumAt(height).Momentum.Hash, Height: height})
 		select {
 		case <-conn.entered:
 			return
