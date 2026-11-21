@@ -143,17 +143,25 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 		heighter,
 		manager.chainman.InsertChain,
 		manager.removePeer,
-		manager.rejectPeer)
+		// No import-failure hook: see rejectPeer.
+		nil)
 
 	return manager
 }
 
-// rejectPeer is the downloader's and fetcher's import-failure hook. When
-// the bridge reports a SideChainRejected, the peer served a branch this
-// node refuses on a consensus check; it is quarantined, so it cannot
-// restart the download-and-reject cycle on the next sync interval or by
+// rejectPeer is the downloader's import-failure hook. When the bridge
+// reports a SideChainRejected, the peer served a branch this node
+// refuses on a consensus check; it is quarantined, so it cannot restart
+// the download-and-reject cycle on the next sync interval or by
 // reconnecting, and removed. Any other failure is left to the caller's
 // existing handling.
+//
+// The fetcher is built without this hook. The peer that delivers a
+// gossiped momentum is usually an honest relayer, not its author: nodes
+// of earlier releases propagate a momentum before importing it, so a
+// verdict on a relayed momentum would cut honest links. The downloader
+// fetches from the serving peer's own chain, so its verdicts name the
+// peer at fault.
 //
 // The import that reports the verdict may outlive the connection that
 // served the bytes: unregistering a peer does not join its import. The
@@ -492,6 +500,11 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		if err := budget.admitLookups(2); err != nil {
 			return err
 		}
+		// A request for no hashes is answered empty before any lookup; it
+		// also keeps Number+Amount-1 below from wrapping for Number 0.
+		if request.Amount == 0 {
+			return p.SendBlockHashes(nil)
+		}
 		// Calculate the last block that should be retrieved, and short circuit if unavailable
 		last, err := pm.chainman.GetBlockByNumber(request.Number + request.Amount - 1)
 		if err != nil {
@@ -502,10 +515,19 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 			if err := budget.admitLookups(1); err != nil {
 				return err
 			}
+			// The requested range runs past the frontier; clamp to the frontier and
+			// re-bound the count. Compare against the frontier before the subtraction
+			// so Height - Number cannot underflow, and re-cap to MaxHashFetch because
+			// the frontier can be far beyond the originally capped request.
 			last = pm.chainman.CurrentBlock()
+			if last.Height < request.Number {
+				return p.SendBlockHashes(nil)
+			}
 			request.Amount = last.Height - request.Number + 1
-		}
-		if last.Height < request.Number {
+			if request.Amount > uint64(downloader.MaxHashFetch) {
+				request.Amount = uint64(downloader.MaxHashFetch)
+			}
+		} else if last.Height < request.Number {
 			return p.SendBlockHashes(nil)
 		}
 		// One unit per hash the walk visits, admitted before it runs.

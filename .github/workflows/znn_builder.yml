@@ -1,13 +1,14 @@
 name: Build and release znnd and libznn
 
 on:
+  # A push to a branch does not start this workflow, so merging a pull request
+  # builds and publishes nothing. A release is made on purpose: by pushing a
+  # "v*" tag, or by running the workflow by hand from the Actions tab. A run by
+  # hand on dev or testnet publishes that channel's pre-release; on any other
+  # branch it builds without publishing (.github/scripts/determine-version.sh).
   push:
-    branches:
-      - dev
-      - testnet
     tags:
       - "v*"
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 permissions:

@@ -1,0 +1,28 @@
+# The Bend checker plus Lean, for `bend --verdict`: the second check, by
+# Bend's small kernel whose soundness is proven in Lean (bend2/bendtt.lean).
+# Built on the image of ./Dockerfile. Lean is installed with elan, pinned to
+# the version Bend 2.0.40 names, and the kernel is built once here so that
+# run.sh can use it without a network.
+ARG BASE=go-zenon-bend:2.0.40
+FROM ${BASE}
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+ && rm -rf /var/lib/apt/lists/*
+USER bend
+ENV HOME=/home/bend
+# The installer script is taken at the commit of elan v4.1.2 and checked
+# against its SHA-256. It then downloads the current elan binary and, through
+# it, the Lean toolchain named below; those two downloads are pinned by name
+# and version only.
+ARG ELAN_COMMIT=58e8d545e33641f66dbcbd22c4283109e71757be
+ARG ELAN_INIT_SHA256=4bacca9502cb89736fe63d2685abc2947cfbf34dc87673504f1bb4c43eda9264
+ARG LEAN_TOOLCHAIN=leanprover/lean4:v4.34.0
+RUN curl --proto '=https' --tlsv1.2 -fsSL \
+      "https://raw.githubusercontent.com/leanprover/elan/${ELAN_COMMIT}/elan-init.sh" -o /tmp/elan-init.sh \
+ && echo "${ELAN_INIT_SHA256}  /tmp/elan-init.sh" | sha256sum -c - \
+ && sh /tmp/elan-init.sh -y --default-toolchain "${LEAN_TOOLCHAIN}" && rm /tmp/elan-init.sh
+ENV PATH=/home/bend/.elan/bin:/opt/bend/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN mkdir -p /tmp/warm && printf 'import Base\n\nlaw one:\n  {1n == 1n : Nat}\n\ndef one():\n  {==}\n' > /tmp/warm/w.bend \
+ && cd /tmp/warm && bend w.bend --verdict && rm -rf /tmp/warm
+WORKDIR /work
+ENTRYPOINT ["bend"]

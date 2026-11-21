@@ -116,6 +116,21 @@ func (s *Supervisor) newMomentumContext(momentum *nom.Momentum) vm_context.Momen
 	)
 }
 
+// ApplyBlockInMomentum applies a block that is part of the momentum with the
+// given height being inserted. Rules introduced at a height are applied
+// according to that momentum's height rather than unconditionally, so that
+// every node judges the momentum the same way on first insertion, reorg and
+// resync. Blocks admitted to the pool or generated locally go through
+// ApplyBlock and get every rule.
+func (s *Supervisor) ApplyBlockInMomentum(block *nom.AccountBlock, momentumHeight uint64) (*nom.AccountBlockTransaction, error) {
+	if block.BlockType == nom.BlockTypeContractSend {
+		return nil, errors.Errorf("can't apply BlockTypeContractSend")
+	}
+	return s.applyBlockWith(block, nil, func(transaction *nom.AccountBlockTransaction) error {
+		return s.verifier.AccountBlockTransactionInMomentum(transaction, momentumHeight)
+	})
+}
+
 // ApplyBlock verifies and executes a fully-formed account block
 // received from outside (RPC publish, chain bridge) and returns the
 // transaction pairing it with the state patch it produces. The VM
@@ -317,7 +332,14 @@ func (s *Supervisor) GenerateGenesisMomentum(template *nom.Momentum, pool chain.
 	return transaction, nil
 }
 
-func (s *Supervisor) applyBlock(block *nom.AccountBlock, signFunc SignFunc) (transaction *nom.AccountBlockTransaction, internalErr error) {
+func (s *Supervisor) applyBlock(block *nom.AccountBlock, signFunc SignFunc) (*nom.AccountBlockTransaction, error) {
+	return s.applyBlockWith(block, signFunc, s.verifier.AccountBlockTransaction)
+}
+
+// applyBlockWith is applyBlock with the transaction verification the caller
+// chooses: the unconditional one for pool admission and local generation,
+// the momentum-height one for momentum insertion.
+func (s *Supervisor) applyBlockWith(block *nom.AccountBlock, signFunc SignFunc, verify func(*nom.AccountBlockTransaction) error) (transaction *nom.AccountBlockTransaction, internalErr error) {
 	defer func() {
 		if err := recover(); err != nil {
 			l := s.log.New("block", block.Header())
@@ -338,7 +360,7 @@ func (s *Supervisor) applyBlock(block *nom.AccountBlock, signFunc SignFunc) (tra
 		return nil, err
 	}
 
-	transaction, err = s.packBlock(context, block, signFunc)
+	transaction, err = s.packBlockWith(context, block, signFunc, verify)
 	if err != nil {
 		return nil, err
 	}
@@ -357,6 +379,9 @@ func (s *Supervisor) setAll(template *nom.AccountBlock) error {
 	return nil
 }
 func (s *Supervisor) packBlock(context vm_context.AccountVmContext, block *nom.AccountBlock, signFunc SignFunc) (*nom.AccountBlockTransaction, error) {
+	return s.packBlockWith(context, block, signFunc, s.verifier.AccountBlockTransaction)
+}
+func (s *Supervisor) packBlockWith(context vm_context.AccountVmContext, block *nom.AccountBlock, signFunc SignFunc, verify func(*nom.AccountBlockTransaction) error) (*nom.AccountBlockTransaction, error) {
 	changes, err := context.Changes()
 	if err != nil {
 		return nil, err
@@ -377,7 +402,7 @@ func (s *Supervisor) packBlock(context vm_context.AccountVmContext, block *nom.A
 		Block:   block,
 		Changes: changes,
 	}
-	if err := s.verifier.AccountBlockTransaction(transaction); err != nil {
+	if err := verify(transaction); err != nil {
 		return nil, err
 	}
 

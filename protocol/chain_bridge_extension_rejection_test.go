@@ -13,8 +13,8 @@ import (
 const servingPeer = "serving-peer"
 
 // expectQuarantinedBy reports err through the import-failure hook the
-// downloader and the fetcher call, on a fresh protocol manager, and checks
-// whether the serving peer ends up quarantined.
+// downloader calls, on a fresh protocol manager, and checks whether the
+// serving peer ends up quarantined.
 func expectQuarantinedBy(t *testing.T, bridge protocol.ChainBridge, err error, quarantined bool) {
 	t.Helper()
 	pm := protocol.NewProtocolManager(1, 1, bridge)

@@ -461,7 +461,10 @@ func decodeAuthMsg(prv *ecdsa.PrivateKey, token []byte, auth []byte) (*encHandsh
 	if err != nil {
 		return nil, err
 	}
-	h.remoteRandomPub, _ = importPublicKey(remoteRandomPub)
+	h.remoteRandomPub, err = importPublicKey(remoteRandomPub)
+	if err != nil {
+		return nil, err
+	}
 	return h, nil
 }
 
@@ -493,8 +496,15 @@ func importPublicKey(pubKey []byte) (*ecies.PublicKey, error) {
 	default:
 		return nil, fmt.Errorf("invalid public key length %v (expect 64/65)", len(pubKey))
 	}
-	// TODO: fewer pointless conversions
-	return ecies.ImportECDSAPublic(ToECDSAPub(pubKey65)), nil
+	// elliptic.Unmarshal reports an input that does not decode to a point on
+	// the curve by returning no coordinates; ToECDSAPub passes that through.
+	// Reject it here so a handshake peer cannot hand us a key that later
+	// fails inside the curve arithmetic. Mirrors the check in NodeID.Pubkey.
+	pub := ToECDSAPub(pubKey65)
+	if pub == nil || pub.X == nil || pub.Y == nil {
+		return nil, fmt.Errorf("invalid public key: not a point on the curve")
+	}
+	return ecies.ImportECDSAPublic(pub), nil
 }
 
 func exportPubkey(pub *ecies.PublicKey) []byte {
