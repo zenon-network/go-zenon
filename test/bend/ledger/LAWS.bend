@@ -249,10 +249,113 @@ law debit_changes_one_balance:
   for +amt: Nat
   {balance_after(L.Bal.debit(a, bs, amt), x, Bool.pick(Nat, Nat.is_eq(x, a), Nat.sub(L.Bal.get(x, bs), amt), L.Bal.get(x, bs))) == Bool.pick(Nat, Nat.is_eq(x, a), Nat.sub(L.Bal.get(x, bs), amt), L.Bal.get(x, bs)) : Nat}
 
-# LAW 13. A momentum moves no balance.
-law momentum_moves_no_balance:
+# The sends as a momentum must leave them: each one confirmed, and its
+# number, addressee, amount, marks and place as they were. Written here on
+# its own, not taken from the model.
+def all_confirmed(+ss: +List<L.Send>) -> +List<L.Send>:
+  match ss:
+    case Nil{}:
+      Nil{}
+    case Con{L.Send{id, to, amount, conf, got}, t}:
+      Con{L.Send{id, to, amount, True{}, got}, all_confirmed(t)}
+
+# LAW 13. A momentum confirms and does nothing else. Balances, heights and
+# the next number are as they were, and so is every send apart from being
+# confirmed: no send changes its addressee or its amount, gains or loses a
+# mark, moves, appears or disappears.
+law momentum_only_confirms:
   for +bals: +List<Nat>
   for +heights: +List<Nat>
   for +sends: +List<L.Send>
   for +next: Nat
-  {L.step(L.State{bals, heights, sends, next}, True{}, L.Tick{}) == L.Accepted{L.State{bals, heights, L.Sends.confirm(sends), next}} : L.Next}
+  {L.step(L.State{bals, heights, sends, next}, True{}, L.Tick{}) == L.Accepted{L.State{bals, heights, all_confirmed(sends), next}} : L.Next}
+
+# Heights and numbers
+# -------------------
+
+def heights_after(+n: L.Next, +other: +List<Nat>) -> +List<Nat>:
+  match n:
+    case L.Refused{}:
+      other
+    case L.Accepted{L.State{bals, heights, sends, next}}:
+      heights
+
+def next_after(+n: L.Next, +other: Nat) -> Nat:
+  match n:
+    case L.Refused{}:
+      other
+    case L.Accepted{L.State{bals, heights, sends, next}}:
+      next
+
+# LAWS 14 and 15. A block is accepted only at the next height of its
+# account's chain: the height is one more than the chain's, or the block is
+# refused.
+law send_only_at_the_next_height:
+  for +bals: +List<Nat>
+  for +heights: +List<Nat>
+  for +sends: +List<L.Send>
+  for +next: Nat
+  for +from: Nat
+  for +height: Nat
+  for +to: Nat
+  for +amount: Nat
+  {Bool.or(Nat.is_eq(height, 1n+L.Bal.get(from, heights)), refused(L.step(L.State{bals, heights, sends, next}, True{}, L.Snd{from, height, to, amount}))) == True{} : Bool}
+
+law receive_only_at_the_next_height:
+  for +bals: +List<Nat>
+  for +heights: +List<Nat>
+  for +sends: +List<L.Send>
+  for +next: Nat
+  for +acc: Nat
+  for +height: Nat
+  for +id: Nat
+  {Bool.or(Nat.is_eq(height, 1n+L.Bal.get(acc, heights)), refused(L.step(L.State{bals, heights, sends, next}, True{}, L.Rcv{acc, height, id}))) == True{} : Bool}
+
+# LAWS 16 and 17. An accepted block raises its own account's height by one
+# and no other.
+law send_raises_its_height:
+  for +bals: +List<Nat>
+  for +heights: +List<Nat>
+  for +sends: +List<L.Send>
+  for +next: Nat
+  for +from: Nat
+  for +height: Nat
+  for +to: Nat
+  for +amount: Nat
+  {heights_after(L.step(L.State{bals, heights, sends, next}, True{}, L.Snd{from, height, to, amount}), L.Bal.credit(from, heights, 1n)) == L.Bal.credit(from, heights, 1n) : +List<Nat>}
+
+law receive_raises_its_height:
+  for +bals: +List<Nat>
+  for +heights: +List<Nat>
+  for +sends: +List<L.Send>
+  for +next: Nat
+  for +acc: Nat
+  for +height: Nat
+  for +id: Nat
+  {heights_after(L.step(L.State{bals, heights, sends, next}, True{}, L.Rcv{acc, height, id}), L.Bal.credit(acc, heights, 1n)) == L.Bal.credit(acc, heights, 1n) : +List<Nat>}
+
+# LAWS 18 and 19. An accepted send takes the next number and moves the
+# count on by one; a receive leaves the count alone. (With LAW 10, two sends
+# accepted one after the other get different numbers. That every send in a
+# ledger reached from a start has a number of its own needs an argument over
+# whole histories, which is not made here.)
+law send_takes_the_next_number:
+  for +bals: +List<Nat>
+  for +heights: +List<Nat>
+  for +sends: +List<L.Send>
+  for +next: Nat
+  for +from: Nat
+  for +height: Nat
+  for +to: Nat
+  for +amount: Nat
+  {next_after(L.step(L.State{bals, heights, sends, next}, True{}, L.Snd{from, height, to, amount}), 1n+next) == 1n+next : Nat}
+
+law receive_keeps_the_count:
+  for +bals: +List<Nat>
+  for +heights: +List<Nat>
+  for +sends: +List<L.Send>
+  for +next: Nat
+  for +acc: Nat
+  for +height: Nat
+  for +id: Nat
+  {next_after(L.step(L.State{bals, heights, sends, next}, True{}, L.Rcv{acc, height, id}), next) == next : Nat}

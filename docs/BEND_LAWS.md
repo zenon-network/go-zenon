@@ -112,9 +112,14 @@ The checker stops at the first proof that fails, so the report names one place, 
 | `receive_marks_only_that_send` | whenever a receive is accepted, the sends afterwards are the sends before with the receiver's mark on the one asked for; every other send is as it was |
 | `send_debits_the_sender`, `send_is_recorded_as_sent` | whenever a send is accepted, the balances afterwards are the balances before with the amount taken from the sender, and one send is added, addressed to the account and with the amount the block names |
 | `credit_changes_one_balance`, `debit_changes_one_balance` | a credit or a debit to one account leaves the balance of every other account as it was |
-| `momentum_moves_no_balance` | a momentum confirms the sends and changes nothing else |
+| `momentum_only_confirms` | a momentum leaves balances, heights and the count of sends as they were, and every send as it was apart from being confirmed: none changes its addressee or amount, gains or loses a mark, moves, appears or disappears. What "confirmed and otherwise unchanged" means is written out in `LAWS.bend`, not taken from the model |
+| `send_only_at_the_next_height`, `receive_only_at_the_next_height` | a block is accepted only at the next height of its account's chain |
+| `send_raises_its_height`, `receive_raises_its_height` | an accepted block raises its own account's height by one and no other |
+| `send_takes_the_next_number`, `receive_keeps_the_count` | an accepted send takes the next number and moves the count on by one; a receive leaves the count alone |
 
 The first law, `no_value_created`, counts one total. A ledger that paid a send to the wrong account would keep that total: that is theft, not creation, and that law does not see it. The laws from `receive_only_by_the_addressee` on are there for that: they say where every unit goes.
+
+One thing these laws do not reach: that every send in a ledger has a number of its own. Two sends accepted one after the other get different numbers, but that a ledger reached from a start never holds two sends with one number needs an argument over whole histories, which is not made. The laws about a receive speak of "the first send with that number", as the model does.
 
 | Case | What step 4 does | Places covered |
 |---|---|---|

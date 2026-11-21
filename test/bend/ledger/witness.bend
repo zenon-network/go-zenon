@@ -34,6 +34,49 @@ def confirmed() -> L.State:
 def received() -> L.State:
   L.run([L.Snd{0n, 1n, 1n, 5n}, L.Tick{}, L.Rcv{1n, 1n, 0n}], s0(), True{})
 
+# Readings, written here again because this file cannot read LAWS.bend.
+def balance_after(+m: Maybe<&2, +List<Nat>>, +x: Nat, +other: Nat) -> Nat:
+  match m:
+    case None{}:
+      other
+    case Some{bs}:
+      L.Bal.get(x, bs)
+
+def debited(+m: Maybe<&2, +List<Nat>>, +other: +List<Nat>) -> +List<Nat>:
+  match m:
+    case None{}:
+      other
+    case Some{bs}:
+      bs
+
+def bals_after(+n: L.Next, +other: +List<Nat>) -> +List<Nat>:
+  match n:
+    case L.Refused{}:
+      other
+    case L.Accepted{L.State{bals, heights, sends, next}}:
+      bals
+
+def same(+xs: +List<Nat>, +ys: +List<Nat>) -> Bool:
+  match xs ys:
+    case Nil{} Nil{}:
+      True{}
+    case Nil{} Con{b, u}:
+      False{}
+    case Con{a, t} Nil{}:
+      False{}
+    case Con{a, t} Con{b, u}:
+      Bool.and(Nat.is_eq(a, b), same(t, u))
+
+def next_of(+s: L.State) -> Nat:
+  match s:
+    case L.State{bals, heights, sends, next}:
+      next
+
+def height_of(+x: Nat, +s: L.State) -> Nat:
+  match s:
+    case L.State{bals, heights, sends, next}:
+      L.Bal.get(x, heights)
+
 def bal(+x: Nat, +s: L.State) -> Nat:
   match s:
     case L.State{bals, heights, sends, next}:
@@ -43,9 +86,9 @@ def bal(+x: Nat, +s: L.State) -> Nat:
 def no_balance_check() -> Bool:
   refused(L.step(s0(), True{}, L.Snd{0n, 1n, 1n, 11n}))
 
-# LAW 9: after sending 5 the sender holds 5.
+# LAW 12: after a debit of 5 from account 0, which held 10, it holds 5.
 def no_debit() -> Bool:
-  Nat.is_eq(bal(0n, sent()), 5n)
+  Nat.is_eq(balance_after(L.Bal.debit(0n, [10n, 0n, 0n], 5n), 0n, 5n), 5n)
 
 # LAW 3: a second receive of the same send is refused.
 def no_received_check() -> Bool:
@@ -65,9 +108,13 @@ def double_credit() -> Bool:
 def credit_wrong_account() -> Bool:
   Nat.is_eq(bal(1n, received()), 5n)
 
-# LAW 9: the 5 are taken from the sender.
+# LAW 9, as stated: both accounts hold 10 and account 0 sends 5 to account
+# 1. The balances afterwards are the debit of 5 from account 0.
+def both_rich() -> +List<Nat>:
+  [10n, 10n, 0n]
+
 def debit_wrong_account() -> Bool:
-  Nat.is_eq(bal(0n, sent()), 5n)
+  same(bals_after(L.step(L.State{both_rich(), [0n, 0n, 0n], [], 0n}, True{}, L.Snd{0n, 1n, 1n, 5n}), debited(L.Bal.debit(0n, both_rich(), 5n), both_rich())), debited(L.Bal.debit(0n, both_rich(), 5n), both_rich()))
 
 # LAW 10: the send is addressed to account 1, which can receive it.
 def send_to_wrong_account() -> Bool:
@@ -80,12 +127,29 @@ def receive_unconfirmed() -> Bool:
 # LAW 8: receiving send 1 leaves send 0 unconfirmed, so it cannot be
 # received. (A ledger with an older send unconfirmed under a newer confirmed
 # one is not one the model reaches from a start; the law covers it anyway.)
-def receive_marks_another() -> Bool:
+def receive_confirms_others() -> Bool:
   refused(L.step(L.apply(L.State{[10n, 0n, 0n], [0n, 0n, 0n], [L.Send{1n, 1n, 5n, True{}, Nil{}}, L.Send{0n, 2n, 3n, False{}, Nil{}}], 2n}, True{}, L.Rcv{1n, 1n, 1n}), True{}, L.Rcv{2n, 1n, 0n}))
 
 # LAW 10: the send is recorded with its amount, so its receiver gets 5.
 def send_not_recorded() -> Bool:
   Nat.is_eq(bal(1n, received()), 5n)
+
+# LAW 13: after the momentum the send is still addressed to account 1,
+# which can receive it.
+def momentum_redirects() -> Bool:
+  Bool.not(refused(L.step(confirmed(), True{}, L.Rcv{1n, 1n, 0n})))
+
+# LAW 18: after one send the count of sends is 1.
+def send_keeps_number() -> Bool:
+  Nat.is_eq(next_of(sent()), 1n)
+
+# LAW 14: a send at height 5 on an empty chain is refused.
+def no_height_check() -> Bool:
+  refused(L.step(s0(), True{}, L.Snd{0n, 5n, 1n, 1n}))
+
+# LAW 16: after one send the sender's chain is at height 1.
+def height_not_raised() -> Bool:
+  Nat.is_eq(height_of(0n, sent()), 1n)
 
 def main() -> IO(Unit):
   do IO<Unit>:
@@ -99,5 +163,9 @@ def main() -> IO(Unit):
     IO.print("debit-wrong-account " ++ Bool.show(debit_wrong_account()))
     IO.print("send-to-wrong-account " ++ Bool.show(send_to_wrong_account()))
     IO.print("receive-unconfirmed " ++ Bool.show(receive_unconfirmed()))
-    IO.print("receive-marks-another " ++ Bool.show(receive_marks_another()))
+    IO.print("receive-confirms-others " ++ Bool.show(receive_confirms_others()))
+    IO.print("momentum-redirects " ++ Bool.show(momentum_redirects()))
+    IO.print("send-keeps-number " ++ Bool.show(send_keeps_number()))
+    IO.print("no-height-check " ++ Bool.show(no_height_check()))
+    IO.print("height-not-raised " ++ Bool.show(height_not_raised()))
     IO.print("send-not-recorded " ++ Bool.show(send_not_recorded()))

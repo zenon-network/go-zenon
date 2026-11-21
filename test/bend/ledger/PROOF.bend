@@ -748,5 +748,110 @@ def Laws.debit_changes_one_balance(x, a, bs, amt):
     case 1n+xp 1n+ap Con{h, t}:
       debitS_tail(L.Bal.debit(ap, t, amt), h, xp, Bool.pick(Nat, Nat.is_eq(xp, ap), Nat.sub(L.Bal.get(xp, t), amt), L.Bal.get(xp, t)), Laws.debit_changes_one_balance(xp, ap, t, amt))
 
-def Laws.momentum_moves_no_balance(bals, heights, sends, next):
+# The model's confirmation is the one written in LAWS.bend.
+law confirm_is_all_confirmed:
+  for +ss: +List<L.Send>
+  {L.Sends.confirm(ss) == Laws.all_confirmed(ss) : +List<L.Send>}
+
+def confirm_is_all_confirmed(ss):
+  match ss:
+    case Nil{}:
+      {==}
+    case Con{L.Send{id, to, amount, conf, got}, t}:
+      %confirm_is_all_confirmed(t) : {Con{L.Send{id, to, amount, True{}, got}, L.Sends.confirm(t)} == Con{L.Send{id, to, amount, True{}, got}, _} : +List<L.Send>}
+      {==}
+
+def Laws.momentum_only_confirms(bals, heights, sends, next):
+  %confirm_is_all_confirmed(sends) : {L.Accepted{L.State{bals, heights, L.Sends.confirm(sends), next}} == L.Accepted{L.State{bals, heights, _, next}} : L.Next}
   {==}
+
+# LAWS 14 to 19: heights and numbers
+# ----------------------------------
+
+def snd_fits(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Bool.or(fits, Laws.refused(L.Step.snd(fits, bals, heights, sends, next, from, to, amount))) == True{} : Bool}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+def Laws.send_only_at_the_next_height(bals, heights, sends, next, from, height, to, amount):
+  snd_fits(Nat.is_eq(height, 1n+L.Bal.get(from, heights)), bals, heights, sends, next, from, to, amount)
+
+def rcv_fits(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +acc: Nat, +id: Nat) -> {Bool.or(fits, Laws.refused(L.Step.rcv(fits, True{}, bals, heights, sends, next, acc, id))) == True{} : Bool}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+def Laws.receive_only_at_the_next_height(bals, heights, sends, next, acc, height, id):
+  rcv_fits(Nat.is_eq(height, 1n+L.Bal.get(acc, heights)), bals, heights, sends, next, acc, id)
+
+def snd_h_pay(+m: Maybe<&2, +List<Nat>>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Laws.heights_after(L.Step.snd.pay(m, heights, sends, next, from, to, amount), L.Bal.credit(from, heights, 1n)) == L.Bal.credit(from, heights, 1n) : +List<Nat>}:
+  match m:
+    case None{}:
+      {==}
+    case Some{bs}:
+      {==}
+
+def snd_h(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Laws.heights_after(L.Step.snd(fits, bals, heights, sends, next, from, to, amount), L.Bal.credit(from, heights, 1n)) == L.Bal.credit(from, heights, 1n) : +List<Nat>}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      snd_h_pay(L.Bal.debit(from, bals, amount), heights, sends, next, from, to, amount)
+
+def Laws.send_raises_its_height(bals, heights, sends, next, from, height, to, amount):
+  snd_h(Nat.is_eq(height, 1n+L.Bal.get(from, heights)), bals, heights, sends, next, from, to, amount)
+
+def rcv_h_take(+g: L.Got, +bals: +List<Nat>, +heights: +List<Nat>, +next: Nat, +acc: Nat) -> {Laws.heights_after(L.Step.rcv.take(g, bals, heights, next, acc), L.Bal.credit(acc, heights, 1n)) == L.Bal.credit(acc, heights, 1n) : +List<Nat>}:
+  match g:
+    case L.Miss{}:
+      {==}
+    case L.Hit{amount, sends}:
+      {==}
+
+def rcv_h(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +acc: Nat, +id: Nat) -> {Laws.heights_after(L.Step.rcv(fits, True{}, bals, heights, sends, next, acc, id), L.Bal.credit(acc, heights, 1n)) == L.Bal.credit(acc, heights, 1n) : +List<Nat>}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      rcv_h_take(L.Sends.recv(sends, True{}, acc, id), bals, heights, next, acc)
+
+def Laws.receive_raises_its_height(bals, heights, sends, next, acc, height, id):
+  rcv_h(Nat.is_eq(height, 1n+L.Bal.get(acc, heights)), bals, heights, sends, next, acc, id)
+
+def snd_n_pay(+m: Maybe<&2, +List<Nat>>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Laws.next_after(L.Step.snd.pay(m, heights, sends, next, from, to, amount), 1n+next) == 1n+next : Nat}:
+  match m:
+    case None{}:
+      {==}
+    case Some{bs}:
+      {==}
+
+def snd_n(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Laws.next_after(L.Step.snd(fits, bals, heights, sends, next, from, to, amount), 1n+next) == 1n+next : Nat}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      snd_n_pay(L.Bal.debit(from, bals, amount), heights, sends, next, from, to, amount)
+
+def Laws.send_takes_the_next_number(bals, heights, sends, next, from, height, to, amount):
+  snd_n(Nat.is_eq(height, 1n+L.Bal.get(from, heights)), bals, heights, sends, next, from, to, amount)
+
+def rcv_n_take(+g: L.Got, +bals: +List<Nat>, +heights: +List<Nat>, +next: Nat, +acc: Nat) -> {Laws.next_after(L.Step.rcv.take(g, bals, heights, next, acc), next) == next : Nat}:
+  match g:
+    case L.Miss{}:
+      {==}
+    case L.Hit{amount, sends}:
+      {==}
+
+def rcv_n(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +acc: Nat, +id: Nat) -> {Laws.next_after(L.Step.rcv(fits, True{}, bals, heights, sends, next, acc, id), next) == next : Nat}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      rcv_n_take(L.Sends.recv(sends, True{}, acc, id), bals, heights, next, acc)
+
+def Laws.receive_keeps_the_count(bals, heights, sends, next, acc, height, id):
+  rcv_n(Nat.is_eq(height, 1n+L.Bal.get(acc, heights)), bals, heights, sends, next, acc, id)

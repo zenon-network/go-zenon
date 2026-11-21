@@ -95,9 +95,15 @@ for rule in $RULES; do
   witnesses=0
   if [ -f "$HERE/$rule/witness.bend" ]; then
     witnesses=1
-    clean="$(bend "$IMAGE" "$HERE" "$rule/witness.bend" || true)"
+    # On the model the witnesses must run to the end, and each mutant must
+    # have exactly one answer there, which is True.
+    if clean="$(bend "$IMAGE" "$HERE" "$rule/witness.bend")"; then clean_ok=1; else clean_ok=0; fi
+    [ "$clean_ok" = 1 ] || { echo "MISSED   $rule: witness.bend did not run on the model" | tee -a "$OUT/mutants.log"; { echo "=== $rule: witness.bend on the model"; echo "$clean"; echo; } >> "$OUT/mutants-detail.log"; }
     while IFS="$(printf '\t')" read -r name what; do
-      echo "$clean" | grep -q "^$name True\$" || echo "MISSED   $rule/$name: its witness is not True on the model (or there is none)" | tee -a "$OUT/mutants.log"
+      answers="$(echo "$clean" | grep -c "^$name " || true)"
+      if [ "$answers" != 1 ] || ! echo "$clean" | grep -q "^$name True\$"; then
+        echo "MISSED   $rule/$name: on the model its witness gives $answers answers, want one and True" | tee -a "$OUT/mutants.log"
+      fi
     done < "$list"
   fi
   while IFS="$(printf '\t')" read -r name what; do
@@ -108,18 +114,27 @@ for rule in $RULES; do
     python3 "$HERE/mutants.py" --apply "$rule" "$name" "$dir"
     res="$(bend "$IMAGE" "$dir" "$rule/PROOF.bend" --check-only || true)"
     where="$(echo "$res" | sed -n 's/^Location: //p' | head -1)"
-    wit=""
-    [ "$witnesses" = 1 ] && wit="$(bend "$IMAGE" "$dir" "$rule/witness.bend" | grep "^$name " || true)"
+    wit=""; wout=""
+    if [ "$witnesses" = 1 ]; then
+      if wout="$(bend "$IMAGE" "$dir" "$rule/witness.bend")"; then
+        # exactly one answer for this mutant, or none counts
+        [ "$(echo "$wout" | grep -c "^$name " || true)" = 1 ] && wit="$(echo "$wout" | grep "^$name ")"
+      else
+        wit="did not run"
+      fi
+    fi
     if ! echo "$res" | grep -q '^SOME PROOFS FAIL'; then
       echo "MISSED   $rule/$name: $what" | tee -a "$OUT/mutants.log"
     elif [ "$witnesses" = 0 ]; then
       echo "caught   $rule/$name: $what; first proof to break: $where (no witness for this rule yet)" | tee -a "$OUT/mutants.log"
     elif [ "$wit" = "$name False" ]; then
       echo "caught   $rule/$name: $what; a law is false at its witness; first proof to break: $where" | tee -a "$OUT/mutants.log"
-    else
+    elif [ "$wit" = "$name True" ]; then
       echo "MISSED   $rule/$name: $what; the proofs break at $where, but its witness still holds, so no law is shown false" | tee -a "$OUT/mutants.log"
+    else
+      echo "MISSED   $rule/$name: $what; its witness did not run or gave no single answer" | tee -a "$OUT/mutants.log"
     fi
-    { echo "=== $rule/$name: $what"; (cd "$dir" && diff "$HERE/$rule" "$rule" | grep '^[<>]' | sed 's/^</  model :/; s/^>/  mutant:/'); echo "$res"; [ -n "$wit" ] && echo "witness: $wit"; echo; } >> "$OUT/mutants-detail.log"
+    { echo "=== $rule/$name: $what"; (cd "$dir" && diff "$HERE/$rule" "$rule" | grep '^[<>]' | sed 's/^</  model :/; s/^>/  mutant:/'); echo "$res"; [ -n "$wit" ] && echo "witness: $wit"; [ "$wit" = "did not run" ] && echo "$wout"; echo; } >> "$OUT/mutants-detail.log"
     rm -rf "$dir"
   done < "$list"
 done
