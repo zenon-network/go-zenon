@@ -103,6 +103,7 @@ for rule in $RULES; do
       answers="$(echo "$clean" | grep -c "^$name " || true)"
       if [ "$answers" != 1 ] || ! echo "$clean" | grep -q "^$name True\$"; then
         echo "MISSED   $rule/$name: on the model its witness gives $answers answers, want one and True" | tee -a "$OUT/mutants.log"
+        { echo "=== $rule/$name: witness.bend on the model"; echo "$clean"; echo; } >> "$OUT/mutants-detail.log"
       fi
     done < "$list"
   fi
@@ -134,7 +135,7 @@ for rule in $RULES; do
     else
       echo "MISSED   $rule/$name: $what; its witness did not run or gave no single answer" | tee -a "$OUT/mutants.log"
     fi
-    { echo "=== $rule/$name: $what"; (cd "$dir" && diff "$HERE/$rule" "$rule" | grep '^[<>]' | sed 's/^</  model :/; s/^>/  mutant:/'); echo "$res"; [ -n "$wit" ] && echo "witness: $wit"; [ "$wit" = "did not run" ] && echo "$wout"; echo; } >> "$OUT/mutants-detail.log"
+    { echo "=== $rule/$name: $what"; (cd "$dir" && diff "$HERE/$rule" "$rule" | grep '^[<>]' | sed 's/^</  model :/; s/^>/  mutant:/'); echo "$res"; [ -n "$wit" ] && echo "witness: $wit"; if [ "$witnesses" = 1 ] && [ "$wit" != "$name False" ]; then echo "witness output:"; echo "$wout"; fi; echo; } >> "$OUT/mutants-detail.log"
     rm -rf "$dir"
   done < "$list"
 done
