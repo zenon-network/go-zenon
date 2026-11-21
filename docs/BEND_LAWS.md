@@ -55,7 +55,7 @@ The script runs six steps and exits 0 only when all pass:
 |---|---|---|
 | 1. proofs | `bend PROOF.bend --check-only` | prints `ALL PROOFS CHECK` |
 | 2. verdict | `bend PROOF.bend --verdict`: the proofs again, through Bend's small kernel, which has a soundness proof in Lean | prints `ALL PROOFS CHECK` |
-| 3. mutants | puts one fault at a time into a copy of the model (`test/bend/mutants.py`) and checks the proofs | every mutant is `caught`: the proofs fail. `mutants.log` names the first proof that broke |
+| 3. mutants | puts one fault at a time into a copy of the model (`test/bend/mutants.py`), checks the proofs, and computes the mutant's witness | every mutant is `caught`: the proofs fail and, for a rule that has witnesses, a law is false at the witness. `mutants.log` names the first proof that broke |
 | 4. node | `go test -tags bendrules ./test/bend/` | every scenario is `same`, and the node-only cases pass |
 | 5. node faults | removes one check at a time from a copy of the node's Go code (`test/bend/node_faults.py`) and runs the comparison of step 4 that covers it | every fault is `caught`: the comparison fails |
 | 6. exhaustive | runs every sequence of up to `DEPTH` steps from a short list of steps, on the node and on the model | no sequence differs |
@@ -73,6 +73,8 @@ Step 6 answers "only the scenarios tried". A random scenario is a sample. Step 6
 | BX-1 `TestExhaustiveLedger` | 11: three sends from account 0 (a small amount, the whole balance, one more than the balance), a send back of everything, five receives (the right account, the wrong ones, a send that does not exist yet), a momentum, a send at a taken height | 16,104 of up to 4 steps |
 | BX-2 `TestExhaustiveHtlc`, BX-3 `TestExhaustivePtlc` | 9: a create with a long and with a short expiry, an unlock with the right and with the wrong preimage or signature, an unlock of a second entry, a reclaim by the maker and by another account, a momentum, a call that fails with an amount | 7,380 each, of up to 4 steps |
 | BX-4 `TestExhaustiveStake`, BX-5 `TestExhaustiveFusion` | 6: a short and a long lock by two accounts, a cancel by the maker and by another account, a cancel of the second entry, a momentum | 9,330 each, of up to 5 steps |
+
+A proof that stops checking does not by itself show that a law is false. A proof is written against the model's text, and it can stop fitting when the text changes while every law still holds. That happened: a model that credits a receive to the wrong account keeps the total, so `no_value_created` is still true of it, and yet its proof no longer checked and the mutant counted as caught. A rule with a `witness.bend` is therefore held to more. For each mutant that file has one witness, a single computed case of a named law. It must be `True` on the model and `False` with the mutant in it, and a mutant whose proofs break while its witness still holds is `MISSED`. The ledger rule has witnesses for all of its mutants. The escrow rule does not yet; its lines in `mutants.log` say so.
 
 To see where a mutant breaks, read `mutants-detail.log`. For each mutant it has the line of the model and the line that replaced it, and then the checker's report: the proof that stopped, what that proof needed (`expected`) and what the faulty model gives (`observed`). For example, with the balance check removed the proof that a debit takes exactly the amount stops in the refused case, where it now has to show that the amount equals the balance:
 
@@ -105,6 +107,14 @@ The checker stops at the first proof that fails, so the report names one place, 
 | `overspend_refused` | a send above the sender's balance is refused, whatever else is true |
 | `receive_once` | when a receive is accepted, the same receive is refused on the ledger that results |
 | `recipient_rule_holds_the_total`, `without_recipient_rule_value_appears` | four blocks in which two accounts receive one send: with the rule that only the addressee may receive, 10 stays 10; without it, 15. The "already received" mark alone does not stop this, because the node keeps it per receiving account |
+| `receive_only_by_the_addressee`, `receive_only_when_confirmed` | for every ledger, account and send: the send is addressed to the account and a momentum has confirmed it, or the receive is refused |
+| `receive_credits_the_amount_of_the_send` | whenever a receive is accepted, the balances afterwards are the balances before with that send's amount added to the receiver: not another amount, not another account |
+| `receive_marks_only_that_send` | whenever a receive is accepted, the sends afterwards are the sends before with the receiver's mark on the one asked for; every other send is as it was |
+| `send_debits_the_sender`, `send_is_recorded_as_sent` | whenever a send is accepted, the balances afterwards are the balances before with the amount taken from the sender, and one send is added, addressed to the account and with the amount the block names |
+| `credit_changes_one_balance`, `debit_changes_one_balance` | a credit or a debit to one account leaves the balance of every other account as it was |
+| `momentum_moves_no_balance` | a momentum confirms the sends and changes nothing else |
+
+The first law, `no_value_created`, counts one total. A ledger that paid a send to the wrong account would keep that total: that is theft, not creation, and that law does not see it. The laws from `receive_only_by_the_addressee` on are there for that: they say where every unit goes.
 
 | Case | What step 4 does | Places covered |
 |---|---|---|
@@ -163,4 +173,4 @@ A pass means: the laws hold for the model, for all inputs; on this commit the no
 
 ## Adding a law or a rule
 
-To add a law to a rule: write it in `LAWS.bend` with its plain-words comment, run step 1, which now reports the law as open, and write the proof in `PROOF.bend` as `def Laws.<name>`. Add a mutant that the new law should catch. To add a rule: a new directory beside `ledger/` with the same four files (a rule may import another, as `escrow` imports `../ledger/ledger.bend`), a list of mutants under its name in `mutants.py` (a mutant is named within its rule, so names need not differ between rules), its name in `RULES` in `run.sh`, and a Go test behind the `bendrules` tag. Step 3 copies every directory that has a `LAWS.bend` into each mutant's workspace, so a rule that imports another finds it there. Bend parameters can be used once unless marked `+`; `test/bend/plus.py <file>` marks them all. Bend has no proof search, so a proof is written out step by step; anything with division needs its own lemmas first.
+To add a law to a rule: write it in `LAWS.bend` with its plain-words comment, run step 1, which now reports the law as open, and write the proof in `PROOF.bend` as `def Laws.<name>`. Add a mutant that the new law should catch, and its witness in `witness.bend` under the mutant's name with `-` written as `_`, printed by `main` as `<name> True`. To add a rule: a new directory beside `ledger/` with the same four files (a rule may import another, as `escrow` imports `../ledger/ledger.bend`), a list of mutants under its name in `mutants.py` (a mutant is named within its rule, so names need not differ between rules), its name in `RULES` in `run.sh`, and a Go test behind the `bendrules` tag. Step 3 copies every directory that has a `LAWS.bend` into each mutant's workspace, so a rule that imports another finds it there. Bend parameters can be used once unless marked `+`; `test/bend/plus.py <file>` marks them all. Bend has no proof search, so a proof is written out step by step; anything with division needs its own lemmas first.
