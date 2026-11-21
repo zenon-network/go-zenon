@@ -83,6 +83,30 @@ func (n *lockNode) held(hash types.Hash, owner int) bool {
 	return err == nil
 }
 
+// left is what the entry under this hash holds, and whether it is there.
+func (n *lockNode) left(hash types.Hash, owner int) (*big.Int, bool) {
+	_, context, err := api.GetFrontierContext(n.z.Chain(), n.contract)
+	if err != nil {
+		n.t.Fatal(err)
+	}
+	amount := new(big.Int)
+	if n.stake {
+		var info *definition.StakeInfo
+		if info, err = definition.GetStakeInfo(context.Storage(), hash, users[owner].Address); err == nil {
+			amount = info.Amount
+		}
+	} else {
+		var info *definition.FusionInfo
+		if info, err = definition.GetFusionInfo(context.Storage(), users[owner].Address, hash); err == nil {
+			amount = info.Amount
+		}
+	}
+	if err != nil && err != constants.ErrDataNonExistent {
+		n.t.Fatal(err)
+	}
+	return amount, err == nil
+}
+
 func (n *lockNode) send(kp *wallet.KeyPair, data []byte, amount uint64) (*nom.AccountBlock, error) {
 	tx, err := n.sup.GenerateFromTemplate(&nom.AccountBlock{
 		BlockType:     nom.BlockTypeUserSend,
@@ -146,7 +170,11 @@ func (n *lockNode) do(c call) (accepted, settled bool, note string) {
 			return false, false, err.Error()
 		}
 		n.settle()
-		ok := executed(n.t, n.ledger, c, b.Hash)
+		ok, there := answered(n.t, n.ledger, c, b.Hash)
+		if !there {
+			n.unknown = true
+			return false, true, "no answer that could be read"
+		}
 		if held := n.held(b.Hash, c.from); held != ok {
 			n.t.Errorf("%v: the contract's status says accepted=%v, but it holds the entry: %v", c, ok, held)
 		}
@@ -173,7 +201,19 @@ func (n *lockNode) do(c call) (accepted, settled bool, note string) {
 		return false, false, err.Error()
 	}
 	blocks, paid := n.settle()
-	ok := executed(n.t, n.ledger, c, b.Hash)
+	ok, there := answered(n.t, n.ledger, c, b.Hash)
+	if !there {
+		n.unknown = true
+		return false, true, "no answer that could be read"
+	}
+	// What an accepted cancel leaves behind: a stake emptied, a fusion gone.
+	if ok && c.id < len(n.entries) {
+		if left, still := n.left(hash, n.owners[c.id]); n.stake && (!still || left.Sign() != 0) {
+			n.t.Errorf("%v: accepted, and the stake is there: %v, holding %v, want it there and empty", c, still, left)
+		} else if !n.stake && still {
+			n.t.Errorf("%v: accepted, and the fusion is still there, holding %v", c, left)
+		}
+	}
 	for i, count := range blocks {
 		want := 0
 		if ok && i == c.from {
@@ -264,11 +304,13 @@ func runLock(t *testing.T, stake bool, name string, steps []lockStep) lockResult
 	defer n.z.StopPanic()
 	r := lockResult{name: name, bals: n.balances(), now: n.now()}
 	var marks strings.Builder
-	for _, s := range steps {
+	for i, s := range steps {
 		c := s(n)
 		c.cancel = stake && c.kind == 'X'
 		before := n.now()
+		c.at = fmt.Sprintf("%s step %d", name, i)
 		ok, settled, note := n.do(c)
+		c.at = ""
 		r.asked, r.notes = append(r.asked, c), append(r.notes, note)
 		if c.kind == 'C' && stake {
 			c.expiry += before + 10 // the model is given the moment it ends
@@ -282,7 +324,7 @@ func runLock(t *testing.T, stake bool, name string, steps []lockStep) lockResult
 		default:
 			r.calls = append(r.calls, c)
 		}
-		marks.WriteByte(map[bool]byte{true: 'A', false: 'R'}[ok])
+		marks.WriteByte(mark(ok, &n.unknown))
 	}
 	for _, b := range n.balances() {
 		fmt.Fprintf(&marks, " %d", b)
