@@ -114,7 +114,9 @@ func (e *validationError) Unwrap() error { return e.err }
 // validationFailure tags err when it is a consensus verdict on the
 // momentum, one a later offer of the same momentum reproduces: a verifier
 // validation error (verifier.IsValidationError), a contract-receive whose
-// changes-hash differs from the locally generated one, or a plasma bound.
+// changes-hash or computed hash differs from the locally generated one
+// (the hash verdict only when the local generation succeeded; a failed
+// local generation carries no sentinel), or a plasma bound.
 // Everything else is returned unchanged, so it is never remembered and
 // never quarantines the peer (the caller's ordinary import-failure
 // handling, a disconnect, still applies): store errors,
@@ -128,6 +130,7 @@ func validationFailure(err error) error {
 	}
 	if verifier.IsValidationError(err) ||
 		errors.Is(err, constants.ErrAutoReceiveChangesHashMismatch) ||
+		errors.Is(err, constants.ErrAutoReceiveHashMismatch) ||
 		errors.Is(err, constants.ErrBlockPlasmaLimitReached) ||
 		errors.Is(err, constants.ErrNotEnoughPlasma) ||
 		errors.Is(err, constants.ErrNotEnoughTotalPlasma) {
