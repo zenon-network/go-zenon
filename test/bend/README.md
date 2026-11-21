@@ -10,7 +10,7 @@ test/bend/run.sh
 
 | Path | What it is |
 |---|---|
-| `ledger/`, `escrow/` | one rule each: `LAWS.bend` (the laws, with a comment in plain words above each: the file to read), the model (`ledger.bend`, `escrow.bend`), the proofs (`PROOF.bend`, `nat.bend`), and `trace.bend` |
+| `ledger/`, `escrow/` | one rule each: `LAWS.bend` (the laws, with a comment in plain words above each: the file to read), the model (`ledger.bend`, `escrow.bend`), the proofs (`PROOF.bend`, `nat.bend`), `trace.bend`, and for the ledger `witness.bend` (one computed case of a law per mutant) |
 | `*_test.go` | the comparison with the node, behind the `bendrules` build tag: `go test ./...` never starts it |
 | `run.sh` | the six steps: proofs, second check, faults in the model, comparison, faults in the node, every short sequence |
 | `mutants.py`, `node_faults.py` | the deliberate faults for the model and for the node |

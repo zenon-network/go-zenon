@@ -380,3 +380,478 @@ def Laws.receive_once(ss, acc, want):
       {==}
     case Con{L.Send{id, to, amount, conf, got}, t}:
       once_pick(Nat.is_eq(id, want), acc, id, to, amount, conf, got, t, want, {==}, Laws.receive_once(t, acc, want))
+
+# LAWS 5 to 13: who is paid, and how much
+# ---------------------------------------
+
+def or_true(+a: Bool) -> {Bool.or(a, True{}) == True{} : Bool}:
+  match a:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+# Readings of the answer to Sends.recv: whether it was refused, what it
+# paid, and the sends it left (other when it was refused).
+def missed(+g: L.Got) -> Bool:
+  match g:
+    case L.Miss{}:
+      True{}
+    case L.Hit{amount, sends}:
+      False{}
+
+def paid(+g: L.Got, +other: Nat) -> Nat:
+  match g:
+    case L.Miss{}:
+      other
+    case L.Hit{amount, sends}:
+      amount
+
+def left(+g: L.Got, +other: +List<L.Send>) -> +List<L.Send>:
+  match g:
+    case L.Miss{}:
+      other
+    case L.Hit{amount, sends}:
+      sends
+
+# "cond, or refused", through the search for the send asked for.
+def m_skip(+c: Bool, +s: L.Send, +g: L.Got, ih: {Bool.or(c, missed(g)) == True{} : Bool}) -> {Bool.or(c, missed(L.Sends.recv.skip(s, g))) == True{} : Bool}:
+  match c g:
+    case True{} g:
+      {==}
+    case False{} L.Miss{}:
+      {==}
+    case False{} L.Hit{amount, t}:
+      Empty.absurd({False{} == True{} : Bool}, N.false_is_not_true(ih))
+
+def m_pick(+hit: Bool, +a: Bool, +b: Bool, +here: L.Got, +other: L.Got, e1: {Bool.or(a, missed(here)) == True{} : Bool}, e2: {Bool.or(b, missed(other)) == True{} : Bool}) -> {Bool.or(Bool.pick(Bool, hit, a, b), missed(L.Sends.recv.pick(hit, here, other))) == True{} : Bool}:
+  match hit:
+    case True{}:
+      e1
+    case False{}:
+      e2
+
+# The send is the one asked for: it is addressed to the receiver, or the
+# second check refuses.
+def addr_c2(+mine: Bool, +acc: Nat, +id: Nat, +to: Nat, +amount: Nat, +got: +List<Nat>, +t: +List<L.Send>) -> {Bool.or(mine, missed(L.Sends.recv.c2(mine, acc, id, to, amount, got, t))) == True{} : Bool}:
+  match mine:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+def addr_c1(+conf: Bool, +acc: Nat, +id: Nat, +to: Nat, +amount: Nat, +got: +List<Nat>, +t: +List<L.Send>) -> {Bool.or(Nat.is_eq(to, acc), missed(L.Sends.recv.c1(conf, True{}, acc, id, to, amount, got, t))) == True{} : Bool}:
+  match conf:
+    case False{}:
+      or_true(Nat.is_eq(to, acc))
+    case True{}:
+      addr_c2(Nat.is_eq(to, acc), acc, id, to, amount, got, t)
+
+law recv_addressee:
+  for +ss: +List<L.Send>
+  for +acc: Nat
+  for +want: Nat
+  {Bool.or(Laws.addressed_to(ss, want, acc), missed(L.Sends.recv(ss, True{}, acc, want))) == True{} : Bool}
+
+def recv_addressee(ss, acc, want):
+  match ss:
+    case Nil{}:
+      {==}
+    case Con{L.Send{id, to, amount, conf, got}, t}:
+      m_pick(Nat.is_eq(id, want), Nat.is_eq(to, acc), Laws.addressed_to(t, want, acc), L.Sends.recv.c1(conf, True{}, acc, id, to, amount, got, t), L.Sends.recv.skip(L.Send{id, to, amount, conf, got}, L.Sends.recv(t, True{}, acc, want)), addr_c1(conf, acc, id, to, amount, got, t), m_skip(Laws.addressed_to(t, want, acc), L.Send{id, to, amount, conf, got}, L.Sends.recv(t, True{}, acc, want), recv_addressee(t, acc, want)))
+
+# It is confirmed, or the first check refuses.
+def conf_c1(+conf: Bool, +acc: Nat, +id: Nat, +to: Nat, +amount: Nat, +got: +List<Nat>, +t: +List<L.Send>) -> {Bool.or(conf, missed(L.Sends.recv.c1(conf, True{}, acc, id, to, amount, got, t))) == True{} : Bool}:
+  match conf:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+law recv_confirmed:
+  for +ss: +List<L.Send>
+  for +acc: Nat
+  for +want: Nat
+  {Bool.or(Laws.confirmed(ss, want), missed(L.Sends.recv(ss, True{}, acc, want))) == True{} : Bool}
+
+def recv_confirmed(ss, acc, want):
+  match ss:
+    case Nil{}:
+      {==}
+    case Con{L.Send{id, to, amount, conf, got}, t}:
+      m_pick(Nat.is_eq(id, want), conf, Laws.confirmed(t, want), L.Sends.recv.c1(conf, True{}, acc, id, to, amount, got, t), L.Sends.recv.skip(L.Send{id, to, amount, conf, got}, L.Sends.recv(t, True{}, acc, want)), conf_c1(conf, acc, id, to, amount, got, t), m_skip(Laws.confirmed(t, want), L.Send{id, to, amount, conf, got}, L.Sends.recv(t, True{}, acc, want), recv_confirmed(t, acc, want)))
+
+# What it pays is the send's own amount.
+def paid_c3(+seen: Bool, +acc: Nat, +id: Nat, +to: Nat, +amount: Nat, +got: +List<Nat>, +t: +List<L.Send>) -> {paid(L.Sends.recv.c3(seen, acc, id, to, amount, got, t), amount) == amount : Nat}:
+  match seen:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def paid_c2(+mine: Bool, +acc: Nat, +id: Nat, +to: Nat, +amount: Nat, +got: +List<Nat>, +t: +List<L.Send>) -> {paid(L.Sends.recv.c2(mine, acc, id, to, amount, got, t), amount) == amount : Nat}:
+  match mine:
+    case False{}:
+      {==}
+    case True{}:
+      paid_c3(L.Sends.mem(acc, got), acc, id, to, amount, got, t)
+
+def paid_c1(+conf: Bool, +acc: Nat, +id: Nat, +to: Nat, +amount: Nat, +got: +List<Nat>, +t: +List<L.Send>) -> {paid(L.Sends.recv.c1(conf, True{}, acc, id, to, amount, got, t), amount) == amount : Nat}:
+  match conf:
+    case False{}:
+      {==}
+    case True{}:
+      paid_c2(Nat.is_eq(to, acc), acc, id, to, amount, got, t)
+
+def paid_skip(+g: L.Got, +s: L.Send, +h: Nat, ih: {paid(g, h) == h : Nat}) -> {paid(L.Sends.recv.skip(s, g), h) == h : Nat}:
+  match g:
+    case L.Miss{}:
+      {==}
+    case L.Hit{amount, t}:
+      ih
+
+def paid_pick(+hit: Bool, +here: L.Got, +other: L.Got, +amount: Nat, +below: Nat, e1: {paid(here, amount) == amount : Nat}, e2: {paid(other, below) == below : Nat}) -> {paid(L.Sends.recv.pick(hit, here, other), Bool.pick(Nat, hit, amount, below)) == Bool.pick(Nat, hit, amount, below) : Nat}:
+  match hit:
+    case True{}:
+      e1
+    case False{}:
+      e2
+
+law recv_pays_the_amount:
+  for +ss: +List<L.Send>
+  for +acc: Nat
+  for +want: Nat
+  {paid(L.Sends.recv(ss, True{}, acc, want), Laws.amount_of(ss, want)) == Laws.amount_of(ss, want) : Nat}
+
+def recv_pays_the_amount(ss, acc, want):
+  match ss:
+    case Nil{}:
+      {==}
+    case Con{L.Send{id, to, amount, conf, got}, t}:
+      paid_pick(Nat.is_eq(id, want), L.Sends.recv.c1(conf, True{}, acc, id, to, amount, got, t), L.Sends.recv.skip(L.Send{id, to, amount, conf, got}, L.Sends.recv(t, True{}, acc, want)), amount, Laws.amount_of(t, want), paid_c1(conf, acc, id, to, amount, got, t), paid_skip(L.Sends.recv(t, True{}, acc, want), L.Send{id, to, amount, conf, got}, Laws.amount_of(t, want), recv_pays_the_amount(t, acc, want)))
+
+# What it leaves is the list with the one mark added.
+def left_c3(+seen: Bool, +acc: Nat, +id: Nat, +to: Nat, +amount: Nat, +got: +List<Nat>, +t: +List<L.Send>) -> {left(L.Sends.recv.c3(seen, acc, id, to, amount, got, t), Con{L.Send{id, to, amount, True{}, Con{acc, got}}, t}) == Con{L.Send{id, to, amount, True{}, Con{acc, got}}, t} : +List<L.Send>}:
+  match seen:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def left_c2(+mine: Bool, +acc: Nat, +id: Nat, +to: Nat, +amount: Nat, +got: +List<Nat>, +t: +List<L.Send>) -> {left(L.Sends.recv.c2(mine, acc, id, to, amount, got, t), Con{L.Send{id, to, amount, True{}, Con{acc, got}}, t}) == Con{L.Send{id, to, amount, True{}, Con{acc, got}}, t} : +List<L.Send>}:
+  match mine:
+    case False{}:
+      {==}
+    case True{}:
+      left_c3(L.Sends.mem(acc, got), acc, id, to, amount, got, t)
+
+def left_c1(+conf: Bool, +acc: Nat, +id: Nat, +to: Nat, +amount: Nat, +got: +List<Nat>, +t: +List<L.Send>) -> {left(L.Sends.recv.c1(conf, True{}, acc, id, to, amount, got, t), Con{L.Send{id, to, amount, True{}, Con{acc, got}}, t}) == Con{L.Send{id, to, amount, True{}, Con{acc, got}}, t} : +List<L.Send>}:
+  match conf:
+    case False{}:
+      {==}
+    case True{}:
+      left_c2(Nat.is_eq(to, acc), acc, id, to, amount, got, t)
+
+def left_skip(+g: L.Got, +s: L.Send, +b: +List<L.Send>, ih: {left(g, b) == b : +List<L.Send>}) -> {left(L.Sends.recv.skip(s, g), Con{s, b}) == Con{s, b} : +List<L.Send>}:
+  match g:
+    case L.Miss{}:
+      {==}
+    case L.Hit{amount, t}:
+      %ih : {Con{s, t} == Con{s, _} : +List<L.Send>}
+      {==}
+
+def left_pick(+hit: Bool, +here: L.Got, +other: L.Got, +a: +List<L.Send>, +b: +List<L.Send>, e1: {left(here, a) == a : +List<L.Send>}, e2: {left(other, b) == b : +List<L.Send>}) -> {left(L.Sends.recv.pick(hit, here, other), Bool.pick(+List<L.Send>, hit, a, b)) == Bool.pick(+List<L.Send>, hit, a, b) : +List<L.Send>}:
+  match hit:
+    case True{}:
+      e1
+    case False{}:
+      e2
+
+law recv_marks_one:
+  for +ss: +List<L.Send>
+  for +acc: Nat
+  for +want: Nat
+  {left(L.Sends.recv(ss, True{}, acc, want), Laws.marked(ss, want, acc)) == Laws.marked(ss, want, acc) : +List<L.Send>}
+
+def recv_marks_one(ss, acc, want):
+  match ss:
+    case Nil{}:
+      {==}
+    case Con{L.Send{id, to, amount, conf, got}, t}:
+      left_pick(Nat.is_eq(id, want), L.Sends.recv.c1(conf, True{}, acc, id, to, amount, got, t), L.Sends.recv.skip(L.Send{id, to, amount, conf, got}, L.Sends.recv(t, True{}, acc, want)), Con{L.Send{id, to, amount, True{}, Con{acc, got}}, t}, Con{L.Send{id, to, amount, conf, got}, Laws.marked(t, want, acc)}, left_c1(conf, acc, id, to, amount, got, t), left_skip(L.Sends.recv(t, True{}, acc, want), L.Send{id, to, amount, conf, got}, Laws.marked(t, want, acc), recv_marks_one(t, acc, want)))
+
+# From Sends.recv up to the block.
+def rcv_or_take(+a: Bool, +g: L.Got, +bals: +List<Nat>, +heights: +List<Nat>, +next: Nat, +acc: Nat, e: {Bool.or(a, missed(g)) == True{} : Bool}) -> {Bool.or(a, Laws.refused(L.Step.rcv.take(g, bals, heights, next, acc))) == True{} : Bool}:
+  match a g:
+    case True{} g:
+      {==}
+    case False{} L.Miss{}:
+      {==}
+    case False{} L.Hit{amount, sends}:
+      Empty.absurd({False{} == True{} : Bool}, N.false_is_not_true(e))
+
+def rcv_or(+fits: Bool, +a: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +acc: Nat, +id: Nat, e: {Bool.or(a, missed(L.Sends.recv(sends, True{}, acc, id))) == True{} : Bool}) -> {Bool.or(a, Laws.refused(L.Step.rcv(fits, True{}, bals, heights, sends, next, acc, id))) == True{} : Bool}:
+  match fits:
+    case False{}:
+      or_true(a)
+    case True{}:
+      rcv_or_take(a, L.Sends.recv(sends, True{}, acc, id), bals, heights, next, acc, e)
+
+def Laws.receive_only_by_the_addressee(bals, heights, sends, next, acc, height, id):
+  rcv_or(Nat.is_eq(height, 1n+L.Bal.get(acc, heights)), Laws.addressed_to(sends, id, acc), bals, heights, sends, next, acc, id, recv_addressee(sends, acc, id))
+
+def Laws.receive_only_when_confirmed(bals, heights, sends, next, acc, height, id):
+  rcv_or(Nat.is_eq(height, 1n+L.Bal.get(acc, heights)), Laws.confirmed(sends, id), bals, heights, sends, next, acc, id, recv_confirmed(sends, acc, id))
+
+def rcv_bals_take(+g: L.Got, +bals: +List<Nat>, +heights: +List<Nat>, +next: Nat, +acc: Nat, +a: Nat, e: {paid(g, a) == a : Nat}) -> {Laws.bals_after(L.Step.rcv.take(g, bals, heights, next, acc), L.Bal.credit(acc, bals, a)) == L.Bal.credit(acc, bals, a) : +List<Nat>}:
+  match g:
+    case L.Miss{}:
+      {==}
+    case L.Hit{amount, sends}:
+      %e : {L.Bal.credit(acc, bals, amount) == L.Bal.credit(acc, bals, _) : +List<Nat>}
+      {==}
+
+def rcv_bals(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +acc: Nat, +id: Nat) -> {Laws.bals_after(L.Step.rcv(fits, True{}, bals, heights, sends, next, acc, id), L.Bal.credit(acc, bals, Laws.amount_of(sends, id))) == L.Bal.credit(acc, bals, Laws.amount_of(sends, id)) : +List<Nat>}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      rcv_bals_take(L.Sends.recv(sends, True{}, acc, id), bals, heights, next, acc, Laws.amount_of(sends, id), recv_pays_the_amount(sends, acc, id))
+
+def Laws.receive_credits_the_amount_of_the_send(bals, heights, sends, next, acc, height, id):
+  rcv_bals(Nat.is_eq(height, 1n+L.Bal.get(acc, heights)), bals, heights, sends, next, acc, id)
+
+def rcv_sends_take(+g: L.Got, +bals: +List<Nat>, +heights: +List<Nat>, +next: Nat, +acc: Nat, +m: +List<L.Send>, e: {left(g, m) == m : +List<L.Send>}) -> {Laws.sends_after(L.Step.rcv.take(g, bals, heights, next, acc), m) == m : +List<L.Send>}:
+  match g:
+    case L.Miss{}:
+      {==}
+    case L.Hit{amount, sends}:
+      e
+
+def rcv_sends(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +acc: Nat, +id: Nat) -> {Laws.sends_after(L.Step.rcv(fits, True{}, bals, heights, sends, next, acc, id), Laws.marked(sends, id, acc)) == Laws.marked(sends, id, acc) : +List<L.Send>}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      rcv_sends_take(L.Sends.recv(sends, True{}, acc, id), bals, heights, next, acc, Laws.marked(sends, id, acc), recv_marks_one(sends, acc, id))
+
+def Laws.receive_marks_only_that_send(bals, heights, sends, next, acc, height, id):
+  rcv_sends(Nat.is_eq(height, 1n+L.Bal.get(acc, heights)), bals, heights, sends, next, acc, id)
+
+# Sends.
+def snd_bals_pay(+m: Maybe<&2, +List<Nat>>, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Laws.bals_after(L.Step.snd.pay(m, heights, sends, next, from, to, amount), Laws.debited(m, bals)) == Laws.debited(m, bals) : +List<Nat>}:
+  match m:
+    case None{}:
+      {==}
+    case Some{bs}:
+      {==}
+
+def snd_bals(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Laws.bals_after(L.Step.snd(fits, bals, heights, sends, next, from, to, amount), Laws.debited(L.Bal.debit(from, bals, amount), bals)) == Laws.debited(L.Bal.debit(from, bals, amount), bals) : +List<Nat>}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      snd_bals_pay(L.Bal.debit(from, bals, amount), bals, heights, sends, next, from, to, amount)
+
+def Laws.send_debits_the_sender(bals, heights, sends, next, from, height, to, amount):
+  snd_bals(Nat.is_eq(height, 1n+L.Bal.get(from, heights)), bals, heights, sends, next, from, to, amount)
+
+def snd_sends_pay(+m: Maybe<&2, +List<Nat>>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Laws.sends_after(L.Step.snd.pay(m, heights, sends, next, from, to, amount), Con{L.Send{next, to, amount, False{}, Nil{}}, sends}) == Con{L.Send{next, to, amount, False{}, Nil{}}, sends} : +List<L.Send>}:
+  match m:
+    case None{}:
+      {==}
+    case Some{bs}:
+      {==}
+
+def snd_sends(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Laws.sends_after(L.Step.snd(fits, bals, heights, sends, next, from, to, amount), Con{L.Send{next, to, amount, False{}, Nil{}}, sends}) == Con{L.Send{next, to, amount, False{}, Nil{}}, sends} : +List<L.Send>}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      snd_sends_pay(L.Bal.debit(from, bals, amount), heights, sends, next, from, to, amount)
+
+def Laws.send_is_recorded_as_sent(bals, heights, sends, next, from, height, to, amount):
+  snd_sends(Nat.is_eq(height, 1n+L.Bal.get(from, heights)), bals, heights, sends, next, from, to, amount)
+
+# Balances, one account at a time.
+def get_nil(+x: Nat) -> {L.Bal.get(x, Nil{}) == 0n : Nat}:
+  match x:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+def Laws.credit_changes_one_balance(x, a, bs, amt):
+  match x a bs:
+    case 0n 0n Nil{}:
+      {==}
+    case 0n 0n Con{h, t}:
+      {==}
+    case 0n 1n+ap Nil{}:
+      {==}
+    case 0n 1n+ap Con{h, t}:
+      {==}
+    case 1n+xp 0n Nil{}:
+      get_nil(xp)
+    case 1n+xp 0n Con{h, t}:
+      {==}
+    case 1n+xp 1n+ap Nil{}:
+      %get_nil(xp) : {L.Bal.get(xp, L.Bal.credit(ap, Nil{}, amt)) == Bool.pick(Nat, Nat.is_eq(xp, ap), Nat.add(_, amt), _) : Nat}
+      Laws.credit_changes_one_balance(xp, ap, Nil{}, amt)
+    case 1n+xp 1n+ap Con{h, t}:
+      Laws.credit_changes_one_balance(xp, ap, t, amt)
+
+def debit0_head(+ok: Bool, +h: Nat, +amt: Nat, +t: +List<Nat>) -> {Laws.balance_after(L.Bal.debit.head(L.Bal.take.go(ok, h, amt), t), 0n, Nat.sub(h, amt)) == Nat.sub(h, amt) : Nat}:
+  match ok:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+def debit0_tail(+m: Maybe<&2, +List<Nat>>, +h: Nat) -> {Laws.balance_after(L.Bal.debit.tail(h, m), 0n, h) == h : Nat}:
+  match m:
+    case None{}:
+      {==}
+    case Some{t}:
+      {==}
+
+def debitS_head(+ok: Bool, +h: Nat, +amt: Nat, +t: +List<Nat>, +x: Nat) -> {Laws.balance_after(L.Bal.debit.head(L.Bal.take.go(ok, h, amt), t), 1n+x, L.Bal.get(x, t)) == L.Bal.get(x, t) : Nat}:
+  match ok:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+def debitS_tail(+m: Maybe<&2, +List<Nat>>, +h: Nat, +x: Nat, +e: Nat, ih: {Laws.balance_after(m, x, e) == e : Nat}) -> {Laws.balance_after(L.Bal.debit.tail(h, m), 1n+x, e) == e : Nat}:
+  match m:
+    case None{}:
+      {==}
+    case Some{t}:
+      ih
+
+def Laws.debit_changes_one_balance(x, a, bs, amt):
+  match x a bs:
+    case 0n 0n Nil{}:
+      {==}
+    case 0n 0n Con{h, t}:
+      debit0_head(Nat.is_le(amt, h), h, amt, t)
+    case 0n 1n+ap Nil{}:
+      {==}
+    case 0n 1n+ap Con{h, t}:
+      debit0_tail(L.Bal.debit(ap, t, amt), h)
+    case 1n+xp 0n Nil{}:
+      {==}
+    case 1n+xp 0n Con{h, t}:
+      debitS_head(Nat.is_le(amt, h), h, amt, t, xp)
+    case 1n+xp 1n+ap Nil{}:
+      {==}
+    case 1n+xp 1n+ap Con{h, t}:
+      debitS_tail(L.Bal.debit(ap, t, amt), h, xp, Bool.pick(Nat, Nat.is_eq(xp, ap), Nat.sub(L.Bal.get(xp, t), amt), L.Bal.get(xp, t)), Laws.debit_changes_one_balance(xp, ap, t, amt))
+
+# The model's confirmation is the one written in LAWS.bend.
+law confirm_is_all_confirmed:
+  for +ss: +List<L.Send>
+  {L.Sends.confirm(ss) == Laws.all_confirmed(ss) : +List<L.Send>}
+
+def confirm_is_all_confirmed(ss):
+  match ss:
+    case Nil{}:
+      {==}
+    case Con{L.Send{id, to, amount, conf, got}, t}:
+      %confirm_is_all_confirmed(t) : {Con{L.Send{id, to, amount, True{}, got}, L.Sends.confirm(t)} == Con{L.Send{id, to, amount, True{}, got}, _} : +List<L.Send>}
+      {==}
+
+def Laws.momentum_only_confirms(bals, heights, sends, next):
+  %confirm_is_all_confirmed(sends) : {L.Accepted{L.State{bals, heights, L.Sends.confirm(sends), next}} == L.Accepted{L.State{bals, heights, _, next}} : L.Next}
+  {==}
+
+# LAWS 14 to 19: heights and numbers
+# ----------------------------------
+
+def snd_fits(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Bool.or(fits, Laws.refused(L.Step.snd(fits, bals, heights, sends, next, from, to, amount))) == True{} : Bool}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+def Laws.send_only_at_the_next_height(bals, heights, sends, next, from, height, to, amount):
+  snd_fits(Nat.is_eq(height, 1n+L.Bal.get(from, heights)), bals, heights, sends, next, from, to, amount)
+
+def rcv_fits(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +acc: Nat, +id: Nat) -> {Bool.or(fits, Laws.refused(L.Step.rcv(fits, True{}, bals, heights, sends, next, acc, id))) == True{} : Bool}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+def Laws.receive_only_at_the_next_height(bals, heights, sends, next, acc, height, id):
+  rcv_fits(Nat.is_eq(height, 1n+L.Bal.get(acc, heights)), bals, heights, sends, next, acc, id)
+
+def snd_h_pay(+m: Maybe<&2, +List<Nat>>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Laws.heights_after(L.Step.snd.pay(m, heights, sends, next, from, to, amount), L.Bal.credit(from, heights, 1n)) == L.Bal.credit(from, heights, 1n) : +List<Nat>}:
+  match m:
+    case None{}:
+      {==}
+    case Some{bs}:
+      {==}
+
+def snd_h(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Laws.heights_after(L.Step.snd(fits, bals, heights, sends, next, from, to, amount), L.Bal.credit(from, heights, 1n)) == L.Bal.credit(from, heights, 1n) : +List<Nat>}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      snd_h_pay(L.Bal.debit(from, bals, amount), heights, sends, next, from, to, amount)
+
+def Laws.send_raises_its_height(bals, heights, sends, next, from, height, to, amount):
+  snd_h(Nat.is_eq(height, 1n+L.Bal.get(from, heights)), bals, heights, sends, next, from, to, amount)
+
+def rcv_h_take(+g: L.Got, +bals: +List<Nat>, +heights: +List<Nat>, +next: Nat, +acc: Nat) -> {Laws.heights_after(L.Step.rcv.take(g, bals, heights, next, acc), L.Bal.credit(acc, heights, 1n)) == L.Bal.credit(acc, heights, 1n) : +List<Nat>}:
+  match g:
+    case L.Miss{}:
+      {==}
+    case L.Hit{amount, sends}:
+      {==}
+
+def rcv_h(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +acc: Nat, +id: Nat) -> {Laws.heights_after(L.Step.rcv(fits, True{}, bals, heights, sends, next, acc, id), L.Bal.credit(acc, heights, 1n)) == L.Bal.credit(acc, heights, 1n) : +List<Nat>}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      rcv_h_take(L.Sends.recv(sends, True{}, acc, id), bals, heights, next, acc)
+
+def Laws.receive_raises_its_height(bals, heights, sends, next, acc, height, id):
+  rcv_h(Nat.is_eq(height, 1n+L.Bal.get(acc, heights)), bals, heights, sends, next, acc, id)
+
+def snd_n_pay(+m: Maybe<&2, +List<Nat>>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Laws.next_after(L.Step.snd.pay(m, heights, sends, next, from, to, amount), 1n+next) == 1n+next : Nat}:
+  match m:
+    case None{}:
+      {==}
+    case Some{bs}:
+      {==}
+
+def snd_n(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +from: Nat, +to: Nat, +amount: Nat) -> {Laws.next_after(L.Step.snd(fits, bals, heights, sends, next, from, to, amount), 1n+next) == 1n+next : Nat}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      snd_n_pay(L.Bal.debit(from, bals, amount), heights, sends, next, from, to, amount)
+
+def Laws.send_takes_the_next_number(bals, heights, sends, next, from, height, to, amount):
+  snd_n(Nat.is_eq(height, 1n+L.Bal.get(from, heights)), bals, heights, sends, next, from, to, amount)
+
+def rcv_n_take(+g: L.Got, +bals: +List<Nat>, +heights: +List<Nat>, +next: Nat, +acc: Nat) -> {Laws.next_after(L.Step.rcv.take(g, bals, heights, next, acc), next) == next : Nat}:
+  match g:
+    case L.Miss{}:
+      {==}
+    case L.Hit{amount, sends}:
+      {==}
+
+def rcv_n(+fits: Bool, +bals: +List<Nat>, +heights: +List<Nat>, +sends: +List<L.Send>, +next: Nat, +acc: Nat, +id: Nat) -> {Laws.next_after(L.Step.rcv(fits, True{}, bals, heights, sends, next, acc, id), next) == next : Nat}:
+  match fits:
+    case False{}:
+      {==}
+    case True{}:
+      rcv_n_take(L.Sends.recv(sends, True{}, acc, id), bals, heights, next, acc)
+
+def Laws.receive_keeps_the_count(bals, heights, sends, next, acc, height, id):
+  rcv_n(Nat.is_eq(height, 1n+L.Bal.get(acc, heights)), bals, heights, sends, next, acc, id)
