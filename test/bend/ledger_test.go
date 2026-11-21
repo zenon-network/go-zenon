@@ -141,6 +141,13 @@ func answered(t *testing.T, ledger *api.LedgerApi, what fmt.Stringer, send types
 		t.Errorf("%v: the block paired with the call is not the contract's receive of it (type %d, by %v, of %v)", what, p.BlockType, p.Address, p.FromBlockHash)
 		return false, false
 	}
+	// And it must be whole: the status is part of what the block's hash is
+	// made of, so a receive whose contents do not give its hash was not
+	// read as the node stored it.
+	if p := block.PairedAccountBlock; p.AccountBlock.ComputeHash() != p.Hash {
+		t.Errorf("%v: the contract's receive of the call does not hash to its own hash %v", what, p.Hash)
+		return false, false
+	}
 	data := block.PairedAccountBlock.Data
 	if len(data) != 8 {
 		t.Errorf("%v: the contract's receive block carries %d bytes, want the 8 of a status", what, len(data))

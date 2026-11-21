@@ -274,6 +274,9 @@ def run_test(cmd, cwd, env):
             sys.exit(STOP["pending"])
         proc.stdout_text, proc.stderr_text = proc.communicate()
     except BaseException:
+        # stopping now: a second signal must not cut the stopping short
+        for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            signal.signal(s, signal.SIG_IGN)
         try:
             os.killpg(proc.pid, signal.SIGTERM)
         except OSError:
@@ -294,7 +297,8 @@ def run(out_dir, names):
     # The copies and overlays of this run, in a directory no other run uses.
     # (The go tool is given the overlay by path, so it must stay until the
     # test has run; run.sh removes its whole scratch directory at the end.)
-    base = os.environ.get("BEND_SCRATCH") or os.path.join(HERE, ".scratch")
+    # (made absolute: it is handed on to the test, which runs elsewhere)
+    base = os.path.abspath(os.environ.get("BEND_SCRATCH") or os.path.join(HERE, ".scratch"))
     os.makedirs(base, exist_ok=True)
     scratch = tempfile.mkdtemp(prefix="node-faults-", dir=base)
     try:
@@ -401,6 +405,7 @@ def main():
     # told to stop: leave through the finally that removes this run's files
     signal.signal(signal.SIGTERM, stopped(143))
     signal.signal(signal.SIGHUP, stopped(129))
+    signal.signal(signal.SIGINT, stopped(130))
     if len(sys.argv) == 2 and sys.argv[1] == "--list":
         for name, what, rel, *_ in FAULTS:
             print("%s\t%s\t%s" % (name, rel, what))

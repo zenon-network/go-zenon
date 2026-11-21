@@ -71,7 +71,9 @@ RUN="$(mktemp -d "$SCRATCH/run.XXXXXX")"
 # Removed when the script ends, also when it is interrupted: the shards of
 # step 6 are stopped first, so that none writes into a directory that is gone.
 pids=""
-trap 'rm -rf "$RUN"' EXIT
+# Whatever ends the script, an error included, what it started is stopped
+# before the directory goes (finish, below).
+trap finish EXIT
 # Told to stop: everything this script started is stopped first, so that
 # nothing goes on writing into a directory that is gone. Every long step is
 # started in a process group of its own (await, below), and this script
@@ -83,6 +85,19 @@ stop_all() {
   # between starting a command and noting it, only remember the signal
   if [ "$launching" = 1 ]; then pending=1; return 0; fi
   trap "" INT TERM HUP
+  stop_active
+  exit 130
+}
+# finish is the end of every run: nothing is left running, the directory is
+# removed, and the status the script was ending with stays.
+finish() {
+  status=$?
+  trap "" INT TERM HUP
+  [ -z "$(echo $active)" ] || stop_active
+  rm -rf "$RUN"
+  exit "$status"
+}
+stop_active() {
   # Asked again until none is left: a command that was only just started
   # may not have made its group yet, and is then reached as a process
   # first and as a group the next time round. (The two forms are the ways
@@ -91,14 +106,15 @@ stop_all() {
   while [ "$tries" -lt 50 ]; do
     left=0
     for p in $active; do
-      kill -TERM "-$p" 2>/dev/null || kill -TERM -- "-$p" 2>/dev/null || true
-      kill -TERM "$p" 2>/dev/null && left=1
+      # the group; the process alone only where there is no group yet, so
+      # that a command busy stopping its own is not told twice
+      kill -TERM "-$p" 2>/dev/null || kill -TERM -- "-$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null || true
+      kill -0 "$p" 2>/dev/null && left=1
     done
     [ "$left" = 1 ] || break
     tries=$((tries + 1)); python3 -c 'import time; time.sleep(0.1)'
   done
   wait 2>/dev/null || true
-  exit 130
 }
 trap stop_all INT TERM HUP
 # ingroup starts a command as the leader of a new process group, in the
@@ -124,7 +140,8 @@ fail=0
 
 bend() { # bend <image> <dir mounted at /work> <args...>
   img="$1"; dir="$2"; shift 2
-  docker run --rm --network none -v "$dir":/work:ro "$img" "$@" 2>&1
+  # (through await, so that a signal is acted on while the container runs)
+  await docker run --rm --network none -v "$dir":/work:ro "$img" "$@" 2>&1
 }
 
 # Print one line as it is. (echo would rewrite backslash sequences, and
@@ -133,14 +150,16 @@ say() { printf '%s\n' "$1"; }
 
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" --build-arg BEND_VERSION="$BEND_VERSION" "$HERE"
 echo "commit  $(git -C "$ROOT" rev-parse HEAD)"
-echo "bend    $(bend "$IMAGE" "$HERE" version)  image $(docker image inspect -f '{{.Id}}' "$IMAGE")"
+bend "$IMAGE" "$HERE" version > "$RUN/version.txt" || true
+echo "bend    $(cat "$RUN/version.txt")  image $(docker image inspect -f '{{.Id}}' "$IMAGE")"
 for rule in $RULES; do echo "laws    $(grep -c '^law ' "$HERE/$rule/LAWS.bend") in $rule/LAWS.bend"; done
 
 echo
 echo "== 1. proofs"
 : > "$OUT/proofs.log"
 for rule in $RULES; do
-  res="$(bend "$IMAGE" "$HERE" "$rule/PROOF.bend" --check-only)"
+  bend "$IMAGE" "$HERE" "$rule/PROOF.bend" --check-only > "$RUN/proofs.txt" || true
+  res="$(cat "$RUN/proofs.txt")"
   say "$rule: $res" | tee -a "$OUT/proofs.log"
   say "$res" | grep -q '^ALL PROOFS CHECK' || { echo "FAIL: proofs of $rule"; fail=1; }
 done
@@ -153,7 +172,8 @@ if [ "$VERDICT" = 0 ]; then
 else
   docker image inspect "$VIMAGE" >/dev/null 2>&1 || docker build -t "$VIMAGE" --build-arg BASE="$IMAGE" -f "$HERE/Dockerfile.verdict" "$HERE"
   for rule in $RULES; do
-    res="$(bend "$VIMAGE" "$HERE" "$rule/PROOF.bend" --verdict)"
+    bend "$VIMAGE" "$HERE" "$rule/PROOF.bend" --verdict > "$RUN/verdict.txt" || true
+    res="$(cat "$RUN/verdict.txt")"
     say "$rule: $res" | tee -a "$OUT/verdict.log"
     say "$res" | grep -q '^ALL PROOFS CHECK' || { echo "FAIL: verdict of $rule"; fail=1; }
   done
@@ -340,7 +360,7 @@ else
   : > "$OUT/exhaustive.log"
   i=0
   while [ "$i" -lt "$SHARDS" ]; do
-    grep -E '^(--- |exit )|every sequence|disagree|node:  |model: |outside the rule|running the model' "$RUN/exhaustive-$i.log" | sed "s/^ *[a-z_]*_test\\.go:[0-9]*: //; s/^/shard $i: /" >> "$OUT/exhaustive.log"
+    grep -E '^(--- |exit )|exhaustive: test=|every sequence|disagree|node:  |model: |outside the rule|running the model' "$RUN/exhaustive-$i.log" | sed "s/^ *[a-z_]*_test\\.go:[0-9]*: //; s/^/shard $i: /" >> "$OUT/exhaustive.log"
     # a shard counts only when it ended with exit 0 and every exhaustive test in it passed
     tail -1 "$RUN/exhaustive-$i.log" | grep -q '^exit 0$' || shards_ok=0
     i=$((i + 1))
@@ -457,6 +477,8 @@ print("exhaustive: checked %d tests in %d shards" % (len(want), shards))
 PY
   if await python3 "$RUN/summary.py" "$RUN" "$SHARDS" "$DEPTH" "$have" $EXHAUSTIVE_TESTS > "$RUN/summary.txt" 2> "$RUN/summary.err"; then summary_ok=1; else summary_ok=0; fi
   cat "$RUN/summary.txt"; cat "$RUN/summary.err" >&2
+  # kept with the logs: why the step failed, when it did
+  { echo "summary:"; cat "$RUN/summary.txt" "$RUN/summary.err"; } >> "$OUT/exhaustive.log"
   [ "$summary_ok" = 1 ] && [ "$(tail -1 "$RUN/summary.txt")" = "exhaustive: checked $(printf '%s\n' $EXHAUSTIVE_TESTS | grep -c '') tests in $SHARDS shards" ] || shards_ok=0
   if [ "$shards_ok" = 0 ] || grep -q -E '^shard [0-9]+: (--- FAIL|exit [1-9])' "$OUT/exhaustive.log"; then echo "FAIL: exhaustive"; fail=1; fi
 fi
