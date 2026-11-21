@@ -34,7 +34,7 @@ IMAGE="${BEND_IMAGE:-go-zenon-bend:$BEND_VERSION}"
 VIMAGE="${BEND_VERDICT_IMAGE:-$IMAGE-verdict}"
 VERDICT="${VERDICT:-1}"
 # The rules whose mutants must each turn a witness False (step 3).
-WITNESSED="ledger"
+WITNESSED="ledger escrow"
 RULES="${RULES:-ledger escrow}"
 # each rule once, in the order given
 RULES="$(printf '%s\n' $RULES | awk '!seen[$0]++' | tr '\n' ' ')"
