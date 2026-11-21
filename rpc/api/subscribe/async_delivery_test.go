@@ -527,9 +527,19 @@ func TestUnsubscribeDuringBlockedWriteReclaimsSlot(t *testing.T) {
 
 // Closing the connection during a blocked write also reclaims the slot:
 // the lifecycle goroutine sees the disconnect signal immediately, without
-// waiting for the delivery goroutine's write to return. Fails if lifecycle
-// and delivery share one goroutine: the watcher cannot service disconnected
-// until the write returns.
+// waiting for the write to return. Fails if lifecycle and delivery share one
+// goroutine: the watcher cannot service the disconnect until the write
+// returns.
+//
+// The gated write is the event's notification, and which goroutine makes it
+// depends on whether the broadcast overtakes the subscribe call. The client
+// has the subscribe response before the call's goroutine activates the
+// notifier, so the event may reach the notifier first: it is then buffered
+// and written by the call's goroutine, in the activation flush, and the
+// delivery goroutine stays idle. Otherwise the delivery goroutine writes it.
+// The slot must come back in both cases. A write held on the call's
+// goroutine is pinned on its own, without depending on the scheduler, by
+// TestDisconnectDuringBlockedSubscribeReplyReclaimsSlot.
 func TestDisconnectDuringBlockedWriteReclaimsSlot(t *testing.T) {
 	server, rpcServer := startTestServer(t)
 
@@ -564,4 +574,57 @@ func TestDisconnectDuringBlockedWriteReclaimsSlot(t *testing.T) {
 	// for the gated write.
 	clientEnd.Close()
 	waitLive(t, server, 0)
+}
+
+// A client that goes away while the goroutine of its subscribe call is
+// still writing to it releases its slot at once as well. Here the write is
+// the subscribe response itself; the activation flush that follows it runs
+// on the same goroutine and is covered by the same path. The connection's
+// teardown waits for that goroutine before it closes the connection, so the
+// watcher must learn of the loss from the subscription's own signal, not
+// from the connection's close. Fails if the slot is held until the write
+// returns: with the global limit at one, the replacement subscription on
+// another connection is refused while the first write is still gated.
+func TestDisconnectDuringBlockedSubscribeReplyReclaimsSlot(t *testing.T) {
+	server, rpcServer := startTestServer(t)
+	server.SetMaxSubscriptions(1)
+
+	serverEnd, clientEnd := net.Pipe()
+	conn := &signaledGateConn{
+		Conn:    serverEnd,
+		gate:    make(chan struct{}),
+		entered: make(chan struct{}),
+	}
+	// Same LIFO order as above: close clientEnd, release the gate so the
+	// call's goroutine can finish, then close serverEnd.
+	t.Cleanup(func() { serverEnd.Close() })
+	t.Cleanup(func() { close(conn.gate) })
+	t.Cleanup(func() { clientEnd.Close() })
+
+	// Every write is gated from the start, so the first one to reach the
+	// gate is the subscribe response, written by the call's goroutine.
+	conn.blockWrites()
+	go rpcServer.ServeCodec(rpc.NewCodec(conn), 0)
+	if _, err := clientEnd.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"ledger.subscribe","params":["momentums"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-conn.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("subscribe response write never entered the gate")
+	}
+	// The subscription was queued before the call returned; wait until the
+	// worker has installed it and its watcher is running.
+	waitInstalled(t, server, MomentumsSubscription, 1)
+
+	clientEnd.Close()
+	waitLive(t, server, 0)
+
+	// The slot is reusable while the first connection's write is still
+	// gated: with a limit of one, this subscribe would be refused otherwise.
+	replacement := rpc.DialInProc(rpcServer)
+	t.Cleanup(replacement.Close)
+	if _, err := replacement.Subscribe(context.Background(), "ledger", make(chan interface{}, 1), "momentums"); err != nil {
+		t.Fatalf("replacement subscription refused while the first write was still gated: %v", err)
+	}
 }

@@ -306,7 +306,11 @@ type Subscription struct {
 	err       chan error // closed on unsubscribe
 }
 
-// Err returns a channel that is closed when the client send an unsubscribe request.
+// Err returns a channel that is closed when the client sends an unsubscribe
+// request or the connection ends. When the connection ends the channel first
+// carries the error that ended it. That happens as soon as the connection's
+// teardown starts: before the calls still writing to the peer have returned,
+// and so before the connection is closed and Notifier.Closed fires.
 func (s *Subscription) Err() <-chan error {
 	return s.err
 }

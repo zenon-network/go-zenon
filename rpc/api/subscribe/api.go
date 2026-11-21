@@ -427,6 +427,11 @@ func (s *Server) install(subscription *Subscription) {
 // itself it only uses the immutable options and rpc fields to find the
 // entry. A client that went away while the entry was still queued is
 // removed right after install.
+//
+// A lost connection reaches the watcher through unsubscribed first: the RPC
+// layer ends the subscription when the connection's teardown starts, and
+// closes the connection, which is what disconnected reports, only after the
+// calls still writing to the peer have returned or timed out.
 func (s *Server) watch(subscription *Subscription, done chan<- struct{}, unsubscribed <-chan error, disconnected <-chan interface{}) {
 	defer s.wg.Done()
 	defer close(done)
