@@ -78,7 +78,7 @@ func newReadinessManager(t *testing.T, minPeers int, height uint64) (*ProtocolMa
 }
 
 func TestReadyToProduce_NotEnoughPeersBlocks(t *testing.T) {
-	useReadinessClock(t)
+	clock := useReadinessClock(t)
 	pm, _ := newReadinessManager(t, 2, 10)
 	addPeer(t, pm, 1, 10)
 	if pm.ReadyToProduce() {
@@ -86,6 +86,14 @@ func TestReadyToProduce_NotEnoughPeersBlocks(t *testing.T) {
 	}
 	if pm.SyncInfo().State != NotEnoughPeers {
 		t.Fatalf("SyncInfo state = %v, want NotEnoughPeers", pm.SyncInfo().State)
+	}
+	// The peer minimum is not a claim and does not lapse with the window.
+	clock.t = clock.t.Add(2 * producerStallWindow)
+	if pm.ReadyToProduce() {
+		t.Fatal("ready with fewer peers than the minimum once the window elapsed")
+	}
+	if pm.readyToProduce(&handoffDownloader{session: true}) {
+		t.Fatal("ready with fewer peers than the minimum while a session runs")
 	}
 }
 
@@ -230,9 +238,11 @@ func (b *failingInsertBridge) InsertChainMoved([]*nom.DetailedMomentum) (int, bo
 	return 0, b.moved, errors.New("injected import failure")
 }
 
-// A running download session blocks production however long the window has
-// been exceeded.
-func TestReadyToProduce_RunningSessionBlocks(t *testing.T) {
+// A running download session holds production while the node has imported
+// a download batch within the stall window, also when the frontier matches
+// the target. A session that has gone the window without an import holds
+// nothing: it is the claim that started it, still unverified.
+func TestReadyToProduce_RunningSessionHoldsOnlyWhileImporting(t *testing.T) {
 	clock := useReadinessClock(t)
 	pm, bridge := newReadinessManager(t, 1, 10)
 	p := addPeer(t, pm, 1, 12)
@@ -270,16 +280,47 @@ func TestReadyToProduce_RunningSessionBlocks(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("session did not start")
 	}
+	if !pm.downloader.Synchronising() {
+		t.Fatal("the session is not running")
+	}
+	// The window lapsed before the session started and the session has
+	// imported nothing, so starting it does not close the gate again.
+	if !pm.ReadyToProduce() {
+		t.Fatal("blocked by a session that has imported nothing since the window elapsed")
+	}
+
+	// The session imports a batch: from here it holds production.
+	bridge.moved = true
+	if _, err := pm.insertFromDownload(nil); err != nil {
+		t.Fatal(err)
+	}
 	if pm.ReadyToProduce() {
-		t.Fatal("ready while a download session is running")
+		t.Fatal("ready while a download session that is importing runs")
 	}
 	// Reaching the advertised height does not end the session; the
 	// frontier may still move, so the caught-up fast path waits too.
 	bridge.height = 12
 	if pm.ReadyToProduce() {
-		t.Fatal("ready while a session runs although the frontier matches the target")
+		t.Fatal("ready while an importing session runs although the frontier matches the target")
+	}
+	clock.t = clock.t.Add(producerStallWindow - time.Second)
+	if pm.ReadyToProduce() {
+		t.Fatal("ready before the window since the session's last import elapsed")
 	}
 	bridge.height = 10
+	if pm.ReadyToProduce() {
+		t.Fatal("ready before the window since the session's last import elapsed")
+	}
+	// The session is still running but has imported nothing for a full
+	// window.
+	clock.t = clock.t.Add(time.Second)
+	if !pm.downloader.Synchronising() {
+		t.Fatal("the session ended early")
+	}
+	if !pm.ReadyToProduce() {
+		t.Fatal("blocked by a session that has imported nothing for the window")
+	}
+
 	close(release)
 	// An empty hash set ends the session quickly.
 	_ = pm.downloader.DeliverHashes(p.id, nil, nil)
@@ -296,5 +337,163 @@ func TestReadyToProduce_RunningSessionBlocks(t *testing.T) {
 	}
 	if !pm.ReadyToProduce() {
 		t.Fatal("still blocked after the session ended without importing")
+	}
+}
+
+// Sessions that never import do not hold production past the stall window,
+// however they are arranged: back to back, each shorter than the window,
+// with the gap the syncer leaves before it starts the next, with or
+// without blocks parked in the queue behind a head that never arrives.
+// This is what one peer claiming the best height can produce at will.
+// Nothing in it is an import, so nothing in it restarts the window; an
+// import does.
+func TestReadyToProduce_SessionsThatImportNothingDoNotHoldPastTheWindow(t *testing.T) {
+	clock := useReadinessClock(t)
+	pm, bridge := newReadinessManager(t, 1, 10)
+	addPeer(t, pm, 1, 1<<24)
+	start := clock.t
+
+	// Each session ends inside what would be its own first window, and the
+	// next starts on the following forced sync.
+	const sessionLength = producerStallWindow - 5*time.Second
+	const cycle = sessionLength + forceSyncCycle
+	for elapsed := time.Duration(0); elapsed < 10*producerStallWindow; elapsed += time.Second {
+		clock.t = start.Add(elapsed)
+		phase := elapsed % cycle
+		work := &handoffDownloader{session: phase < sessionLength}
+		if work.session && phase >= sessionLength/2 {
+			// Blocks delivered for every position but the head: the queue
+			// counts them and the worker can take none.
+			work.stage = stageDelivered
+		}
+		ready := pm.readyToProduce(work)
+		if elapsed < producerStallWindow && ready {
+			t.Fatalf("ready %v after start-up, behind the advertised height and inside the window", elapsed)
+		}
+		if elapsed >= producerStallWindow && !ready {
+			t.Fatalf("blocked %v after the last import by download activity that imported nothing (session %v, stage %d)", elapsed, work.session, work.stage)
+		}
+	}
+
+	// A download import is progress: sessions hold again, for one window
+	// from it.
+	bridge.moved = true
+	if _, err := pm.insertFromDownload(nil); err != nil {
+		t.Fatal(err)
+	}
+	if pm.readyToProduce(&handoffDownloader{session: true}) {
+		t.Fatal("ready while a session runs right after a download import")
+	}
+	if pm.readyToProduce(&handoffDownloader{session: true, stage: stageDelivered}) {
+		t.Fatal("ready with blocks in the queue right after a download import")
+	}
+	clock.t = clock.t.Add(producerStallWindow - time.Second)
+	if pm.readyToProduce(&handoffDownloader{session: true}) {
+		t.Fatal("ready while a session runs inside the window since the last import")
+	}
+	clock.t = clock.t.Add(time.Second)
+	if !pm.readyToProduce(&handoffDownloader{session: true}) {
+		t.Fatal("blocked by a session a full window after the last import")
+	}
+}
+
+// The same through a real downloader session against a scripted origin:
+// every hash request is answered with a hash the node does not have, which
+// walks the ancestor search over the whole local chain, and the forward
+// request with an empty reply, which ends the session as completed. The
+// gate is read while each request is outstanding, so the session is
+// running at every read. Inside the window production is held at every
+// read; once the window has passed without an import, sessions run back to
+// back and hold nothing.
+func TestReadyToProduce_AncestorSearchSessionsDoNotHoldPastTheWindow(t *testing.T) {
+	clock := useReadinessClock(t)
+	pm, _ := newReadinessManager(t, 1, 1<<20)
+	p := addPeer(t, pm, 1, 1<<24)
+
+	var (
+		mu         sync.Mutex
+		rounds     int
+		notRunning int
+		ready      int
+		unknown    uint64
+	)
+	// Every request, whatever it asks for, is observed and then answered.
+	answer := func(from uint64, count int) error {
+		running, gate := pm.downloader.Synchronising(), pm.ReadyToProduce()
+		mu.Lock()
+		rounds++
+		if !running {
+			notRunning++
+		}
+		if gate {
+			ready++
+		}
+		unknown++
+		var hash types.Hash
+		hash[0] = 0xee
+		for i := 0; i < 8; i++ {
+			hash[types.HashSize-1-i] = byte(unknown >> (8 * i))
+		}
+		mu.Unlock()
+		// The forward fetch starts right above the ancestor the search
+		// settled on, which is the bottom of the chain.
+		if from == 1 && count > 1 {
+			return pm.downloader.DeliverHashes(p.id, nil, nil)
+		}
+		return pm.downloader.DeliverHashes(p.id, []types.Hash{hash}, nil)
+	}
+	err := pm.downloader.RegisterPeer(p.id, int(ProtocolVersions[0]), p.Head(),
+		func(types.Hash) error { return nil },
+		answer,
+		func([]types.Hash) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := func() (int, int) {
+		t.Helper()
+		mu.Lock()
+		rounds, notRunning, ready = 0, 0, 0
+		mu.Unlock()
+		done := make(chan struct{})
+		go func() {
+			pm.downloader.Synchronise(p.id, p.Head(), p.Td())
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			t.Fatal("session did not end")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if notRunning != 0 {
+			t.Fatalf("%d of %d requests were observed outside a running session", notRunning, rounds)
+		}
+		return rounds, ready
+	}
+
+	// Inside the window since start-up: held at every round.
+	rounds, readyRounds := session()
+	if rounds < 3 {
+		t.Fatalf("the session made %d requests, want the head request, an ancestor search and the forward request", rounds)
+	}
+	if readyRounds != 0 {
+		t.Fatalf("ready in %d of %d rounds of a session inside the window", readyRounds, rounds)
+	}
+	if pm.peers.Peer(p.id) == nil {
+		t.Fatal("the scripted origin was dropped; the back-to-back case needs a session ending that keeps its origin")
+	}
+
+	// Past the window: the same sessions, one after another, hold nothing.
+	clock.t = clock.t.Add(producerStallWindow)
+	for i := 0; i < 3; i++ {
+		rounds, readyRounds := session()
+		if rounds < 3 {
+			t.Fatalf("session %d made %d requests", i, rounds)
+		}
+		if readyRounds != rounds {
+			t.Fatalf("session %d: blocked in %d of %d rounds although nothing was imported for the window", i, rounds-readyRounds, rounds)
+		}
+		t.Logf("session %d: %d request rounds, ready in all of them", i, rounds)
 	}
 }
