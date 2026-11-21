@@ -258,14 +258,14 @@ func (h *handler) handleMsg(msg *jsonrpcMessage, slotAcquired bool) {
 // The contexts are cancelled first: a call that returns only when its
 // context ends would otherwise hold the connection's teardown open.
 //
-// The subscriptions are ended before the wait as well. A call's goroutine
-// can sit in a write, of its reply or of a notifier's activation flush,
-// until that write returns or reaches its deadline, and the connection is
-// only closed, and closed() only fires, after the wait. The owner of a
-// subscription learns from its Err channel that the connection is going
-// away and must not be kept waiting behind a write to a peer that has
-// already gone. A subscribe call still running during the wait registers
-// its subscription afterwards, so a second pass ends those.
+// The subscriptions registered so far are ended before the wait as well. A
+// call's goroutine can sit in a write, of its reply or of a notifier's
+// activation flush, until that write returns or reaches its deadline, and
+// the caller closes the connection only after close has returned. The
+// owner of a subscription learns from its Err channel that the connection
+// is going away and must not be kept waiting behind a write to a peer that
+// has already gone. A subscribe call still running during the wait
+// registers its subscription afterwards, so a second pass ends those.
 func (h *handler) close(err error, inflightReq *requestOp) {
 	h.cancelAllRequests(err, inflightReq)
 	h.cancelRoot()

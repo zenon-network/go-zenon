@@ -308,9 +308,15 @@ type Subscription struct {
 
 // Err returns a channel that is closed when the client sends an unsubscribe
 // request or the connection ends. When the connection ends the channel first
-// carries the error that ended it. That happens as soon as the connection's
-// teardown starts: before the calls still writing to the peer have returned,
-// and so before the connection is closed and Notifier.Closed fires.
+// carries the error that ended it.
+//
+// A subscription that is registered on the connection when its teardown
+// starts is ended at that point, before the teardown waits for the calls
+// still running, so it is not kept open behind a call that is writing to
+// the peer. A subscription registered by a call that was still running is
+// ended once those calls have returned. No order is promised between this
+// channel and Notifier.Closed: after a read error this channel comes first,
+// while a write failure or Server.Stop closes the connection first.
 func (s *Subscription) Err() <-chan error {
 	return s.err
 }

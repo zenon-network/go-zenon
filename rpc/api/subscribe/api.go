@@ -428,10 +428,13 @@ func (s *Server) install(subscription *Subscription) {
 // entry. A client that went away while the entry was still queued is
 // removed right after install.
 //
-// A lost connection reaches the watcher through unsubscribed first: the RPC
-// layer ends the subscription when the connection's teardown starts, and
-// closes the connection, which is what disconnected reports, only after the
-// calls still writing to the peer have returned or timed out.
+// Which signal reports a lost connection first depends on how it was lost.
+// After a read error the RPC layer ends the subscription, which unsubscribed
+// reports, when the connection's teardown starts, and closes the connection,
+// which disconnected reports, only after the calls still running on it have
+// returned; a call that is writing to the peer returns when its write does
+// or times out. A write failure or a stop of the RPC server closes the
+// connection first.
 func (s *Server) watch(subscription *Subscription, done chan<- struct{}, unsubscribed <-chan error, disconnected <-chan interface{}) {
 	defer s.wg.Done()
 	defer close(done)
