@@ -116,6 +116,10 @@ const (
 // did is then not known. The caller marks such a call with a '?' in the
 // node's line, so that it is counted neither as accepted nor as refused.
 //
+// (Such a message begins with the word "unreadable": node_faults.py knows
+// it by that beginning, and not by the words turning up inside some other
+// message.)
+//
 // A call that cannot be read back, because the read failed or the send is
 // not on the ledger, says nothing about the contract: the test stops there,
 // before that could be taken for a refusal. (node_faults.py never counts
@@ -123,13 +127,13 @@ const (
 func answered(t *testing.T, ledger *api.LedgerApi, what fmt.Stringer, send types.Hash) (ok, there bool) {
 	block, err := ledger.GetAccountBlockByHash(send)
 	if err != nil {
-		t.Fatalf("%v: the call could not be read back: %v", what, err)
+		t.Fatalf("unreadable: %v: the call could not be read back: %v", what, err)
 	}
 	if block == nil {
-		t.Fatalf("%v: the call could not be read back: the send is not on the ledger", what)
+		t.Fatalf("unreadable: %v: the call could not be read back: the send is not on the ledger", what)
 	}
 	if block.Hash != send {
-		t.Fatalf("%v: the call could not be read back: asked for %v and was given %v", what, send, block.Hash)
+		t.Fatalf("unreadable: %v: the call could not be read back: asked for %v and was given %v", what, send, block.Hash)
 	}
 	if block.PairedAccountBlock == nil {
 		t.Errorf("%v: the contract has not answered the call", what)
@@ -144,9 +148,10 @@ func answered(t *testing.T, ledger *api.LedgerApi, what fmt.Stringer, send types
 	// And it must be whole: the status is part of what the block's hash is
 	// made of, so a receive whose contents do not give its hash was not
 	// read as the node stored it.
+	// That is a failure to read, not something the contract did: the test
+	// stops, as for a call that could not be read at all.
 	if p := block.PairedAccountBlock; p.AccountBlock.ComputeHash() != p.Hash {
-		t.Errorf("%v: the contract's receive of the call does not hash to its own hash %v", what, p.Hash)
-		return false, false
+		t.Fatalf("unreadable: %v: the call could not be read back: the contract's receive of it does not hash to its own hash %v", what, p.Hash)
 	}
 	data := block.PairedAccountBlock.Data
 	if len(data) != 8 {

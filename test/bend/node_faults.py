@@ -175,7 +175,7 @@ OWN = re.compile(r"^    [a-z_]+_test\.go:\d+: (.*)$")
 
 # A call the test could not read back. The test stops on it; whatever else
 # it printed before, the run says nothing about the fault.
-UNREAD = r": the call could not be read back: "
+UNREAD = r"unreadable: .*: the call could not be read back: "
 
 
 # Output is cut into lines at the line feed and nowhere else. (Python's
@@ -187,7 +187,7 @@ def events(raw):
     it belongs to. Returns the whole output as text, the output of each
     test by its exact name, and the names of the tests that failed. A line
     that is not an event (the tool's own complaints) is kept in the text."""
-    text, by_test, failed = [], {}, set()
+    text, by_test, failed, runs = [], {}, set(), {}
     for line in raw.split("\n"):
         try:
             ev = json.loads(line)
@@ -201,7 +201,9 @@ def events(raw):
             by_test.setdefault(ev.get("Test", ""), []).append(ev.get("Output", ""))
         elif ev["Action"] == "fail" and ev.get("Test"):
             failed.add(ev["Test"])
-    return "".join(text), {k: "".join(v) for k, v in by_test.items()}, failed
+        elif ev["Action"] == "run" and ev.get("Test"):
+            runs[ev["Test"]] = runs.get(ev["Test"], 0) + 1
+    return "".join(text), {k: "".join(v) for k, v in by_test.items()}, failed, runs
 
 
 def of_test(out, test):
@@ -247,15 +249,22 @@ def first_evidence(out, expect, test):
     return found
 
 
-STOP = {"launching": False, "pending": None}
+STOP = {"launching": False, "pending": None, "stopping": False}
 
 
 def stopped(code):
     """The handler of a signal that tells this script to stop."""
     def handler(*_):
+        # Once the script is on its way out, a further signal does nothing:
+        # it must not cut short the stopping of the go tool. That is said
+        # here, in the handler, so that there is no moment between the
+        # first signal and the cleanup at which a second one could.
+        if STOP["stopping"]:
+            return
         if STOP["launching"]:
             STOP["pending"] = code
         else:
+            STOP["stopping"] = True
             sys.exit(code)
     return handler
 
@@ -271,6 +280,7 @@ def run_test(cmd, cwd, env):
     try:
         STOP["launching"] = False
         if STOP["pending"] is not None:
+            STOP["stopping"] = True
             sys.exit(STOP["pending"])
         proc.stdout_text, proc.stderr_text = proc.communicate()
     except BaseException:
@@ -336,12 +346,18 @@ def run_in(out_dir, names, scratch):
         # what the test writes for the model goes into this run's directory
         # too, so that it is removed with it if the run is stopped
         env["BEND_SCRATCH"] = scratch
+        # one execution of the test: a -cpu list in GOFLAGS would run it
+        # once for each entry
+        env["GOFLAGS"] = " ".join(f for f in env.get("GOFLAGS", "").split() if not f.startswith(("-cpu", "--cpu")))
         proc = run_test(
             ["go", "test", "-overlay", overlay, "-tags", "bendrules", "./test/bend/", "-run", "^%s$" % test, "-count=1", "-json", "-fullpath=false", "-timeout", "20m"],
             cwd=ROOT, env=env)
         # out is everything, for the checks on the run as a whole; mine is
         # what the named test itself printed, and all that counts as evidence
-        out, by_test, failures = events(proc.stdout_text)
+        out, by_test, failures, runs = events(proc.stdout_text)
+        # The named test must have run exactly once: its evidence is then
+        # of one execution, and not put together from two.
+        once = runs.get(test, 0) == 1 and not [n for n in runs if n != test and n.split("/")[0].startswith(test + "-")]
         out += proc.stderr_text
         mine = by_test.get(test, "")
         # The test can also fail because the model could not be run at all
@@ -352,9 +368,9 @@ def run_in(out_dir, names, scratch):
         # comparison, whatever it had printed before: also not a catch.
         crashed = re.search(r"^(panic: |fatal error: |panic: test timed out)|\*\*\* Test killed", out, re.M)
         evidence = first_evidence(mine, expect, test)
-        failed = proc.returncode != 0 and test in failures
+        failed = proc.returncode != 0 and test in failures and once
         # (anywhere in the output: no test's unread call is evidence)
-        unread = [m.group(1) for m in map(OWN.match, out.split("\n")) if m and re.search(UNREAD, m.group(1))]
+        unread = [m.group(1) for m in map(OWN.match, out.split("\n")) if m and re.match(UNREAD, m.group(1))]
         with open(os.path.join(full, name + ".log"), "w") as f:
             f.write(out)
         if unread:

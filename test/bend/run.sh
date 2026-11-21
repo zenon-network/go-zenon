@@ -94,7 +94,7 @@ finish() {
   status=$?
   trap "" INT TERM HUP
   [ -z "$(echo $active)" ] || stop_active
-  rm -rf "$RUN"
+  rm -rf "$RUN" || true
   exit "$status"
 }
 stop_active() {
@@ -121,10 +121,20 @@ trap stop_all INT TERM HUP
 # background, and notes it. await also waits for it: the shell acts on a
 # signal while it waits, and not while a foreground command runs. A command
 # started this way reads nothing: what it needs is given to it in files.
-GROUP='import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])'
+# With merge=1 set just before, the command's error output goes where its
+# output goes. That is done in the command itself, not by a redirection
+# here, which would also catch what this shell says when it is traced.
+GROUP='import os, sys
+os.setsid()
+if os.environ.pop("BEND_MERGE", None):
+    os.dup2(1, 2)
+os.execvp(sys.argv[1], sys.argv[1:])'
+merge=0
 ingroup() {
   launching=1
-  python3 -c "$GROUP" "$@" < /dev/null & last=$!
+  if [ "$merge" = 1 ]; then BEND_MERGE=1 python3 -c "$GROUP" "$@" < /dev/null & last=$!
+  else python3 -c "$GROUP" "$@" < /dev/null & last=$!; fi
+  merge=0
   active="$active $last"
   launching=0
   [ "$pending" = 0 ] || stop_all
@@ -141,7 +151,7 @@ fail=0
 bend() { # bend <image> <dir mounted at /work> <args...>
   img="$1"; dir="$2"; shift 2
   # (through await, so that a signal is acted on while the container runs)
-  await docker run --rm --network none -v "$dir":/work:ro "$img" "$@" 2>&1
+  merge=1; await docker run --rm --network none -v "$dir":/work:ro "$img" "$@"
 }
 
 # Print one line as it is. (echo would rewrite backslash sequences, and
@@ -158,8 +168,10 @@ echo
 echo "== 1. proofs"
 : > "$OUT/proofs.log"
 for rule in $RULES; do
-  bend "$IMAGE" "$HERE" "$rule/PROOF.bend" --check-only > "$RUN/proofs.txt" || true
+  # the checker must both say so and end well
+  if bend "$IMAGE" "$HERE" "$rule/PROOF.bend" --check-only > "$RUN/proofs.txt"; then ended=0; else ended=$?; fi
   res="$(cat "$RUN/proofs.txt")"
+  [ "$ended" = 0 ] || { echo "FAIL: proofs of $rule (the checker ended with status $ended)"; fail=1; }
   say "$rule: $res" | tee -a "$OUT/proofs.log"
   say "$res" | grep -q '^ALL PROOFS CHECK' || { echo "FAIL: proofs of $rule"; fail=1; }
 done
@@ -172,8 +184,9 @@ if [ "$VERDICT" = 0 ]; then
 else
   docker image inspect "$VIMAGE" >/dev/null 2>&1 || docker build -t "$VIMAGE" --build-arg BASE="$IMAGE" -f "$HERE/Dockerfile.verdict" "$HERE"
   for rule in $RULES; do
-    bend "$VIMAGE" "$HERE" "$rule/PROOF.bend" --verdict > "$RUN/verdict.txt" || true
+    if bend "$VIMAGE" "$HERE" "$rule/PROOF.bend" --verdict > "$RUN/verdict.txt"; then ended=0; else ended=$?; fi
     res="$(cat "$RUN/verdict.txt")"
+    [ "$ended" = 0 ] || { echo "FAIL: verdict of $rule (the checker ended with status $ended)"; fail=1; }
     say "$rule: $res" | tee -a "$OUT/verdict.log"
     say "$res" | grep -q '^ALL PROOFS CHECK' || { echo "FAIL: verdict of $rule"; fail=1; }
   done
@@ -272,11 +285,11 @@ if [ "$listed" = 0 ] || [ "$lines" != "$listed" ] || [ "$caught" != "$listed" ];
 
 echo
 echo "== 4. node"
-node_tests() { await go test -C "$ROOT" -tags bendrules ./test/bend/ -skip '^TestExhaustive' -count=1 -v -json=false -fullpath=false -timeout 30m; }
+node_tests() { merge=1; await go test -C "$ROOT" -tags bendrules ./test/bend/ -skip '^TestExhaustive' -count=1 -v -json=false -fullpath=false -timeout 30m; }
 # The mock chain logs every block; node.log keeps the lines of the test.
 if [ "${NODE:-1}" = 0 ]; then
   echo "skipped (NODE=0)" | tee "$OUT/node.log"
-elif node_tests > "$RUN/node-full.log" 2>&1; then
+elif node_tests > "$RUN/node-full.log"; then
   grep -E '^(=== |--- |ok|PASS|FAIL)|^ +[a-z_]+_test\.go:[0-9]+: ' "$RUN/node-full.log" | sed 's/^ *[a-z_]*_test\.go:[0-9]*: //' > "$OUT/node.log"
   grep -E '^(--- |ok|FAIL)|scenarios|refused +[0-9]+ times|accepted +[0-9]+|refunded +[0-9]+|paid zero|rounds:' "$OUT/node.log" || true
   # "go test" also ends well when it ran nothing (a -run in GOFLAGS, a
@@ -343,7 +356,7 @@ else
   cd "$HERE"   # the tests look for the models beside them
   i=0; pids=""
   while [ "$i" -lt "$SHARDS" ]; do
-    ingroup env BEND_DEPTH="$DEPTH" BEND_SHARD="$i/$SHARDS" "$RUN/bend.test" -test.run '^TestExhaustive' -test.v -test.fullpath=false -test.timeout 12h > "$RUN/exhaustive-$i.log" 2>&1
+    merge=1; ingroup env BEND_DEPTH="$DEPTH" BEND_SHARD="$i/$SHARDS" "$RUN/bend.test" -test.run '^TestExhaustive' -test.v -test.fullpath=false -test.timeout 12h > "$RUN/exhaustive-$i.log"
     pids="$pids $last"
     i=$((i + 1))
   done
