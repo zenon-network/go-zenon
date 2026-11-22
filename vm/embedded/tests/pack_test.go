@@ -117,6 +117,7 @@ func assertComplexDataStructureEqual(t *testing.T, expected, actual *ComplexData
 	assert.Equal(t, expected.Title, actual.Title)
 	assert.Equal(t, expected.Keys, actual.Keys)
 	assert.Equal(t, expected.Values1, actual.Values1)
+	assert.Equal(t, expected.Values2 == nil, actual.Values2 == nil, "Values2 nil-ness")
 	if assert.Len(t, actual.Values2, len(expected.Values2)) {
 		for i := range expected.Values2 {
 			assert.Zerof(t, expected.Values2[i].Cmp(actual.Values2[i]), "Values2[%d]: expected %s, got %s", i, expected.Values2[i], actual.Values2[i])
