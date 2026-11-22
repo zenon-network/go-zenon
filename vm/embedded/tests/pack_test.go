@@ -108,6 +108,22 @@ func String(length int) string {
 	return StringWithCharset(length, charset)
 }
 
+// assertComplexDataStructureEqual compares the big.Int values by value. A
+// zero built with big.NewInt and a zero decoded from storage differ in their
+// internal representation (nil against empty), so assert.Equal on the whole
+// struct fails whenever a random draw is 0.
+func assertComplexDataStructureEqual(t *testing.T, expected, actual *ComplexDataStructureVariable) {
+	t.Helper()
+	assert.Equal(t, expected.Title, actual.Title)
+	assert.Equal(t, expected.Keys, actual.Keys)
+	assert.Equal(t, expected.Values1, actual.Values1)
+	if assert.Len(t, actual.Values2, len(expected.Values2)) {
+		for i := range expected.Values2 {
+			assert.Zerof(t, expected.Values2[i].Cmp(actual.Values2[i]), "Values2[%d]: expected %s, got %s", i, expected.Values2[i], actual.Values2[i])
+		}
+	}
+}
+
 func TestPack_SimpleTest(t *testing.T) {
 	context := vm_context.NewGenesisMomentumVMContext()
 	storage := context.GetAccountStore(g.User1.Address).Storage()
@@ -128,7 +144,7 @@ func TestPack_SimpleTest(t *testing.T) {
 	assert.Nil(t, err)
 	variable, err = GetComplexDataStructureVariable(storage, "znn")
 	assert.Nil(t, err)
-	assert.Equal(t, refVariable, variable)
+	assertComplexDataStructureEqual(t, refVariable, variable)
 }
 
 func generateComplexDataStructure(title string) *ComplexDataStructureVariable {
@@ -167,8 +183,8 @@ func TestPack_ComplexTest(t *testing.T) {
 	assert.Nil(t, err)
 	variable, err = GetComplexDataStructureVariable(storage, "znn")
 	assert.Nil(t, err)
-	assert.Equal(t, znnRefVariable, variable)
+	assertComplexDataStructureEqual(t, znnRefVariable, variable)
 	variable, err = GetComplexDataStructureVariable(storage, "qsr")
 	assert.Nil(t, err)
-	assert.Equal(t, qsrRefVariable, variable)
+	assertComplexDataStructureEqual(t, qsrRefVariable, variable)
 }
