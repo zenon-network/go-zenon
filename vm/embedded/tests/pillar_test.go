@@ -551,10 +551,12 @@ t=2001-09-09T02:46:50+0000 lvl=dbug msg="minted ZTS" module=embedded contract=to
 t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1znnxxxxxxxxxxxxx9z4ulx amount=187200000000
 t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded contract=common embedded=z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae from-address=z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0 zts=zts1qsrxxxxxxxxxxxxxmrhjll amount=500000000000
 `)
-	defer func() {
-		constants.PillarEpochRevokeTime = 28800
-		constants.PillarEpochLockTime = 144000
-	}()
+	savedRevokeTime := constants.PillarEpochRevokeTime
+	savedLockTime := constants.PillarEpochLockTime
+	t.Cleanup(func() {
+		constants.PillarEpochRevokeTime = savedRevokeTime
+		constants.PillarEpochLockTime = savedLockTime
+	})
 	constants.PillarEpochRevokeTime = 60
 	constants.PillarEpochLockTime = 60
 

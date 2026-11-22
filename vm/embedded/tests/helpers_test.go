@@ -84,3 +84,14 @@ func saveCommunitySporkGlobals(t *testing.T) {
 		definition.CommunitySporkAddressEndHeight = savedEnd
 	})
 }
+
+// setFuseExpiration overrides constants.FuseExpiration for the calling test
+// and restores the previous value when the test ends, so that the fusion
+// expiration heights other tests assert on do not depend on test order.
+func setFuseExpiration(t *testing.T, momentums uint64) {
+	saved := constants.FuseExpiration
+	constants.FuseExpiration = momentums
+	t.Cleanup(func() {
+		constants.FuseExpiration = saved
+	})
+}
