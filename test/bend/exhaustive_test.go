@@ -3,6 +3,7 @@
 package bend
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"strconv"
@@ -31,15 +32,39 @@ func depth(t *testing.T, extra int) int {
 	return d + extra
 }
 
-// sequences lists every sequence of 1 to depth steps out of n, as indexes,
-// and keeps the ones of this process's shard.
-func sequences(t *testing.T, n, depth int) [][]int {
-	shard, of := 0, 1
+// shardOf reads BEND_SHARD: which part of the sequences this process runs,
+// out of how many.
+func shardOf(t *testing.T) (shard, of int) {
+	shard, of = 0, 1
 	if v := os.Getenv("BEND_SHARD"); v != "" {
 		if _, err := fmt.Sscanf(v, "%d/%d", &shard, &of); err != nil || of < 1 || shard < 0 || shard >= of {
 			t.Fatalf("BEND_SHARD=%q: want i/n with 0 <= i < n", v)
 		}
 	}
+	return shard, of
+}
+
+// report prints what an exhaustive test did, in the one line run.sh reads:
+// which test, which shard, to what length, from how many steps, and how
+// many sequences were compared with the model. compared is counted where a
+// node result is set beside the model's, not where the sequences are
+// listed: a sequence that was listed and never compared is not in it.
+//
+// names are the sequences compared, in order, and the line carries their
+// SHA-256: run.sh works out for itself which sequences this shard is to
+// compare and requires the same digest, so that the same sequences run in
+// every shard, or the wrong ones in this, do not pass for the whole.
+func report(t *testing.T, where string, depth, steps int, names []string, different int) {
+	shard, of := shardOf(t)
+	sum := sha256.Sum256([]byte(strings.Join(names, "\n")))
+	t.Logf("exhaustive: test=%s shard=%d/%d depth=%d steps=%d compared=%d names=%x different=%d", t.Name(), shard, of, depth, steps, len(names), sum, different)
+	t.Logf("%severy sequence of up to %d of %d steps: %d compared, %d different", where, depth, steps, len(names), different)
+}
+
+// sequences lists every sequence of 1 to depth steps out of n, as indexes,
+// and keeps the ones of this process's shard.
+func sequences(t *testing.T, n, depth int) [][]int {
+	shard, of := shardOf(t)
 	var out [][]int
 	count := 0
 	for length := 1; length <= depth; length++ {
@@ -80,7 +105,19 @@ func seqName(seq []int) string {
 const chunk = 400
 
 // TestExhaustiveLedger is case BX-1.
-func TestExhaustiveLedger(t *testing.T) {
+func TestExhaustiveLedger(t *testing.T) { exhaustiveLedger(t, nil, "x-", "") }
+
+// TestExhaustiveLedgerAfterSend is case BX-6: the same list of steps, on a
+// ledger where account 0 has sent 7 to account 1 and a momentum has
+// confirmed it. From an empty ledger a receive that is accepted takes three
+// steps (send, momentum, receive), so BX-1 at a length of 2 has none; here
+// the first step can be one, and the second a receive of the same send
+// again.
+func TestExhaustiveLedgerAfterSend(t *testing.T) {
+	exhaustiveLedger(t, []step{send(0, 1, exactly(7)), tick()}, "y-", "after a send and a momentum, ")
+}
+
+func exhaustiveLedger(t *testing.T, before []step, tag, where string) {
 	d := depth(t, 0)
 	// A send at a height that is taken is only tried when a momentum has
 	// confirmed the account's blocks; otherwise the step leaves a gap. (At a
@@ -102,18 +139,20 @@ func TestExhaustiveLedger(t *testing.T) {
 	}
 	seqs := sequences(t, len(alphabet), d)
 	different := 0
+	var compared []string
 	for start := 0; start < len(seqs); start += chunk {
 		end := min(start+chunk, len(seqs))
 		var results []result
 		for _, seq := range seqs[start:end] {
-			steps := make([]step, len(seq))
-			for i, v := range seq {
-				steps[i] = alphabet[v]
+			steps := append([]step(nil), before...)
+			for _, v := range seq {
+				steps = append(steps, alphabet[v])
 			}
-			results = append(results, runScenario(t, seqName(seq), steps))
+			results = append(results, runScenario(t, tag+strings.TrimPrefix(seqName(seq), "x-"), steps))
 		}
 		lines := model(t, results)
 		for i, r := range results {
+			compared = append(compared, r.name)
 			if lines[i] != r.nodeLine {
 				different++
 				t.Errorf("%s: the node and the model disagree\n  node:  %s\n  model: %s", r.name, r.nodeLine, lines[i])
@@ -123,7 +162,7 @@ func TestExhaustiveLedger(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("every sequence of up to %d of %d steps: %d sequences, %d different", d, len(alphabet), len(seqs), different)
+	report(t, where, d, len(alphabet), compared, different)
 }
 
 func exhaustiveEscrow(t *testing.T, ptlc bool, id string) {
@@ -136,6 +175,7 @@ func exhaustiveEscrow(t *testing.T, ptlc bool, id string) {
 	}
 	seqs := sequences(t, len(alphabet), d)
 	different := 0
+	var compared []string
 	for start := 0; start < len(seqs); start += chunk {
 		end := min(start+chunk, len(seqs))
 		var results []escrowResult
@@ -157,6 +197,7 @@ func exhaustiveEscrow(t *testing.T, ptlc bool, id string) {
 		}
 		lines := runBend(t, "escrow-"+id, src.String(), len(results))
 		for i, r := range results {
+			compared = append(compared, r.name)
 			if lines[i] != r.nodeLine {
 				different++
 				t.Errorf("%s: the node and the model disagree\n  node:  %s\n  model: %s", r.name, r.nodeLine, lines[i])
@@ -166,7 +207,7 @@ func exhaustiveEscrow(t *testing.T, ptlc bool, id string) {
 			}
 		}
 	}
-	t.Logf("every sequence of up to %d of %d steps: %d sequences, %d different", d, len(alphabet), len(seqs), different)
+	report(t, "", d, len(alphabet), compared, different)
 }
 
 // TestExhaustiveHtlc is case BX-2.
@@ -184,6 +225,7 @@ func exhaustiveLock(t *testing.T, stake bool, id string) {
 	}
 	seqs := sequences(t, len(alphabet), d)
 	different := 0
+	var compared []string
 	for start := 0; start < len(seqs); start += chunk {
 		end := min(start+chunk, len(seqs))
 		var results []lockResult
@@ -205,6 +247,7 @@ func exhaustiveLock(t *testing.T, stake bool, id string) {
 		}
 		lines := runBend(t, "escrow-"+id, src.String(), len(results))
 		for i, r := range results {
+			compared = append(compared, r.name)
 			if lines[i] != r.nodeLine {
 				different++
 				t.Errorf("%s: the node and the model disagree\n  node:  %s\n  model: %s", r.name, r.nodeLine, lines[i])
@@ -214,7 +257,7 @@ func exhaustiveLock(t *testing.T, stake bool, id string) {
 			}
 		}
 	}
-	t.Logf("every sequence of up to %d of %d steps: %d sequences, %d different", d, len(alphabet), len(seqs), different)
+	report(t, "", d, len(alphabet), compared, different)
 }
 
 // TestExhaustiveStake is case BX-4.

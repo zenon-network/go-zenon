@@ -26,6 +26,9 @@ import (
 
 // A call to the HTLC or the PTLC contract, in the model's terms.
 type call struct {
+	// where the call is made: the scenario and the number of the step in
+	// it, put before everything the test says about the call
+	at     string
 	kind   byte // 'C' create, 'U' unlock, 'X' reclaim, 'F' a call that fails, 'T' one more momentum
 	claim  bool // the unlock is PTLC's: it pays the caller
 	lock   bool // the create is a stake or a fusion: the maker is the payee
@@ -64,6 +67,11 @@ func (c call) bend() string {
 }
 
 func (c call) String() string {
+	if c.at != "" {
+		at := c.at
+		c.at = ""
+		return at + ": " + c.String()
+	}
 	switch c.kind {
 	case 'C':
 		return fmt.Sprintf("create by %d for %d amount %d expiry %d", c.from, c.payee, c.amount, c.expiry)
@@ -163,6 +171,15 @@ func (n *htlcNode) exists(id int) bool {
 		return false
 	}
 	return n.held(n.entries[id])
+}
+
+// holds is the contract's own balance.
+func (n *htlcNode) holds() *big.Int {
+	amount, err := n.z.Chain().GetFrontierAccountStore(n.contract).GetBalance(znn)
+	if err != nil {
+		n.t.Fatal(err)
+	}
+	return amount
 }
 
 // held says whether the contract holds an entry under this hash.
@@ -279,11 +296,23 @@ func (n *htlcNode) fail(c call) (accepted, settled bool) {
 		return false, false
 	}
 	all := n.settle()
-	if executed(n.t, n.ledger, c, b.Hash) {
+	ok, there := answered(n.t, n.ledger, c, b.Hash)
+	if !there {
+		// nothing is known of this call; what follows is about a refusal
+		n.unknown = true
+		return false, true
+	}
+	if ok {
 		n.t.Errorf("%v: the contract accepted a registration without the deposit", c)
 		return false, true
 	}
 	got := all[c.from]
+	// The contract refused, and kept what it was sent: said in one line,
+	// apart from the other ways a refund can be wrong.
+	if after := held(); len(got) == 0 && new(big.Int).Sub(after, before).Cmp(new(big.Int).SetUint64(c.amount)) == 0 {
+		n.t.Errorf("%v: refused, and the amount was not given back: the contract held %v before and %v after, and no block came back", c, before, after)
+		return false, true
+	}
 	for i, blocks := range all {
 		if i != c.from && len(blocks) != 0 {
 			n.t.Errorf("%v: %d block(s) went to account %d, which made no call", c, len(blocks), i)
@@ -333,6 +362,7 @@ func (n *htlcNode) do(c call) (accepted, settled bool) {
 			data = definition.ABIHtlc.PackMethodPanic(definition.CreateHtlcMethodName,
 				users[c.payee].Address, c.expiry, uint8(definition.HashTypeSHA3), uint8(32), crypto.Hash(preimage(len(n.entries))))
 		}
+		before := n.holds()
 		b, err := n.send(users[c.from], data, c.amount)
 		if err != nil {
 			if !errors.Is(err, constants.ErrInsufficientBalance) && !errors.Is(err, constants.ErrInvalidTokenOrAmount) {
@@ -340,12 +370,30 @@ func (n *htlcNode) do(c call) (accepted, settled bool) {
 			}
 			return false, false
 		}
-		n.settle()
-		ok := executed(n.t, n.ledger, c, b.Hash)
+		all := n.settle()
+		ok, there := answered(n.t, n.ledger, c, b.Hash)
+		if !there {
+			n.unknown = true
+			return false, true
+		}
 		if held := n.held(b.Hash); held != ok {
 			n.t.Errorf("%v: the contract's status says accepted=%v, but it holds the entry: %v", c, ok, held)
 		}
 		if !ok {
+			// A create the contract refuses gives the amount back: one block
+			// to the caller, carrying what the call carried, and the contract
+			// holds what it held before the call.
+			back := new(big.Int)
+			for _, blk := range all[c.from] {
+				back.Add(back, blk.Amount)
+			}
+			after, amount := n.holds(), new(big.Int).SetUint64(c.amount)
+			switch {
+			case len(all[c.from]) == 0 && new(big.Int).Sub(after, before).Cmp(amount) == 0:
+				n.t.Errorf("%v: refused, and the amount was not given back: the contract held %v before and %v after, and no block came back", c, before, after)
+			case len(all[c.from]) != 1 || back.Cmp(amount) != 0 || after.Cmp(before) != 0:
+				n.t.Errorf("%v: refused, and %d block(s) came back carrying %v, want one carrying %d; the contract held %v before and %v after", c, len(all[c.from]), back, c.amount, before, after)
+			}
 			return false, true
 		}
 		n.entries = append(n.entries, b.Hash)
@@ -383,12 +431,30 @@ func (n *htlcNode) do(c call) (accepted, settled bool) {
 		return false, false
 	}
 	n.settle()
-	ok := executed(n.t, n.ledger, c, b.Hash)
+	ok, there := answered(n.t, n.ledger, c, b.Hash)
+	if !there {
+		n.unknown = true
+		return false, true
+	}
 	// accepted: the entry was there and is gone; refused: it is as it was
 	if after := n.exists(c.id); ok && !(before && !after) || !ok && after != before {
 		n.t.Errorf("%v: the contract's status says accepted=%v, but the entry was held before: %v, after: %v", c, ok, before, after)
 	}
 	return ok, true
+}
+
+// mark is the letter of a call in the node's line: A accepted, R refused,
+// or ? when no answer of the contract could be read. A line with a ? in it
+// equals no line of the model, and none that a fault is known by.
+func mark(ok bool, unknown *bool) byte {
+	if *unknown {
+		*unknown = false
+		return '?'
+	}
+	if ok {
+		return 'A'
+	}
+	return 'R'
 }
 
 type escrowResult struct {
@@ -408,10 +474,12 @@ func runEscrow(t *testing.T, ptlc bool, name string, steps []escrowStep) escrowR
 	defer n.z.StopPanic()
 	r := escrowResult{name: name, bals: n.balances(), now: n.now()}
 	var marks strings.Builder
-	for _, s := range steps {
+	for i, s := range steps {
 		c := s(n)
 		c.claim = ptlc && c.kind == 'U'
+		c.at = fmt.Sprintf("%s step %d", name, i)
 		ok, settled := n.do(c)
+		c.at = ""
 		r.asked = append(r.asked, c)
 		switch {
 		case c.kind == 'T':
@@ -425,7 +493,7 @@ func runEscrow(t *testing.T, ptlc bool, name string, steps []escrowStep) escrowR
 		default:
 			r.calls = append(r.calls, c)
 		}
-		marks.WriteByte(map[bool]byte{true: 'A', false: 'R'}[ok])
+		marks.WriteByte(mark(ok, &n.unknown))
 	}
 	for _, b := range n.balances() {
 		fmt.Fprintf(&marks, " %d", b)
@@ -470,7 +538,7 @@ func wait() escrowStep { return func(*htlcNode) call { return call{kind: 'T'} } 
 // The written scenarios: each way of asking for one entry twice, and the
 // two edges of the expiry.
 func escrowScripted() ([]string, map[string][]escrowStep) {
-	names := []string{"unlock-twice", "unlock-then-reclaim", "reclaim-twice", "reclaim-then-unlock", "wrong-preimage", "expiry-edge-unlock", "expiry-edge-reclaim", "create-expired", "create-overspend", "two-entries", "failed-call"}
+	names := []string{"unlock-twice", "unlock-then-reclaim", "reclaim-twice", "reclaim-then-unlock", "wrong-preimage", "expiry-edge-unlock", "expiry-edge-reclaim", "create-expired", "refund-from-funds", "create-overspend", "two-entries", "failed-call"}
 	return names, map[string][]escrowStep{
 		"unlock-twice":        {create(0, 1, exactly(500), 100), unlock(1, 0, true), unlock(1, 0, true), unlock(2, 0, true), reclaim(0, 0)},
 		"unlock-then-reclaim": {create(0, 1, exactly(500), 60), unlock(2, 0, true), wait(), wait(), wait(), reclaim(0, 0), reclaim(1, 0)},
@@ -482,8 +550,13 @@ func escrowScripted() ([]string, map[string][]escrowStep) {
 		// judged at 30 with expiry 30: the unlock is late and the reclaim is due
 		"expiry-edge-reclaim": {create(0, 1, exactly(500), 30), unlock(1, 0, true), reclaim(0, 0), create(0, 1, exactly(700), 40), reclaim(0, 1), reclaim(0, 1)},
 		// an entry that would be expired when it is made is refused and the amount comes back
-		"create-expired":   {create(0, 1, exactly(500), 10), create(0, 1, exactly(500), 0), create(0, 1, exactly(500), 20), unlock(1, 0, true)},
-		"create-overspend": {create(0, 1, allPlus(1), 100), create(0, 1, exactly(0), 100), create(0, 1, all, 100), create(0, 1, exactly(1), 100), create(0, 1, all, 100), unlock(3, 0, true), unlock(3, 0, true)},
+		"create-expired": {create(0, 1, exactly(500), 10), create(0, 1, exactly(500), 0), create(0, 1, exactly(500), 20), unlock(1, 0, true)},
+		// a refused create of 200 while the contract holds 500 of another
+		// entry: here the contract could pay more than it was sent, so a
+		// refund of the wrong amount shows as an amount, not as a contract
+		// that stops answering
+		"refund-from-funds": {create(0, 1, exactly(500), 100), create(0, 1, exactly(200), 0)},
+		"create-overspend":  {create(0, 1, allPlus(1), 100), create(0, 1, exactly(0), 100), create(0, 1, all, 100), create(0, 1, exactly(1), 100), create(0, 1, all, 100), unlock(3, 0, true), unlock(3, 0, true)},
 		// a call that fails gives the amount back, each time, and not to an
 		// account that could not pay it; around it the entries go on as before
 		"failed-call": {refused(0), refused(0), refused(2), create(0, 1, exactly(500), 100), refused(1), refused(0), unlock(1, 0, true), create(0, 1, all, 100), refused(0), refused(3)},

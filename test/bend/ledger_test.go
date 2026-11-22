@@ -109,30 +109,63 @@ const (
 	statusFail    = 2
 )
 
-// executed finds the contract's receive block for a call and returns the
-// status the contract wrote into it. A call with no receive after it was
-// settled, or with a status that is neither of the two, fails the test:
-// what the contract did is then not known, and the call must not be counted
-// as refused just because nothing changed.
-func executed(t *testing.T, ledger *api.LedgerApi, what fmt.Stringer, send types.Hash) (ok bool) {
+// answered finds the contract's receive block for a call and returns the
+// status the contract wrote into it, and whether there was one to read.
+// A call with no receive after it was settled, or with a status that is
+// neither of the two, fails the test, and there is false: what the contract
+// did is then not known. The caller marks such a call with a '?' in the
+// node's line, so that it is counted neither as accepted nor as refused.
+//
+// (Such a message begins with the word "unreadable": node_faults.py knows
+// it by that beginning, and not by the words turning up inside some other
+// message.)
+//
+// A call that cannot be read back, because the read failed or the send is
+// not on the ledger, says nothing about the contract: the test stops there,
+// before that could be taken for a refusal. (node_faults.py never counts
+// such a run as a fault being noticed.)
+func answered(t *testing.T, ledger *api.LedgerApi, what fmt.Stringer, send types.Hash) (ok, there bool) {
 	block, err := ledger.GetAccountBlockByHash(send)
-	if err != nil || block == nil || block.PairedAccountBlock == nil {
-		t.Errorf("%v: the contract has not answered the call (%v)", what, err)
-		return false
+	if err != nil {
+		t.Fatalf("unreadable: %v: the call could not be read back: %v", what, err)
+	}
+	if block == nil {
+		t.Fatalf("unreadable: %v: the call could not be read back: the send is not on the ledger", what)
+	}
+	if block.Hash != send {
+		t.Fatalf("unreadable: %v: the call could not be read back: asked for %v and was given %v", what, send, block.Hash)
+	}
+	if block.PairedAccountBlock == nil {
+		t.Errorf("%v: the contract has not answered the call", what)
+		return false, false
+	}
+	// The receive must be the contract's receive of this very call: a
+	// status read off another block says nothing about this one.
+	if p := block.PairedAccountBlock; p.FromBlockHash != send || p.Address != block.ToAddress || p.BlockType != nom.BlockTypeContractReceive {
+		t.Errorf("%v: the block paired with the call is not the contract's receive of it (type %d, by %v, of %v)", what, p.BlockType, p.Address, p.FromBlockHash)
+		return false, false
+	}
+	// And it must be whole: the status is part of what the block's hash is
+	// made of, so a receive whose contents do not give its hash was not
+	// read as the node stored it.
+	// That is a failure to read, not something the contract did: the test
+	// stops, as for a call that could not be read at all.
+	if p := block.PairedAccountBlock; p.AccountBlock.ComputeHash() != p.Hash {
+		t.Fatalf("unreadable: %v: the call could not be read back: the contract's receive of it does not hash to its own hash %v", what, p.Hash)
 	}
 	data := block.PairedAccountBlock.Data
 	if len(data) != 8 {
 		t.Errorf("%v: the contract's receive block carries %d bytes, want the 8 of a status", what, len(data))
-		return false
+		return false, false
 	}
 	switch status := binary.BigEndian.Uint64(data); status {
 	case statusSuccess:
-		return true
+		return true, true
 	case statusFail:
-		return false
+		return false, true
 	default:
 		t.Errorf("%v: the contract's receive block carries status %d", what, status)
-		return false
+		return false, false
 	}
 }
 
@@ -154,11 +187,13 @@ func envCount(t *testing.T, name string, def, min int64) int64 {
 
 // node drives one fresh in-process chain.
 type node struct {
-	t     *testing.T
-	z     mock.MockZenon
-	sup   *vm.Supervisor
-	token types.ZenonTokenStandard // the token whose balances are compared
-	sends []types.Hash             // accepted sends, by the number the model gives them
+	// the last call got no answer that could be read (see answered)
+	unknown bool
+	t       *testing.T
+	z       mock.MockZenon
+	sup     *vm.Supervisor
+	token   types.ZenonTokenStandard // the token whose balances are compared
+	sends   []types.Hash             // accepted sends, by the number the model gives them
 }
 
 func newNode(t *testing.T) *node {
@@ -467,11 +502,30 @@ func runBend(t *testing.T, name, program string, want int) []string {
 	}
 	// Under Colima only the home directory is shared with the docker VM, so
 	// the generated program is written next to the models, not to a temp dir.
-	dir := filepath.Join(here, ".scratch", fmt.Sprintf("conformance-%s-%d", name, os.Getpid()))
-	if err := os.RemoveAll(dir); err != nil {
+	// The directory is new each time and no other run knows its name.
+	if err := os.MkdirAll(filepath.Join(here, ".scratch"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Under run.sh it is inside that run's own directory, which run.sh
+	// removes at its end whatever became of this process.
+	base := os.Getenv("BEND_SCRATCH")
+	if base == "" {
+		base = filepath.Join(here, ".scratch")
+	}
+	dir, err := os.MkdirTemp(base, "conformance-"+name+"-")
+	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(dir)
+	// The container runs as another user. What it reads is opened to it
+	// here by name, whatever the umask of this process: MkdirTemp, MkdirAll
+	// and WriteFile all make less when the umask says so.
+	readable := func(path string, mode os.FileMode) {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readable(dir, 0o755)
 	models, err := filepath.Glob(filepath.Join(here, "*", "*.bend"))
 	if err != nil {
 		t.Fatal(err)
@@ -488,13 +542,16 @@ func runBend(t *testing.T, name, program string, want int) []string {
 		if err := os.WriteFile(filepath.Join(dir, rel), data, 0o644); err != nil {
 			t.Fatal(err)
 		}
+		readable(filepath.Join(dir, filepath.Dir(rel)), 0o755)
+		readable(filepath.Join(dir, rel), 0o644)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "run.bend"), []byte(program), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	readable(filepath.Join(dir, "run.bend"), 0o644)
 	// No network, the models mounted read-only, and a time limit: a model
 	// that counts down a balance one unit at a time would run for days.
-	container := fmt.Sprintf("go-zenon-bend-%s-%d", name, os.Getpid())
+	container := "go-zenon-bend-" + filepath.Base(dir)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--name", container, "--network", "none", "-v", dir+":/work:ro", image, "run.bend").CombinedOutput()
@@ -508,8 +565,13 @@ func runBend(t *testing.T, name, program string, want int) []string {
 	}
 	var lines []string
 	sc := bufio.NewScanner(strings.NewReader(string(out)))
+	// a line may be long: one scenario's whole trace
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {
 		lines = append(lines, sc.Text())
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatalf("the model printed something that could not be read: %v", err)
 	}
 	if len(lines) != want {
 		t.Fatalf("the model printed %d lines for %d scenarios:\n%s", len(lines), want, out)
