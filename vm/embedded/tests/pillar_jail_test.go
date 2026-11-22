@@ -483,8 +483,8 @@ func TestPillarJail_LifecycleMatchesColdReplay(t *testing.T) {
 	if f+2 > next {
 		next = f + 2
 	}
-	// Only misses from tick tMin on count, so the re-jail needs them to
-	// span a full window from there.
+	// Only misses from tick tMin on count, so the re-jail needs a miss a
+	// full window after the first of them.
 	insertUntilPillarUpdate(t, z, next+constants.PillarJailWindowPeriods, 7500)
 	jail = expectJailRecord(t, z, g.Pillar3Name, true)
 	s5 := jail.Since

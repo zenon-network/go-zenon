@@ -59,18 +59,19 @@ func advanceJailStreaks(periods []*api.PeriodStats, streaks map[string]*jailStre
 }
 
 // streakJails reports whether a streak jails its pillar: at least
-// constants.PillarJailMinMissedSlots missed slots, from a first to a
-// last miss that span at least constants.PillarJailWindowPeriods ticks.
+// constants.PillarJailMinMissedSlots missed slots, with the first and
+// the last miss at least constants.PillarJailWindowPeriods ticks apart.
 func streakJails(streak *jailStreak) bool {
 	return streak.missed >= constants.PillarJailMinMissedSlots &&
-		streak.last+1-streak.first >= constants.PillarJailWindowPeriods
+		streak.last-streak.first >= constants.PillarJailWindowPeriods
 }
 
 // jailInactivePillars judges the finished election ticks the jail rule
 // has not judged yet and jails every active, non-jailed pillar whose
 // streak then jails it (see advanceJailStreaks and streakJails). The
-// first judgement covers the last constants.PillarJailWindowPeriods
-// finished ticks. When more than constants.PillarJailMaxTicksPerUpdate
+// first judgement covers the last constants.PillarJailWindowPeriods+1
+// finished ticks, the fewest that can hold two misses
+// constants.PillarJailWindowPeriods ticks apart. When more than constants.PillarJailMaxTicksPerUpdate
 // ticks are unjudged, only the newest of them are judged and every
 // carried streak is cleared first, since the skipped ticks may hold
 // production. A pillar's misses count only in ticks that started at or
@@ -91,8 +92,8 @@ func jailInactivePillars(context vm_context.AccountVmContext) error {
 	end := latestStats[0].Tick + 1
 
 	next := uint64(0)
-	if end > constants.PillarJailWindowPeriods {
-		next = end - constants.PillarJailWindowPeriods
+	if end > constants.PillarJailWindowPeriods+1 {
+		next = end - constants.PillarJailWindowPeriods - 1
 	}
 	cursor, err := definition.GetPillarJailCursor(context.Storage())
 	if err == nil {

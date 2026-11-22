@@ -59,7 +59,7 @@ func expectJail(t *testing.T, ctx *testEpochBoundContext, want *definition.Pilla
 		return
 	}
 	common.FailIfErr(t, err)
-	if got.Name != want.Name || got.Jailed != want.Jailed || got.Since != want.Since {
+	if *got != *want {
 		t.Fatalf("jail record = %+v, want %+v", got, want)
 	}
 }
@@ -136,7 +136,8 @@ func TestUnjail_ReceiveBlockRejectsAndKeepsRecord(t *testing.T) {
 
 func TestUnjail_ReceiveBlockClearsJailAndBurnsFee(t *testing.T) {
 	method := &UnjailMethod{MethodName: definition.UnjailMethodName}
-	ctx := newUnjailContext(t, 0, &definition.PillarJail{Name: unjailPillarName, Jailed: true, Since: 100})
+	// The missed-slot run is seeded so the test sees Unjail clear it.
+	ctx := newUnjailContext(t, 0, &definition.PillarJail{Name: unjailPillarName, Jailed: true, Since: 100, MissedSlots: 7, FirstMissTick: 3, LastMissTick: 9})
 	send := unjailSendBlock(unjailOwner, unjailPillarName, types.ZnnTokenStandard, constants.PillarUnjailAmount)
 
 	blocks, err := method.ReceiveBlock(ctx, send)

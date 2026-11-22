@@ -105,9 +105,9 @@ func TestStreakJails(t *testing.T) {
 		streak jailStreak
 		want   bool
 	}{
-		{"enough slots over the full window", jailStreak{missed: min, first: 10, last: 10 + window - 1}, true},
-		{"enough slots one tick short of the window", jailStreak{missed: min, first: 10, last: 10 + window - 2}, false},
-		{"one slot short over the full window", jailStreak{missed: min - 1, first: 10, last: 10 + window - 1}, false},
+		{"enough slots a full window apart", jailStreak{missed: min, first: 10, last: 10 + window}, true},
+		{"enough slots one tick short of a window apart", jailStreak{missed: min, first: 10, last: 10 + window - 1}, false},
+		{"one slot short a full window apart", jailStreak{missed: min - 1, first: 10, last: 10 + window}, false},
 		{"no streak", jailStreak{}, false},
 	}
 	for _, c := range cases {
@@ -147,8 +147,8 @@ func TestAdvanceJailStreaks_SparselyScheduledPillar(t *testing.T) {
 	if !streakJails(streak) {
 		t.Fatalf("an offline, sparsely elected pillar was never jailed: %+v", streak)
 	}
-	if streak.first != 5 || streak.last+1-streak.first < constants.PillarJailWindowPeriods {
-		t.Fatalf("streak %+v, want it to start at tick 5 and span the window", streak)
+	if streak.first != 5 || streak.last-streak.first < constants.PillarJailWindowPeriods {
+		t.Fatalf("streak %+v, want it to start at tick 5 and end a window later", streak)
 	}
 }
 
@@ -171,8 +171,8 @@ func TestAdvanceJailStreaks_ReturnedPillarIsNotJailedWhileUnscheduled(t *testing
 }
 
 // After an unjail in tick 23, the pillar produces in tick 25 and then
-// stops. Its production counts, so it is not jailed until its misses
-// from tick 26 span a full window.
+// stops. Its production counts, so it is not jailed until it misses a
+// full window after its first miss in tick 26.
 func TestAdvanceJailStreaks_ProductionAfterUnjailCounts(t *testing.T) {
 	streak := &jailStreak{}
 	ticks := jailTicks(23, 26+constants.PillarJailWindowPeriods+3, func(tick uint64, counts map[string]jailCount) {
@@ -188,7 +188,7 @@ func TestAdvanceJailStreaks_ProductionAfterUnjailCounts(t *testing.T) {
 	for _, tick := range ticks {
 		advanceJailStreaks([]*api.PeriodStats{tick}, map[string]*jailStreak{"A": streak})
 		jailed := streakJails(streak)
-		want := tick.Tick >= 26+constants.PillarJailWindowPeriods-1
+		want := tick.Tick >= 26+constants.PillarJailWindowPeriods
 		if jailed != want {
 			t.Fatalf("after tick %d: jailed %v, want %v; streak %+v", tick.Tick, jailed, want, streak)
 		}
@@ -211,8 +211,9 @@ func (ctx *jailUpdateContext) FinishedPeriodStats(count uint64) ([]*api.PeriodSt
 }
 
 // jailFixtureLastTick is the last tick of newJailUpdateContext: the
-// first judgement covers ticks 2 to jailFixtureLastTick, one window.
-var jailFixtureLastTick = constants.PillarJailWindowPeriods + 1
+// first judgement covers ticks 2 to jailFixtureLastTick, one window
+// apart.
+var jailFixtureLastTick = constants.PillarJailWindowPeriods + 2
 
 // newJailUpdateContext stores pillars a to f, e revoked, with c jailed
 // and d and f unjailed before, and ticks 0 to jailFixtureLastTick. a, c
@@ -347,7 +348,7 @@ func TestUpdate_JailsInactivePillarsUnderSpork(t *testing.T) {
 	expectNamedJail(t, ctx, "pillar-e", nil)
 	expectNamedJail(t, ctx, "pillar-f", &definition.PillarJail{Name: "pillar-f", Since: 1, MissedSlots: 3, FirstMissTick: last, LastMissTick: last})
 	expectJailCursor(t, ctx, last+1)
-	if want := []uint64{1, constants.PillarJailWindowPeriods}; !reflect.DeepEqual(ctx.requested, want) {
+	if want := []uint64{1, constants.PillarJailWindowPeriods + 1}; !reflect.DeepEqual(ctx.requested, want) {
 		t.Fatalf("FinishedPeriodStats requested %v, want %v", ctx.requested, want)
 	}
 }
@@ -358,9 +359,10 @@ func TestJailInactivePillars_JudgesOnlyNewTicks(t *testing.T) {
 	ctx := newJailUpdateContext(t, true)
 	common.FailIfErr(t, jailInactivePillars(ctx))
 
-	// d keeps missing until its misses span a full window; f produces.
+	// d keeps missing until its misses are a full window apart; f
+	// produces.
 	from := jailFixtureLastTick + 1
-	to := jailFixtureLastTick + constants.PillarJailWindowPeriods
+	to := jailFixtureLastTick + constants.PillarJailWindowPeriods + 1
 	ctx.periodStats = append(ctx.periodStats, jailTicks(from, to, func(tick uint64, counts map[string]jailCount) {
 		counts["pillar-b"] = jailCount{produced: 1, expected: 1}
 		counts["pillar-d"] = jailCount{expected: 1}

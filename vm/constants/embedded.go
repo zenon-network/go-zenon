@@ -126,9 +126,9 @@ var (
 	// burned.
 	PillarUnjailAmount = big.NewInt(100 * Decimals)
 	// PillarJailWindowPeriods is the number of election ticks (three
-	// hours at the 300-second tick) that a pillar's run of missed
-	// eligible slots, with nothing produced, must span from its first
-	// miss to its last before the pillar can be jailed. It leaves room
+	// hours at the 300-second tick) that the first and the last miss of
+	// a pillar's run of missed eligible slots, with nothing produced,
+	// must be apart before the pillar can be jailed. It leaves room
 	// for planned maintenance such as an upgrade, a resync or a move to
 	// a new host.
 	PillarJailWindowPeriods = uint64(36)
