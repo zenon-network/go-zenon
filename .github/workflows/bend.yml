@@ -8,6 +8,8 @@ on:
   pull_request:
     branches:
       - dev
+      # release candidate branches cut from dev, such as release/0.0.11-rc1
+      - "release/**"
   # Run by hand to take step 6 further than a pull request does: every
   # sequence of up to `depth` steps (one more for the lock cases).
   workflow_dispatch:
