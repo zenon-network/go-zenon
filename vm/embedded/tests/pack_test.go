@@ -114,12 +114,18 @@ func String(length int) string {
 // struct fails whenever a random draw is 0.
 func assertComplexDataStructureEqual(t *testing.T, expected, actual *ComplexDataStructureVariable) {
 	t.Helper()
+	if !assert.NotNil(t, actual) {
+		return
+	}
 	assert.Equal(t, expected.Title, actual.Title)
 	assert.Equal(t, expected.Keys, actual.Keys)
 	assert.Equal(t, expected.Values1, actual.Values1)
 	assert.Equal(t, expected.Values2 == nil, actual.Values2 == nil, "Values2 nil-ness")
 	if assert.Len(t, actual.Values2, len(expected.Values2)) {
 		for i := range expected.Values2 {
+			if !assert.NotNilf(t, actual.Values2[i], "Values2[%d]", i) {
+				continue
+			}
 			assert.Zerof(t, expected.Values2[i].Cmp(actual.Values2[i]), "Values2[%d]: expected %s, got %s", i, expected.Values2[i], actual.Values2[i])
 		}
 	}
