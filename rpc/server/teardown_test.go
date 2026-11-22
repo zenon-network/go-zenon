@@ -25,6 +25,7 @@ type scriptedConn struct {
 	failAfter    int   // when > 0, writes numbered above it fail with failAfterErr
 	failAfterErr error //
 	gate         chan struct{}
+	gateAfter    int    // writes numbered above it are held at gate
 	gateHit      func() // reports the first Write that reached the gate
 	writes       int
 	closes       atomic.Int32
@@ -44,6 +45,9 @@ func (c *scriptedConn) Write(p []byte) (int, error) {
 	err, gate, hit := c.failErr, c.gate, c.gateHit
 	if err == nil && c.failAfter > 0 && c.writes > c.failAfter {
 		err = c.failAfterErr
+	}
+	if c.writes <= c.gateAfter {
+		gate = nil
 	}
 	c.mu.Unlock()
 	if err != nil {
@@ -79,11 +83,19 @@ func (c *scriptedConn) failWritesAfter(n int, err error) {
 // closed when the first held Write arrives, so a test can wait for the
 // writer to be at the gate instead of sleeping.
 func (c *scriptedConn) gateWrites() (reached <-chan struct{}, release func()) {
+	return c.gateWritesAfter(0)
+}
+
+// gateWritesAfter lets the first n writes through and holds every later one
+// until release is called. Like failWritesAfter it is decided by write
+// number inside Write, so it cannot race a write in flight when it is set
+// before the first write.
+func (c *scriptedConn) gateWritesAfter(n int) (reached <-chan struct{}, release func()) {
 	gate := make(chan struct{})
 	hit := make(chan struct{})
 	var hitOnce, releaseOnce sync.Once
 	c.mu.Lock()
-	c.gate = gate
+	c.gate, c.gateAfter = gate, n
 	c.gateHit = func() { hitOnce.Do(func() { close(hit) }) }
 	c.mu.Unlock()
 	return hit, func() { releaseOnce.Do(func() { close(gate) }) }
