@@ -203,14 +203,27 @@ func TestSimple_MomentumInsertionBenchmark(b *testing.T) {
 	z := mock.NewMockZenon(b)
 	defer z.StopPanic()
 
-	start := time.Now().UnixNano()
-	// 1 hours, expect to last less than 1,5 seconds
-	z.InsertMomentumsTo(1 * 60 * 60 / 10)
-	end := time.Now().UnixNano()
+	// 1 hour of momentums
+	const targetHeight = 1 * 60 * 60 / 10
 
-	diff := (end - start) / 1000000
-	if diff > 1500 {
-		b.Fatalf("Test took too much. Expected to be less than 1500 ms but it took %v", diff)
+	start := time.Now()
+	z.InsertMomentumsTo(targetHeight)
+	elapsed := time.Since(start)
+
+	if height := z.Chain().GetFrontierMomentumStore().Identifier().Height; height != targetHeight {
+		b.Fatalf("Expected frontier momentum height %v but got %v", targetHeight, height)
+	}
+
+	// The budget is measured for a normal build. The race detector slows
+	// execution several times over, so under -race the insertions still run
+	// and are checked above, but the elapsed time is only reported.
+	const budget = 1500 * time.Millisecond
+	if raceDetectorEnabled {
+		b.Logf("Race detector enabled; not enforcing the %v budget. Took %v", budget, elapsed)
+		return
+	}
+	if elapsed > budget {
+		b.Fatalf("Test took too much. Expected to be less than %v but it took %v", budget, elapsed)
 	}
 }
 
