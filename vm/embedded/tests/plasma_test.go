@@ -406,7 +406,7 @@ func TestPlasma_RevokeFusedPlasma(t *testing.T) {
 t=2001-09-09T01:46:50+0000 lvl=dbug msg="fused new entry" module=embedded contract=plasma fusionInfo="{Owner:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz Id:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Amount:+1000000000 ExpirationHeight:32 Beneficiary:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz}" beneficiary="&{Beneficiary:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz Amount:+1001000000000}"
 t=2001-09-09T01:52:10+0000 lvl=dbug msg="canceled fusion entry" module=embedded contract=plasma fusionInfo="&{Owner:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz Id:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Amount:+1000000000 ExpirationHeight:32 Beneficiary:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz}" beneficiary-remaining="&{Beneficiary:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz Amount:+1000000000000}"
 `)
-	constants.FuseExpiration = 30
+	setFuseExpiration(t, 30)
 
 	common.Json(plasmaApi.GetEntriesByAddress(g.User1.Address, 0, 10)).Equals(t, `
 {
@@ -489,7 +489,7 @@ t=2001-09-09T01:52:10+0000 lvl=dbug msg="canceled fusion entry" module=embedded 
 func TestPlasma_FuseMaxPlasma(t *testing.T) {
 	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
 	plasmaApi := embedded.NewPlasmaApi(z)
-	constants.FuseExpiration = 10
+	setFuseExpiration(t, 10)
 	defer z.StopPanic()
 	defer z.SaveLogs(common.EmbeddedLogger).HideHashes().Equals(t, `
 t=2001-09-09T01:46:50+0000 lvl=dbug msg="fused new entry" module=embedded contract=plasma fusionInfo="{Owner:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz Id:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Amount:+350000000000 ExpirationHeight:12 Beneficiary:z1qqdt06lnwz57x38rwlyutcx5wgrtl0ynkfe3kv}" beneficiary="&{Beneficiary:z1qqdt06lnwz57x38rwlyutcx5wgrtl0ynkfe3kv Amount:+350000000000}"
@@ -582,7 +582,7 @@ func TestPlasma_TooEarlyRevoke(t *testing.T) {
 	defer z.SaveLogs(common.EmbeddedLogger).HideHashes().Equals(t, `
 t=2001-09-09T01:46:50+0000 lvl=dbug msg="fused new entry" module=embedded contract=plasma fusionInfo="{Owner:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz Id:XXXHASHXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Amount:+10000000000000 ExpirationHeight:102 Beneficiary:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz}" beneficiary="&{Beneficiary:z1qzal6c5s9rjnnxd2z7dvdhjxpmmj4fmw56a0mz Amount:+11000000000000}"
 `)
-	constants.FuseExpiration = 100
+	setFuseExpiration(t, 100)
 
 	defer z.CallContract(&nom.AccountBlock{
 		Address:       g.User1.Address,
