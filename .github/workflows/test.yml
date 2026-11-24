@@ -1,11 +1,14 @@
 name: Test
 
 on:
+  # "release/**" covers the release candidate branches cut from dev, such as
+  # release/0.0.11-rc1, so a fix merged into a frozen branch is tested too.
   pull_request:
     branches:
       - dev
       - testnet
       - master
+      - "release/**"
   # A pull request run tests the merge commit GitHub made for that event, with
   # the base branch as it was then. Re-running it does not pick up a newer
   # base. A push run tests the tip of the pushed branch, so the result of a
@@ -15,6 +18,7 @@ on:
       - dev
       - testnet
       - master
+      - "release/**"
 
 permissions:
   contents: read

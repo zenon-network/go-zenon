@@ -32,7 +32,7 @@ VERDICT=0 test/bend/run.sh                         # without the second check an
 DEPTH=4 SHARDS=6 test/bend/run.sh                  # step 6 to length 4, in six processes: about an hour
 ```
 
-In CI the same script runs from `.github/workflows/bend.yml` on every pull request to `dev`: steps 1 and 3 to 6 always, step 2 when a file under `test/bend/` changed, and step 6 at the default length. The workflow can also be started by hand with a `depth` and a number of `shards`, to take step 6 further.
+In CI the same script runs from `.github/workflows/bend.yml` on every pull request to `dev` or to a `release/**` branch: steps 1 and 3 to 6 always, step 2 when a file under `test/bend/` changed, and step 6 at the default length. The workflow can also be started by hand with a `depth` and a number of `shards`, to take step 6 further.
 
 The first run builds two images. `go-zenon-bend:2.0.40` (290 MB) is the Bend release archive, checked against the SHA-256 that Bend's own installer carries for it. `go-zenon-bend:2.0.40-verdict` (4.4 GB, a few minutes) adds Lean 4.34.0, which Bend's second check needs. Bend always runs without a network and with the rule directory mounted read-only.
 
