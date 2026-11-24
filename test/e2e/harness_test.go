@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -31,8 +33,9 @@ const wait = 2 * time.Minute
 
 var (
 	net     *Net
-	runBase uint32 // first derivation index of this run's fresh accounts
-	runTag  string // unique per run on one chain; used in names
+	runBase uint32   // first derivation index of this run's fresh accounts
+	runTag  string   // unique per run on one chain; used in names
+	runLock *os.File // held for the whole run: one driver per devnet at a time
 	cov     = &coverage{rows: map[string]bool{}}
 
 	// fast is true when driver and node are the test build with short
@@ -83,6 +86,17 @@ func TestMain(m *testing.M) {
 	var err error
 	if net, err = Dial(urls, chainID); err != nil {
 		exit("%v", err)
+	}
+	// One driver process per devnet at a time: two runs that start at the
+	// same height derive the same accounts and names (runBase, runTag
+	// below), and the per-account locks of Net do not reach across
+	// processes. The lock is held until the process exits.
+	lockName := "go-zenon-e2e-" + regexp.MustCompile(`[^A-Za-z0-9]+`).ReplaceAllString(urls[0], "_") + ".lock"
+	if runLock, err = os.OpenFile(filepath.Join(os.TempDir(), lockName), os.O_CREATE|os.O_RDWR, 0o600); err != nil {
+		exit("run lock: %v", err)
+	}
+	if err = syscall.Flock(int(runLock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		exit("another driver run holds %s; one run per devnet at a time (%v)", runLock.Name(), err)
 	}
 	// E2E_NODES: containers of the devnet, read through docker exec, so that
 	// "every node" covers the nodes that publish no RPC port as well.
@@ -145,7 +159,11 @@ func TestMain(m *testing.M) {
 	}
 	// Fresh accounts and names for every run, so a run can be repeated on
 	// the same chain without meeting the state of an earlier run. Slots go
-	// up to 255 per run.
+	// up to 255 per run. The indexes are uint32, so the height must leave
+	// room for a whole run's slots.
+	if f.Height > (math.MaxUint32-1000)/256-1 {
+		exit("start height %d is too high for this run's account indexes (uint32)", f.Height)
+	}
 	runBase = 1000 + uint32(f.Height)*256
 	runTag = strconv.FormatUint(f.Height, 10)
 	var names []string

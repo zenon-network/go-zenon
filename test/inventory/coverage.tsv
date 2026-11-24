@@ -1,7 +1,7 @@
 contract-method	accelerator.Update	E1:FAZ-1 E7:LAD-2
 contract-method	accelerator.Donate	E1:AZ-1 E5:AZ-1
 contract-method	accelerator.CreateProject	E1:AZ-2 E2:AZ-3 E5:AZ-3 E7:LAD-2
-contract-method	accelerator.AddPhase	E1:FAZ-2 E3:AZ-6 E4:AZ-6 E7:LAD-2
+contract-method	accelerator.AddPhase	E1:FAZ-2 E3:FAZ-2 E4:AZ-6 E7:LAD-2
 contract-method	accelerator.UpdatePhase	E1:FAZ-2 E7:LAD-2
 contract-method	accelerator.VoteByName	E1:AZ-4 E2:AZ-5 E3:AZ-5 E4:AZ-5 E7:LAD-2
 contract-method	accelerator.VoteByProdAddress	E3:AZ-5 E7:LAD-2

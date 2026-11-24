@@ -946,10 +946,10 @@ func TestAccelerator(t *testing.T) {
 
 	t.Run("AZ-6_add_phase_to_a_project_that_is_not_accepted_fails", func(t *testing.T) {
 		cover(t, "E4", "contract-method", "accelerator.AddPhase")
-		cover(t, "E3", "contract-method", "accelerator.AddPhase")
 		phase := pack(definition.AddPhaseMethodName, id, "phase", "d", "e2e.test", coins(1), coins(1))
 		callFail(t, a, az, phase, znn, units(0))
-		callFail(t, net.Key(IdxOwner1), az, phase, znn, units(0)) // not the project owner
+		// Whether a stranger is refused is judged on an accepted project, where
+		// only ownership can refuse the call: FAZ-2 on the fast build.
 	})
 }
 
@@ -1015,6 +1015,25 @@ func TestSpork(t *testing.T) {
 func TestHaltOnUnknownSpork(t *testing.T) {
 	if os.Getenv("E2E_DESTRUCTIVE") != "1" {
 		t.Skip("set E2E_DESTRUCTIVE=1 to run; the devnet must be wiped afterwards")
+	}
+	// SP-7 reads all five nodes. Establish that before SP-5 puts the spork on
+	// chain: afterwards the chain cannot be used again.
+	want := map[string]bool{}
+	for _, name := range []string{"pillar", "pillar2", "pillar3", "rpc", "observer"} {
+		want["znnd-devnet-"+name] = true
+	}
+	seen := map[string]bool{}
+	for _, c := range net.Containers {
+		if !want[c] || seen[c] {
+			t.Fatalf("this group reads the five nodes once each; set E2E_NODES=pillar,pillar2,pillar3,rpc,observer (got %v)", net.Containers)
+		}
+		seen[c] = true
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("this group reads all five nodes; set E2E_NODES=pillar,pillar2,pillar3,rpc,observer (got %v)", net.Containers)
+	}
+	if _, err := net.Frontiers(); err != nil {
+		t.Fatalf("a node does not answer before the activation: %v", err)
 	}
 	sporkKey := net.Key(IdxProducer1)
 	spork := types.SporkContract

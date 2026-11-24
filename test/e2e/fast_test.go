@@ -476,15 +476,32 @@ func TestFastStake(t *testing.T) {
 			t.Fatalf("stake entry not found: %v", entries)
 		}
 		cancel := definition.ABIStake.PackMethodPanic(definition.CancelStakeMethodName, id)
-		eventually(t, 5*time.Minute, "the stake expires", func() bool { return frontierTime(t) >= expiry })
+		// A cancelled entry stays, with amount zero, until the reward update
+		// of the epoch it was cancelled in, which runs after that epoch
+		// ends. Both cancels must therefore execute in one epoch: the first
+		// is made with three minutes of it left, and an epoch that ends
+		// between them makes the run inconclusive, not a failure.
+		epochLen := int64(constants.MomentumsPerEpoch) * 10
+		genesis := genesisTime(t)
+		epochOf := func(at int64) int64 { return (at - genesis) / epochLen }
+		eventually(t, 5*time.Minute+2*time.Duration(epochLen)*time.Second, "the stake expires with three minutes of the running epoch left", func() bool {
+			at := frontierTime(t)
+			return at >= expiry && epochLen-(at-genesis)%epochLen >= 180
+		})
 		short.revoke = ackTime(t, callOK(t, a, stake, cancel, znn, units(0)))
+		firstIn := epochOf(short.revoke)
 		receiveAll(t, a, 1)
 		wantBig(t, "ZNN after the cancel", bal(t, a.Address, znn), new(big.Int).Sub(before, coins(100)))
-		// A cancelled entry stays, with amount zero, until the next reward
-		// update. A second cancel is therefore accepted, and pays nothing:
+		if now := epochOf(frontierTime(t)); now != firstIn {
+			t.Fatalf("epoch %d ended before the second cancel (the first executed in it, now %d): its reward update may have removed the entry, so this run is inconclusive; run the group again", firstIn, now)
+		}
+		// Within the epoch a second cancel is accepted, and pays nothing:
 		// the contract sends a zero-amount block.
 		after := bal(t, a.Address, znn)
 		res := callOK(t, a, stake, cancel, znn, units(0))
+		if in := epochOf(ackTime(t, res)); in != firstIn {
+			t.Fatalf("the second cancel executed in epoch %d, the first in %d: this run is inconclusive; run the group again", in, firstIn)
+		}
 		short.revoke = ackTime(t, res) // the second cancel stamps the revoke time again
 		if len(res.Receive.DescendantBlocks) != 1 || res.Receive.DescendantBlocks[0].Amount.Sign() != 0 {
 			t.Fatalf("second cancel of the same stake: descendants %v, want one block of amount 0", res.Receive.DescendantBlocks)
@@ -900,8 +917,18 @@ func TestFastAccelerator(t *testing.T) {
 
 	t.Run("FAZ-2_phase_added_updated_voted_and_paid", func(t *testing.T) {
 		cover(t, "E1", "contract-method", "accelerator.AddPhase", "accelerator.UpdatePhase")
+		cover(t, "E3", "contract-method", "accelerator.AddPhase")
+		// The project is accepted and has no phase, so the owner may add one
+		// (just below); the same phase from someone else may not.
+		addPhase := pack(definition.AddPhaseMethodName, project, "phase one", "first", "e2e.test", coins(5), coins(50))
+		callFail(t, net.Key(IdxOwner1), az, addPhase, znn, units(0)) // not the project owner
+		var refusedFor obj
+		get(t, &refusedFor, "embedded.accelerator.getProjectById", project)
+		if ids, _ := refusedFor["phaseIds"].([]interface{}); len(ids) != 0 || len(listOfKey(refusedFor, "phases")) != 0 || str(refusedFor["status"]) != fmt.Sprint(definition.ActiveStatus) {
+			t.Fatalf("after a stranger's refused AddPhase the project must be accepted with no phase: %v", refusedFor)
+		}
 		znnBefore, qsrBefore := bal(t, a.Address, znn), bal(t, a.Address, qsr)
-		phase := callOK(t, a, az, pack(definition.AddPhaseMethodName, project, "phase one", "first", "e2e.test", coins(5), coins(50)), znn, units(0)).Send.Hash
+		phase := callOK(t, a, az, addPhase, znn, units(0)).Send.Hash
 		// One pillar votes on the phase as first proposed.
 		callOK(t, net.Key(IdxOwner1), az, pack(definition.VoteByNameMethodName, phase, "dev1", definition.VoteYes), znn, units(0))
 		var votes obj
@@ -1148,8 +1175,13 @@ func TestFastBridgeAdmin(t *testing.T) {
 				appliedAt, appliedHash = res.Receive.Height, res.Receive.Hash
 			}
 		}
+		// Every call was judged above by the height it executed on, so a
+		// wrong refusal or a wrong success has already failed the case. What
+		// is left is timing: the driver does not choose the height a call
+		// executes on, and calls that missed one side of the boundary say
+		// nothing about the contract. That run is inconclusive.
 		if !atEdge || !afterEdge {
-			t.Fatalf("the calls did not land on both sides of the boundary: wanted a refusal at height %d and success at %d, got height:status %v", edge, edge+1, seen)
+			t.Fatalf("inconclusive, run the group again: no call executed exactly on height %d (refusal) and on %d (success), so the boundary was not observed; every call was judged by its height and none contradicts the delay (height:status %v)", edge, edge+1, seen)
 		}
 		// Each reading's block must be the bridge's block at that height.
 		chainAt := map[uint64]types.Hash{}
@@ -1192,8 +1224,13 @@ func TestFastBridgeAdmin(t *testing.T) {
 		if refusalAt >= appliedAt {
 			t.Fatalf("the refusal is block %d of the bridge's chain and the applying receive block %d", refusalAt, appliedAt)
 		}
+		// The getters read the contract's newest state; no RPC reads it as of
+		// a given block. So the two decisive readings depend on the polling
+		// catching each block between its own two tip reads, and when the
+		// applying receive follows the block before it closely, that can
+		// miss. Every reading taken was judged above; a miss is inconclusive.
 		if !sawBefore || !sawAt {
-			t.Fatalf("the pair list was not read both on the bridge's block just before the applying receive (block %d) and on that receive itself (block %d, %s); readings: %+v", appliedAt-1, appliedAt, appliedHash, readings)
+			t.Fatalf("inconclusive, run the group again: the pair list was not read both on the bridge's block just before the applying receive (block %d) and on that receive itself (block %d, %s); no reading taken contradicts the delay (readings: %+v)", appliedAt-1, appliedAt, appliedHash, readings)
 		}
 		get(t, &got, "embedded.bridge.getNetworkInfo", class, chain)
 		pairs, _ := got["tokenPairs"].([]interface{})
@@ -1479,4 +1516,10 @@ func lastUpdateBefore(t *testing.T, contract types.Address, receipt *api.Account
 		t.Fatalf("the first block of %s names a previous block %s", contract, prev)
 	}
 	return 0
+}
+
+// listOfKey is the list under key, or nil if it is missing or not a list.
+func listOfKey(v obj, key string) []interface{} {
+	list, _ := v[key].([]interface{})
+	return list
 }

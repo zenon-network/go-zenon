@@ -290,8 +290,9 @@ func (n *Net) Balance(addr types.Address, zts types.ZenonTokenStandard) (*big.In
 }
 
 // StageError says where a block was stopped: while the driver prepared it
-// ("prepare"), or by the node when it was published ("publish"). A case that
-// expects the node to refuse a block must see "publish".
+// ("prepare"), by the node when it was published ("publish"), or nowhere
+// known: the publish got no answer from the node ("publish-unknown"). A case
+// that expects the node to refuse a block must see "publish".
 type StageError struct {
 	Stage string
 	Err   error
@@ -965,6 +966,14 @@ func (n *Net) Send(kp *wallet.KeyPair, tmpl *nom.AccountBlock, mut *Mutator) (*n
 			n.mu.Unlock()
 			return b, nil
 		}
+		// Only an error the node sent back is a refusal. Without one (a
+		// timeout, a lost reply) the node may have accepted the block, so
+		// it is neither recorded as refused nor tried again, and the stage
+		// says the outcome is unknown: no case takes that as a refusal.
+		var reply server.Error
+		if !errors.As(err, &reply) {
+			return b, &StageError{"publish-unknown", err}
+		}
 		// Every block the node refused is recorded, also one that is tried
 		// again below: none of them may be on the chain afterwards.
 		n.mu.Lock()
@@ -1377,21 +1386,24 @@ func (n *Net) ReceiveAll(kp *wallet.KeyPair, want int, timeout time.Duration) (i
 			}
 			// The pending entry, and the block under that hash on every
 			// endpoint, must have the content the driver knows the send has.
+			// The data counts too: a node does not recompute the hash of what
+			// it answers with.
 			same := func(b *api.AccountBlock) bool {
-				return b.Hash == owed.Hash && b.Address == owed.Address && b.ToAddress == kp.Address && b.TokenStandard == owed.TokenStandard &&
-					b.BlockType == owed.BlockType && b.Amount != nil && owed.Amount != nil && b.Amount.Cmp(owed.Amount) == 0
+				return b.ToAddress == kp.Address && sameBlock(&b.AccountBlock, owed)
 			}
 			if !same(p) {
-				return len(done), fmt.Errorf("pending send %s is listed as type %d from %s, %s of %s; the driver knows it as type %d from %s, %s of %s",
-					p.Hash, p.BlockType, p.Address, p.Amount, p.TokenStandard, owed.BlockType, owed.Address, owed.Amount, owed.TokenStandard)
+				return len(done), fmt.Errorf("pending send %s is listed as type %d from %s, %s of %s, data %x; the driver knows it as type %d from %s, %s of %s, data %x",
+					p.Hash, p.BlockType, p.Address, p.Amount, p.TokenStandard, p.Data, owed.BlockType, owed.Address, owed.Amount, owed.TokenStandard, owed.Data)
 			}
 			// Another endpoint may not have the send yet: then it is left for
 			// the next poll, and if it is still missing at the deadline, that
-			// fails.
+			// fails. The reads end at the deadline.
 			missing := ""
+			ctx, cancel := context.WithDeadline(context.Background(), deadline)
 			for i, url := range n.URLs {
-				blk, err := n.Block(i, p.Hash)
+				blk, err := n.BlockCtx(ctx, i, p.Hash)
 				if err != nil {
+					cancel()
 					return len(done), fmt.Errorf("%s: pending send %s: %v", url, p.Hash, err)
 				}
 				if blk == nil {
@@ -1399,12 +1411,19 @@ func (n *Net) ReceiveAll(kp *wallet.KeyPair, want int, timeout time.Duration) (i
 					break
 				}
 				if !same(blk) {
-					return len(done), fmt.Errorf("%s: pending send %s reads back as type %d, from %s to %s, %s of %s", url, p.Hash, blk.BlockType, blk.Address, blk.ToAddress, blk.Amount, blk.TokenStandard)
+					cancel()
+					return len(done), fmt.Errorf("%s: pending send %s reads back as type %d, from %s to %s, %s of %s, data %x", url, p.Hash, blk.BlockType, blk.Address, blk.ToAddress, blk.Amount, blk.TokenStandard, blk.Data)
 				}
 			}
+			cancel()
 			if missing != "" {
 				lagging = fmt.Sprintf("%s does not have pending send %s yet", missing, p.Hash)
 				continue
+			}
+			// No receive starts after the deadline, however long the reads
+			// before it took.
+			if !time.Now().Before(deadline) {
+				return len(done), fmt.Errorf("the %s deadline passed before send %s to %s could be received", timeout, p.Hash, kp.Address)
 			}
 			// Count before publishing: a surplus send is not received at all.
 			if len(done)+1 > want {

@@ -5,6 +5,7 @@ package e2e
 import (
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
@@ -22,8 +23,23 @@ func TestLedger(t *testing.T) {
 	b := net.Key(runBase + 1)              // empty, no plasma: pays with proof of work
 
 	var sendZnn *nom.AccountBlock
+	// The cases build on each other: B-1 funds b and makes the send several
+	// later cases read, and B-3a leaves a send to b that B-4 receives. A case
+	// run without the steps it builds on (a -run that selects it alone)
+	// stops and names them, instead of failing on missing state.
+	passed := map[string]bool{}
+	step := func(t *testing.T, id string) { t.Cleanup(func() { passed[id] = !t.Failed() }) }
+	requires := func(t *testing.T, ids ...string) {
+		t.Helper()
+		for _, id := range ids {
+			if !passed[id] {
+				t.Fatalf("this case builds on %s, which did not run or did not pass; run TestLedger as a whole (or select %s with it)", id, strings.Join(ids, " and "))
+			}
+		}
+	}
 
 	t.Run("B-1_send_and_receive_znn_and_qsr", func(t *testing.T) {
+		step(t, "B-1")
 		cover(t, "E1", "rpc-method", "LedgerApi.PublishRawTransaction", "LedgerApi.GetFrontierAccountBlock",
 			"LedgerApi.GetAccountBlockByHash", "LedgerApi.GetUnreceivedBlocksByAddress", "LedgerApi.GetAccountInfoByAddress",
 			"LedgerApi.GetFrontierMomentum", "PlasmaApi.GetRequiredPoWForAccountBlock")
@@ -51,6 +67,7 @@ func TestLedger(t *testing.T) {
 	})
 
 	t.Run("B-2a_fused_plasma_only", func(t *testing.T) {
+		requires(t, "B-1")
 		got, err := net.Block(0, sendZnn.Hash)
 		if err != nil || got == nil {
 			t.Fatalf("read back: %v", err)
@@ -61,6 +78,7 @@ func TestLedger(t *testing.T) {
 	})
 
 	t.Run("B-2b_proof_of_work_only", func(t *testing.T) {
+		requires(t, "B-1")
 		var got *api.AccountBlock
 		get(t, &got, "ledger.getFrontierAccountBlock", b.Address)
 		if got.Difficulty == 0 || got.FusedPlasma != 0 || got.TotalPlasma < got.BasePlasma {
@@ -75,12 +93,14 @@ func TestLedger(t *testing.T) {
 	})
 
 	t.Run("B-2d_fused_plasma_the_account_does_not_have_refused", func(t *testing.T) {
+		requires(t, "B-1")
 		cover(t, "E5", "error", "vm/constants.ErrNotEnoughPlasma")
 		err := tryTransfer(b, a.Address, znn, units(1), &Mutator{Plasma: func(b *nom.AccountBlock) { b.FusedPlasma, b.Difficulty = constants.AccountBlockBasePlasma, 0 }})
 		mustReject(t, err, constants.ErrNotEnoughPlasma.Error())
 	})
 
 	t.Run("B-2e_difficulty_without_work_refused", func(t *testing.T) {
+		requires(t, "B-1")
 		cover(t, "E6", "error", "verifier.ErrABPoWInvalid")
 		err := tryTransfer(b, a.Address, znn, units(1), &Mutator{SkipPoW: true,
 			Plasma: func(b *nom.AccountBlock) {
@@ -90,6 +110,7 @@ func TestLedger(t *testing.T) {
 	})
 
 	t.Run("B-3a_data_at_the_limit_accepted", func(t *testing.T) {
+		step(t, "B-3a")
 		blk := transfer(t, a, b.Address, znn, units(1), make([]byte, constants.MaxDataLength))
 		got, err := net.WaitConfirmed(blk.Hash, wait)
 		if err != nil {
@@ -109,6 +130,7 @@ func TestLedger(t *testing.T) {
 	})
 
 	t.Run("B-4_receive_by_the_wrong_account_refused", func(t *testing.T) {
+		requires(t, "B-1", "B-3a")
 		cover(t, "E3", "error", "verifier.ErrABFromBlockReceiverMismatch")
 		blk := transfer(t, a, b.Address, znn, units(5), nil)
 		if _, err := net.WaitConfirmed(blk.Hash, wait); err != nil {
@@ -120,6 +142,7 @@ func TestLedger(t *testing.T) {
 	})
 
 	t.Run("B-5a_double_receive_refused", func(t *testing.T) {
+		requires(t, "B-1")
 		cover(t, "E4", "error", "verifier.ErrABFromBlockAlreadyReceived")
 		_, err := net.Receive(b, sendZnn.Hash, nil)
 		mustReject(t, err, "already received")

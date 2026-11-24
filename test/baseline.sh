@@ -37,6 +37,12 @@ cd "$ROOT" || exit 2
 unset FAST IMAGE GOIMG DEVNET_IMAGE DEVNET_GENESIS GOFLAGS GOEXPERIMENT GOARCH GOOS COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES E2E_RPC E2E_CHAIN_ID E2E_MIN_HEIGHT E2E_DESTRUCTIVE E2E_COVERAGE E2E_NODES E2E_GENESIS
 export E2E_NODES="pillar,pillar2,pillar3,rpc,observer"   # the driver checks all five through docker exec
 export GOWORK=off
+# Settings saved with `go env -w` (a GOFLAGS of -run=^$, say) would apply even
+# with GOFLAGS unset; GOENV=off ignores that file.
+export GOENV=off
+# Every list this script compares (known-fuzz.txt, known-vet.txt, the case
+# lists) is stored in C order; a locale's collation would order them otherwise.
+export LC_ALL=C
 FUZZTIME="${FUZZTIME:-30s}"
 
 FAILED=0
