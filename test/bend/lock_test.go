@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/rpc/api"
@@ -32,16 +33,20 @@ const (
 
 // lockNode is a fresh chain driven against the Stake contract (ZNN), or
 // against the fusions of the Plasma contract (QSR) when stake is false.
+// When afterSpork is set (stake only), DynamicPlasmaSpork is activated
+// before the scenario begins.
 type lockNode struct {
 	*node
-	stake    bool
-	contract types.Address
-	ledger   *api.LedgerApi
-	entries  []types.Hash // accepted locks, by the number the model gives them
-	owners   []int
+	stake       bool
+	afterSpork  bool
+	contract    types.Address
+	ledger      *api.LedgerApi
+	entries     []types.Hash // accepted locks, by the number the model gives them
+	owners      []int
+	revokeTimes map[types.Hash]int64 // first accepted cancel's RevokeTime, when afterSpork
 }
 
-func newLockNode(t *testing.T, stake bool) *lockNode {
+func newLockNode(t *testing.T, stake, afterSpork bool) *lockNode {
 	unitSec, minSec, maxSec, fuse := constants.StakeTimeUnitSec, constants.StakeTimeMinSec, constants.StakeTimeMaxSec, constants.FuseExpiration
 	t.Cleanup(func() {
 		constants.StakeTimeUnitSec, constants.StakeTimeMinSec, constants.StakeTimeMaxSec, constants.FuseExpiration = unitSec, minSec, maxSec, fuse
@@ -49,12 +54,62 @@ func newLockNode(t *testing.T, stake bool) *lockNode {
 	constants.StakeTimeUnitSec, constants.StakeTimeMinSec, constants.StakeTimeMaxSec = stakeUnitSec, stakeUnitSec, 12*stakeUnitSec
 	constants.FuseExpiration = fuseMomentums
 
-	n := &lockNode{node: newNode(t), stake: stake, contract: types.StakeContract}
+	if afterSpork {
+		savedDP := types.DynamicPlasmaSpork.SporkId
+		savedMap := make(map[types.Hash]bool, len(types.ImplementedSporksMap))
+		for k, v := range types.ImplementedSporksMap {
+			savedMap[k] = v
+		}
+		t.Cleanup(func() {
+			types.DynamicPlasmaSpork.SporkId = savedDP
+			types.ImplementedSporksMap = savedMap
+		})
+	}
+
+	base := newNode(t)
+	ready := false
+	defer func() {
+		if !ready {
+			base.z.StopPanic()
+		}
+	}()
+	if afterSpork {
+		z := base.z
+		createSend := z.InsertSendBlock(&nom.AccountBlock{
+			Address:   g.Spork.Address,
+			ToAddress: types.SporkContract,
+			Data:      definition.ABISpork.PackMethodPanic(definition.SporkCreateMethodName, "dynamic-plasma", "activate dynamic-plasma"),
+		}, nil, mock.SkipVmChanges)
+		z.InsertNewMomentum()
+		id := createSend.Hash
+		z.InsertSendBlock(&nom.AccountBlock{
+			Address:   g.Spork.Address,
+			ToAddress: types.SporkContract,
+			Data:      definition.ABISpork.PackMethodPanic(definition.SporkActivateMethodName, id),
+		}, nil, mock.SkipVmChanges)
+		z.InsertNewMomentum()
+		types.DynamicPlasmaSpork.SporkId = id
+		types.ImplementedSporksMap[id] = true
+		z.InsertMomentumsTo(20)
+		active, err := z.Chain().GetFrontierMomentumStore().IsSporkActive(types.DynamicPlasmaSpork)
+		if err != nil || !active {
+			t.Fatalf("dynamic plasma spork not active after setup: active=%v err=%v", active, err)
+		}
+	}
+
+	n := &lockNode{
+		node:        base,
+		stake:       stake,
+		afterSpork:  afterSpork,
+		contract:    types.StakeContract,
+		revokeTimes: map[types.Hash]int64{},
+	}
 	if !stake {
 		n.contract = types.PlasmaContract
 		n.token = types.QsrTokenStandard
 	}
 	n.ledger = api.NewLedgerApi(n.z)
+	ready = true
 	return n
 }
 
@@ -105,6 +160,22 @@ func (n *lockNode) left(hash types.Hash, owner int) (*big.Int, bool) {
 		n.t.Fatal(err)
 	}
 	return amount, err == nil
+}
+
+// stakeState reads the stored StakeInfo amount, revoke time, and presence.
+func (n *lockNode) stakeState(hash types.Hash, owner int) (amount *big.Int, revokeTime int64, still bool) {
+	_, context, err := api.GetFrontierContext(n.z.Chain(), n.contract)
+	if err != nil {
+		n.t.Fatal(err)
+	}
+	info, err := definition.GetStakeInfo(context.Storage(), hash, users[owner].Address)
+	if err == constants.ErrDataNonExistent {
+		return new(big.Int), 0, false
+	}
+	if err != nil {
+		n.t.Fatal(err)
+	}
+	return info.Amount, info.RevokeTime, true
 }
 
 func (n *lockNode) send(kp *wallet.KeyPair, data []byte, amount uint64) (*nom.AccountBlock, error) {
@@ -207,7 +278,25 @@ func (n *lockNode) do(c call) (accepted, settled bool, note string) {
 		return false, true, "no answer that could be read"
 	}
 	// What an accepted cancel leaves behind: a stake emptied, a fusion gone.
-	if ok && c.id < len(n.entries) {
+	// Once DynamicPlasmaSpork is active, a stake cancel stamps RevokeTime once
+	// and any later cancel of the same entry is refused without moving it.
+	if n.stake && n.afterSpork && c.id < len(n.entries) {
+		amount, revokeTime, still := n.stakeState(hash, n.owners[c.id])
+		if ok {
+			if !still || amount.Sign() != 0 || revokeTime == 0 {
+				n.t.Errorf("%v: accepted, and the stake is there: %v, holding %v, revokeTime %d, want it there, empty and revoked", c, still, amount, revokeTime)
+			}
+			if prev, seen := n.revokeTimes[hash]; seen {
+				n.t.Errorf("%v: accepted a second cancel of an already-revoked stake (revoke time %d -> %d)", c, prev, revokeTime)
+			} else {
+				n.revokeTimes[hash] = revokeTime
+			}
+		} else if prev, seen := n.revokeTimes[hash]; seen {
+			if !still || amount.Sign() != 0 || revokeTime != prev {
+				n.t.Errorf("%v: refused repeat cancel altered the stored stake: there=%v amount=%v revokeTime=%d, want true, 0, %d", c, still, amount, revokeTime, prev)
+			}
+		}
+	} else if ok && c.id < len(n.entries) {
 		if left, still := n.left(hash, n.owners[c.id]); n.stake && (!still || left.Sign() != 0) {
 			n.t.Errorf("%v: accepted, and the stake is there: %v, holding %v, want it there and empty", c, still, left)
 		} else if !n.stake && still {
@@ -299,14 +388,14 @@ type lockResult struct {
 	nodeLine string
 }
 
-func runLock(t *testing.T, stake bool, name string, steps []lockStep) lockResult {
-	n := newLockNode(t, stake)
+func runLock(t *testing.T, stake, afterSpork bool, name string, steps []lockStep) lockResult {
+	n := newLockNode(t, stake, afterSpork)
 	defer n.z.StopPanic()
 	r := lockResult{name: name, bals: n.balances(), now: n.now()}
 	var marks strings.Builder
 	for i, s := range steps {
 		c := s(n)
-		c.cancel = stake && c.kind == 'X'
+		c.cancel = stake && !afterSpork && c.kind == 'X'
 		before := n.now()
 		c.at = fmt.Sprintf("%s step %d", name, i)
 		ok, settled, note := n.do(c)
@@ -331,7 +420,11 @@ func runLock(t *testing.T, stake bool, name string, steps []lockStep) lockResult
 	}
 	left := 0
 	for id, hash := range n.entries {
-		if n.held(hash, n.owners[id]) {
+		if stake && afterSpork {
+			if _, revokeTime, still := n.stakeState(hash, n.owners[id]); still && revokeTime == 0 {
+				left++
+			}
+		} else if n.held(hash, n.owners[id]) {
 			left++
 		}
 	}
@@ -340,26 +433,34 @@ func runLock(t *testing.T, stake bool, name string, steps []lockStep) lockResult
 	return r
 }
 
-// TestEscrowModelMatchesStake is case BE-3: the lock of the Stake contract.
+// TestEscrowModelMatchesStake is case BE-3: the lock of the Stake contract
+// before DynamicPlasmaSpork.
 func TestEscrowModelMatchesStake(t *testing.T) {
-	compareLock(t, true, "BE-3")
+	compareLock(t, true, false, "BE-3")
+}
+
+// TestEscrowModelMatchesStakeAfterSpork is case BE-5: the lock of the Stake
+// contract once DynamicPlasmaSpork is enforced, where revocation is one-shot
+// and matches Reclaim on active entries.
+func TestEscrowModelMatchesStakeAfterSpork(t *testing.T) {
+	compareLock(t, true, true, "BE-5")
 }
 
 // TestEscrowModelMatchesFusion is case BE-4: the fusions of the Plasma
 // contract.
 func TestEscrowModelMatchesFusion(t *testing.T) {
-	compareLock(t, false, "BE-4")
+	compareLock(t, false, false, "BE-4")
 }
 
-func compareLock(t *testing.T, stake bool, id string) {
+func compareLock(t *testing.T, stake, afterSpork bool, id string) {
 	var results []lockResult
 	names, scripted := lockScripted()
 	for _, name := range names {
-		results = append(results, runLock(t, stake, name, scripted[name]))
+		results = append(results, runLock(t, stake, afterSpork, name, scripted[name]))
 	}
 	seed, count := envCount(t, "BEND_SEED", 1, 0), int(envCount(t, "BEND_RANDOM", 40, 0))
 	for i := 0; i < count; i++ {
-		results = append(results, runLock(t, stake, fmt.Sprintf("random-%d", seed+int64(i)), lockRandom(seed+int64(i), 14)))
+		results = append(results, runLock(t, stake, afterSpork, fmt.Sprintf("random-%d", seed+int64(i)), lockRandom(seed+int64(i), 14)))
 	}
 
 	var src strings.Builder

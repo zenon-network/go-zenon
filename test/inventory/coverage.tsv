@@ -397,6 +397,7 @@ error	vm/constants.ErrIDNotUnique
 error	vm/constants.ErrTokenInvalidText	E2:TK-2
 error	vm/constants.ErrTokenInvalidAmount	E2:TK-2
 error	vm/constants.RevokeNotDue	
+error	vm/constants.ErrStakeAlreadyRevoked	E4:FS-1
 error	vm/constants.ErrInvalidStakingPeriod	E2:ST-2
 error	vm/constants.ErrBlockPlasmaLimitReached	
 error	vm/constants.ErrNotEnoughPlasma	E5:B-2d
