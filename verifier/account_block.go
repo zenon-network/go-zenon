@@ -84,10 +84,20 @@ func (av *accountVerifier) getContext(block *nom.AccountBlock) (store.Account, s
 		return nil, nil, ErrABMAMustNotBeZero
 	}
 
-	var momentumStore store.Momentum
+	// Verify the acknowledged momentum exists against the frontier store without
+	// materializing a rolled-back historical momentum store (which costs O(gap)
+	// replay time and memory). Every check in accountBlockVerifier and
+	// accountBlockTransactionVerifier reads from frontierStore and the cache.
+	frontierStore := av.chain.GetFrontierMomentumStore()
+	if frontierStore == nil {
+		return nil, nil, ErrABMAMissing
+	}
 	if types.IsEmbeddedAddress(block.Address) {
-		momentumStore = av.chain.GetMomentumStore(block.MomentumAcknowledged)
-		if momentumStore == nil {
+		m, err := frontierStore.GetMomentumByHeight(block.MomentumAcknowledged.Height)
+		if err != nil {
+			return nil, nil, InternalError(err)
+		}
+		if m == nil || m.Hash != block.MomentumAcknowledged.Hash {
 			return nil, nil, ErrABMAMissing
 		}
 	}
@@ -96,7 +106,7 @@ func (av *accountVerifier) getContext(block *nom.AccountBlock) (store.Account, s
 
 	if accountStore == nil {
 		// try to give a better error in case we are not able to give a better error
-		globalStore := av.chain.GetFrontierMomentumStore().GetAccountStore(block.Address)
+		globalStore := frontierStore.GetAccountStore(block.Address)
 		globalFrontier, err := globalStore.Frontier()
 		if err != nil {
 			return nil, nil, InternalError(err)
@@ -120,14 +130,14 @@ func (av *accountVerifier) getContext(block *nom.AccountBlock) (store.Account, s
 		}
 	}
 
-	return accountStore, momentumStore, nil
+	return accountStore, frontierStore, nil
 }
 func (av *accountVerifier) AccountBlock(block *nom.AccountBlock) error {
 	if block.BlockType == nom.BlockTypeContractSend {
 		return ErrABTypeInvalidExternal
 	}
 
-	accountStore, momentumStore, err := av.getContext(block)
+	accountStore, frontierStore, err := av.getContext(block)
 	if err != nil {
 		return err
 	}
@@ -135,8 +145,7 @@ func (av *accountVerifier) AccountBlock(block *nom.AccountBlock) error {
 	return (&accountBlockVerifier{
 		block:         block,
 		accountStore:  accountStore,
-		momentumStore: momentumStore,
-		frontierStore: av.chain.GetFrontierMomentumStore(),
+		frontierStore: frontierStore,
 		chain:         av.chain,
 	}).all()
 }
@@ -151,7 +160,7 @@ func (av *accountVerifier) verifyTransaction(transaction *nom.AccountBlockTransa
 		return ErrABTypeInvalidExternal
 	}
 
-	accountStore, momentumStore, err := av.getContext(transaction.Block)
+	accountStore, frontierStore, err := av.getContext(transaction.Block)
 	if err != nil {
 		return err
 	}
@@ -159,8 +168,7 @@ func (av *accountVerifier) verifyTransaction(transaction *nom.AccountBlockTransa
 	return (&accountBlockTransactionVerifier{
 		transaction:          transaction,
 		accountStore:         accountStore,
-		momentumStore:        momentumStore,
-		frontierStore:        av.chain.GetFrontierMomentumStore(),
+		frontierStore:        frontierStore,
 		chain:                av.chain,
 		contractReceiveRules: contractReceiveRules,
 	}).all()
@@ -492,7 +500,18 @@ func (abv *accountBlockVerifier) sequencer() error {
 		return nil
 	}
 
-	nextInLine, err := abv.accountStore.SequencerFront(abv.momentumStore.GetAccountMailbox(abv.block.Address))
+	// An embedded contract's mailbox sequencer is strictly append-only along a
+	// canonical chain, so reading SequencerFront from frontierStore yields the
+	// same header as a rolled-back store at MomentumAcknowledged whenever that
+	// send was already confirmed at or before MomentumAcknowledged. If the next
+	// queued send was confirmed strictly after MomentumAcknowledged, the
+	// mailbox at MomentumAcknowledged had no pending entry yet.
+	mailboxStore := abv.frontierStore
+	if abv.momentumStore != nil {
+		mailboxStore = abv.momentumStore
+	}
+
+	nextInLine, err := abv.accountStore.SequencerFront(mailboxStore.GetAccountMailbox(abv.block.Address))
 	if err != nil {
 		return InternalError(err)
 	}
@@ -500,9 +519,22 @@ func (abv *accountBlockVerifier) sequencer() error {
 		return ErrABSequencerNothing
 	}
 
-	sendBlock, err := abv.momentumStore.GetAccountBlockByHash(abv.block.FromBlockHash)
+	if abv.momentumStore == nil {
+		confirmationHeight, err := abv.frontierStore.GetBlockConfirmationHeight(nextInLine.Hash)
+		if err != nil {
+			return InternalError(err)
+		}
+		if confirmationHeight == 0 || confirmationHeight > abv.block.MomentumAcknowledged.Height {
+			return ErrABSequencerNothing
+		}
+	}
+
+	sendBlock, err := mailboxStore.GetAccountBlockByHash(abv.block.FromBlockHash)
 	if err != nil {
 		return InternalError(err)
+	}
+	if sendBlock == nil {
+		return ErrABFromBlockMissing
 	}
 	if sendBlock.Header() != *nextInLine {
 		return ErrABSequencerNotNext
@@ -670,6 +702,9 @@ func (abvt *accountBlockTransactionVerifier) descendantBlocks() error {
 		return ErrABDescendantMustBeZero
 	}
 	for _, dBlock := range block.DescendantBlocks {
+		if dBlock.MomentumAcknowledged != block.MomentumAcknowledged {
+			return DescendantVerifyError(ErrABMAMustBeTheSame)
+		}
 		if err := (&accountBlockVerifier{
 			block:         dBlock,
 			accountStore:  abvt.accountStore,

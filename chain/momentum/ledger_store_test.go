@@ -48,6 +48,23 @@ func TestAddAccountBlockTransactionPropagatesApplyError(t *testing.T) {
 	}
 }
 
+// A nil patch — momentum content listing a block the pool has no patch for —
+// must be rejected with an error instead of dereferencing nil in patch.Dump().
+func TestAddAccountBlockTransactionRejectsNilPatch(t *testing.T) {
+	store := NewStore(nil, db.NewMemDB())
+
+	header := types.AccountHeader{
+		Address: types.PillarContract,
+		HashHeight: types.HashHeight{
+			Hash:   types.ZeroHash,
+			Height: 1,
+		},
+	}
+	if err := store.AddAccountBlockTransaction(header, nil); err == nil {
+		t.Fatal("expected nil patch to be rejected, got nil")
+	}
+}
+
 // TestIdentifier_MalformedFrontierMomentum verifies that Identifier() does
 // not silently return a zero HashHeight when the frontier momentum record in
 // the store is corrupt.  With valid frontier metadata pointing at a height

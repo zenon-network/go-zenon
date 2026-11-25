@@ -38,6 +38,11 @@ type SyncInfo struct {
 }
 
 type txPool interface {
+	// AddAccountBlocks validates and inserts peer-gossiped account blocks into
+	// the uncommitted pool. Stale embedded-address blocks beyond the peer
+	// acknowledgement window are skipped without aborting subsequent blocks in
+	// the batch; when that happens, the returned policy error is informational
+	// even though later blocks in the batch may have been applied.
 	AddAccountBlocks([]*nom.AccountBlock) error
 
 	// GetTransactions should return pending transactions.

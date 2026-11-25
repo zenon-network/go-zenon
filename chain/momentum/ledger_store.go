@@ -54,6 +54,13 @@ func (ms *momentumStore) GetAccountMailbox(address types.Address) store.AccountM
 }
 
 func (ms *momentumStore) AddAccountBlockTransaction(header types.AccountHeader, patch db.Patch) error {
+	// Reject a missing patch with an error instead of dereferencing nil on
+	// patch.Dump(). Previously the nil dereference panicked and was recovered
+	// as ErrVmRunPanic, rejecting the momentum; returning an error preserves
+	// the same consensus rejection without the panic.
+	if patch == nil {
+		return errors.Errorf("can't find patch for header %v", header)
+	}
 	// skip batched blocks
 	if len(patch.Dump()) == 0 {
 		return nil

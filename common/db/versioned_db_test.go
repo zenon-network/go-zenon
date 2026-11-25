@@ -2209,3 +2209,253 @@ func TestLevelDBManagerAddInverseReadFailureWritesNothing(t *testing.T) {
 	common.Expect(t, GetFrontierIdentifier(m.Frontier()), before)
 	common.ExpectString(t, DebugDB(m.Frontier()), beforeDump)
 }
+
+// TestLevelDBManagerL2CacheByteBudget verifies that far historical rollback
+// overlays (beyond maximumCacheHeightDifference) are bounded by l2MaxBytes:
+//   - overlays within budget evict the oldest l2 entry when the byte budget
+//     would be exceeded,
+//   - a single overlay larger than l2MaxBytes is still returned accurately but
+//     is not retained in l2Cache,
+//   - an overlay previously cached in l1Cache is evicted from l1Cache once the
+//     frontier advances past maximumCacheHeightDifference,
+//   - Pop resets both l2Cache and its tracked byte count.
+func TestLevelDBManagerL2CacheByteBudget(t *testing.T) {
+	m := mustNewLevelDBManager(t, t.TempDir()).(*ldbManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+
+	// Create 4 early historical versions and advance past the near-cache window.
+	var early [4]types.HashHeight
+	for i := 0; i < len(early); i++ {
+		common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), fmt.Sprintf("early-%d", i), fmt.Sprintf("val-%d", i))))
+		early[i] = GetFrontierIdentifier(m.Frontier())
+	}
+
+	// Warm early[0] while it is still inside the near window so it lands in l1Cache.
+	expectValue(t, m.Get(early[0]), "early-0", "val-0")
+	if !m.l1Cache.Contains(early[0]) {
+		t.Fatal("expected early[0] to be cached in l1Cache while inside the near window")
+	}
+
+	// Push the frontier beyond maximumCacheHeightDifference from all four early heights.
+	for i := 0; i < maximumCacheHeightDifference+len(early)+2; i++ {
+		common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), fmt.Sprintf("pad-%04d", i), "0123456789abcdef0123456789abcdef")))
+	}
+
+	// Query early[0] again now that it drifted past maximumCacheHeightDifference:
+	// it must leave l1Cache and move into l2Cache.
+	expectValue(t, m.Get(early[0]), "early-0", "val-0")
+	if m.l1Cache.Contains(early[0]) {
+		t.Fatal("expected drifted early[0] to be removed from l1Cache")
+	}
+	if !m.l2Cache.Contains(early[0]) {
+		t.Fatal("expected drifted early[0] to be stored in l2Cache")
+	}
+	entrySize := m.l2Bytes
+	if entrySize <= 0 {
+		t.Fatalf("expected positive tracked l2Bytes, got %d", entrySize)
+	}
+
+	// Budget holds at most two overlays of this size; adding early[1] fits,
+	// adding early[2] must evict early[0] to stay within budget.
+	m.l2MaxBytes = entrySize*2 + entrySize/2
+	expectValue(t, m.Get(early[1]), "early-1", "val-1")
+
+	residentL2Bytes := func() int {
+		total := 0
+		for _, k := range m.l2Cache.Keys() {
+			v, ok := m.l2Cache.Peek(k)
+			if !ok {
+				t.Fatalf("key %v missing from l2Cache", k)
+			}
+			entry := v.(*rollbackCache)
+			actualSize := memDBSize(entry.raw)
+			if entry.size != actualSize {
+				t.Fatalf("l2 entry %v recorded size %d != memdb size %d", k, entry.size, actualSize)
+			}
+			total += actualSize
+		}
+		return total
+	}
+	common.Expect(t, m.l2Bytes, residentL2Bytes())
+
+	// Repeated hits on the same cached far identifier must not double-count
+	// l2Bytes or falsely evict other resident entries.
+	for i := 0; i < 5; i++ {
+		expectValue(t, m.Get(early[0]), "early-0", "val-0")
+		common.Expect(t, m.l2Bytes, residentL2Bytes())
+		if !m.l2Cache.Contains(early[1]) {
+			t.Fatalf("hit %d on early[0] falsely evicted early[1] (l2Bytes=%d, budget=%d)", i, m.l2Bytes, m.l2MaxBytes)
+		}
+	}
+
+	// Advancing the frontier grows early[0] in place; re-reading it repeatedly
+	// must keep l2Bytes synchronized with the updated overlay size.
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "pad-extra-1", "0123456789abcdef0123456789abcdef")))
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "pad-extra-2", "0123456789abcdef0123456789abcdef")))
+	for i := 0; i < 3; i++ {
+		expectValue(t, m.Get(early[0]), "early-0", "val-0")
+		common.Expect(t, m.l2Bytes, residentL2Bytes())
+	}
+
+	// Touch early[1] so early[0] is oldest, then adding early[2] must evict
+	// early[0] to stay within the byte budget.
+	expectValue(t, m.Get(early[1]), "early-1", "val-1")
+	expectValue(t, m.Get(early[2]), "early-2", "val-2")
+	common.Expect(t, m.l2Bytes, residentL2Bytes())
+	if m.l2Bytes > m.l2MaxBytes {
+		t.Fatalf("l2Bytes %d exceeded budget %d", m.l2Bytes, m.l2MaxBytes)
+	}
+	if m.l2Cache.Contains(early[0]) {
+		t.Fatal("expected oldest l2 entry early[0] to be evicted under byte budget")
+	}
+
+	// An existing cached L2 entry that grows beyond l2MaxBytes as the frontier
+	// advances must be evicted (releasing its overlay) without corrupting
+	// l2Bytes on removal or later Purge.
+	v1, ok := m.l2Cache.Peek(early[1])
+	if !ok {
+		t.Fatal("expected early[1] to remain resident in l2Cache")
+	}
+	early1Size := v1.(*rollbackCache).size
+	m.l2MaxBytes = early1Size + 16
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "grow-past-budget-1", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")))
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "grow-past-budget-2", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")))
+	expectValue(t, m.Get(early[1]), "early-1", "val-1")
+	if m.l2Cache.Contains(early[1]) {
+		t.Fatal("expected overgrown early[1] to be removed from l2Cache")
+	}
+	common.Expect(t, m.l2Bytes, residentL2Bytes())
+
+	// An overlay whose own size exceeds l2MaxBytes must not be retained, while
+	// still returning the exact historical view.
+	m.l2Cache.Purge()
+	common.Expect(t, m.l2Bytes, 0)
+	m.l2MaxBytes = entrySize / 2
+	expectValue(t, m.Get(early[3]), "early-3", "val-3")
+	expectMissing(t, m.Get(early[3]), "pad-0000")
+	common.Expect(t, m.l2Cache.Len(), 0)
+	common.Expect(t, m.l2Bytes, 0)
+
+	// Re-enabling budget and popping resets tracked l2Bytes to zero.
+	m.l2MaxBytes = l2CacheMaxBytes
+	expectValue(t, m.Get(early[3]), "early-3", "val-3")
+	if m.l2Bytes <= 0 {
+		t.Fatal("expected early[3] to be cached once budget is restored")
+	}
+	common.FailIfErr(t, m.Pop())
+	common.Expect(t, m.l2Cache.Len(), 0)
+	common.Expect(t, m.l2Bytes, 0)
+}
+
+// TestLevelDBManagerL2CacheInterruptedReplayKeepsAccountingConsistent pins that
+// detaching a cached overlay before replaying new rollbacks into it prevents a
+// mid-replay panic (recovered by a caller) from leaving an enlarged overlay in
+// l2Cache under its stale pre-replay size.
+func TestLevelDBManagerL2CacheInterruptedReplayKeepsAccountingConsistent(t *testing.T) {
+	m := mustNewLevelDBManager(t, t.TempDir()).(*ldbManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+
+	var early [2]types.HashHeight
+	for i := 0; i < len(early); i++ {
+		common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), fmt.Sprintf("early-%d", i), fmt.Sprintf("val-%d", i))))
+		early[i] = GetFrontierIdentifier(m.Frontier())
+	}
+	for i := 0; i < maximumCacheHeightDifference+len(early)+2; i++ {
+		common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), fmt.Sprintf("pad-%04d", i), "0123456789abcdef0123456789abcdef")))
+	}
+
+	// Populate both early[0] and early[1] in l2Cache.
+	expectValue(t, m.Get(early[0]), "early-0", "val-0")
+	expectValue(t, m.Get(early[1]), "early-1", "val-1")
+	if !m.l2Cache.Contains(early[0]) || !m.l2Cache.Contains(early[1]) {
+		t.Fatal("expected early[0] and early[1] to be cached in l2Cache")
+	}
+
+	// Advance frontier by two entries, then corrupt the second rollback record
+	// so replaying early[0] mutates its overlay on the first step and panics
+	// on the second step.
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "step-1", "0123456789abcdef0123456789abcdef")))
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "step-2", "0123456789abcdef0123456789abcdef")))
+	frontierHeight := GetFrontierIdentifier(m.Frontier()).Height
+	badKey := common.JoinBytes(rollbackByte, common.Uint64ToBytes(frontierHeight))
+	savedRollback, err := m.ldb.Get(badKey, nil)
+	common.FailIfErr(t, err)
+	common.FailIfErr(t, m.ldb.Put(badKey, []byte("corrupt-rollback-payload"), nil))
+
+	var panicked bool
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		m.Get(early[0])
+	}()
+	if !panicked {
+		t.Fatal("expected corrupted rollback record to panic during Get replay")
+	}
+
+	// Restore the rollback record before further assertions and cleanup.
+	common.FailIfErr(t, m.ldb.Put(badKey, savedRollback, nil))
+
+	if m.l2Cache.Contains(early[0]) {
+		t.Fatal("interrupted replay must not leave early[0] cached in l2Cache")
+	}
+	if !m.l2Cache.Contains(early[1]) {
+		t.Fatal("expected untouched early[1] to remain resident in l2Cache")
+	}
+	actualBytes := 0
+	for _, k := range m.l2Cache.Keys() {
+		v, ok := m.l2Cache.Peek(k)
+		if !ok {
+			t.Fatalf("key %v missing from l2Cache", k)
+		}
+		entry := v.(*rollbackCache)
+		actual := memDBSize(entry.raw)
+		if entry.size != actual {
+			t.Fatalf("l2 entry %v recorded size %d != memdb size %d", k, entry.size, actual)
+		}
+		actualBytes += actual
+	}
+	common.Expect(t, m.l2Bytes, actualBytes)
+
+	// Re-reading early[0] after restoring the rollback succeeds and Pop resets l2Bytes to 0.
+	expectValue(t, m.Get(early[0]), "early-0", "val-0")
+	common.FailIfErr(t, m.Pop())
+	common.Expect(t, m.l2Cache.Len(), 0)
+	common.Expect(t, m.l2Bytes, 0)
+}
+
+// TestLevelDBManagerGetEarlyReturnsReleaseSnapshots pins that early returns
+// from ldbManager.Get (zero identifier, missing hash, mismatched height) do not
+// leave unreleased LevelDB snapshots behind for GC finalizers.
+func TestLevelDBManagerGetEarlyReturnsReleaseSnapshots(t *testing.T) {
+	m := mustNewLevelDBManager(t, t.TempDir()).(*ldbManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+	for seed := int64(1); seed <= 3; seed++ {
+		common.FailIfErr(t, m.Add(newMockTransaction(seed, m.Frontier())))
+	}
+	frontier := GetFrontierIdentifier(m.Frontier())
+
+	before := settledSnapshots(t, m)
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer debug.SetMemoryLimit(debug.SetMemoryLimit(math.MaxInt64))
+
+	unknown := types.HashHeight{Hash: types.NewHash([]byte("no-such-block")), Height: 2}
+	wrongHeight := types.HashHeight{Hash: frontier.Hash, Height: frontier.Height + 1}
+
+	for i := 0; i < 50; i++ {
+		if m.Get(types.ZeroHashHeight) == nil {
+			t.Fatal("expected non-nil empty DB for zero identifier")
+		}
+		if m.Get(unknown) != nil {
+			t.Fatal("expected nil for unknown identifier")
+		}
+		if m.Get(wrongHeight) != nil {
+			t.Fatal("expected nil for mismatched height")
+		}
+	}
+	if after := aliveSnapshots(t, m); after != before {
+		t.Fatalf("early returns from Get left %d snapshots alive (before %d)", after, before)
+	}
+}

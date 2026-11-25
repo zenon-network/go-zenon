@@ -89,7 +89,6 @@ func (s *Supervisor) newEmbeddedBlockContext(block *nom.AccountBlock) vm_context
 	momentumStore := s.chain.GetMomentumStore(block.MomentumAcknowledged)
 	accountStore := s.chain.GetAccountStore(block.Address, block.Previous())
 	cacheStore := s.chain.GetCacheStore(block.MomentumAcknowledged)
-	cache := s.consensus.FixedPillarReader(block.MomentumAcknowledged)
 	if momentumStore == nil {
 		panic(fmt.Sprintf("can't find momentumStore for %v", block.MomentumAcknowledged))
 	}
@@ -99,6 +98,7 @@ func (s *Supervisor) newEmbeddedBlockContext(block *nom.AccountBlock) vm_context
 	if cacheStore == nil {
 		panic(fmt.Sprintf("can't find cacheStore for %v", block.MomentumAcknowledged))
 	}
+	cache := s.consensus.FixedPillarReaderForStore(momentumStore.Snapshot())
 	if cache == nil {
 		panic(fmt.Sprintf("can't find cache for %v", block.MomentumAcknowledged))
 	}
@@ -123,12 +123,45 @@ func (s *Supervisor) newMomentumContext(momentum *nom.Momentum) vm_context.Momen
 // resync. Blocks admitted to the pool or generated locally go through
 // ApplyBlock and get every rule.
 func (s *Supervisor) ApplyBlockInMomentum(block *nom.AccountBlock, momentumHeight uint64) (*nom.AccountBlockTransaction, error) {
+	tx, _, err := s.ApplyBlockInMomentumStatus(block, momentumHeight)
+	return tx, err
+}
+
+// ApplyBlockInMomentumStatus applies block like ApplyBlockInMomentum and also
+// reports whether a matching ContractReceive came from a local embedded
+// execution whose contract method returned a non-nil error.
+func (s *Supervisor) ApplyBlockInMomentumStatus(block *nom.AccountBlock, momentumHeight uint64) (*nom.AccountBlockTransaction, bool, error) {
 	if block.BlockType == nom.BlockTypeContractSend {
-		return nil, errors.Errorf("can't apply BlockTypeContractSend")
+		return nil, false, errors.Errorf("can't apply BlockTypeContractSend")
 	}
-	return s.applyBlockWith(block, nil, func(transaction *nom.AccountBlockTransaction) error {
+	return s.applyBlockWithStatus(block, nil, func(transaction *nom.AccountBlockTransaction) error {
 		return s.verifier.AccountBlockTransactionInMomentum(transaction, momentumHeight)
 	})
+}
+
+// VerifyBlockInMomentum runs the momentum-context account-block and
+// transaction-level verification checks without opening a historical momentum
+// store or executing the VM. Panics inside the verifier (e.g., storage read
+// failures) are recovered and surfaced as constants.ErrVmRunPanic, matching
+// ApplyBlockInMomentum.
+func (s *Supervisor) VerifyBlockInMomentum(block *nom.AccountBlock, momentumHeight uint64) (internalErr error) {
+	defer func() {
+		if err := recover(); err != nil {
+			l := s.log
+			if block != nil {
+				l = l.New("block", block.Header())
+			}
+			l.Error("vm panic when verifying block", "reason", err, "stack", string(debug.Stack()))
+			internalErr = constants.ErrVmRunPanic
+		}
+	}()
+	if block.BlockType == nom.BlockTypeContractSend {
+		return errors.Errorf("can't apply BlockTypeContractSend")
+	}
+	if err := s.verifier.AccountBlock(block); err != nil {
+		return err
+	}
+	return s.verifier.AccountBlockTransactionInMomentum(&nom.AccountBlockTransaction{Block: block}, momentumHeight)
 }
 
 // ApplyBlock verifies and executes a fully-formed account block
@@ -333,39 +366,54 @@ func (s *Supervisor) GenerateGenesisMomentum(template *nom.Momentum, pool chain.
 }
 
 func (s *Supervisor) applyBlock(block *nom.AccountBlock, signFunc SignFunc) (*nom.AccountBlockTransaction, error) {
-	return s.applyBlockWith(block, signFunc, s.verifier.AccountBlockTransaction)
+	tx, _, err := s.applyBlockWithStatus(block, signFunc, s.verifier.AccountBlockTransaction)
+	return tx, err
 }
 
-// applyBlockWith is applyBlock with the transaction verification the caller
-// chooses: the unconditional one for pool admission and local generation,
-// the momentum-height one for momentum insertion.
-func (s *Supervisor) applyBlockWith(block *nom.AccountBlock, signFunc SignFunc, verify func(*nom.AccountBlockTransaction) error) (transaction *nom.AccountBlockTransaction, internalErr error) {
+// applyBlockWithStatus is applyBlock with the transaction verification the
+// caller chooses (unconditional for pool admission/local generation,
+// momentum-height for momentum insertion) and reports whether a matching
+// ContractReceive came from a contract method that returned a non-nil error.
+func (s *Supervisor) applyBlockWithStatus(block *nom.AccountBlock, signFunc SignFunc, verify func(*nom.AccountBlockTransaction) error) (transaction *nom.AccountBlockTransaction, methodFailed bool, internalErr error) {
 	defer func() {
 		if err := recover(); err != nil {
 			l := s.log.New("block", block.Header())
 			l.Error("vm panic when applying block", "reason", err, "stack", string(debug.Stack()))
 
 			transaction = nil
+			methodFailed = false
 			internalErr = constants.ErrVmRunPanic
 		}
 	}()
 
 	if err := s.verifier.AccountBlock(block); err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	// For externally supplied blocks (signFunc == nil), verify hash,
+	// signature, producer, plasma fields, and descendants before opening any
+	// historical momentum store or executing the VM. The block is not re-signed
+	// or mutated in fields covered by verify afterwards, so skip the duplicate
+	// verify pass in packBlockWith.
+	packVerify := verify
+	if signFunc == nil {
+		if err := verify(&nom.AccountBlockTransaction{Block: block}); err != nil {
+			return nil, false, err
+		}
+		packVerify = nil
 	}
 	context := s.newBlockContext(block)
 	vm := NewVM(context, s.chain.GetFrontierMomentumStore())
-	err := vm.applyBlock(block)
+	methodFailed, err := vm.applyBlockOutcome(block)
 	if err != nil {
-		return nil, err
+		return nil, methodFailed, err
 	}
 
-	transaction, err = s.packBlockWith(context, block, signFunc, verify)
+	transaction, err = s.packBlockWith(context, block, signFunc, packVerify)
 	if err != nil {
-		return nil, err
+		return nil, methodFailed, err
 	}
 
-	return transaction, nil
+	return transaction, methodFailed, nil
 }
 
 func (s *Supervisor) setAll(template *nom.AccountBlock) error {
@@ -402,8 +450,10 @@ func (s *Supervisor) packBlockWith(context vm_context.AccountVmContext, block *n
 		Block:   block,
 		Changes: changes,
 	}
-	if err := verify(transaction); err != nil {
-		return nil, err
+	if verify != nil {
+		if err := verify(transaction); err != nil {
+			return nil, err
+		}
 	}
 
 	return transaction, nil

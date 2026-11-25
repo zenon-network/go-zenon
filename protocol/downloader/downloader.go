@@ -132,7 +132,30 @@ var (
 	//
 	// Whichever kind it is, the session ends, as after any failed import.
 	ErrBatchInconclusive = errors.New("batch inconclusive")
+	// ErrImportDeferred indicates that chain import deferred a momentum
+	// locally (for example due to a per-receive historical reconstruction
+	// cooldown) rather than rejecting the peer's bytes. The peer is not
+	// dropped or quarantined, and the downloader retries after RetryAfter.
+	ErrImportDeferred = errors.New("import deferred")
 )
+
+// ImportDeferredError wraps a local import deferral with the time at which the
+// caller may retry. errors.Is matches ErrImportDeferred.
+type ImportDeferredError struct {
+	RetryAfter time.Time
+	Cause      error
+}
+
+func (e *ImportDeferredError) Error() string {
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	return ErrImportDeferred.Error()
+}
+
+func (e *ImportDeferredError) Unwrap() error { return e.Cause }
+
+func (e *ImportDeferredError) Is(target error) bool { return target == ErrImportDeferred }
 
 // hashCheckFn is a callback type for verifying a hash's presence in the local chain.
 type hashCheckFn func(types.Hash) bool
@@ -228,8 +251,10 @@ type Downloader struct {
 	blockCh   chan blockPack // Channel receiving inbound blocks
 	processCh chan bool      // Channel to signal the block fetcher of new or finished work
 
-	cancelCh   chan struct{} // Channel to cancel mid-flight syncs
-	cancelLock sync.RWMutex  // Lock to protect the cancel channel in delivers
+	cancelCh   chan struct{} // Channel to end mid-flight fetches (closed on cancel and endSession)
+	abortCh    chan struct{} // Channel closed only on explicit cancel, not normal endSession
+	quitCh     chan struct{} // Channel closed permanently on Terminate
+	cancelLock sync.RWMutex  // Lock to protect cancelCh, abortCh, and quitCh
 
 	wg sync.WaitGroup
 }
@@ -295,6 +320,8 @@ func New(hasBlock hashCheckFn, getBlock blockRetrievalFn, headBlock headRetrieva
 		hashCh:      make(chan hashPack, 1),
 		blockCh:     make(chan blockPack, 1),
 		processCh:   make(chan bool, 1),
+		abortCh:     make(chan struct{}),
+		quitCh:      make(chan struct{}),
 	}
 	// Inject all the known bad hashes
 	downloader.banned = set.New()
@@ -482,16 +509,19 @@ func (d *Downloader) synchronise(id string, hash types.Hash, td uint64) error {
 	default:
 	}
 
-	// Create cancel channel for aborting mid-flight. A terminated
+	// Create cancel and abort channels for the new session. A terminated
 	// downloader starts no session: Terminate raises the flag before it
 	// takes the lock to cancel, so either this sees the flag or Terminate
-	// closes the channel made here.
+	// closes the channels made here. endSession closes cancelCh when the
+	// session ends normally while leaving abortCh open so deferred imports
+	// in process() keep retrying after a successful session.
 	d.cancelLock.Lock()
 	if atomic.LoadInt32(&d.interrupt) == 1 {
 		d.cancelLock.Unlock()
 		return errTerminated
 	}
 	d.cancelCh = make(chan struct{})
+	d.abortCh = make(chan struct{})
 	d.cancelLock.Unlock()
 	// Close it again when the session is over, whichever way it ends. A
 	// delivery that arrived after its fetcher returned is still blocked on
@@ -567,7 +597,7 @@ func (d *Downloader) syncWithPeer(p *peer, hash types.Hash, td uint64) (err erro
 // cancel cancels all of the operations and resets the queue. It returns true
 // if the cancel operation was completed.
 func (d *Downloader) cancel() {
-	// Close the current cancel channel
+	// Close the current cancel and abort channels
 	d.cancelLock.Lock()
 	if d.cancelCh != nil {
 		select {
@@ -575,6 +605,13 @@ func (d *Downloader) cancel() {
 			// Channel was already closed
 		default:
 			close(d.cancelCh)
+		}
+	}
+	if d.abortCh != nil {
+		select {
+		case <-d.abortCh:
+		default:
+			close(d.abortCh)
 		}
 	}
 	d.cancelLock.Unlock()
@@ -601,6 +638,15 @@ func (d *Downloader) endSession() {
 // Terminate interrupts the downloader, canceling all pending operations.
 func (d *Downloader) Terminate() {
 	atomic.StoreInt32(&d.interrupt, 1)
+	d.cancelLock.Lock()
+	if d.quitCh != nil {
+		select {
+		case <-d.quitCh:
+		default:
+			close(d.quitCh)
+		}
+	}
+	d.cancelLock.Unlock()
 	d.cancel()
 	d.wg.Wait()
 }
@@ -1112,6 +1158,7 @@ func (d *Downloader) process() {
 
 		// Actually import the blocks
 		log.Info("Inserting side-chain", "num-account-blocks", len(blocks), "start-height", blocks[0].RawBlock.Momentum.Height, "end-height", blocks[len(blocks)-1].RawBlock.Momentum.Height)
+		var lastDeferredID types.HashHeight
 		for len(blocks) != 0 {
 			// Check for any termination requests
 			if atomic.LoadInt32(&d.interrupt) == 1 {
@@ -1126,11 +1173,43 @@ func (d *Downloader) process() {
 			// Try to insert the blocks, drop the peer the failure belongs to if there's an error
 			index, err := d.insertChain(raw)
 			if err != nil {
+				var deferred *ImportDeferredError
+				if errors.As(err, &deferred) {
+					deferredID := raw[index].Momentum.Identifier()
+					if deferredID != lastDeferredID {
+						lastDeferredID = deferredID
+						d.cancelLock.RLock()
+						abort := d.abortCh
+						quit := d.quitCh
+						d.cancelLock.RUnlock()
+						wait := time.Until(deferred.RetryAfter)
+						if wait > 0 {
+							timer := time.NewTimer(wait)
+							select {
+							case <-timer.C:
+							case <-abort:
+								timer.Stop()
+								return
+							case <-quit:
+								timer.Stop()
+								return
+							}
+						}
+						if atomic.LoadInt32(&d.interrupt) == 1 {
+							return
+						}
+						// Retry the unsliced batch: insertChain strips any
+						// prefix already on the chain, while a restored
+						// side-chain still needs its earlier candidates.
+						continue
+					}
+				}
 				log.Info("Block import failed", "momentum-height", raw[index].Momentum.Height, "reason", err)
 				d.dropForImportFailure(blocks[index], err)
 				d.cancel()
 				return
 			}
+			lastDeferredID = types.ZeroHashHeight
 			// The chain now holds the batch. If nothing else moves it, its
 			// last momentum is the head, where this session's next batch
 			// attaches. If the chain already held the batch and reaches
@@ -1167,6 +1246,8 @@ func (d *Downloader) process() {
 // block.
 func (d *Downloader) dropForImportFailure(block *Block, err error) {
 	switch {
+	case errors.Is(err, ErrImportDeferred):
+		log.Info("Import deferred locally, not held against a peer", "reason", err)
 	case errors.Is(err, ErrBatchInconclusive):
 		log.Info("Import failure not held against a peer", "reason", err)
 	case errors.Is(err, ErrBatchRejected):

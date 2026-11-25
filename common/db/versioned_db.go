@@ -5,7 +5,7 @@ import (
 	"sort"
 	"sync"
 
-	lru "github.com/hashicorp/golang-lru"
+	"github.com/hashicorp/golang-lru/simplelru"
 	"github.com/pkg/errors"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
@@ -15,8 +15,12 @@ import (
 )
 
 const (
-	l1CacheSize                  = 400
-	l2CacheSize                  = 100
+	l1CacheSize = 400
+	l2CacheSize = 16
+	// l2CacheMaxBytes bounds the total logical key+value payload (measured by
+	// memdb.DB.Size(), excluding skip-list index overhead and backing-buffer
+	// slack) retained across far rollback overlays in l2Cache.
+	l2CacheMaxBytes              = 32 * 1024 * 1024
 	maximumCacheHeightDifference = 360
 )
 
@@ -490,14 +494,24 @@ func (m *memdbManager) Location() string {
 type rollbackCache struct {
 	frontier types.HashHeight
 	raw      db
+	size     int
+}
+
+func memDBSize(d db) int {
+	if w, ok := d.(*memDBWrapper); ok {
+		return w.Size()
+	}
+	return 0
 }
 
 type ldbManager struct {
-	location string
-	l1Cache  *lru.Cache
-	l2Cache  *lru.Cache
-	ldb      *leveldb.DB
-	write    func(*leveldb.Batch) error
+	location   string
+	l1Cache    *simplelru.LRU
+	l2Cache    *simplelru.LRU
+	l2Bytes    int
+	l2MaxBytes int
+	ldb        *leveldb.DB
+	write      func(*leveldb.Batch) error
 	// writeSync writes a batch and fsyncs the journal before returning;
 	// PutMetadata uses it. Replaceable by tests like write.
 	writeSync func(*leveldb.Batch) error
@@ -524,21 +538,10 @@ func NewLevelDBManager(dir string) (Manager, error) {
 // newLDBManager wraps an open LevelDB in an ldbManager, closing it if
 // the caches cannot be created.
 func newLDBManager(location string, ldb *leveldb.DB) (*ldbManager, error) {
-	l1Cache, err := lru.New(l1CacheSize)
-	if err != nil {
-		ldb.Close()
-		return nil, errors.Wrap(err, "create l1 cache")
-	}
-	l2Cache, err := lru.New(l2CacheSize)
-	if err != nil {
-		ldb.Close()
-		return nil, errors.Wrap(err, "create l2 cache")
-	}
-	return &ldbManager{
-		location: location,
-		l1Cache:  l1Cache,
-		l2Cache:  l2Cache,
-		ldb:      ldb,
+	m := &ldbManager{
+		location:   location,
+		l2MaxBytes: l2CacheMaxBytes,
+		ldb:        ldb,
 		write: func(batch *leveldb.Batch) error {
 			return ldb.Write(batch, nil)
 		},
@@ -546,7 +549,22 @@ func newLDBManager(location string, ldb *leveldb.DB) (*ldbManager, error) {
 			return ldb.Write(batch, &opt.WriteOptions{Sync: true})
 		},
 		rollbackPatch: RollbackPatch,
-	}, nil
+	}
+	l1Cache, err := simplelru.NewLRU(l1CacheSize, nil)
+	if err != nil {
+		ldb.Close()
+		return nil, errors.Wrap(err, "create l1 cache")
+	}
+	l2Cache, err := simplelru.NewLRU(l2CacheSize, func(_ interface{}, value interface{}) {
+		m.l2Bytes -= value.(*rollbackCache).size
+	})
+	if err != nil {
+		ldb.Close()
+		return nil, errors.Wrap(err, "create l2 cache")
+	}
+	m.l1Cache = l1Cache
+	m.l2Cache = l2Cache
+	return m, nil
 }
 
 func (m *ldbManager) Frontier() DB {
@@ -564,15 +582,25 @@ func (m *ldbManager) Get(identifier types.HashHeight) DB {
 	if m.stopped {
 		return nil
 	}
-	snapshot, _ := m.ldb.GetSnapshot()
+	if identifier.IsZero() {
+		return NewMemDB()
+	}
+
+	snapshot, err := m.ldb.GetSnapshot()
+	common.DealWithErr(err)
+	releaseSnapshot := true
+	defer func() {
+		if releaseSnapshot {
+			snapshot.Release()
+		}
+	}()
+
 	// check if has snapshot
 	frontier := NewLevelDBSnapshotWrapper(snapshot).Subset(frontierByte)
 	frontierIdentifier := GetFrontierIdentifier(frontier)
 
-	if identifier.IsZero() {
-		return NewMemDB()
-	}
 	if identifier == frontierIdentifier {
+		releaseSnapshot = false
 		return frontier
 	}
 
@@ -588,10 +616,15 @@ func (m *ldbManager) Get(identifier types.HashHeight) DB {
 	var rawChanges db
 	var toIdentifier types.HashHeight
 
+	// Detach any cached overlay before mutating it in place so an interrupted
+	// rollback replay (e.g., a recovered panic) cannot leave a grown overlay
+	// cached under its stale pre-replay size.
 	if cache, ok := m.l1Cache.Get(identifier); ok {
+		m.l1Cache.Remove(identifier)
 		toIdentifier = cache.(*rollbackCache).frontier
 		rawChanges = cache.(*rollbackCache).raw
 	} else if cache, ok := m.l2Cache.Get(identifier); ok {
+		m.l2Cache.Remove(identifier)
 		toIdentifier = cache.(*rollbackCache).frontier
 		rawChanges = cache.(*rollbackCache).raw
 	} else {
@@ -606,18 +639,34 @@ func (m *ldbManager) Get(identifier types.HashHeight) DB {
 		}
 	}
 
+	size := memDBSize(rawChanges)
 	if absDiff(identifier.Height, frontierIdentifier.Height) < maximumCacheHeightDifference {
 		m.l1Cache.Add(identifier, &rollbackCache{
 			frontier: frontierIdentifier,
 			raw:      rawChanges,
+			size:     size,
 		})
 	} else {
-		m.l2Cache.Add(identifier, &rollbackCache{
-			frontier: frontierIdentifier,
-			raw:      rawChanges,
-		})
+		// An overlay that started inside the near window and drifted past it
+		// must not stay pinned in l1Cache as it grows. Far overlays are kept
+		// in l2Cache only within l2MaxBytes so deep historical lookups cannot
+		// ratchet process memory.
+		if size <= m.l2MaxBytes {
+			for m.l2Bytes+size > m.l2MaxBytes {
+				if _, _, ok := m.l2Cache.RemoveOldest(); !ok {
+					break
+				}
+			}
+			m.l2Cache.Add(identifier, &rollbackCache{
+				frontier: frontierIdentifier,
+				raw:      rawChanges,
+				size:     size,
+			})
+			m.l2Bytes += size
+		}
 	}
 
+	releaseSnapshot = false
 	u := newMergedDb([]db{
 		newMemDBInternal(),
 		newSkipDelete(
@@ -777,6 +826,7 @@ func (m *ldbManager) Stop() error {
 	m.ldb = nil
 	m.l1Cache = nil
 	m.l2Cache = nil
+	m.l2Bytes = 0
 	return err
 }
 func (m *ldbManager) Location() string {

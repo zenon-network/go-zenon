@@ -84,13 +84,13 @@ func (l LedgerApi) String() string {
 // frontier state and, on success, handed to the broadcaster for network
 // propagation; nil is returned in that case.
 //
-// It returns ErrParamIsNull for a nil block, an error if the block's
-// ChainIdentifier is non-zero and differs from the node's network id
-// (a zero ChainIdentifier passes this check but is then rejected by
-// the verifier with ErrMChainIdentifierMissing), an error if the
-// block's TokenStandard
-// is non-zero and unknown to the chain, and any validation error raised
-// while applying the block.
+// It returns ErrParamIsNull for a nil block, ErrEmbeddedAddressNotAllowed
+// for a block whose address belongs to the embedded-contract address class,
+// an error if the block's ChainIdentifier is non-zero and differs from the
+// node's network id (a zero ChainIdentifier passes this check but is then
+// rejected by the verifier with ErrMChainIdentifierMissing), an error if the
+// block's TokenStandard is non-zero and unknown to the chain, and any
+// validation error raised while applying the block.
 //
 // JSON-RPC: ledger.publishRawTransaction
 func (l *LedgerApi) PublishRawTransaction(block *AccountBlock) error {
@@ -106,6 +106,9 @@ func (l *LedgerApi) PublishRawTransaction(block *AccountBlock) error {
 	lb, err := block.ToLedgerBlock()
 	if err != nil {
 		return err
+	}
+	if types.IsEmbeddedAddress(lb.Address) {
+		return ErrEmbeddedAddressNotAllowed
 	}
 	if err := checkTokenIdValid(l.chain, &lb.TokenStandard); err != nil {
 		return err

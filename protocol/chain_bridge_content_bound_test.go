@@ -227,16 +227,16 @@ func rollBackFrontier(t *testing.T, z mock.MockZenon, momentum *nom.Momentum) {
 	common.Expect(t, len(z.Chain().GetAllUncommittedAccountBlocks()), 0)
 }
 
-// pendingListing builds an unsigned momentum that extends the frontier and
-// lists the given pending blocks in content order. Its header is well formed
-// for the chain it extends, so the verifier reaches its content.
+// pendingListing builds a momentum signed by the elected producer that extends
+// the frontier and lists the given pending blocks in content order. Its header
+// is well formed for the chain it extends, so the verifier reaches its content.
 func pendingListing(t *testing.T, z mock.MockZenon, blocks []*nom.AccountBlock) *nom.DetailedMomentum {
 	t.Helper()
 	frontier := momentumAt(t, z.Chain(), z.Chain().GetFrontierMomentumStore().Identifier().Height)
 	next := unsignedMomentum(frontier, frontier.Height+1)
 	next.Version, next.NextFusionPrice, next.NextWorkPrice = momentumVersionFor(t, z, frontier)
 	next.Content = nom.NewMomentumContent(blocks)
-	next.Hash = next.ComputeHash()
+	next = signedBy(next, electedKey(t, z, *next.Timestamp))
 	byIdentifier := make(map[types.HashHeight]*nom.AccountBlock, len(blocks))
 	for _, block := range blocks {
 		byIdentifier[block.Identifier()] = block

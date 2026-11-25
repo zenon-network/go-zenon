@@ -1,14 +1,18 @@
 package verifier_test
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
+	"github.com/zenon-network/go-zenon/chain"
 	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/verifier"
+	"github.com/zenon-network/go-zenon/vm"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
@@ -117,5 +121,310 @@ func TestAccountBlockVerifier_FirstBlockOfANewAccountChainIsAccepted(t *testing.
 	common.FailIfErr(t, err)
 	if frontier == nil || frontier.Hash != receive.Hash {
 		t.Fatalf("User10's account chain does not start with the inserted block: frontier %v", frontier)
+	}
+}
+
+type momentumStoreCountingChain struct {
+	chain.Chain
+	getMomentumStoreCalls int
+}
+
+func (c *momentumStoreCountingChain) GetMomentumStore(identifier types.HashHeight) store.Momentum {
+	c.getMomentumStoreCalls++
+	return c.Chain.GetMomentumStore(identifier)
+}
+
+// Verifying or applying a crafted embedded-address block with an old
+// MomentumAcknowledged must not materialize a rolled-back historical momentum
+// store via GetMomentumStore.
+func TestAccountBlockVerifier_EmbeddedAddressDoesNotCallGetMomentumStore(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(2)
+
+	// Confirm and auto-receive a send to PlasmaContract so PlasmaContract has a
+	// real frontier and an already-received historical send block.
+	send := z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.PlasmaContract,
+		Data:          definition.ABIPlasma.PackMethodPanic(definition.FuseMethodName, g.User10.Address),
+		TokenStandard: types.QsrTokenStandard,
+		Amount:        big.NewInt(10 * g.Zexp),
+	}, nil, mock.SkipVmChanges)
+	z.InsertMomentumsTo(8)
+
+	frontierStore := z.Chain().GetFrontierMomentumStore()
+	oldMomentum, err := frontierStore.GetMomentumByHeight(1)
+	common.FailIfErr(t, err)
+	sendConfirmHeight, err := frontierStore.GetBlockConfirmationHeight(send.Hash)
+	common.FailIfErr(t, err)
+	sendConfirmMomentum, err := frontierStore.GetMomentumByHeight(sendConfirmHeight)
+	common.FailIfErr(t, err)
+	plasmaFrontier, err := z.Chain().GetFrontierAccountStore(types.PlasmaContract).Frontier()
+	common.FailIfErr(t, err)
+	if plasmaFrontier == nil {
+		t.Fatal("expected PlasmaContract to have a frontier block")
+	}
+
+	unregisteredEmbedded := types.Address{types.ContractAddrByte, 0xaa, 0xbb}
+	chainID := z.Chain().ChainIdentifier()
+
+	cases := []struct {
+		name    string
+		block   *nom.AccountBlock
+		wantErr error
+	}{
+		{
+			name: "contract-receive at real frontier with old MA and non-zero ZTS",
+			block: &nom.AccountBlock{
+				Version:              1,
+				ChainIdentifier:      chainID,
+				BlockType:            nom.BlockTypeContractReceive,
+				Address:              types.PlasmaContract,
+				Height:               plasmaFrontier.Height + 1,
+				PreviousHash:         plasmaFrontier.Hash,
+				MomentumAcknowledged: oldMomentum.Identifier(),
+				TokenStandard:        types.ZnnTokenStandard,
+				FromBlockHash:        types.NewHash([]byte("garbage")),
+			},
+			wantErr: verifier.ErrABZtsMustBeZero,
+		},
+		{
+			name: "arbitrary embedded-class address height 1 with old MA",
+			block: &nom.AccountBlock{
+				Version:              1,
+				ChainIdentifier:      chainID,
+				BlockType:            nom.BlockTypeUserSend,
+				Address:              unregisteredEmbedded,
+				Height:               1,
+				PreviousHash:         types.ZeroHash,
+				MomentumAcknowledged: oldMomentum.Identifier(),
+				Amount:               common.Big0,
+			},
+			wantErr: verifier.ErrABTypeMustBeContract,
+		},
+		{
+			name: "contract-receive replaying an already-received historical send",
+			block: &nom.AccountBlock{
+				Version:              1,
+				ChainIdentifier:      chainID,
+				BlockType:            nom.BlockTypeContractReceive,
+				Address:              types.PlasmaContract,
+				Height:               plasmaFrontier.Height + 1,
+				PreviousHash:         plasmaFrontier.Hash,
+				MomentumAcknowledged: sendConfirmMomentum.Identifier(),
+				FromBlockHash:        send.Hash,
+			},
+			// Contract receives advance the sequencer index rather than the user
+			// received-set, so replaying an already-received send is rejected by
+			// sequencer() with ErrABSequencerNothing.
+			wantErr: verifier.ErrABSequencerNothing,
+		},
+		{
+			name: "embedded address with non-existent MA returns ErrABMAMissing",
+			block: &nom.AccountBlock{
+				Version:         1,
+				ChainIdentifier: chainID,
+				BlockType:       nom.BlockTypeContractReceive,
+				Address:         types.PlasmaContract,
+				Height:          plasmaFrontier.Height + 1,
+				PreviousHash:    plasmaFrontier.Hash,
+				MomentumAcknowledged: types.HashHeight{
+					Hash:   types.NewHash([]byte("missing")),
+					Height: 9999,
+				},
+			},
+			wantErr: verifier.ErrABMAMissing,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			counting := &momentumStoreCountingChain{Chain: z.Chain()}
+			v := verifier.NewAccountBlockVerifier(counting, z.Consensus())
+			if err := v.AccountBlock(tc.block); err != tc.wantErr {
+				t.Fatalf("AccountBlock: got %v, want %v", err, tc.wantErr)
+			}
+			wantTxErr := verifier.ErrABHashMissing
+			if tc.wantErr == verifier.ErrABMAMissing {
+				wantTxErr = verifier.ErrABMAMissing
+			}
+			if err := v.AccountBlockTransaction(&nom.AccountBlockTransaction{Block: tc.block}); err != wantTxErr {
+				t.Fatalf("AccountBlockTransaction: got %v, want %v", err, wantTxErr)
+			}
+			supervisor := vm.NewSupervisor(counting, z.Consensus())
+			if _, err := supervisor.ApplyBlock(tc.block); err != tc.wantErr {
+				t.Fatalf("Supervisor.ApplyBlock: got %v, want %v", err, tc.wantErr)
+			}
+			if counting.getMomentumStoreCalls != 0 {
+				t.Fatalf("expected 0 GetMomentumStore calls, got %d", counting.getMomentumStoreCalls)
+			}
+		})
+	}
+}
+
+// Sequencer checks for contract receives must reject out-of-order sends and
+// sends confirmed after MomentumAcknowledged using frontierStore alone,
+// without calling GetMomentumStore.
+func TestAccountBlockVerifier_EmbeddedSequencerRejectsOutOfOrderWithoutRollback(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(2)
+
+	send1 := z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.PlasmaContract,
+		Data:          definition.ABIPlasma.PackMethodPanic(definition.FuseMethodName, g.User10.Address),
+		TokenStandard: types.QsrTokenStandard,
+		Amount:        big.NewInt(10 * g.Zexp),
+	}, nil, mock.SkipVmChanges)
+	send2 := z.InsertSendBlock(&nom.AccountBlock{
+		Address:       g.User1.Address,
+		ToAddress:     types.PlasmaContract,
+		Data:          definition.ABIPlasma.PackMethodPanic(definition.FuseMethodName, g.User10.Address),
+		TokenStandard: types.QsrTokenStandard,
+		Amount:        big.NewInt(10 * g.Zexp),
+	}, nil, mock.SkipVmChanges)
+	z.InsertNewMomentum()
+
+	// InsertNewMomentum commits send1 and send2 in the new momentum and then
+	// auto-generates their contract receives as uncommitted pool blocks on top
+	// of PlasmaContract's confirmed frontier. Verify against that confirmed
+	// frontier, where send1 is at the sequencer head and send2 is second.
+	frontierStore := z.Chain().GetFrontierMomentumStore()
+	plasmaConfirmed := frontierStore.GetAccountStore(types.PlasmaContract)
+	front, err := plasmaConfirmed.SequencerFront(frontierStore.GetAccountMailbox(types.PlasmaContract))
+	common.FailIfErr(t, err)
+	if front == nil || front.Hash != send1.Hash {
+		t.Fatalf("expected send1 (%v) at sequencer front, got %v", send1.Hash, front)
+	}
+	confirmHeight, err := frontierStore.GetBlockConfirmationHeight(send2.Hash)
+	common.FailIfErr(t, err)
+	confirmMomentum, err := frontierStore.GetMomentumByHeight(confirmHeight)
+	common.FailIfErr(t, err)
+	plasmaFrontier := plasmaConfirmed.Identifier()
+
+	counting := &momentumStoreCountingChain{Chain: z.Chain()}
+	v := verifier.NewAccountBlockVerifier(counting, z.Consensus())
+
+	// Receiving send1 (head of sequencer) passes verification with 0 GetMomentumStore calls.
+	validReceive := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      z.Chain().ChainIdentifier(),
+		BlockType:            nom.BlockTypeContractReceive,
+		Address:              types.PlasmaContract,
+		Height:               plasmaFrontier.Height + 1,
+		PreviousHash:         plasmaFrontier.Hash,
+		MomentumAcknowledged: confirmMomentum.Identifier(),
+		FromBlockHash:        send1.Hash,
+	}
+	if err := v.AccountBlock(validReceive); err != nil {
+		t.Fatalf("expected valid receive for sequencer front to pass, got %v", err)
+	}
+
+	// Receiving send2 out of order fails with ErrABSequencerNotNext and 0 GetMomentumStore calls.
+	outOfOrder := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      z.Chain().ChainIdentifier(),
+		BlockType:            nom.BlockTypeContractReceive,
+		Address:              types.PlasmaContract,
+		Height:               plasmaFrontier.Height + 1,
+		PreviousHash:         plasmaFrontier.Hash,
+		MomentumAcknowledged: confirmMomentum.Identifier(),
+		FromBlockHash:        send2.Hash,
+	}
+	if err := v.AccountBlock(outOfOrder); err != verifier.ErrABSequencerNotNext {
+		t.Fatalf("expected ErrABSequencerNotNext, got %v", err)
+	}
+	if counting.getMomentumStoreCalls != 0 {
+		t.Fatalf("expected 0 GetMomentumStore calls, got %d", counting.getMomentumStoreCalls)
+	}
+}
+
+type nilFrontierChain struct {
+	chain.Chain
+}
+
+func (c *nilFrontierChain) GetFrontierMomentumStore() store.Momentum {
+	return nil
+}
+
+// When the frontier momentum store is unavailable (for example after manager
+// shutdown), getContext must return ErrABMAMissing instead of panicking on a
+// nil store dereference.
+func TestAccountBlockVerifier_NilFrontierStoreReturnsMAMissing(t *testing.T) {
+	v := verifier.NewAccountBlockVerifier(&nilFrontierChain{}, nil)
+	block := &nom.AccountBlock{
+		Version:              1,
+		BlockType:            nom.BlockTypeContractReceive,
+		Address:              types.StakeContract,
+		Height:               1,
+		MomentumAcknowledged: types.HashHeight{Hash: types.NewHash([]byte("m1")), Height: 1},
+	}
+	if err := v.AccountBlock(block); err != verifier.ErrABMAMissing {
+		t.Fatalf("AccountBlock: got %v, want ErrABMAMissing", err)
+	}
+	if err := v.AccountBlockTransaction(&nom.AccountBlockTransaction{Block: block}); err != verifier.ErrABMAMissing {
+		t.Fatalf("AccountBlockTransaction: got %v, want ErrABMAMissing", err)
+	}
+}
+
+// Direct callers of AccountBlockTransaction and AccountBlockTransactionInMomentum
+// must reject a ContractReceive whose descendant acknowledges a different
+// canonical momentum than the parent, without calling GetMomentumStore.
+func TestAccountBlockTransactionVerifier_DescendantMAMismatchRejectedDirectly(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(4)
+
+	frontierStore := z.Chain().GetFrontierMomentumStore()
+	m2, err := frontierStore.GetMomentumByHeight(2)
+	common.FailIfErr(t, err)
+	m3, err := frontierStore.GetMomentumByHeight(3)
+	common.FailIfErr(t, err)
+
+	stakeFrontier := z.Chain().GetFrontierAccountStore(types.StakeContract).Identifier()
+	descendant := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      z.Chain().ChainIdentifier(),
+		BlockType:            nom.BlockTypeContractSend,
+		Address:              types.StakeContract,
+		ToAddress:            g.User1.Address,
+		Amount:               big.NewInt(1),
+		TokenStandard:        types.ZnnTokenStandard,
+		Height:               stakeFrontier.Height + 1,
+		PreviousHash:         stakeFrontier.Hash,
+		MomentumAcknowledged: m2.Identifier(),
+	}
+	descendant.Hash = descendant.ComputeHash()
+
+	parent := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      z.Chain().ChainIdentifier(),
+		BlockType:            nom.BlockTypeContractReceive,
+		Address:              types.StakeContract,
+		Height:               stakeFrontier.Height + 2,
+		PreviousHash:         descendant.Hash,
+		MomentumAcknowledged: m3.Identifier(),
+		FromBlockHash:        types.NewHash([]byte("send")),
+		DescendantBlocks:     []*nom.AccountBlock{descendant},
+	}
+	parent.Hash = parent.ComputeHash()
+
+	counting := &momentumStoreCountingChain{Chain: z.Chain()}
+	v := verifier.NewAccountBlockVerifier(counting, z.Consensus())
+	tx := &nom.AccountBlockTransaction{Block: parent}
+
+	if err := v.AccountBlockTransaction(tx); !errors.Is(err, verifier.ErrABMAMustBeTheSame) {
+		t.Fatalf("AccountBlockTransaction: got %v, want ErrABMAMustBeTheSame", err)
+	}
+	if err := v.AccountBlockTransactionInMomentum(tx, 1); !errors.Is(err, verifier.ErrABMAMustBeTheSame) {
+		t.Fatalf("AccountBlockTransactionInMomentum(1): got %v, want ErrABMAMustBeTheSame", err)
+	}
+	if err := v.AccountBlockTransactionInMomentum(tx, 1<<40); !errors.Is(err, verifier.ErrABMAMustBeTheSame) {
+		t.Fatalf("AccountBlockTransactionInMomentum(high): got %v, want ErrABMAMustBeTheSame", err)
+	}
+	if counting.getMomentumStoreCalls != 0 {
+		t.Fatalf("expected 0 GetMomentumStore calls, got %d", counting.getMomentumStoreCalls)
 	}
 }

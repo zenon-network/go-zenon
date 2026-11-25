@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus/api"
 )
@@ -64,4 +65,5 @@ type Consensus interface {
 
 	FrontierPillarReader() api.PillarReader
 	FixedPillarReader(types.HashHeight) api.PillarReader
+	FixedPillarReaderForStore(store.Momentum) api.PillarReader
 }

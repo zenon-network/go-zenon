@@ -29,6 +29,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
@@ -73,8 +74,15 @@ func (cs *consensus) FrontierPillarReader() api.PillarReader {
 // chain, not the live frontier. If identifier is not in the chain the
 // store is missing and every query that needs it returns an error.
 func (cs *consensus) FixedPillarReader(identifier types.HashHeight) api.PillarReader {
+	return cs.FixedPillarReaderForStore(cs.chain.GetMomentumStore(identifier))
+}
+
+// FixedPillarReaderForStore returns a reader pinned to momentumStore, reusing
+// an already-reconstructed historical store instead of rebuilding it a second
+// time via chain.GetMomentumStore.
+func (cs *consensus) FixedPillarReaderForStore(momentumStore store.Momentum) api.PillarReader {
 	return &API{
-		momentumStore: cs.chain.GetMomentumStore(identifier),
+		momentumStore: momentumStore,
 		er:            cs.electionManager,
 		points:        cs.points,
 	}

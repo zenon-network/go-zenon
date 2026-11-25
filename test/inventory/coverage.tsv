@@ -272,6 +272,7 @@ error	pillar.ErrNothingToGenerate
 error	protocol/downloader.ErrBatchRejected	
 error	protocol/downloader.ErrBatchMisplaced	
 error	protocol/downloader.ErrBatchInconclusive	
+error	protocol/downloader.ErrImportDeferred	
 error	protocol.ErrSideChainKnownInvalid	
 error	rpc/api.ErrPageSizeParamTooBig	
 error	rpc/api.ErrPageIndexParamTooBig	
@@ -279,6 +280,7 @@ error	rpc/api.ErrCountParamTooBig
 error	rpc/api.ErrHeightParamIsZero	
 error	rpc/api.ErrDetailedMomentumTooLarge	
 error	rpc/api.ErrParamIsNull	
+error	rpc/api.ErrEmbeddedAddressNotAllowed	
 error	rpc/api.ErrNameParamTooLong	
 error	rpc/api.ErrListParamTooBig	
 error	rpc/api/subscribe.ErrSubscribeBacklogFull	

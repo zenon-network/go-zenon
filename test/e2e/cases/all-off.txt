@@ -20,6 +20,7 @@ TestLedger/B-5j_version_and_type_refused
 TestLedger/B-5k_contract_block_types_from_a_user_refused
 TestLedger/B-5l_receive_block_with_send_fields_refused
 TestLedger/B-5m_momentum_acknowledged_refused
+TestLedger/B-5n_embedded_address_refused
 TestLedger/B-9_refused_blocks_left_no_trace
 TestPillar/PI-1_getters
 TestPillar/PI-2_delegate_and_change

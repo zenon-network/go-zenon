@@ -27,9 +27,8 @@
 package vm
 
 import (
+	"fmt"
 	"math/big"
-
-	"github.com/pkg/errors"
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
@@ -149,24 +148,83 @@ func enoughFunds(context vm_context.AccountVmContext, block *nom.AccountBlock) b
 	return true
 }
 
+// AutoReceiveMismatchError reports that an externally supplied ContractReceive
+// block disagreed with a deterministic local embedded execution
+// (executionErr == nil). It unwraps to Cause
+// (constants.ErrAutoReceiveChangesHashMismatch or
+// constants.ErrAutoReceiveHashMismatch) while carrying the unique expected
+// hashes produced for that canonical state.
+type AutoReceiveMismatchError struct {
+	Cause               error
+	ExpectedChangesHash types.Hash
+	ExpectedHash        types.Hash
+	GotChangesHash      types.Hash
+	GotHash             types.Hash
+}
+
+func (e *AutoReceiveMismatchError) Error() string {
+	if e.Cause == constants.ErrAutoReceiveChangesHashMismatch {
+		return fmt.Sprintf("expected %v but got %v: %v", e.ExpectedChangesHash, e.GotChangesHash, e.Cause)
+	}
+	return fmt.Sprintf("expected %v but got %v: %v", e.ExpectedHash, e.GotHash, e.Cause)
+}
+
+func (e *AutoReceiveMismatchError) Unwrap() error {
+	return e.Cause
+}
+
+// AutoReceiveFailedGenerationMismatchError reports that an externally supplied
+// ContractReceive block disagreed with a local embedded execution that itself
+// returned a non-nil contract error (executionErr != nil). It intentionally
+// does NOT unwrap to ErrAutoReceiveChangesHashMismatch or
+// ErrAutoReceiveHashMismatch so callers treat it as an unclassified import
+// failure rather than a permanent consensus verdict (see issue #239), while
+// still exposing the locally produced hashes so the bridge can bound repeated
+// historical reconstructions without blocking the matching receipt or later
+// retries after transient storage failures.
+type AutoReceiveFailedGenerationMismatchError struct {
+	ChangesHashMismatch bool
+	ExpectedChangesHash types.Hash
+	ExpectedHash        types.Hash
+	GotChangesHash      types.Hash
+	GotHash             types.Hash
+	ExecutionErr        error
+}
+
+func (e *AutoReceiveFailedGenerationMismatchError) Error() string {
+	if e.ChangesHashMismatch {
+		return fmt.Sprintf("auto-received block has different changes-hash expected %v but got %v (local generation failed: %v)", e.ExpectedChangesHash, e.GotChangesHash, e.ExecutionErr)
+	}
+	return fmt.Sprintf("auto-received block has different hash expected %v but got %v (local generation failed: %v)", e.ExpectedHash, e.GotHash, e.ExecutionErr)
+}
+
 // applyBlock is used to apply the block on top of the vm.context
 // After calling applyBlock vm.context.Changes() has all the changes necessary to create a nom.AccountBlockTransaction
 func (vm *VM) applyBlock(block *nom.AccountBlock) error {
+	_, err := vm.applyBlockOutcome(block)
+	return err
+}
+
+// applyBlockOutcome applies block like applyBlock and also reports whether a
+// matching ContractReceive came from a local embedded execution whose contract
+// method returned a non-nil error (executionErr != nil).
+func (vm *VM) applyBlockOutcome(block *nom.AccountBlock) (bool, error) {
 	if err := enoughPlasma(vm.context, block); err != nil {
-		return err
+		return false, err
 	}
 
 	// In case vm will update some fields of block, make a copy of block.
 	switch block.BlockType {
 	case nom.BlockTypeUserSend, nom.BlockTypeContractSend:
-		return vm.applySend(block)
+		return false, vm.applySend(block)
 	case nom.BlockTypeUserReceive:
-		return vm.applyReceive(block)
+		return false, vm.applyReceive(block)
 	case nom.BlockTypeContractReceive:
 		generated, executionErr, err := vm.generateEmbeddedReceive(block.FromBlockHash)
 		if err != nil {
-			return err
+			return false, err
 		}
+		computed := generated.ComputeHash()
 		if generated.ChangesHash != block.ChangesHash {
 			if executionErr != nil {
 				// The local generation failed inside the contract method. A
@@ -179,11 +237,23 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 				// here, say) unremembered: telling the two apart needs
 				// the embedded methods to report provenance, which they
 				// do not yet. Unremembered fails safe; see issue #239.
-				return errors.Errorf("auto-received block has different changes-hash expected %v but got %v (local generation failed: %v)", generated.ChangesHash, block.ChangesHash, executionErr)
+				return true, &AutoReceiveFailedGenerationMismatchError{
+					ChangesHashMismatch: true,
+					ExpectedChangesHash: generated.ChangesHash,
+					ExpectedHash:        computed,
+					GotChangesHash:      block.ChangesHash,
+					GotHash:             block.Hash,
+					ExecutionErr:        executionErr,
+				}
 			}
-			return errors.Wrapf(constants.ErrAutoReceiveChangesHashMismatch, "expected %v but got %v", generated.ChangesHash, block.ChangesHash)
+			return false, &AutoReceiveMismatchError{
+				Cause:               constants.ErrAutoReceiveChangesHashMismatch,
+				ExpectedChangesHash: generated.ChangesHash,
+				ExpectedHash:        computed,
+				GotChangesHash:      block.ChangesHash,
+				GotHash:             block.Hash,
+			}
 		}
-		computed := generated.ComputeHash()
 		if computed != block.Hash {
 			if executionErr != nil {
 				// Same reasoning as the changes-hash branch: a failed
@@ -192,11 +262,24 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 				// nothing produces a rollback patch byte-identical to
 				// the success patch, so the changes-hash can match even
 				// though the local read failed.
-				return errors.Errorf("auto-received block has different hash expected %v but got %v (local generation failed: %v)", computed, block.Hash, executionErr)
+				return true, &AutoReceiveFailedGenerationMismatchError{
+					ChangesHashMismatch: false,
+					ExpectedChangesHash: generated.ChangesHash,
+					ExpectedHash:        computed,
+					GotChangesHash:      block.ChangesHash,
+					GotHash:             block.Hash,
+					ExecutionErr:        executionErr,
+				}
 			}
-			return errors.Wrapf(constants.ErrAutoReceiveHashMismatch, "expected %v but got %v", computed, block.Hash)
+			return false, &AutoReceiveMismatchError{
+				Cause:               constants.ErrAutoReceiveHashMismatch,
+				ExpectedChangesHash: generated.ChangesHash,
+				ExpectedHash:        computed,
+				GotChangesHash:      block.ChangesHash,
+				GotHash:             block.Hash,
+			}
 		}
-		return nil
+		return executionErr != nil, nil
 	default:
 		panic("unknown block type")
 	}
