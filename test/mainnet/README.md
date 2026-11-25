@@ -1,8 +1,10 @@
 # Mainnet comparison tools for the go-zenon test framework
 
-Two tools for [test level L6](../../docs/TESTING.md) (mainnet history): testing a
-`dev` binary against a v0.0.10 reference node on mainnet. They are
-standard-library Python 3, read-only, and live in their own package
+Two tools for test level L6 (mainnet history): testing a `dev` binary
+against a v0.0.10 reference node on mainnet. L6 and the M-2/M-3 cases are
+defined in [docs/TEST-PLAN.md](../../docs/TEST-PLAN.md) (section 7);
+[docs/TESTING.md](../../docs/TESTING.md) holds the procedures. The tools
+are standard-library Python 3, read-only, and live in their own package
 (`test/mainnet/`) so they never mix with the devnet driver (which signs and
 publishes transactions — do not run `test/e2e` or `test/devnet` against a
 mainnet host). Both tools:
@@ -12,18 +14,28 @@ mainnet host). Both tools:
 - emit one JSON line per comparison/finding (JSONL), a final summary by case
   id, and the go-zenon commit the tool runs from (`-dirty` appended unless
   the tree is clean, so a run is attributable to the code that produced it),
-- retry transport-level failures (a node under sync can drop connections).
+- retry transport-level failures (a node under sync can drop connections),
+- write to a unique `tempfile.mkdtemp` directory when `--out` is not given
+  (removed after the results are echoed to stdout), so concurrent slices
+  cannot clobber each other.
 
 ## `compare.py` — M-2: mainnet RPC state differ
 
 ```sh
+# --sample-height is S of the #17 sampling rule: the first height divisible
+# by 10,000 after the test node reported sync state 2 (a node that finished
+# syncing at height 14,691,234 uses S = 14,700,000); the momentum at S must
+# exist on both nodes
 python3 test/mainnet/compare.py \
-    --ref http://127.0.0.1:35997 \          # v0.0.10 reference node
-    --test http://127.0.0.1:36997 \         # dev binary under test
-    --sample-height 14700000 \               # S of the #17 sampling rule
-    --addr-count 1000 --batch-size 50 \     # M-2c sample size / batching
-    --out results.jsonl                      # sample manifest: results.jsonl.sample.jsonl
+    --ref http://127.0.0.1:35997 \
+    --test http://127.0.0.1:36997 \
+    --sample-height 14700000 \
+    --addr-count 1000 --batch-size 50 \
+    --out results.jsonl
 ```
+
+(`--ref` is the v0.0.10 reference node, `--test` the dev binary under test;
+the sample manifest goes to `results.jsonl.sample.jsonl`.)
 
 - **M-2a**: full `ledger.getDetailedMomentumsByHeight` answers (momentum
   hash, changes hash, every account block) at each spork activation height
@@ -50,26 +62,86 @@ python3 test/mainnet/compare.py \
   `test/inventory/coverage.tsv` (including the three `TokenAPI` getters),
   with lazily resolved arguments (pillar name, accelerator project/phase,
   bridge network/wrap/unwrap ids, ZNN zts, ...) and paging to the end
-  (pageSize 1000).
+  (pageSize 1000). Paged getters keep the top-level fields next to `list`
+  (`count`, `qsrAmount`, `totalAmount`, `totalWeightedAmount`, ...) from the
+  first page and compare them too — a disagreement there is a `FAIL` even
+  when the merged lists match.
 - **M-2d** controls: self-self at height 100 (must match) and a planted
   height difference 100 vs 101 (must be detected).
 
-Comparison semantics: node-local contextual fields (`numConfirmations`,
+### Comparison semantics
+
+Normalization: node-local contextual fields (`numConfirmations`,
 `token.totalSupply`/`maxSupply`, recursively incl. `pairedAccountBlock`) are
-normalized before comparison. Pillar answers additionally have the
-consensus-cache fields `weight`/`rank`/`currentStats` normalized — they come
-from a node-local cache refreshed asynchronously (at most every 5 min), so
-two nodes on the same frontier legitimately report different values; the
-strip is guarded by the `producerAddress` discriminator so a same-named
-field elsewhere is never silently dropped. RPC-level errors are comparable
-answers:
-identical errors on both sides are a PASS; a method missing on exactly one
-build (a getter added after the reference release) is `INFO`
-(`method-missing-on-one-side`); an error on exactly one side, a different
-error surface, and blocks present on exactly one side
-(`block-availability-mismatch`) are FAILs — the #17 reference node is full
-history and serves every height. A batch/getter taken while the frontier
-moved is INFO, never FAIL.
+normalized before comparison.
+
+Pillar answers: `embedded.pillar.getAll` sorts pillars by descending
+`weight`, and `weight`/`rank`/`currentStats` come from a node-local
+consensus cache refreshed asynchronously at most every 5 minutes
+(`rpc/api/embedded/pillar.go`: `GetAll` ranks by weight before cutting the
+page; while the cache is cold the weights are zero placeholders and the
+order degrades to ascending name). Two nodes on the same frontier therefore
+legitimately report the same pillars in different orders with different
+cache values. The lists are sorted by `(name, ownerAddress)` before
+comparison and the cache-derived fields `weight`/`rank`/`currentStats` are
+excluded from equality; the strip is guarded by the `producerAddress`
+discriminator so a same-named field elsewhere is never silently dropped.
+Every other pillar field is compared.
+
+Classification of one getter pair (see `classify_getter`):
+
+- **Transport failures are `ERROR`, never PASS/FAIL.** Identical transport
+  failures on both sides ("timed out" twice) are not agreement — neither
+  getter returned an answer — and a one-sided transport failure is not a
+  chain difference either; both record `ERROR`.
+- **Method-missing is classified before the one-sided-error rule** (-32601,
+  "the method X does not exist/is not available"). Missing on the
+  reference but answered by the test node is `INFO`
+  (`method-missing-on-ref`: a getter added on dev after the reference
+  release, e.g. `embedded.plasma.getVariables`). Missing on the test node
+  but answered by the reference is also `INFO` (`method-missing-on-test`) —
+  the detection is symmetric, and a getter dropped by the binary under test
+  stays visible for review instead of hiding in a generic FAIL. Missing on
+  both is `INFO` (`method-missing-on-both`): consistent, documented as INFO
+  rather than PASS so the missing surface stays visible.
+- Identical RPC-level errors on both sides are a `PASS` (e.g. a not-found
+  id); different errors are a `FAIL` (`error-surface-differs`); an RPC
+  error on exactly one side is a `FAIL` (`error-on-one-side`).
+- Results are compared after normalization. A diff consisting exactly of
+  the known, intended API additions in `EXPECTED_API_ADDITIONS` (top of
+  `compare.py`, one comment per entry — currently `requiredFusedPlasma` on
+  `embedded.plasma.getRequiredPoWForAccountBlock`, added on dev with
+  Dynamic Plasma) is `INFO` (`expected-api-addition`, logged with the
+  reason), so exit status 0 is a real gate for dev-vs-v0.0.10 runs. Any
+  other diff is a `FAIL` with the first differing key/index in the record.
+- A getter whose argument cannot be built because the reference chain has
+  no such entity (e.g. no accelerator project with a phase — `getAll` is
+  sorted by descending `lastUpdateTimestamp`, so a fresh submission with
+  `phases: []` can be the newest project; the tool scans for the first
+  project that has one) is `SKIP` with the reason, not `ERROR`.
+
+Address-keyed getters are exercised against populated addresses resolved
+from list getters on the reference node — a pillar owner and a sentinel
+owner, a staker / liquidity staker / fuser / delegator / token owner probed
+from those candidates — so the comparison does not degenerate to comparing
+trivially-empty answers. When the chain has no such entity the sampled
+address is used and the fallback is recorded; the resolved address book
+(slot, address, source) is logged as an `address-book` record.
+
+Frontier guards: an account-info batch or a getter result comparison counts
+only when the frontier hashes of both nodes are identical before and after
+it. If the frontier moved, the comparison is retried up to 3 times before
+degrading to `INFO` (`frontier-moved-during-batch` / `-getter`), and if
+zero batches (or zero getters) were actually compared because the frontier
+kept moving, the run logs an `ERROR` record and exits non-zero — an
+all-INFO run cannot pass as exit 0 without having compared anything.
+
+One known false-FAIL source is handled explicitly:
+`ledger.getAccountInfoByAddress` reads the frontier account store, which
+includes node-local unconfirmed pool blocks, so two nodes with identical
+frontier hashes can intermittently disagree. A differing address is
+re-fetched on both sides once before a FAIL is declared; a difference that
+resolves on the re-read is a `PASS` with `poolRetryResolved` recorded.
 
 Left out of the getter list (spec: listed): `stats.*` (node-local),
 `ledger.getUnconfirmedBlocksByAddress` (unconfirmed pool), all write methods
@@ -81,15 +153,19 @@ exactly 1,000 addresses drawn per the rule above (manifest sha256 in the log;
 independently re-simulated height-for-height outside the tool: exact match),
 M-2c-accountInfos batches PASS, getters PASS, controls 2 PASS. An address
 that never transacted records `accountHeight` 0 and a null frontier hash.
+Classification logic is unit-tested with canned answers in
+`test/mainnet/test_compare.py` (stdlib unittest; run
+`python3 test/mainnet/test_compare.py -v`).
 
 ## `scan.py` — M-3: mainnet history scanner
 
 M-3 reads the v0.0.10 reference node (the full-history node of #17).
 
 ```sh
-# hash-link walk over momentum headers 1..H (pages of 1000, verifies each
-# page is height-contiguous and that page boundaries chain by previousHash;
-# the walk is capped at --to and FAILs unless it reaches exactly --to)
+# hash-link walk over momentum headers 1..H (pages of 1000, verifies every
+# entry is exactly the expected height and that page boundaries chain by
+# previousHash; the walk is capped at --to and FAILs unless it reaches
+# exactly --to)
 python3 test/mainnet/scan.py --node http://127.0.0.1:35997 \
     --headers --to 14661812 --out scan.jsonl
 
@@ -99,17 +175,41 @@ python3 test/mainnet/scan.py --node http://127.0.0.1:35997 \
 # 15a0c641 = first 4 bytes of the SHA3-256 of
 # "ChangeTssECDSAPubKey(string,string,string)", same computation as vm/abi
 # Method.Id), ABI-decodes the new key and checks it lies on secp256k1, and
-# reports every block whose Difficulty read as unsigned 64-bit is >= 2^63
+# reports every account block whose Difficulty read as unsigned 64-bit is
+# >= 2^63
 python3 test/mainnet/scan.py --node http://127.0.0.1:35997 \
     --blocks --from 1 --to 14661812 --out scan.jsonl
 ```
 
+Range validation: `--from` must be >= 1 and <= `--to`, and an explicit
+`--to` above the node's frontier is rejected with an error (exit non-zero)
+instead of being silently clamped — a scan that cannot reach the stated
+height must not pass below it. An inverted range (`--from 51 --to 50`)
+would read 0 momentums and pass; it is rejected the same way.
+
 Momentum 1 is excluded from `--blocks`: `getDetailedMomentumsByHeight` does
 not answer at height 1 on full-history nodes (momentum 1 reads fine via
-`getMomentumByHash`; the exclusion is logged, and the `from` field records
-the real range). As for headers, the scan FAILs unless it reaches exactly
-`--to`; a page shorter than requested before `--to` is a short read, not a
-pass.
+`getMomentumByHash`; the exclusion is logged, and the `from` field of the
+`M-3-blocks` record is the effective start, 2 in that case). As for
+headers, the scan FAILs unless it reaches exactly `--to`; a page shorter
+than requested before `--to` is a short read, not a pass — except when the
+node caps the answer at its 10 MB byte budget and returns fewer momentums
+with `"more": true` (dev), in which case the scan continues after the last
+returned momentum. Every returned momentum must be exactly the expected
+height: a page of heights [2..9, 11] for a 2..11 request FAILs even though
+its last height reaches the request.
+
+Outcome policy (one policy for both #78 checks, per `docs/TEST-PLAN.md`
+M-3 "none found, or each one listed with the height where `dev` and
+v0.0.10 would disagree"): **integrity problems FAIL the scan** — short
+reads, wrong heights in a page, a difficulty or block-data field that does
+not parse, a bridge key that does not base64/ABI-decode. **Findings are
+listed and counted but do not by themselves fail it** — an off-curve or
+unrecognized bridge key and a difficulty >= 2^63 are logged one by one
+(`M-3-bridgeKey` with `keyCheck`, `M-3-highDifficulty`) and counted in the
+`M-3-blocks` record (`offCurveKeys`, `unexpectedKeyFormats`,
+`highDifficultyItems`, `findings`) and in the summary record (`findings`),
+so a run with findings is PASS-with-findings-listed, never silently clean.
 
 **Validation**: header walk 1..200,000 on a dev node — 200,000 momentums,
 0 link breaks; header walk `--to 1500` on the v0.0.10 node — exactly 1,500

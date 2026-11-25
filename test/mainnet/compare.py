@@ -25,20 +25,32 @@ and the commit the tool was built from.
   python3 test/mainnet/compare.py \
       --ref http://127.0.0.1:35997 \
       --test http://127.0.0.1:36997 \
+      --sample-height 14700000 \
       --out results.jsonl
+
+--sample-height is S of the sampling rule of 0x3639/go-zenon#17: the first
+height divisible by 10,000 after the test node reported sync state 2
+(fully synced).  A node that reached state 2 at height 14,691,234 uses
+S = 14,700,000; the momentum at S must already exist on both nodes.
 """
 import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
 # Mainnet momentum-1 hash and the chain identifier every endpoint must report.
 MAINNET_GENESIS_MOMENTUM = "9e204601d1b7b1427fe12bc82622e610d8a6ad43c40abf020eb66e538bb8eeb0"
 MAINNET_CHAIN_ID = 1
+
+# The zero address, used only when a run samples no addresses at all
+# (--addr-count is validated > 0, so this is defensive).
+ZERO_ADDRESS = "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
 
 # M-2a heights: every spork activation height and the one before it, the
 # 4,188,198-4,188,207 window (HTLC + Multiverse activations), and the
@@ -60,16 +72,58 @@ LEFT_OUT = [
     ("ledger.subscribe", "subscription"),
 ]
 
+# Known, intended API additions of dev over the v0.0.10 reference, per
+# method: top-level result keys the test answer may carry that the
+# reference answer lacks.  A result diff consisting of exactly these extra
+# keys is INFO (logged with the reason), not FAIL, so exit status 0 stays
+# a real gate for dev-vs-v0.0.10 runs.  Any other difference still FAILs.
+EXPECTED_API_ADDITIONS = {
+    # dev's Dynamic Plasma work adds the fused-only payment target to the
+    # PoW quote (GetRequiredResult.RequiredFusedPlasma,
+    # rpc/api/embedded/plasma.go); v0.0.10 never returns it.
+    "embedded.plasma.getRequiredPoWForAccountBlock": {
+        "requiredFusedPlasma": "added on dev with Dynamic Plasma (total "
+                               "fused-only payment target); absent in v0.0.10",
+    },
+}
+
+# List getters whose item order is node-local, not chain state:
+# embedded.pillar.getAll sorts by descending Weight from the consensus
+# cache, which is refreshed asynchronously (at most every 5 min), so a cold
+# node reports all-zero weights and the order degrades to ascending name
+# while a warm node reports weight order (rpc/api/embedded/pillar.go,
+# PillarInfoByWeight).  These lists are sorted by a stable key before
+# comparison; the cache-derived fields themselves (weight/rank/
+# currentStats) are stripped by normalize().
+SORT_BEFORE_COMPARE = {
+    "embedded.pillar.getAll": lambda p: (p.get("name") or "",
+                                         p.get("ownerAddress") or ""),
+}
+
 PAGE = 1000          # RpcMaxPageSize / RpcMaxCountSize
 MAX_PAGES = 500      # guard against unbounded paging; truncation is reported
-ZNN_ZTS = "zts1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+
+# How often a frontier-state comparison (account-info batch or getter) is
+# retried when the frontier moved while it was being read.
+FRONTIER_RETRIES = 3
+
+# How many candidate addresses the populated-address probes try before
+# falling back to the sampled address.
+PROBE_MAX = 25
 
 # Argument sources for the M-2c getter list (every embedded.* read method in
 # test/inventory/coverage.tsv).  Markers:
-#   ("addr",)       the first derived mainnet address (see derive_addresses)
-#   ("page",)       trailing paging marker: the getter is paged to the end
-#   other tuples    lazily resolved from the reference node (see Ctx)
-#   literals        used verbatim
+#   ("addr",)          the first sampled mainnet address (see sample_addresses)
+#   ("pillarOwner",)   populated addresses resolved from list getters on the
+#   ("sentinelOwner",) reference node: pillar owner, sentinel owner, a staker,
+#   ("staker",)        a liquidity staker, a fuser, a delegator, a token owner
+#   ("liquidityStaker",) — so address-keyed getters are exercised against
+#   ("fuser",)         non-empty state.  Each falls back to the sampled
+#   ("delegator",)     address with a note in the logged address book when
+#   ("tokenOwner",)    the chain has no such entity (see Ctx)
+#   ("page",)          trailing paging marker: the getter is paged to the end
+#   other tuples       lazily resolved from the reference node (see Ctx)
+#   literals           used verbatim
 GETTERS = [
     # accelerator (5 read methods in coverage.tsv)
     ("embedded.accelerator.getAll", [("page",)]),
@@ -101,50 +155,50 @@ GETTERS = [
     # liquidity (6)
     ("embedded.liquidity.getLiquidityInfo", []),
     ("embedded.liquidity.getSecurityInfo", []),
-    ("embedded.liquidity.getLiquidityStakeEntriesByAddress", [("addr",), ("page",)]),
-    ("embedded.liquidity.getUncollectedReward", [("addr",)]),
-    ("embedded.liquidity.getFrontierRewardByPage", [("addr",), ("page",)]),
+    ("embedded.liquidity.getLiquidityStakeEntriesByAddress", [("liquidityStaker",), ("page",)]),
+    ("embedded.liquidity.getUncollectedReward", [("liquidityStaker",)]),
+    ("embedded.liquidity.getFrontierRewardByPage", [("liquidityStaker",), ("page",)]),
     ("embedded.liquidity.getTimeChallengesInfo", []),
-    # pillar (9)
-    ("embedded.pillar.getDepositedQsr", [("addr",)]),
-    ("embedded.pillar.getUncollectedReward", [("addr",)]),
-    ("embedded.pillar.getFrontierRewardByPage", [("addr",), ("page",)]),
+    # pillar (11)
+    ("embedded.pillar.getDepositedQsr", [("pillarOwner",)]),
+    ("embedded.pillar.getUncollectedReward", [("pillarOwner",)]),
+    ("embedded.pillar.getFrontierRewardByPage", [("pillarOwner",), ("page",)]),
     ("embedded.pillar.getQsrRegistrationCost", []),
     ("embedded.pillar.getAll", [("page",)]),
-    ("embedded.pillar.getByOwner", [("addr",)]),
+    ("embedded.pillar.getByOwner", [("pillarOwner",)]),
     ("embedded.pillar.getByName", [("name",)]),
     ("embedded.pillar.checkNameAvailability", [("name",)]),
-    ("embedded.pillar.getDelegatedPillar", [("addr",)]),
+    ("embedded.pillar.getDelegatedPillar", [("delegator",)]),
     ("embedded.pillar.getPillarEpochHistory", [("name",), ("page",)]),
     ("embedded.pillar.getPillarsHistoryByEpoch", [1, ("page",)]),
     # plasma (4)
-    ("embedded.plasma.get", [("addr",)]),
-    ("embedded.plasma.getEntriesByAddress", [("addr",), ("page",)]),
+    ("embedded.plasma.get", [("fuser",)]),
+    ("embedded.plasma.getEntriesByAddress", [("fuser",), ("page",)]),
     ("embedded.plasma.getRequiredPoWForAccountBlock",
-        [{"address": ("addr",), "blockType": 2, "toAddress": ("addr",), "data": ""}]),
+        [{"address": ("fuser",), "blockType": 2, "toAddress": ("addr",), "data": ""}]),
     ("embedded.plasma.getVariables", []),
     # ptlc (2)
     ("embedded.ptlc.getById", [("zeroHash",)]),
     ("embedded.ptlc.getReclaimLockById", [("zeroHash",)]),
     # sentinel (5)
     ("embedded.sentinel.getAllActive", [("page",)]),
-    ("embedded.sentinel.getByOwner", [("addr",)]),
-    ("embedded.sentinel.getDepositedQsr", [("addr",)]),
-    ("embedded.sentinel.getUncollectedReward", [("addr",)]),
-    ("embedded.sentinel.getFrontierRewardByPage", [("addr",), ("page",)]),
+    ("embedded.sentinel.getByOwner", [("sentinelOwner",)]),
+    ("embedded.sentinel.getDepositedQsr", [("sentinelOwner",)]),
+    ("embedded.sentinel.getUncollectedReward", [("sentinelOwner",)]),
+    ("embedded.sentinel.getFrontierRewardByPage", [("sentinelOwner",), ("page",)]),
     # spork (1)
     ("embedded.spork.getAll", [("page",)]),
     # stake (3)
-    ("embedded.stake.getUncollectedReward", [("addr",)]),
-    ("embedded.stake.getFrontierRewardByPage", [("addr",), ("page",)]),
-    ("embedded.stake.getEntriesByAddress", [("addr",), ("page",)]),
+    ("embedded.stake.getUncollectedReward", [("staker",)]),
+    ("embedded.stake.getFrontierRewardByPage", [("staker",), ("page",)]),
+    ("embedded.stake.getEntriesByAddress", [("staker",), ("page",)]),
     # swap (3)
     ("embedded.swap.getAssetsByKeyIdHash", [("swapKeyIdHash",)]),
     ("embedded.swap.getAssets", []),
     ("embedded.swap.getLegacyPillars", []),
     # token (3)
     ("embedded.token.getAll", [("page",)]),
-    ("embedded.token.getByOwner", [("addr",), ("page",)]),
+    ("embedded.token.getByOwner", [("tokenOwner",), ("page",)]),
     ("embedded.token.getByZts", [("znnZts",)]),
 ]
 
@@ -252,6 +306,33 @@ def normalize(value):
     return value
 
 
+def first_diff(x, y, path=""):
+    """A small record of the first difference between two answers, with a
+    dotted path ("list[3].weight") to the differing leaf.  Keys present on
+    only one side are reported as such."""
+    if isinstance(x, dict) and isinstance(y, dict):
+        for k in sorted(set(x) | set(y)):
+            p = f"{path}.{k}" if path else k
+            if k not in x:
+                return {"path": p, "refMissing": True, "test": str(y[k])[:120]}
+            if k not in y:
+                return {"path": p, "testMissing": True, "ref": str(x[k])[:120]}
+            if x[k] != y[k]:
+                if isinstance(x[k], (dict, list)) and isinstance(y[k], (dict, list)):
+                    return first_diff(x[k], y[k], p)
+                return {"path": p, "ref": str(x[k])[:120], "test": str(y[k])[:120]}
+    if isinstance(x, list) and isinstance(y, list):
+        for i, (a, b) in enumerate(zip(x, y)):
+            if a != b:
+                p = f"{path}[{i}]"
+                if isinstance(a, (dict, list)) and isinstance(b, (dict, list)):
+                    return first_diff(a, b, p)
+                return {"path": p, "ref": str(a)[:120], "test": str(b)[:120]}
+        if len(x) != len(y):
+            return {"path": path, "detail": "length", "ref": len(x), "test": len(y)}
+    return {"path": path, "ref": str(x)[:120], "test": str(y)[:120]}
+
+
 def compare_momentum_answer(ref_a, test_a):
     """Compare one getDetailedMomentumsByHeight answer.  Returns (status, detail)."""
     rl = ref_a.get("list") or []
@@ -278,7 +359,9 @@ def compare_momentum_answer(ref_a, test_a):
             first = None
             for i, (x, y) in enumerate(zip(nr, nt)):
                 if x != y:
-                    for k in x:
+                    # Union of keys: a key added on only one side must show
+                    # up as the first diff, not leave firstDiff null.
+                    for k in sorted(set(x) | set(y)):
                         if x.get(k) != y.get(k):
                             first = {"block": i, "field": k,
                                      "ref": str(x.get(k))[:120],
@@ -296,54 +379,266 @@ def compare_momentum_answer(ref_a, test_a):
     return ("FAIL" if diffs else "PASS"), {**out, **({"diffs": diffs} if diffs else {})}
 
 
+def is_method_missing(err):
+    """True iff the error string reports JSON-RPC method-not-found (-32601,
+    'the method X does not exist/is not available')."""
+    return err is not None and ("-32601" in err or "does not exist" in err
+                                or "not available" in err)
+
+
+def allowlisted_diff_only(method, nr, nt):
+    """True iff the only difference between the two normalized answers is
+    test-side extra keys listed in EXPECTED_API_ADDITIONS[method]."""
+    allowed = EXPECTED_API_ADDITIONS.get(method)
+    if not allowed or not isinstance(nr, dict) or not isinstance(nt, dict):
+        return False
+    extra = set(nt) - set(nr)
+    if not extra or not extra <= set(allowed):
+        return False
+    return {k: v for k, v in nt.items() if k not in extra} == nr
+
+
+def sort_list_answer(answer, key):
+    """A copy of the answer with its list (the answer itself, or its "list"
+    field) sorted by `key`; anything else is returned unchanged."""
+    if isinstance(answer, dict) and isinstance(answer.get("list"), list):
+        return {**answer, "list": sorted(answer["list"], key=key)}
+    if isinstance(answer, list):
+        return sorted(answer, key=key)
+    return answer
+
+
+def classify_getter(method, ref_obs, test_obs):
+    """Classify one getter pair.  Each observation is one of
+    {"result": answer}      the call returned a result
+    {"rpcError": str}       a JSON-RPC error (a comparable answer)
+    {"transportError": str} the request failed below JSON-RPC after retries
+    Returns (status, detail).  Pure: no I/O, no clock.
+
+    Rules (see README):
+      - any transport failure is ERROR, never PASS/FAIL: identical
+        transport failures on both sides mean neither getter answered;
+      - method-missing is classified before the one-sided-error rule:
+        missing on exactly one side is INFO either way (added on dev /
+        absent on the binary under test), missing on both is INFO
+        (consistent: neither build serves it);
+      - identical RPC errors on both sides are PASS, different ones FAIL;
+      - one-sided RPC error is FAIL;
+      - results are compared after normalization (and list reordering for
+        SORT_BEFORE_COMPARE methods); an expected API addition is INFO,
+        anything else FAIL with the first difference recorded.
+    """
+    rtrans = ref_obs.get("transportError")
+    ttrans = test_obs.get("transportError")
+    if rtrans is not None or ttrans is not None:
+        d = {"refError": (rtrans or "")[:200], "testError": (ttrans or "")[:200]}
+        if rtrans is not None and ttrans is not None:
+            # Identical transport failures are NOT agreement: neither
+            # getter returned an answer to compare.
+            d["detail"] = "transport-failure-both-sides"
+        else:
+            d["detail"] = "transport-failure-on-one-side"
+        return "ERROR", d
+    rerr = ref_obs.get("rpcError")
+    terr = test_obs.get("rpcError")
+    if rerr is not None or terr is not None:
+        d = {"refError": (rerr or "")[:200], "testError": (terr or "")[:200]}
+        rmiss, tmiss = is_method_missing(rerr), is_method_missing(terr)
+        if rmiss and tmiss:
+            # Neither build serves the method: consistent, documented as
+            # INFO rather than PASS so the missing surface stays visible.
+            d["detail"] = "method-missing-on-both"
+            return "INFO", d
+        if rmiss:
+            # The method exists only on the binary under test (a getter
+            # added after the reference release): expected, not a chain
+            # difference.
+            d["detail"] = "method-missing-on-ref"
+            return "INFO", d
+        if tmiss:
+            # The reference serves it but the binary under test does not:
+            # symmetric detection, INFO for review, never silently PASS.
+            d["detail"] = "method-missing-on-test"
+            return "INFO", d
+        if rerr is not None and terr is not None:
+            # Identical errors on both sides are agreement (not-found id,
+            # ...).  Different errors are a real difference in the error
+            # surface.
+            if rerr == terr:
+                return "PASS", d
+            d["detail"] = "error-surface-differs"
+            return "FAIL", d
+        d["detail"] = "error-on-one-side"
+        return "FAIL", d
+    rr, tt = ref_obs["result"], test_obs["result"]
+    key = SORT_BEFORE_COMPARE.get(method)
+    if key is not None:
+        rr = sort_list_answer(rr, key)
+        tt = sort_list_answer(tt, key)
+    nr, nt = normalize(rr), normalize(tt)
+    if nr == nt:
+        return "PASS", {}
+    if allowlisted_diff_only(method, nr, nt):
+        extra = sorted(set(nt) - set(nr))
+        return "INFO", {"detail": "expected-api-addition", "addedKeys": extra,
+                        "reasons": {k: EXPECTED_API_ADDITIONS[method][k]
+                                    for k in extra}}
+    return "FAIL", {"detail": "result-differs", "firstDiff": first_diff(nr, nt)}
+
+
+class ArgUnavailable(Exception):
+    """The reference chain has no entity to build this argument from (e.g.
+    no accelerator project with a phase).  Dependent getters are SKIP with
+    the reason, not ERROR: there is nothing to compare, and that is a
+    property of the chain, not a failure of either node."""
+
+
 class Ctx:
-    """Lazily-resolved argument sources, read once from the reference node."""
+    """Lazily-resolved argument sources, read once from the reference node.
+
+    Address-keyed getters are exercised with addresses known to hold the
+    relevant state (a pillar owner has pillar state, a staker has stake
+    entries, ...), resolved from list getters on the reference node, so the
+    comparison does not degenerate to comparing trivially-empty answers.
+    When the chain has no such entity the sampled address is used and the
+    fallback is recorded in `sources` (logged as the address book)."""
 
     def __init__(self, ref, addr):
         self.ref = ref
         self.addr = addr
         self.cache = {}
+        self.sources = {}   # address slot -> where the address came from
 
     def get(self, key):
         if key not in self.cache:
             self.cache[key] = self._resolve(key)
         return self.cache[key]
 
+    def address_book(self):
+        """The resolved populated-address slots and their provenance."""
+        return {k: {"address": self.cache[k], "source": self.sources[k]}
+                for k in sorted(self.sources)}
+
+    def _pillars(self):
+        if "pillars" not in self.cache:
+            res = rpc(self.ref, "embedded.pillar.getAll", [0, 100])
+            self.cache["pillars"] = (res or {}).get("list") or []
+        return self.cache["pillars"]
+
+    def _sentinels(self):
+        if "sentinels" not in self.cache:
+            res, err = rpc_catching(self.ref, "embedded.sentinel.getAllActive",
+                                    [0, 100])
+            self.cache["sentinels"] = [] if err else ((res or {}).get("list") or [])
+        return self.cache["sentinels"]
+
+    def _candidates(self):
+        """Addresses known to hold state, most-likely-populated first."""
+        if "candidates" not in self.cache:
+            cands = [p["ownerAddress"] for p in self._pillars()
+                     if p.get("ownerAddress")]
+            cands += [s["owner"] for s in self._sentinels() if s.get("owner")]
+            self.cache["candidates"] = cands
+        return self.cache["candidates"]
+
+    def _fallback(self, key, why):
+        self.sources[key] = f"fallback: sampled address ({why})"
+        return self.addr
+
+    def _probe_list(self, key, method):
+        """The first candidate whose `method` answer carries a non-empty
+        list, else the sampled address with a note."""
+        for cand in self._candidates()[:PROBE_MAX]:
+            res, err = rpc_catching(self.ref, method, [cand, 0, 1])
+            if not err and ((res or {}).get("list") or []):
+                self.sources[key] = f"{method} non-empty"
+                return cand
+        return self._fallback(key, f"no candidate with entries in {method}")
+
     def _resolve(self, key):
         if key == "addr":
             return self.addr
         if key == "zeroHash":
             return "00" * 32
+        if key == "pillarOwner":
+            for p in self._pillars():
+                if p.get("ownerAddress"):
+                    self.sources[key] = "embedded.pillar.getAll ownerAddress"
+                    return p["ownerAddress"]
+            raise ArgUnavailable("no pillar on ref")
+        if key == "sentinelOwner":
+            for s in self._sentinels():
+                if s.get("owner"):
+                    self.sources[key] = "embedded.sentinel.getAllActive owner"
+                    return s["owner"]
+            return self._fallback(key, "no active sentinel on ref")
+        if key == "staker":
+            return self._probe_list(key, "embedded.stake.getEntriesByAddress")
+        if key == "liquidityStaker":
+            return self._probe_list(key,
+                                    "embedded.liquidity.getLiquidityStakeEntriesByAddress")
+        if key == "fuser":
+            return self._probe_list(key, "embedded.plasma.getEntriesByAddress")
+        if key == "delegator":
+            for cand in self._candidates()[:PROBE_MAX]:
+                res, err = rpc_catching(self.ref, "embedded.pillar.getDelegatedPillar",
+                                        [cand])
+                if not err and res:
+                    self.sources[key] = "embedded.pillar.getDelegatedPillar non-null"
+                    return cand
+            return self._fallback(key, "no delegated candidate found")
+        if key == "tokenOwner":
+            for pi in range(5):
+                res = rpc(self.ref, "embedded.token.getAll", [pi, 100])
+                tokens = (res or {}).get("list") or []
+                for t in tokens:
+                    if t.get("owner"):
+                        self.sources[key] = "embedded.token.getAll owner"
+                        return t["owner"]
+                if len(tokens) < 100:
+                    break
+            return self._fallback(key, "no token owner on ref")
         if key == "name":
-            l = rpc(self.ref, "embedded.pillar.getAll", [0, 1])["list"]
-            if not l:
-                raise RuntimeError("no pillars on ref")
-            return l[0]["name"]
+            pillars = self._pillars()
+            if not pillars:
+                raise ArgUnavailable("no pillar on ref")
+            return pillars[0]["name"]
         if key == "project":
             l = rpc(self.ref, "embedded.accelerator.getAll", [0, 1])["list"]
             if not l:
-                raise RuntimeError("no accelerator projects on ref")
+                raise ArgUnavailable("no accelerator project on ref")
             return l[0]["id"]
         if key == "phase":
-            p = rpc(self.ref, "embedded.accelerator.getProjectById", [self.get("project")])
-            ph = (p or {}).get("phases") or []
-            if not ph or not (ph[0].get("phase") or {}).get("id"):
-                raise RuntimeError("no phase id on first project")
-            return ph[0]["phase"]["id"]
+            # getAll returns projects sorted by descending
+            # lastUpdateTimestamp, so the first project may be a fresh
+            # submission with phases: [] — scan for the first project that
+            # actually has a phase.
+            for pi in range(5):
+                res = rpc(self.ref, "embedded.accelerator.getAll", [pi, 100])
+                projects = (res or {}).get("list") or []
+                for p in projects:
+                    d = rpc(self.ref, "embedded.accelerator.getProjectById",
+                            [p["id"]])
+                    for e in (d or {}).get("phases") or []:
+                        if (e.get("phase") or {}).get("id"):
+                            return e["phase"]["id"]
+                if len(projects) < 100:
+                    break
+            raise ArgUnavailable("no accelerator project with a phase on ref")
         if key in ("networkClass", "chainId"):
             l = rpc(self.ref, "embedded.bridge.getAllNetworks", [0, 1])["list"]
             if not l:
-                raise RuntimeError("no bridge networks on ref")
+                raise ArgUnavailable("no bridge network on ref")
             return l[0][key]
         if key in ("wrapId", "wrapToAddress"):
             l = rpc(self.ref, "embedded.bridge.getAllWrapTokenRequests", [0, 1])["list"]
             if not l:
-                raise RuntimeError("no wrap requests on ref")
+                raise ArgUnavailable("no wrap request on ref")
             return l[0]["id"] if key == "wrapId" else l[0]["toAddress"]
         if key in ("unwrapHash", "unwrapLogIndex", "unwrapToAddress"):
             l = rpc(self.ref, "embedded.bridge.getAllUnwrapTokenRequests", [0, 1])["list"]
             if not l:
-                raise RuntimeError("no unwrap requests on ref")
+                raise ArgUnavailable("no unwrap request on ref")
             e = l[0]
             return {"unwrapHash": e.get("transactionHash"),
                     "unwrapLogIndex": e.get("logIndex"),
@@ -360,12 +655,12 @@ class Ctx:
                         return t["tokenStandard"]
                 if len((res or {}).get("list") or []) < 100:
                     break
-            raise RuntimeError("ZNN token not found on ref")
+            raise ArgUnavailable("ZNN token not found on ref")
         if key == "swapKeyIdHash":
             assets = rpc(self.ref, "embedded.swap.getAssets") or {}
             for h in assets:
                 return h
-            raise RuntimeError("no swap assets on ref")
+            raise ArgUnavailable("no swap asset on ref")
         raise RuntimeError(f"unknown arg source {key}")
 
 
@@ -385,16 +680,41 @@ def build_args(tmpl, ctx):
 
 
 def page_all(endpoint, method, fixed_args):
-    """Page a list getter to the end.  Returns (merged list, pages, truncated)."""
+    """Page a list getter to the end.  Returns (answer, pages, truncated)
+    where answer is the page-0 answer with "list" replaced by the merged
+    items of all pages, so top-level fields next to "list" (count,
+    qsrAmount, totalAmount, totalWeightedAmount, ...) survive and are
+    compared too."""
     merged = []
+    top = {}
     for pi in range(MAX_PAGES):
-        res = rpc(endpoint, method, fixed_args + [pi, PAGE], timeout=180)
-        items = (res or {}).get("list") or []
+        res = rpc(endpoint, method, fixed_args + [pi, PAGE], timeout=180) or {}
+        items = res.get("list") or []
+        if pi == 0:
+            top = {k: v for k, v in res.items() if k != "list"}
         merged.extend(items)
-        count = (res or {}).get("count")
+        count = res.get("count")
         if len(items) < PAGE or (count is not None and len(merged) >= count):
-            return merged, pi + 1, False
-    return merged, MAX_PAGES, True
+            return {**top, "list": merged}, pi + 1, False
+    return {**top, "list": merged}, MAX_PAGES, True
+
+
+def observe(endpoint, method, fixed, paged):
+    """Run one getter on one endpoint.  Returns (observation, meta) for
+    classify_getter; meta carries page counts/truncation for the log."""
+    meta = {}
+    try:
+        if paged:
+            ans, pages, trunc = page_all(endpoint, method, fixed)
+            meta["Pages"] = pages
+            if trunc:
+                meta["Truncated"] = True
+            return {"result": ans}, meta
+        return {"result": rpc(endpoint, method, fixed, timeout=180)}, meta
+    except RuntimeError as e:
+        return {"rpcError": str(e)}, meta
+    except Exception as e:
+        return {"transportError": str(e)}, meta
 
 
 def sample_addresses(endpoint, ref, S, want, fh):
@@ -466,7 +786,9 @@ def run(ref, test, args, fh):
          "ref": ref, "test": test,
          "params": {"addrCount": args.addr_count, "sampleHeight": args.sample_height,
                     "batchSize": args.batch_size},
-         "leftOut": LEFT_OUT}, fh)
+         "leftOut": LEFT_OUT,
+         "expectedApiAdditions": {m: sorted(k) for m, k in
+                                  EXPECTED_API_ADDITIONS.items()}}, fh)
 
     gate(ref)
     gate(test)
@@ -529,97 +851,135 @@ def run(ref, test, args, fh):
     with open(args.sample_out, "w") as sf:
         for row in rows:
             sf.write(json.dumps(row) + "\n")
-    manifest_hash = hashlib.sha256(
-        open(args.sample_out, "rb").read()).hexdigest()
+    with open(args.sample_out, "rb") as sf:
+        manifest_hash = hashlib.sha256(sf.read()).hexdigest()
     addrs = [r["address"] for r in rows]
     log({"case": "M-2c", "status": "INFO", "detail": "sample-manifest",
          "count": len(addrs), "file": args.sample_out, "sha256": manifest_hash}, fh)
 
+    # Account infos.  A batch counts only if the frontier hashes of both
+    # nodes are identical before and after it; if the frontier moved the
+    # batch is retried a bounded number of times before it degrades to
+    # INFO.  ledger.getAccountInfoByAddress reads the frontier account
+    # store, which includes node-local unconfirmed pool blocks, so two
+    # nodes with identical frontier hashes can still disagree
+    # intermittently: a differing address is re-fetched on both sides once
+    # before it is declared a FAIL.
+    compared_batches = 0
     for i in range(0, len(addrs), args.batch_size):
         batch = addrs[i:i + args.batch_size]
         r = {"case": "M-2c-accountInfos", "batch": i // args.batch_size, "n": len(batch)}
-        h_before = (frontier_hash(ref), frontier_hash(test))
-        infos_ref, infos_test, ok = [], [], True
-        try:
-            for a in batch:
-                infos_ref.append(rpc(ref, "ledger.getAccountInfoByAddress", [a], timeout=30))
-                infos_test.append(rpc(test, "ledger.getAccountInfoByAddress", [a], timeout=30))
-        except Exception as e:
-            r["status"] = "ERROR"; r["error"] = str(e)[:200]; ok = False
-        h_after = (frontier_hash(ref), frontier_hash(test))
-        if ok:
+        for attempt in range(1, FRONTIER_RETRIES + 1):
+            h_before = (frontier_hash(ref), frontier_hash(test))
+            infos_ref, infos_test = [], []
+            try:
+                for a in batch:
+                    infos_ref.append(rpc(ref, "ledger.getAccountInfoByAddress", [a], timeout=30))
+                    infos_test.append(rpc(test, "ledger.getAccountInfoByAddress", [a], timeout=30))
+            except Exception as e:
+                r["status"] = "ERROR"; r["error"] = str(e)[:200]
+                compared_batches += 1
+                break
+            h_after = (frontier_hash(ref), frontier_hash(test))
             if h_before[0] == h_before[1] == h_after[0] == h_after[1]:
-                r["status"] = "PASS" if infos_ref == infos_test else "FAIL"
-                if r["status"] == "FAIL":
-                    for a, x, y in zip(batch, infos_ref, infos_test):
-                        if x != y:
-                            r["firstDiffAddress"] = a
-                            break
-            else:
-                r["status"] = "INFO"; r["detail"] = "frontier-moved-during-batch"
+                diffs = [a for a, x, y in zip(batch, infos_ref, infos_test) if x != y]
+                if diffs:
+                    try:
+                        still = []
+                        for a in diffs:
+                            x2 = rpc(ref, "ledger.getAccountInfoByAddress", [a], timeout=30)
+                            y2 = rpc(test, "ledger.getAccountInfoByAddress", [a], timeout=30)
+                            if x2 != y2:
+                                still.append(a)
+                    except Exception as e:
+                        r["status"] = "ERROR"; r["error"] = ("pool-retry: " + str(e))[:200]
+                        compared_batches += 1
+                        break
+                    if still:
+                        r["status"] = "FAIL"
+                        r["firstDiffAddress"] = still[0]
+                        r["diffAddresses"] = len(still)
+                    else:
+                        # The difference was node-local unconfirmed pool
+                        # state and resolved on the single re-read.
+                        r["status"] = "PASS"
+                        r["poolRetryResolved"] = len(diffs)
+                else:
+                    r["status"] = "PASS"
+                compared_batches += 1
+                if attempt > 1:
+                    r["attempts"] = attempt
+                break
+            if attempt == FRONTIER_RETRIES:
+                r["status"] = "INFO"
+                r["detail"] = "frontier-moved-during-batch"
+                r["attempts"] = attempt
         log(r, fh)
 
     # Embedded getters: run the identical walk on both nodes and compare.
-    # RPC-level errors are comparable answers: identical errors on both sides
-    # are a PASS (e.g. a not-found id or a getter missing on the release),
-    # an error on exactly one side is a FAIL (the full-history reference
-    # serves every method, so one-sided breakage is a regression).
-    addr = addrs[0] if addrs else \
-        "z1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+    # classify_getter decides the verdict (see its docstring and the
+    # README); a result comparison counts only when the frontier hashes of
+    # both nodes are identical before and after the walk, retried a
+    # bounded number of times before it degrades to INFO.
+    addr = addrs[0] if addrs else ZERO_ADDRESS
     ctx = Ctx(ref, addr)
+    compared_getters = 0
     for method, tmpl in GETTERS:
         r = {"case": "M-2c-getters", "method": method}
         try:
             paged = bool(tmpl and isinstance(tmpl[-1], tuple) and tmpl[-1][0] == "page")
             fixed = build_args(tmpl[:-1] if paged else tmpl, ctx)
+        except ArgUnavailable as e:
+            # The reference chain has no entity to build the argument from:
+            # nothing to compare, by property of the chain, not a failure.
+            r["status"] = "SKIP"; r["detail"] = ("arg-unavailable: " + str(e))[:200]
+            log(r, fh)
+            continue
         except Exception as e:
             r["status"] = "ERROR"; r["error"] = ("arg-resolution: " + str(e))[:200]
             log(r, fh)
             continue
-        h_before = (frontier_hash(ref), frontier_hash(test))
-        rerr = terr = None
-        rr = tt = None
-        try:
-            if paged:
-                rr, rp, rtrunc = page_all(ref, method, fixed)
-                r["refPages"] = rp
-                if rtrunc:
-                    r["refTruncated"] = True
+        for attempt in range(1, FRONTIER_RETRIES + 1):
+            h_before = (frontier_hash(ref), frontier_hash(test))
+            ref_obs, ref_meta = observe(ref, method, fixed, paged)
+            test_obs, test_meta = observe(test, method, fixed, paged)
+            h_after = (frontier_hash(ref), frontier_hash(test))
+            status, detail = classify_getter(method, ref_obs, test_obs)
+            stable = h_before[0] == h_before[1] == h_after[0] == h_after[1]
+            if "result" in ref_obs and "result" in test_obs and not stable:
+                # A result comparison across a moved frontier proves
+                # nothing; retry, and degrade to INFO after the bound.
+                # Not counted as compared: an all-frontier-moved run must
+                # not pass as exit 0 (see the no-getter-compared ERROR).
+                if attempt < FRONTIER_RETRIES:
+                    continue
+                status, detail = "INFO", {"detail": "frontier-moved-during-getter"}
             else:
-                rr = rpc(ref, method, fixed, timeout=180)
-        except Exception as e:
-            rerr = str(e)
-        try:
-            if paged:
-                tt, tp, ttrunc = page_all(test, method, fixed)
-                r["testPages"] = tp
-                if ttrunc:
-                    r["testTruncated"] = True
-            else:
-                tt = rpc(test, method, fixed, timeout=180)
-        except Exception as e:
-            terr = str(e)
-        h_after = (frontier_hash(ref), frontier_hash(test))
-        if rerr is not None and terr is not None:
-            if ("does not exist" in rerr or "not available" in rerr) != \
-               ("does not exist" in terr or "not available" in terr):
-                # The method exists on exactly one build (added after the
-                # reference release): expected, not a chain difference.
-                r["status"] = "INFO"; r["detail"] = "method-missing-on-one-side"
-            else:
-                # Identical errors on both sides are agreement (not-found id,
-                # ...).  Different errors are a real difference in the error
-                # surface.
-                r["status"] = "PASS" if rerr == terr else "FAIL"
-            r["refError"], r["testError"] = rerr[:200], terr[:200]
-        elif rerr is not None or terr is not None:
-            r["status"] = "FAIL"; r["detail"] = "error-on-one-side"
-            r["refError"], r["testError"] = (rerr or "")[:200], (terr or "")[:200]
-        elif h_before[0] == h_before[1] == h_after[0] == h_after[1]:
-            r["status"] = "PASS" if normalize(rr) == normalize(tt) else "FAIL"
-        else:
-            r["status"] = "INFO"; r["detail"] = "frontier-moved-during-getter"
+                compared_getters += 1
+            r["status"] = status
+            r.update(detail)
+            for k, v in ref_meta.items():
+                r["ref" + k] = v
+            for k, v in test_meta.items():
+                r["test" + k] = v
+            if attempt > 1:
+                r["attempts"] = attempt
+            break
         log(r, fh)
+
+    log({"case": "M-2c-getters", "status": "INFO", "detail": "address-book",
+         "addresses": ctx.address_book()}, fh)
+
+    # A run in which the frontier moved through every retry of every batch
+    # or getter compared nothing; it must not pass as exit 0.
+    if addrs and compared_batches == 0:
+        log({"case": "M-2c-accountInfos", "status": "ERROR",
+             "detail": "no-batch-compared: the frontier moved through every "
+                       "retry of every batch"}, fh)
+    if compared_getters == 0:
+        log({"case": "M-2c-getters", "status": "ERROR",
+             "detail": "no-getter-compared: the frontier moved through every "
+                       "retry of every getter"}, fh)
 
     # ---- M-2d: controls
     try:
@@ -675,7 +1035,21 @@ def main():
                     help="where the sample manifest is written (default: <out>.sample.jsonl)")
     args = ap.parse_args()
 
-    path = args.out or os.path.join(os.environ.get("TMPDIR", "/tmp"), "compare-results.jsonl")
+    if args.batch_size <= 0:
+        ap.error(f"--batch-size must be > 0, got {args.batch_size}")
+    if args.addr_count <= 0:
+        ap.error(f"--addr-count must be > 0, got {args.addr_count}")
+
+    tmpdir = None
+    if args.out:
+        path = args.out
+    else:
+        # A unique directory per run: two slices without --out must not
+        # clobber each other's results or sample manifests.
+        tmpdir = tempfile.mkdtemp(prefix="compare-")
+        path = os.path.join(tmpdir, "compare-results.jsonl")
+        print(f"writing to {path} (use --out to choose the location)",
+              file=sys.stderr)
     if not args.sample_out:
         args.sample_out = path + ".sample.jsonl"
     with open(path, "w") as fh:
@@ -684,6 +1058,7 @@ def main():
     if not args.out:
         with open(path) as fh:
             sys.stdout.write(fh.read())
+        shutil.rmtree(tmpdir, ignore_errors=True)
     else:
         print(f"Wrote {path}", file=sys.stderr)
     fail = sum(s.get("FAIL", 0) for s in by_case.values())
