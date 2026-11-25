@@ -951,6 +951,11 @@ func (n *Net) sendBy(kp *wallet.KeyPair, tmpl *nom.AccountBlock, mut *Mutator, d
 	l.Lock()
 	defer l.Unlock()
 	for attempt := 0; ; attempt++ {
+		// Checked before each preparation too, so a deadline that passed
+		// while the lock was held elsewhere is reported as such.
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			return nil, &StageError{"deadline", fmt.Errorf("the deadline passed before a block could be prepared")}
+		}
 		b, err := n.Prepare(kp, tmpl, mut)
 		if err != nil {
 			return nil, &StageError{"prepare", err}

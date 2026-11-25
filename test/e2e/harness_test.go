@@ -111,7 +111,10 @@ func TestMain(m *testing.M) {
 		}
 	}
 	lockName := fmt.Sprintf("go-zenon-e2e-%d-%s.lock", chainID, genesis.List[0].Hash)
-	if runLock, err = os.OpenFile(filepath.Join(os.TempDir(), lockName), os.O_CREATE|os.O_RDWR, 0o600); err != nil {
+	// In /tmp, not os.TempDir(): runs with different TMPDIR values must meet
+	// the same file. It is readable by everyone, so another user's run can
+	// open it read-only and take the same lock.
+	if runLock, err = os.OpenFile(filepath.Join("/tmp", lockName), os.O_CREATE|os.O_RDONLY, 0o644); err != nil {
 		exit("run lock: %v", err)
 	}
 	if err = syscall.Flock(int(runLock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
