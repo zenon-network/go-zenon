@@ -279,21 +279,35 @@ func (n *lockNode) do(c call) (accepted, settled bool, note string) {
 	}
 	// What an accepted cancel leaves behind: a stake emptied, a fusion gone.
 	// Once DynamicPlasmaSpork is active, a stake cancel stamps RevokeTime once
-	// and any later cancel of the same entry is refused without moving it.
-	if n.stake && n.afterSpork && c.id < len(n.entries) {
-		amount, revokeTime, still := n.stakeState(hash, n.owners[c.id])
+	// and any later cancel of the same entry is refused without moving it or
+	// emitting any descendant blocks.
+	if n.stake && n.afterSpork {
+		sendBlock, err := n.ledger.GetAccountBlockByHash(b.Hash)
+		if err != nil || sendBlock == nil || sendBlock.PairedAccountBlock == nil {
+			n.t.Fatalf("unreadable: %v: the call could not be read back for descendant check: %v", c, err)
+		}
+		wantDesc := 0
 		if ok {
-			if !still || amount.Sign() != 0 || revokeTime == 0 {
-				n.t.Errorf("%v: accepted, and the stake is there: %v, holding %v, revokeTime %d, want it there, empty and revoked", c, still, amount, revokeTime)
-			}
-			if prev, seen := n.revokeTimes[hash]; seen {
-				n.t.Errorf("%v: accepted a second cancel of an already-revoked stake (revoke time %d -> %d)", c, prev, revokeTime)
-			} else {
-				n.revokeTimes[hash] = revokeTime
-			}
-		} else if prev, seen := n.revokeTimes[hash]; seen {
-			if !still || amount.Sign() != 0 || revokeTime != prev {
-				n.t.Errorf("%v: refused repeat cancel altered the stored stake: there=%v amount=%v revokeTime=%d, want true, 0, %d", c, still, amount, revokeTime, prev)
+			wantDesc = 1
+		}
+		if gotDesc := len(sendBlock.PairedAccountBlock.DescendantBlocks); gotDesc != wantDesc {
+			n.t.Errorf("%v: the contract's status says accepted=%v, and its receive emitted %d descendant block(s), want %d", c, ok, gotDesc, wantDesc)
+		}
+		if c.id < len(n.entries) {
+			amount, revokeTime, still := n.stakeState(hash, n.owners[c.id])
+			if ok {
+				if !still || amount.Sign() != 0 || revokeTime == 0 {
+					n.t.Errorf("%v: accepted, and the stake is there: %v, holding %v, revokeTime %d, want it there, empty and revoked", c, still, amount, revokeTime)
+				}
+				if prev, seen := n.revokeTimes[hash]; seen {
+					n.t.Errorf("%v: accepted a second cancel of an already-revoked stake (revoke time %d -> %d)", c, prev, revokeTime)
+				} else {
+					n.revokeTimes[hash] = revokeTime
+				}
+			} else if prev, seen := n.revokeTimes[hash]; seen {
+				if !still || amount.Sign() != 0 || revokeTime != prev {
+					n.t.Errorf("%v: refused repeat cancel altered the stored stake: there=%v amount=%v revokeTime=%d, want true, 0, %d", c, still, amount, revokeTime, prev)
+				}
 			}
 		}
 	} else if ok && c.id < len(n.entries) {
