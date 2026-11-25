@@ -156,7 +156,7 @@ Rewards need epochs. The mainnet epoch is 24 hours. Use a devnet build or genesi
 | B-10 | Amount and from-hash fields of a send: negative amount, missing ZTS, from-hash must be zero: each refused with the verifier's own error |
 | B-11 | Acknowledgement gap between the account frontier and the confirmed momentum: refused |
 | B-12 | Receive carrying data: refused with the right error while the rule is in force |
-| B-13 | Forged embedded receive: not next in line (sequencer), a base-plasma field, and an acknowledgement that must match the confirmation: each refused |
+| B-13 | Forged embedded receive: not next in line (sequencer), the VM changes-hash wall (a forged receive is re-generated on arrival; a lying plasma field rides an honest hash into this wall, ahead of the plasmaFields rule), and an acknowledgement that must match the confirmation: each refused |
 | B-14 | Descendant blocks attached to a user send: refused |
 | B-15 | Walk the recent momentums: chain identifier, version 2 only past the dynamic-plasma enforcement, timestamp, previous, data, fusion and work prices, content, producer a registered pillar |
 | B-16 | Acknowledgement recency of the content blocks inside a momentum |

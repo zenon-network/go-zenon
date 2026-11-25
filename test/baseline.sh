@@ -237,13 +237,14 @@ fi
 
 # The groups a variant must skip, and nothing else may be skipped.
 FASTG="TestFastAccelerator TestFastBridgeAdmin TestFastPillar TestFastPlasma TestFastSentinel TestFastStake"
-NORMG="TestAccelerator TestHtlc TestLedger TestPillar TestPlasma TestPtlc TestSentinel TestSpork TestSporkLadder TestStake TestToken"
+NORMG="TestAccelerator TestHtlc TestLedger TestPillar TestPlasma TestPtlc TestSentinel TestSpork TestSporkEdge TestSporkLadder TestStake TestToken TestVerifierAccountRules TestVerifierMomentumRules"
 skips() {
   case "$1" in
-    stock|mainnet-like) echo "TestHaltOnUnknownSpork TestPtlc $FASTG" ;;
-    all-on)  echo "TestHaltOnUnknownSpork $FASTG" ;;
-    all-off) echo "TestAccelerator TestHaltOnUnknownSpork TestHtlc TestPtlc $FASTG" ;;
-    fast)    echo "TestHaltOnUnknownSpork $NORMG" ;;
+    stock)         echo "TestHaltOnUnknownSpork TestPtlc TestSporkStagedEnforcement TestSporkUnknownBinary $FASTG" ;;
+    mainnet-like)  echo "TestHaltOnUnknownSpork TestPtlc TestSporkEdge TestSporkStagedEnforcement TestSporkUnknownBinary $FASTG" ;;
+    all-on)        echo "TestHaltOnUnknownSpork TestSporkStagedEnforcement TestSporkUnknownBinary $FASTG" ;;
+    all-off)       echo "TestAccelerator TestHaltOnUnknownSpork TestHtlc TestPtlc TestSporkEdge TestSporkStagedEnforcement TestSporkUnknownBinary $FASTG" ;;
+    fast)          echo "TestHaltOnUnknownSpork TestSporkStagedEnforcement TestSporkUnknownBinary $NORMG" ;;
     destructive) ;;   # run with -run, so no other group is even started
   esac | tr ' ' '\n' | grep . | sort
 }

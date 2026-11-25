@@ -165,8 +165,11 @@ func TestLedger(t *testing.T) {
 	t.Run("B-5c_wrong_previous_hash_refused", func(t *testing.T) {
 		err := tryTransfer(a, b.Address, znn, units(1), &Mutator{Fields: func(b *nom.AccountBlock) { b.PreviousHash = types.NewHash([]byte("wrong")) }})
 		mustReject(t, err, "previous block is missing")
+		// The refusal comes from context acquisition (the previous block
+		// lookup in accountVerifier.getContext), not from the block
+		// verifier's previous rule, which never runs.
 		cover(t, "E6", "error", "verifier.ErrABPreviousMissing")
-		cover(t, "E6", "verifier-rule", "accountBlockVerifier.previous")
+		cover(t, "E6", "verifier-rule", "accountVerifier.getContext")
 	})
 
 	t.Run("B-5d_wrong_height_refused", func(t *testing.T) {
@@ -177,8 +180,11 @@ func TestLedger(t *testing.T) {
 		}
 		err := tryTransfer(a, b.Address, znn, units(1), &Mutator{Fields: func(b *nom.AccountBlock) { b.Height = 0 }})
 		mustReject(t, err, "height must be higher than 0")
+		// All four refusals come from context acquisition
+		// (accountVerifier.getContext), not the block verifier's previous
+		// rule.
 		cover(t, "E2", "error", "verifier.ErrABMHeightMissing")
-		cover(t, "E2", "verifier-rule", "accountBlockVerifier.previous")
+		cover(t, "E2", "verifier-rule", "accountVerifier.getContext")
 	})
 
 	t.Run("B-5e_bad_signature_refused", func(t *testing.T) {

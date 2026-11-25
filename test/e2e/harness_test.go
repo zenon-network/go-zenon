@@ -264,6 +264,34 @@ var sporkNames = map[types.Hash]string{
 	types.EpochRewardTermsSpork.SporkId:   "epoch-reward-terms",
 }
 
+// sporkItems maps a spork's short name to the inventory item cover() rows
+// name it by, so a spork added to sporkNames cannot silently produce an
+// empty item in a cover row. sporkIDs is the reverse of sporkNames.
+var sporkItems = map[string]string{
+	"accelerator": "AcceleratorSpork", "htlc": "HtlcSpork", "bridge": "BridgeAndLiquiditySpork",
+	"ptlc": "PtlcSpork", "libp2p": "Libp2pSpork", "dynamic-plasma": "DynamicPlasmaSpork",
+	"embedded-refund": "EmbeddedRefundSpork", "epoch-reward-terms": "EpochRewardTermsSpork",
+}
+
+var sporkIDs = func() map[string]types.Hash {
+	out := map[string]types.Hash{}
+	for id, name := range sporkNames {
+		out[name] = id
+	}
+	return out
+}()
+
+// sporkItem names the inventory item of a spork or fails the test: a spork
+// without an item name is a table bug, not a case to run with a blank row.
+func sporkItem(t *testing.T, name string) string {
+	t.Helper()
+	item, ok := sporkItems[name]
+	if !ok {
+		t.Fatalf("spork %q has no inventory item name in sporkItems", name)
+	}
+	return item
+}
+
 // waitSettled returns when, at two different heights, every
 // endpoint and container has the same frontier momentum and, among the last
 // 60 momentums below it, each pillar of the genesis file has produced at

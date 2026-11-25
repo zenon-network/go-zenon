@@ -3,16 +3,24 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+// initializedRe matches the line chain.Init prints while loading the
+// database, before P2P starts (chain/chain.go).
+var initializedRe = regexp.MustCompile(`Initialized NoM\. Height: (\d+)`)
 
 // TestSporkUnknownBinary covers TEST-PLAN.md S-4 and X-4 on the staged
 // genesis (edge class E7): a node whose binary lacks EmbeddedRefundSpork in
@@ -59,8 +67,9 @@ import (
 //
 // Nothing here touches the five standard nodes: the case is safe to run
 // alongside the normal groups on a staged devnet. Set E2E_OLDNODE=1 to
-// enable; E2E_DEVNET_GENESIS must point at the staged genesis file (the
-// same DEVNET_GENESIS test/devnet/up.sh exports).
+// enable; the staged genesis file is E2E_DEVNET_GENESIS, falling back to
+// the E2E_GENESIS every run already sets (the same DEVNET_GENESIS
+// test/devnet/up.sh exports).
 func TestSporkUnknownBinary(t *testing.T) {
 	if os.Getenv("E2E_OLDNODE") != "1" {
 		t.Skip("needs the oldnode container and docker access; set E2E_OLDNODE=1")
@@ -80,9 +89,16 @@ func TestSporkUnknownBinary(t *testing.T) {
 	image := envOr("E2E_DEVNET_IMAGE", "go-zenon-devnet:latest")
 	volume := envOr("E2E_OLDNODE_VOLUME", "znnd-oldnode-data")
 	rpc := envOr("E2E_OLDNODE_RPC", "http://localhost:36996")
-	genesis := os.Getenv("E2E_DEVNET_GENESIS")
+	// The host port the oldnode containers publish is the one in
+	// E2E_OLDNODE_RPC, so overriding the URL moves the port mapping too.
+	rpcURL, err := url.Parse(rpc)
+	if err != nil || rpcURL.Port() == "" {
+		t.Fatalf("E2E_OLDNODE_RPC %q is not a URL with a port: %v", rpc, err)
+	}
+	port := rpcURL.Port()
+	genesis := envOr("E2E_DEVNET_GENESIS", os.Getenv("E2E_GENESIS"))
 	if genesis == "" {
-		t.Fatal("E2E_DEVNET_GENESIS must point at the staged genesis file (the DEVNET_GENESIS test/devnet/up.sh exports)")
+		t.Fatal("E2E_DEVNET_GENESIS or E2E_GENESIS must point at the staged genesis file (the DEVNET_GENESIS test/devnet/up.sh exports)")
 	}
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -108,8 +124,17 @@ func TestSporkUnknownBinary(t *testing.T) {
 		return f[0], exitCode, nil
 	}
 	frontierAt := func() (uint64, error) {
-		body := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ledger.getFrontierMomentum","params":[]}`)
-		resp, err := http.Post(rpc, "application/json", body)
+		// Each request is bounded so a stalled endpoint cannot block past
+		// the caller's polling deadline.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, "POST", rpc,
+			strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ledger.getFrontierMomentum","params":[]}`))
+		if err != nil {
+			return 0, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return 0, err
 		}
@@ -150,7 +175,7 @@ func TestSporkUnknownBinary(t *testing.T) {
 			"-v", genesis+":/devnet/genesis.json:ro",
 			"-v", oldCfg+":/devnet/syncnode/config.json:ro",
 			"-e", "ZNND_ROLE=syncnode",
-			"-p", "36996:35997", img)
+			"-p", port+":35997", img)
 		if err != nil {
 			t.Fatalf("start %s (%s): %v (%s)", name, img, err, out)
 		}
@@ -165,6 +190,18 @@ func TestSporkUnknownBinary(t *testing.T) {
 	// before the recovery swap; S-4b asserts the recovered node continues
 	// from at least here instead of resyncing from genesis.
 	var volumeAt uint64
+
+	// Fail fast with the fix in the message when the oldnode is not up or
+	// its volume is stale: a volume left over from an earlier run is
+	// already past the enforcement height, so S-4 could only fail
+	// confusingly. test/devnet/up.sh removes the volume with the old
+	// chain; a manual oldnode start must reset it first.
+	if status, _, err := state(oldnode); err != nil || status != "running" {
+		t.Fatalf("the oldnode container %s is not running (%q, %v): start it per the group comment (compose.oldnode.yml)", oldnode, status, err)
+	}
+	if got, err := frontierAt(); err == nil && got > enf-1 {
+		t.Fatalf("the oldnode volume is stale: its frontier %d is past the enforcement height %d; reset it (docker rm -f %s; docker volume rm %s) and start the oldnode again", got, enf, oldnode, volume)
+	}
 
 	t.Run("S-4_old_node_cannot_pass_the_enforcement_height", func(t *testing.T) {
 		cover(t, "E7", "spork", "EmbeddedRefundSpork")
@@ -219,6 +256,8 @@ func TestSporkUnknownBinary(t *testing.T) {
 			t.Fatalf("remove the live old node: %v (%s)", err, out)
 		}
 		run("oldnode-sync-past", image)
+		// A fatal below must not leave the helper holding the RPC port.
+		t.Cleanup(func() { docker("rm", "-f", "oldnode-sync-past") })
 		volumeAt = waitFrontier(enf+3, "stock binary syncing the oldnode volume past the enforcement height")
 		if out, err := docker("rm", "-f", "oldnode-sync-past"); err != nil {
 			t.Fatalf("remove the sync-past container: %v (%s)", err, out)
@@ -233,7 +272,7 @@ func TestSporkUnknownBinary(t *testing.T) {
 			"-v", genesis+":/devnet/genesis.json:ro",
 			"-v", oldCfg+":/devnet/syncnode/config.json:ro",
 			"-e", "ZNND_ROLE=syncnode",
-			"-p", "36996:35997", envOr("E2E_OLDNODE_IMAGE", "go-zenon-devnet-noref:latest"))
+			"-p", port+":35997", envOr("E2E_OLDNODE_IMAGE", "go-zenon-devnet-noref:latest"))
 		if err != nil {
 			t.Fatalf("start the old binary on the past-enforcement volume: %v (%s)", err, out)
 		}
@@ -264,20 +303,36 @@ func TestSporkUnknownBinary(t *testing.T) {
 	t.Run("S-4b_recovery_binary_continues_without_resync", func(t *testing.T) {
 		// Recovery per the upgrade runbook: stop (done above), swap to a
 		// binary that implements the spork, start on the SAME data
-		// directory. The chain continues without a resync: the first
-		// frontier after boot must already be at or beyond the height the
-		// volume had reached before the swap (a resync from genesis would
-		// boot far below it), and the node then reaches the live frontier.
-		first := run(oldnode, image)
+		// directory. The chain continues without a resync. The proof is
+		// the height chain.Init prints while loading the database, before
+		// P2P starts ("Initialized NoM. Height: H"): a resync from genesis
+		// would load height 1, a continuation loads the height the volume
+		// had reached. (Polling the first RPC frontier instead would be
+		// racy: on a short devnet the node can sync past the volume height
+		// before the first successful poll.)
+		run(oldnode, image)
 		t.Cleanup(func() { docker("rm", "-f", oldnode) })
-		if first < volumeAt {
-			t.Errorf("recovered node first frontier is %d, below the recorded volume height %d — it resynced instead of continuing on the existing data", first, volumeAt)
+		var loaded uint64
+		deadline := time.Now().Add(2 * time.Minute)
+		for {
+			out, _ := docker("logs", oldnode)
+			if m := initializedRe.FindStringSubmatch(out); m != nil {
+				loaded, _ = strconv.ParseUint(m[1], 10, 64)
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("no 'Initialized NoM. Height:' line in the recovery node's logs within 2 min")
+			}
+			time.Sleep(2 * time.Second)
+		}
+		if loaded < volumeAt {
+			t.Errorf("recovery node loaded height %d from disk, below the recorded volume height %d — it resynced instead of continuing on the existing data", loaded, volumeAt)
 		}
 		want, err := net.Frontier()
 		if err != nil {
 			t.Fatal(err)
 		}
 		got := waitFrontier(want.Height, "recovered node catching up on its existing data")
-		t.Logf("recovered node reached height %d (frontier at start %d, first boot frontier %d) on its existing data", got, want.Height, first)
+		t.Logf("recovered node loaded height %d from disk and reached height %d (frontier at start %d) on its existing data", loaded, got, want.Height)
 	})
 }

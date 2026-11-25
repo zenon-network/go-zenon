@@ -43,8 +43,14 @@ GENESIS_MOMENTUM="$(go run $OVERLAY ./test/devnet/genesishash "$GENESIS" 2>/dev/
 case "$GENESIS_MOMENTUM" in *[!0-9a-f]*|'') die "cannot compute the genesis momentum of $GENESIS (go run ./test/devnet/genesishash)" ;; esac
 [ ${#GENESIS_MOMENTUM} -eq 64 ] || die "cannot compute the genesis momentum of $GENESIS"
 
-# 2. Remove the old chain, and check that it is gone.
+# 2. Remove the old chain, and check that it is gone. A leftover oldnode
+# from the S-4 suite (test/e2e/sporkhalt_test.go) is not in this compose
+# project, so `down` does not remove it: remove it, its sync-past helper
+# and its volume explicitly, or the container check below fails and the
+# next oldnode run would boot on a stale database.
 docker compose --profile sync down -v >/dev/null 2>&1 || die "cannot remove the previous devnet (docker compose down failed)"
+docker rm -f znnd-devnet-oldnode oldnode-sync-past >/dev/null 2>&1 || true
+docker volume rm znnd-oldnode-data >/dev/null 2>&1 || true
 left="$(docker ps -aq --filter name=znnd-devnet-)" || die "cannot list containers"
 left="$(printf '%s' "$left" | grep -c . || true)"
 [ "$left" = 0 ] || die "$left devnet containers survived the teardown"

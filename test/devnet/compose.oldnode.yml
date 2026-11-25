@@ -19,7 +19,11 @@
 #     the libp2p swap spork (zenon-network/go-zenon issue #105), and the
 #     oldnode always joins after height 20.
 #   - The volume name is fixed (not project-prefixed) so the e2e test can find
-#     it without knowing the compose project name.
+#     it without knowing the compose project name. test/devnet/up.sh removes
+#     the volume with the rest of the old chain; when bringing the oldnode up
+#     without up.sh, reset it first or a stale database (already past the
+#     enforcement height) makes the old binary refuse startup:
+#       docker volume rm znnd-oldnode-data
 services:
   oldnode:
     image: go-zenon-devnet-noref:latest

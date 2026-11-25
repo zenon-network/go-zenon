@@ -23,44 +23,36 @@ func TestSporkEdge(t *testing.T) {
 	if !live["dynamic-plasma"] {
 		t.Skip("acknowledgement recency (#280) is enforced only once dynamic plasma is")
 	}
-	sporkIDs := map[string]types.Hash{
-		"accelerator": types.AcceleratorSpork.SporkId, "htlc": types.HtlcSpork.SporkId,
-		"bridge": types.BridgeAndLiquiditySpork.SporkId, "ptlc": types.PtlcSpork.SporkId,
-		"libp2p": types.Libp2pSpork.SporkId, "dynamic-plasma": types.DynamicPlasmaSpork.SporkId,
-		"embedded-refund": types.EmbeddedRefundSpork.SporkId, "epoch-reward-terms": types.EpochRewardTermsSpork.SporkId,
-	}
-	// enf is the highest enforcement height of an activated spork, and top
-	// the spork first enforced there whose id sorts first: a block
-	// acknowledging one momentum below enf is refused, and the refusal
-	// names top (the rule sorts the enforced set by id so every node names
-	// the same spork).
+	// enf is the highest enforcement height of a spork that is in force at
+	// the frontier, and top the spork first enforced there whose id sorts
+	// first: a block acknowledging one momentum below enf is refused, and
+	// the refusal names top (the rule sorts the enforced set by id so every
+	// node names the same spork). Sporks whose enforcement height is still
+	// ahead (a staged run positioned below them) are not counted: the rule
+	// compares against the sporks enforced at the frontier, and acking a
+	// height that does not exist yet would fail for the wrong reason.
 	enf := uint64(0)
-	for _, h := range sporkHeights {
-		if h > enf {
+	for name, h := range sporkHeights {
+		if live[name] && h > enf {
 			enf = h
 		}
 	}
 	if enf == 0 {
 		t.Skip("every spork is enforced from height 0; there is no momentum before them")
 	}
+	if enf < 2 {
+		t.Skipf("the highest enforcement in force is %d; there is no momentum below it to acknowledge", enf)
+	}
 	var top types.Hash
+	topName := ""
 	for name, h := range sporkHeights {
-		if h != enf {
+		if !live[name] || h != enf {
 			continue
 		}
-		if id := sporkIDs[name]; top == types.ZeroHash || bytes.Compare(id.Bytes(), top.Bytes()) < 0 {
+		id := sporkIDs[name]
+		if top == types.ZeroHash || bytes.Compare(id.Bytes(), top.Bytes()) < 0 {
 			top = id
-		}
-	}
-	sporkItem := map[string]string{
-		"accelerator": "AcceleratorSpork", "htlc": "HtlcSpork", "bridge": "BridgeAndLiquiditySpork",
-		"ptlc": "PtlcSpork", "libp2p": "Libp2pSpork", "dynamic-plasma": "DynamicPlasmaSpork",
-		"embedded-refund": "EmbeddedRefundSpork", "epoch-reward-terms": "EpochRewardTermsSpork",
-	}
-	topName := ""
-	for name, id := range sporkIDs {
-		if id == top {
-			topName = sporkItem[name]
+			topName = sporkItem(t, name)
 		}
 	}
 
@@ -101,7 +93,9 @@ func TestSporkEdge(t *testing.T) {
 	}
 
 	t.Run("S-7_ack_below_the_highest_enforcement_refused", func(t *testing.T) {
-		cover(t, "E7", "error", "chain.ErrStaleMomentumAcknowledged")
+		// The refusal wraps both sentinels: the verifier's ErrABMAStale
+		// around the chain rule's ErrStaleMomentumAcknowledged.
+		cover(t, "E7", "error", "chain.ErrStaleMomentumAcknowledged", "verifier.ErrABMAStale")
 		cover(t, "E7", "verifier-rule", "accountBlockVerifier.acknowledgementRecency")
 		cover(t, "E7", "spork", topName)
 		err := tryTransfer(a, b.Address, znn, units(1), acking(enf-1))

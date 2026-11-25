@@ -663,6 +663,22 @@ func (n *Net) RefusedBy(hash types.Hash) types.Address {
 	return n.refusedBy[hash]
 }
 
+// NoteRefused records a block the node refused at publish outside sendBy —
+// a forgery published directly with Publish — so the end-of-run no-trace
+// check (refusedGone) sees it. Like sendBy, only an error the node sent
+// back counts as a refusal: a transport error means the node may never
+// have seen the block, so it is not recorded.
+func (n *Net) NoteRefused(b *nom.AccountBlock, err error) {
+	var reply server.Error
+	if !errors.As(err, &reply) {
+		return
+	}
+	n.mu.Lock()
+	n.refused = append(n.refused, b.Hash)
+	n.refusedBy[b.Hash] = b.Address
+	n.mu.Unlock()
+}
+
 // Unconfirmed lists the hashes of the account's blocks that each endpoint
 // and container holds but has not put in a momentum (its pool). Each node's
 // pool is read in one call of the RPC's largest page, so the list is one

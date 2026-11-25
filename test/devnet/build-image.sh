@@ -30,6 +30,12 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GOIMG="${GOIMG:-golang:1.24.1-alpine}"
 FAST="${FAST:-0}"
 OLDNODE="${OLDNODE:-0}"
+if [ "$FAST" = 1 ] && [ "$OLDNODE" = 1 ]; then
+  # The oldnode branch below builds without the fast overlay but would
+  # write into the fast output directory with a fast version suffix.
+  echo "build-image: FAST=1 and OLDNODE=1 together are not supported" >&2
+  exit 2
+fi
 if [ "$FAST" = 1 ]; then
   IMAGE="${IMAGE:-go-zenon-devnet-fast:latest}"; OUT="$ROOT/build/linux-fast"
 elif [ "$OLDNODE" = 1 ]; then
@@ -58,7 +64,7 @@ if [ "$OLDNODE" = 1 ]; then
     -v go-zenon-test-gomod:/go/pkg/mod -v go-zenon-test-gocache:/root/.cache/go-build \
     -w /src -e CGO_ENABLED=1 -e GOWORK=off -e GOFLAGS=-buildvcs=false \
     "$GOIMG" sh -ec "apk add --no-cache gcc musl-dev patch >/dev/null && \
-      mkdir /build && (cd /src && tar cf - --exclude=.git .) | (cd /build && tar xf -) && \
+      mkdir /build && (cd /src && tar cf - --exclude=.git --exclude=./build .) | (cd /build && tar xf -) && \
       cd /build && patch -p1 </src/test/devnet/oldnode/embedded-refund-removal.patch && \
       go build -o /out/znnd -ldflags '-X $PKG.Version=$VERSION -X $PKG.GitCommit=$COMMIT' ./cmd/znnd && go version"
 else

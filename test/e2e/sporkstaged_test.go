@@ -3,10 +3,10 @@
 package e2e
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -48,19 +48,25 @@ import (
 // and the phase-27 lab rehearsal instead of here. This case covers what the
 // staged network itself can show: the boundary mechanics, above.
 //
-// Run it positioned before the first staged height:
+// Run it positioned before the first staged height, from the repo root:
 //
-//	E2E_MIN_HEIGHT=12 go test -tags e2e ./test/e2e/ -run TestSporkStagedEnforcement
+//	E2E_STAGED=1 E2E_NODES=pillar,pillar2,pillar3,rpc,observer \
+//	E2E_GENESIS="$PWD/test/devnet/genesis/staged.json" E2E_MIN_HEIGHT=12 \
+//	go test -tags e2e ./test/e2e/ -run TestSporkStagedEnforcement -timeout 20m
 //
-// It reads the other nodes' RPC through the docker-published ports
-// (E2E_ALL_RPC) and controls the containers through the docker CLI
-// (E2E_DOCKER_NET names the container prefix), like TestSporkUnknownBinary.
+// E2E_STAGED=1 is the opt-in: the S-5 case restarts all five containers, so
+// an unfiltered run on a staged devnet must not pick the test up by itself.
+// The nodes are read through docker exec (E2E_NODES, like
+// TestHaltOnUnknownSpork), so no host RPC ports beyond the primary endpoint
+// are needed; the containers are controlled through the docker CLI.
 // readSporks returns the enforcement height of every activated spork this
 // binary implements, and the highest of them, as the node reports it over
 // RPC. (The framework reads the same list from the genesis file at start;
 // the restart-survival case compares the node's own answer before and
 // after.)
-func readSporks() (map[string]uint64, uint64, error) {
+type sporkCaller func(result interface{}, method string, args ...interface{}) error
+
+func readSporksFrom(call sporkCaller) (map[string]uint64, uint64, error) {
 	var list struct {
 		List []struct {
 			Id                types.Hash `json:"id"`
@@ -68,7 +74,7 @@ func readSporks() (map[string]uint64, uint64, error) {
 			EnforcementHeight uint64     `json:"enforcementHeight"`
 		} `json:"list"`
 	}
-	if err := net.Call(&list, "embedded.spork.getAll", 0, 50); err != nil {
+	if err := call(&list, "embedded.spork.getAll", 0, 50); err != nil {
 		return nil, 0, err
 	}
 	out, last := map[string]uint64{}, uint64(0)
@@ -85,7 +91,36 @@ func readSporks() (map[string]uint64, uint64, error) {
 	return out, last, nil
 }
 
+func readSporks() (map[string]uint64, uint64, error) {
+	return readSporksFrom(net.Call)
+}
+
+// containerCaller reads one devnet container's RPC through docker exec, so
+// the nodes that publish no host port answer too (net.Containers comes from
+// E2E_NODES). Every request is bounded by ctx.
+func containerCaller(ctx context.Context, container string) sporkCaller {
+	return func(result interface{}, method string, args ...interface{}) error {
+		params, err := json.Marshal(args)
+		if err != nil {
+			return err
+		}
+		var envelope struct {
+			Result json.RawMessage `json:"result"`
+		}
+		if err := dockerRPCParams(ctx, container, method, string(params), &envelope); err != nil {
+			return err
+		}
+		return json.Unmarshal(envelope.Result, result)
+	}
+}
+
 func TestSporkStagedEnforcement(t *testing.T) {
+	if os.Getenv("E2E_STAGED") != "1" {
+		t.Skip("S-5 restarts all five devnet containers; set E2E_STAGED=1 to opt in")
+	}
+	if os.Getenv("E2E_DESTRUCTIVE") == "1" {
+		t.Skip("skipped in a destructive run")
+	}
 	if fast {
 		t.Skip("the fast variant enforces every spork from height 0")
 	}
@@ -100,33 +135,33 @@ func TestSporkStagedEnforcement(t *testing.T) {
 			t.Skipf("needs the staged genesis: spork %q enforced at %d, staged has %d", name, sporkHeights[name], h)
 		}
 	}
+	if len(net.Containers) == 0 {
+		t.Fatal("E2E_NODES is not set: the boundary and restart checks read every node through docker exec")
+	}
 	// S-1 and the Dynamic Plasma format assertions need the run positioned
 	// before height 30 (set E2E_MIN_HEIGHT=12); the boundary agreement
 	// checks read history and the restart works at any height.
-	allRPC := strings.Split(envOr("E2E_ALL_RPC",
-		"http://localhost:35991,http://localhost:36992,http://localhost:36993,http://localhost:36997,http://localhost:36994"), ",")
-	prefix := envOr("E2E_DOCKER_NET", "znnd-devnet")
-	containers := []string{prefix + "-pillar", prefix + "-pillar2", prefix + "-pillar3", prefix + "-rpc", prefix + "-observer"}
+	containers := net.Containers
 
 	docker := func(args ...string) (string, error) {
 		out, err := exec.Command("docker", args...).CombinedOutput()
 		return strings.TrimSpace(string(out)), err
 	}
-	// noExitYet fails when a container has ever restarted: across an
-	// enforcement height a node that exited (e.g. on an unknown spork, the
-	// S-4 case) would show a non-zero restart count here.
+	// noExitYet fails when a container is not running or has ever
+	// restarted: across an enforcement height a node that exited (e.g. on
+	// an unknown spork, the S-4 case) would show here.
 	noExitYet := func(what string) {
 		t.Helper()
-		args := append([]string{"inspect", "-f", "{{.Name}} {{.RestartCount}}"}, containers...)
+		args := append([]string{"inspect", "-f", "{{.Name}} {{.State.Status}} {{.RestartCount}}"}, containers...)
 		out, err := docker(args...)
 		if err != nil {
 			t.Fatalf("docker inspect: %v (%s)", err, out)
 		}
 		for _, line := range strings.Split(out, "\n") {
-			var name string
+			var name, status string
 			var restarts int
-			if _, err := fmt.Sscanf(line, "/%s %d", &name, &restarts); err != nil || restarts != 0 {
-				t.Fatalf("%s: container %q has restarted %d times (%q): a node exited", what, name, restarts, line)
+			if _, err := fmt.Sscanf(line, "/%s %s %d", &name, &status, &restarts); err != nil || status != "running" || restarts != 0 {
+				t.Fatalf("%s: container %q is %s with %d restarts (%q): a node exited", what, name, status, restarts, line)
 			}
 		}
 	}
@@ -159,48 +194,38 @@ func TestSporkStagedEnforcement(t *testing.T) {
 
 	// agree polls until every node answers and returns the single momentum
 	// hash they all share at the height; a node on a different branch (or
-	// dead) fails the deadline.
+	// dead) fails the deadline. Every node is read through docker exec
+	// (net.Containers), each request bounded by the polling deadline.
 	agree := func(height uint64) types.Hash {
 		t.Helper()
-		var ref types.Hash
 		deadline := time.Now().Add(wait)
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		defer cancel()
+		var ref types.Hash
 		for {
 			all := true
-			for i, url := range allRPC {
-				body, _ := json.Marshal(map[string]interface{}{
-					"jsonrpc": "2.0", "id": 1, "method": "ledger.getMomentumsByHeight",
-					"params": []interface{}{height, 1},
-				})
-				resp, err := http.Post(url, "application/json", bytes.NewReader(body))
-				if err != nil {
-					all = false
-					break
-				}
+			for i, c := range containers {
 				var m struct {
-					Result struct {
-						List []struct {
-							Hash   types.Hash `json:"hash"`
-							Height uint64     `json:"height"`
-						} `json:"list"`
-					} `json:"result"`
+					List []struct {
+						Hash   types.Hash `json:"hash"`
+						Height uint64     `json:"height"`
+					} `json:"list"`
 				}
-				if err := json.NewDecoder(resp.Body).Decode(&m); err != nil || len(m.Result.List) != 1 || m.Result.List[0].Height != height {
-					resp.Body.Close()
+				if err := containerCaller(ctx, c)(&m, "ledger.getMomentumsByHeight", height, 1); err != nil || len(m.List) != 1 || m.List[0].Height != height {
 					all = false
 					break
 				}
-				resp.Body.Close()
 				if i == 0 {
-					ref = m.Result.List[0].Hash
-				} else if m.Result.List[0].Hash != ref {
-					t.Fatalf("node %s disagrees at height %d: %s vs %s", url, height, m.Result.List[0].Hash, ref)
+					ref = m.List[0].Hash
+				} else if m.List[0].Hash != ref {
+					t.Fatalf("node %s disagrees at height %d: %s vs %s", c, height, m.List[0].Hash, ref)
 				}
 			}
 			if all {
 				return ref
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("not all of %v answered height %d within %v", allRPC, height, wait)
+				t.Fatalf("not all of %v answered height %d within %v", containers, height, wait)
 			}
 			time.Sleep(2 * time.Second)
 		}
@@ -218,15 +243,11 @@ func TestSporkStagedEnforcement(t *testing.T) {
 		// driver starts just below the libp2p height, libp2p itself is
 		// checked by the S-2 subtest instead.
 		var ahead []string
-		item := map[string]string{
-			"libp2p": "Libp2pSpork", "dynamic-plasma": "DynamicPlasmaSpork", "ptlc": "PtlcSpork",
-			"embedded-refund": "EmbeddedRefundSpork", "epoch-reward-terms": "EpochRewardTermsSpork",
-		}
 		for name, h := range want {
 			if f.Height >= h {
 				continue
 			}
-			ahead = append(ahead, item[name])
+			ahead = append(ahead, sporkItem(t, name))
 			if live[name] {
 				t.Fatalf("harness recorded %s as live at frontier %d below its enforcement height %d", name, f.Height, h)
 			}
@@ -327,17 +348,29 @@ func TestSporkStagedEnforcement(t *testing.T) {
 		if err := net.WaitHeight(f.Height+2, wait); err != nil {
 			t.Fatal(err)
 		}
-		after, _, err := readSporks()
-		if err != nil {
-			t.Fatal(err)
-		}
-		for name, h := range before {
-			if after[name] != h {
-				t.Errorf("spork %s enforcement height after restart: %d, want %d", name, after[name], h)
+		// Every node came back, not only the primary endpoint: all five
+		// serve the same new tip (two of three pillars can still produce
+		// with one node down, so the primary alone would not notice), and
+		// every container is running with no restart-policy restart.
+		agree(f.Height + 2)
+		noExitYet("after the S-5 restart")
+		// The spork table survived on every node, read through docker exec.
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
+		defer cancel()
+		for _, c := range containers {
+			after, _, err := readSporksFrom(containerCaller(ctx, c))
+			if err != nil {
+				t.Errorf("spork table of %s after the restart: %v", c, err)
+				continue
 			}
-		}
-		if len(after) != len(before) {
-			t.Errorf("spork table changed across the restart: %v -> %v", before, after)
+			for name, h := range before {
+				if after[name] != h {
+					t.Errorf("%s: spork %s enforcement height after restart: %d, want %d", c, name, after[name], h)
+				}
+			}
+			if len(after) != len(before) {
+				t.Errorf("%s: spork table changed across the restart: %v -> %v", c, before, after)
+			}
 		}
 		// Same data, no resync: the pre-restart frontier is still
 		// canonical and the Dynamic Plasma format persisted (the switch
