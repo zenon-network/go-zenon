@@ -502,10 +502,27 @@ func TestLiquidityRemovedTuple_AfterSporkDeletesRevokedEntry(t *testing.T) {
 
 	defer z.CallContract(unlockLiquidityEntries(g.User5.Address, tokens[0])).Error(t, nil)
 	insertMomentums(z, 2)
+
+	// Cancel exactly on the epoch 5 boundary (RevokeTime == epoch4.endTime)
+	// while tokens[0] is absent from TokenTuples, so epoch 4's settlement hits
+	// the removed-token skip branch with RevokeTime == endTime.
+	z.InsertMomentumsTo(heightAt(zeroWeightBoundary) - 1)
 	defer z.CallContract(cancelStakeLiq(g.User1.Address, revokedID)).Error(t, nil)
 	insertMomentums(z, 2)
+	revokedInfo, err := storedLiquidityStake(t, z, revokedID, g.User1.Address)
+	common.FailIfErr(t, err)
+	if revokedInfo.RevokeTime != zeroWeightBoundary {
+		t.Fatalf("revoke time %d, want epoch boundary %d (fixture timing changed)", revokedInfo.RevokeTime, zeroWeightBoundary)
+	}
 
-	insertMomentums(z, 3*360)
+	// After epoch 4 settles, RevokeTime == epoch4.endTime so the skipped-token
+	// branch must keep the entry until epoch 5 settles.
+	z.InsertMomentumsTo(heightAt(zeroWeightBoundary) + 20)
+	if _, err := storedLiquidityStake(t, z, revokedID, g.User1.Address); err != nil {
+		t.Fatalf("post-spork: removed-token entry deleted prematurely at epoch 4 boundary: %v", err)
+	}
+
+	z.InsertMomentumsTo(heightAt(zeroWeightBoundary) + 2*360)
 	if _, err := storedLiquidityStake(t, z, revokedID, g.User1.Address); err != constants.ErrDataNonExistent {
 		t.Fatalf("post-spork: revoked entry of a removed token after update: err %v, want ErrDataNonExistent", err)
 	}
