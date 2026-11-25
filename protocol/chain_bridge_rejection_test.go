@@ -264,7 +264,7 @@ func TestInsertChain_RejectedExtensionIsRememberedAndAttributed(t *testing.T) {
 	if !errors.As(err, &rejected) {
 		t.Fatalf("expected a failed extension to be a SideChainRejected, got %v", err)
 	}
-	if !errors.Is(err, verifier.ErrMChangesHashInvalid) {
+	if !errors.Is(err, verifier.ErrMProducerInvalid) {
 		t.Fatalf("the rejection must keep its cause, got %v", err)
 	}
 	common.Expect(t, rejected.Momentum, bad.Identifier())

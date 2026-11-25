@@ -2,11 +2,18 @@ package protocol_test
 
 import (
 	"errors"
+	"sync"
 	"testing"
 
+	"github.com/zenon-network/go-zenon/chain"
+	g "github.com/zenon-network/go-zenon/chain/genesis/mock"
+	"github.com/zenon-network/go-zenon/chain/nom"
+	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/protocol"
 	"github.com/zenon-network/go-zenon/verifier"
+	"github.com/zenon-network/go-zenon/vm"
 	"github.com/zenon-network/go-zenon/zenon/mock"
 )
 
@@ -189,4 +196,100 @@ func TestInsertChain_ExtensionRejectedBranchIsRefusedOnReconnectWithoutRollback(
 	expectQuarantinedBy(t, bridge, err, true)
 	common.Expect(t, counting.rollbacks, 0)
 	expectChainEquals(t, z.Chain(), before)
+}
+
+type extensionGuardChain struct {
+	chain.Chain
+	getMomentumStoreCalls int
+	forceAddCalls         int
+	snapshotCalls         int
+}
+
+func (c *extensionGuardChain) GetMomentumStore(identifier types.HashHeight) store.Momentum {
+	c.getMomentumStoreCalls++
+	return c.Chain.GetMomentumStore(identifier)
+}
+
+func (c *extensionGuardChain) ForceAddAccountBlockTransaction(insertLocker sync.Locker, transaction *nom.AccountBlockTransaction) error {
+	c.forceAddCalls++
+	return c.Chain.ForceAddAccountBlockTransaction(insertLocker, transaction)
+}
+
+func (c *extensionGuardChain) SnapshotUncommitted(insertLocker sync.Locker, addresses []types.Address) *chain.UncommittedSnapshot {
+	c.snapshotCalls++
+	return c.Chain.SnapshotUncommitted(insertLocker, addresses)
+}
+
+// An extension momentum that is unsigned or signed by a key other than the
+// elected producer must be rejected before snapshotting the pool or applying
+// any of its prefetched account blocks through the supervisor.
+func TestInsertChain_ExtensionRefusesUnsignedOrNonProducerBeforeApplyingBlocks(t *testing.T) {
+	cases := []struct {
+		name      string
+		sign      bool
+		wantCause error
+	}{
+		{
+			name:      "unsigned",
+			sign:      false,
+			wantCause: verifier.ErrMSignatureMissing,
+		},
+		{
+			name:      "non-elected producer",
+			sign:      true,
+			wantCause: verifier.ErrMProducerInvalid,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			z := mock.NewMockZenon(t)
+			defer z.StopPanic()
+			z.InsertMomentumsTo(6)
+
+			oldMomentum := momentumAt(t, z.Chain(), 1)
+			frontier := momentumAt(t, z.Chain(), 6)
+			before := snapshotChain(t, z.Chain())
+
+			crafted := &nom.AccountBlock{
+				Version:              1,
+				ChainIdentifier:      frontier.ChainIdentifier,
+				BlockType:            nom.BlockTypeContractReceive,
+				Address:              types.StakeContract,
+				Height:               1,
+				MomentumAcknowledged: oldMomentum.Identifier(),
+				TokenStandard:        types.ZnnTokenStandard,
+				FromBlockHash:        types.NewHash([]byte("garbage")),
+			}
+			crafted.Hash = crafted.ComputeHash()
+
+			m := unsignedMomentum(frontier, frontier.Height+1)
+			m.Content = nom.NewMomentumContent([]*nom.AccountBlock{crafted})
+			if tc.sign {
+				m = signedBy(m, g.User1)
+			} else {
+				m.Hash = m.ComputeHash()
+			}
+
+			guarded := &extensionGuardChain{Chain: z.Chain()}
+			supervisor := vm.NewSupervisor(guarded, z.Consensus())
+			bridge := protocol.NewChainBridge(guarded, z.Consensus(), z.Verifier(), supervisor)
+
+			_, err := bridge.InsertChain([]*nom.DetailedMomentum{{
+				Momentum:      m,
+				AccountBlocks: []*nom.AccountBlock{crafted},
+			}})
+			var rejected *protocol.SideChainRejected
+			if !errors.As(err, &rejected) {
+				t.Fatalf("expected SideChainRejected, got %v", err)
+			}
+			if !errors.Is(err, tc.wantCause) {
+				t.Fatalf("expected cause %v, got %v", tc.wantCause, err)
+			}
+			common.Expect(t, guarded.getMomentumStoreCalls, 0)
+			common.Expect(t, guarded.forceAddCalls, 0)
+			common.Expect(t, guarded.snapshotCalls, 0)
+			expectChainEquals(t, z.Chain(), before)
+		})
+	}
 }

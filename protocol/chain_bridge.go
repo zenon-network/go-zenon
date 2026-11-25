@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 
@@ -495,13 +496,51 @@ func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.Detail
 		// checking here first keeps the momentum's blocks out of the pool
 		// and the VM, and avoids the copy and snapshot for a momentum that
 		// would be rejected anyway.
-		maxContent, err := verifier.MaxMomentumContent(c.chain.GetFrontierMomentumStore())
+		frontierStore := c.chain.GetFrontierMomentumStore()
+		maxContent, err := verifier.MaxMomentumContent(frontierStore)
 		if err != nil {
 			return index, index, err
 		}
 		if uint64(len(supplied.AccountBlocks)) > maxContent {
 			log.Info("refusing momentum with too many account-blocks", "num-blocks", len(supplied.AccountBlocks), "max", maxContent, "momentum-identifier", supplied.Momentum.Identifier())
 			return index, index, validationFailure(verifier.ErrMContentTooBig)
+		}
+
+		// Verify the momentum's own hash, signature, timestamp, and elected
+		// producer before copying account blocks, snapshotting the pool, or
+		// running ApplyBlockInMomentum. Without this, an unauthenticated peer
+		// sending an unsigned or non-producer momentum on the extension path
+		// can force account-block verification and VM work under the insert
+		// lock before ApplyMomentum rejects the momentum. Work on a shallow
+		// copy so populating cached Timestamp/producer fields cannot race with
+		// a caller broadcasting supplied.Momentum concurrently.
+		candidate := *supplied.Momentum
+		candidate.EnsureCache()
+		if err := verifier.MomentumStatic(&candidate); err != nil {
+			log.Info("momentum failed static verification", "reason", err, "momentum-identifier", candidate.Identifier())
+			return index, index, validationFailure(err)
+		}
+		if candidate.Timestamp.Unix() == 0 {
+			return index, index, validationFailure(verifier.ErrMTimestampMissing)
+		}
+		if candidate.Timestamp.After(time.Now().Add(time.Second * 10)) {
+			return index, index, validationFailure(verifier.ErrMTimestampInTheFuture)
+		}
+		previous, err := frontierStore.GetFrontierMomentum()
+		if err != nil {
+			return index, index, verifier.InternalError(err)
+		}
+		if previous.TimestampUnix >= candidate.TimestampUnix {
+			return index, index, validationFailure(verifier.ErrMTimestampNotIncreasing)
+		}
+		isProducer, err := c.consensus.VerifyMomentumProducer(&candidate)
+		if err != nil {
+			log.Info("momentum producer check failed", "reason", err, "momentum-identifier", candidate.Identifier())
+			return index, index, verifier.InternalError(err)
+		}
+		if !isProducer {
+			log.Info("momentum not signed by the elected producer", "momentum-identifier", candidate.Identifier(), "producer", candidate.Producer())
+			return index, index, validationFailure(verifier.ErrMProducerInvalid)
 		}
 
 		// The caller keeps using its own objects concurrently (the fetcher
@@ -516,7 +555,7 @@ func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.Detail
 		// is validated, so keep a snapshot of every account the momentum
 		// touches and put it back if anything fails.
 		snapshot := c.chain.SnapshotUncommitted(insert, momentumAddresses(detailed))
-		frontierBefore := c.chain.GetFrontierMomentumStore().Identifier()
+		frontierBefore := frontierStore.Identifier()
 		if err := c.insertMomentum(insert, detailed, frontierBefore); err != nil {
 			if c.chain.GetFrontierMomentumStore().Identifier() != frontierBefore {
 				// The momentum was committed before the error surfaced. The
