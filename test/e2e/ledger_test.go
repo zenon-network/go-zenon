@@ -251,6 +251,16 @@ func TestLedger(t *testing.T) {
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Fields: func(b *nom.AccountBlock) { b.MomentumAcknowledged.Hash = types.NewHash([]byte("x")) }}), "momentum-acknowledged points to missing momentum")
 	})
 
+	t.Run("B-5n_embedded_address_refused", func(t *testing.T) {
+		cover(t, "E3", "error", "rpc/api.ErrEmbeddedAddressNotAllowed")
+		err := tryTransfer(a, b.Address, znn, units(1), &Mutator{Plasma: func(b *nom.AccountBlock) {
+			b.Address = types.StakeContract
+			b.FusedPlasma = constants.AccountBlockBasePlasma
+			b.Difficulty = 0
+		}})
+		mustReject(t, err, api.ErrEmbeddedAddressNotAllowed.Error())
+	})
+
 	t.Run("B-9_refused_blocks_left_no_trace", func(t *testing.T) {
 		// Both accounts exist only in this run, so the chain must show exactly
 		// the blocks the node accepted from the driver and none it refused.
