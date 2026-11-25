@@ -1,6 +1,7 @@
 package verifier_test
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
@@ -365,5 +366,65 @@ func TestAccountBlockVerifier_NilFrontierStoreReturnsMAMissing(t *testing.T) {
 	}
 	if err := v.AccountBlockTransaction(&nom.AccountBlockTransaction{Block: block}); err != verifier.ErrABMAMissing {
 		t.Fatalf("AccountBlockTransaction: got %v, want ErrABMAMissing", err)
+	}
+}
+
+// Direct callers of AccountBlockTransaction and AccountBlockTransactionInMomentum
+// must reject a ContractReceive whose descendant acknowledges a different
+// canonical momentum than the parent, without calling GetMomentumStore.
+func TestAccountBlockTransactionVerifier_DescendantMAMismatchRejectedDirectly(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(4)
+
+	frontierStore := z.Chain().GetFrontierMomentumStore()
+	m2, err := frontierStore.GetMomentumByHeight(2)
+	common.FailIfErr(t, err)
+	m3, err := frontierStore.GetMomentumByHeight(3)
+	common.FailIfErr(t, err)
+
+	stakeFrontier := z.Chain().GetFrontierAccountStore(types.StakeContract).Identifier()
+	descendant := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      z.Chain().ChainIdentifier(),
+		BlockType:            nom.BlockTypeContractSend,
+		Address:              types.StakeContract,
+		ToAddress:            g.User1.Address,
+		Amount:               big.NewInt(1),
+		TokenStandard:        types.ZnnTokenStandard,
+		Height:               stakeFrontier.Height + 1,
+		PreviousHash:         stakeFrontier.Hash,
+		MomentumAcknowledged: m2.Identifier(),
+	}
+	descendant.Hash = descendant.ComputeHash()
+
+	parent := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      z.Chain().ChainIdentifier(),
+		BlockType:            nom.BlockTypeContractReceive,
+		Address:              types.StakeContract,
+		Height:               stakeFrontier.Height + 2,
+		PreviousHash:         descendant.Hash,
+		MomentumAcknowledged: m3.Identifier(),
+		FromBlockHash:        types.NewHash([]byte("send")),
+		DescendantBlocks:     []*nom.AccountBlock{descendant},
+	}
+	parent.Hash = parent.ComputeHash()
+
+	counting := &momentumStoreCountingChain{Chain: z.Chain()}
+	v := verifier.NewAccountBlockVerifier(counting, z.Consensus())
+	tx := &nom.AccountBlockTransaction{Block: parent}
+
+	if err := v.AccountBlockTransaction(tx); !errors.Is(err, verifier.ErrABMAMustBeTheSame) {
+		t.Fatalf("AccountBlockTransaction: got %v, want ErrABMAMustBeTheSame", err)
+	}
+	if err := v.AccountBlockTransactionInMomentum(tx, 1); !errors.Is(err, verifier.ErrABMAMustBeTheSame) {
+		t.Fatalf("AccountBlockTransactionInMomentum(1): got %v, want ErrABMAMustBeTheSame", err)
+	}
+	if err := v.AccountBlockTransactionInMomentum(tx, 1<<40); !errors.Is(err, verifier.ErrABMAMustBeTheSame) {
+		t.Fatalf("AccountBlockTransactionInMomentum(high): got %v, want ErrABMAMustBeTheSame", err)
+	}
+	if counting.getMomentumStoreCalls != 0 {
+		t.Fatalf("expected 0 GetMomentumStore calls, got %d", counting.getMomentumStoreCalls)
 	}
 }

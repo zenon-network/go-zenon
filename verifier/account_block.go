@@ -702,6 +702,9 @@ func (abvt *accountBlockTransactionVerifier) descendantBlocks() error {
 		return ErrABDescendantMustBeZero
 	}
 	for _, dBlock := range block.DescendantBlocks {
+		if dBlock.MomentumAcknowledged != block.MomentumAcknowledged {
+			return DescendantVerifyError(ErrABMAMustBeTheSame)
+		}
 		if err := (&accountBlockVerifier{
 			block:         dBlock,
 			accountStore:  abvt.accountStore,
