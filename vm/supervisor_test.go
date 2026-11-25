@@ -2,14 +2,17 @@ package vm
 
 import (
 	"testing"
+	"time"
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/account"
+	"github.com/zenon-network/go-zenon/chain/momentum"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/vm/constants"
 )
 
@@ -112,4 +115,58 @@ func TestGenerateFromTemplate_NilCacheStoreRecover(t *testing.T) {
 	transaction, err := s.GenerateFromTemplate(template, nil)
 	common.ExpectError(t, err, constants.ErrVmRunPanic)
 	common.Expect(t, transaction, nil)
+}
+
+type embeddedContextCountingChain struct {
+	stubChainForGenerate
+	genesis               *nom.Momentum
+	getMomentumStoreCalls int
+}
+
+func (c *embeddedContextCountingChain) GetGenesisMomentum() *nom.Momentum {
+	return c.genesis
+}
+
+func (c *embeddedContextCountingChain) GetMomentumStore(_ types.HashHeight) store.Momentum {
+	c.getMomentumStoreCalls++
+	return c.momentumStore
+}
+
+// TestNewEmbeddedBlockContext_ReusesMomentumStoreForPillarReader pins that
+// constructing an embedded VM context opens the historical momentum store once
+// and passes a snapshot of it to consensus.FixedPillarReaderForStore instead
+// of invoking chain.GetMomentumStore a second time.
+func TestNewEmbeddedBlockContext_ReusesMomentumStoreForPillarReader(t *testing.T) {
+	ts := time.Unix(1637755200, 0)
+	genesis := &nom.Momentum{
+		Hash:          types.HexToHashPanic("01aab631b44daf47f68810a416bea4ed3695e89c0ab9668a0ab8acb834dfb900"),
+		Height:        1,
+		TimestampUnix: uint64(ts.Unix()),
+		Timestamp:     &ts,
+	}
+	memStore := momentum.NewStore(nil, db.NewMemDB())
+	counting := &embeddedContextCountingChain{
+		stubChainForGenerate: stubChainForGenerate{
+			momentumStore: memStore,
+			accountStore:  account.NewAccountStore(types.PillarContract, db.NewMemDB()),
+			cacheStore:    noSporkCache{},
+		},
+		genesis: genesis,
+	}
+	cs := consensus.NewConsensus(db.NewMemDB(), counting, true)
+	s := NewSupervisor(counting, cs)
+	counting.getMomentumStoreCalls = 0
+
+	block := &nom.AccountBlock{
+		BlockType:            nom.BlockTypeContractReceive,
+		Address:              types.PillarContract,
+		MomentumAcknowledged: genesis.Identifier(),
+		Height:               1,
+	}
+	ctx := s.newEmbeddedBlockContext(block)
+	common.Expect(t, counting.getMomentumStoreCalls, 1)
+	if ctx.EpochTicker() == nil {
+		t.Fatal("expected embedded context to expose initialized pillar reader")
+	}
+	common.Expect(t, counting.getMomentumStoreCalls, 1)
 }

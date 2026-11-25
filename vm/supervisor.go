@@ -89,7 +89,6 @@ func (s *Supervisor) newEmbeddedBlockContext(block *nom.AccountBlock) vm_context
 	momentumStore := s.chain.GetMomentumStore(block.MomentumAcknowledged)
 	accountStore := s.chain.GetAccountStore(block.Address, block.Previous())
 	cacheStore := s.chain.GetCacheStore(block.MomentumAcknowledged)
-	cache := s.consensus.FixedPillarReader(block.MomentumAcknowledged)
 	if momentumStore == nil {
 		panic(fmt.Sprintf("can't find momentumStore for %v", block.MomentumAcknowledged))
 	}
@@ -99,6 +98,7 @@ func (s *Supervisor) newEmbeddedBlockContext(block *nom.AccountBlock) vm_context
 	if cacheStore == nil {
 		panic(fmt.Sprintf("can't find cacheStore for %v", block.MomentumAcknowledged))
 	}
+	cache := s.consensus.FixedPillarReaderForStore(momentumStore.Snapshot())
 	if cache == nil {
 		panic(fmt.Sprintf("can't find cache for %v", block.MomentumAcknowledged))
 	}
