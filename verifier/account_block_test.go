@@ -183,3 +183,66 @@ func TestAccountBlockVerifier_ReceiveData_NilChain_ReturnsMAMissing(t *testing.T
 		t.Fatalf("expected ErrABMAMissing with nil chain, got %v", err)
 	}
 }
+
+type stubSequencerAccountStore struct {
+	store.Account
+	next *types.AccountHeader
+}
+
+func (s *stubSequencerAccountStore) SequencerFront(store.AccountMailbox) (*types.AccountHeader, error) {
+	return s.next, nil
+}
+
+type stubSequencerFrontierStore struct {
+	store.Momentum
+	confirmHeights map[types.Hash]uint64
+	blocks         map[types.Hash]*nom.AccountBlock
+}
+
+func (s *stubSequencerFrontierStore) GetAccountMailbox(types.Address) store.AccountMailbox {
+	return nil
+}
+
+func (s *stubSequencerFrontierStore) GetBlockConfirmationHeight(hash types.Hash) (uint64, error) {
+	return s.confirmHeights[hash], nil
+}
+
+func (s *stubSequencerFrontierStore) GetAccountBlockByHash(hash types.Hash) (*nom.AccountBlock, error) {
+	return s.blocks[hash], nil
+}
+
+// When frontierStore's sequencer front was confirmed strictly after the
+// block's MomentumAcknowledged height, the mailbox at MomentumAcknowledged had
+// no pending entry yet, so sequencer() must return ErrABSequencerNothing.
+func TestAccountBlockVerifier_SequencerRejectsSendConfirmedAfterMA(t *testing.T) {
+	send := &nom.AccountBlock{
+		Address: types.ParseAddressPanic("z1qph8dkja68pg3g6j4spwk9re0kjdkul0amwqnt"),
+		Hash:    types.NewHash([]byte("later-send")),
+		Height:  2,
+	}
+	header := send.Header()
+
+	abv := &accountBlockVerifier{
+		block: &nom.AccountBlock{
+			BlockType:            nom.BlockTypeContractReceive,
+			Address:              types.StakeContract,
+			FromBlockHash:        send.Hash,
+			MomentumAcknowledged: types.HashHeight{Hash: types.NewHash([]byte("ma")), Height: 10},
+		},
+		accountStore: &stubSequencerAccountStore{next: &header},
+		frontierStore: &stubSequencerFrontierStore{
+			confirmHeights: map[types.Hash]uint64{send.Hash: 11},
+			blocks:         map[types.Hash]*nom.AccountBlock{send.Hash: send},
+		},
+	}
+
+	if err := abv.sequencer(); err != ErrABSequencerNothing {
+		t.Fatalf("expected ErrABSequencerNothing for send confirmed after MA, got %v", err)
+	}
+
+	// Control: once MA reaches the confirmation height, the same sequencer check passes.
+	abv.block.MomentumAcknowledged.Height = 11
+	if err := abv.sequencer(); err != nil {
+		t.Fatalf("expected nil once MA reaches confirmation height, got %v", err)
+	}
+}
