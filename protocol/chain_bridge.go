@@ -228,6 +228,11 @@ func NewChainBridge(chain chain.Chain, consensus consensus.Consensus, verifier v
 // import (ApplyBlockInMomentum) remain unrestricted.
 const maxPeerEmbeddedAckGap uint64 = 360
 
+// AddAccountBlocks validates and inserts peer-gossiped account blocks into the
+// uncommitted pool. Stale embedded-address blocks at or beyond
+// maxPeerEmbeddedAckGap are skipped without aborting subsequent blocks in the
+// batch; if all remaining blocks succeed, the first skipped block's policy
+// error is returned even though later blocks were applied.
 func (c chainBridge) AddAccountBlocks(blocks []*nom.AccountBlock) error {
 	insert := c.chain.AcquireInsert(fmt.Sprintf("Insert blocks in chain-bridge. Len:%v", len(blocks)))
 	defer insert.Unlock()
@@ -704,18 +709,8 @@ func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.Detail
 			log.Info("momentum failed static verification", "reason", err, "momentum-identifier", candidate.Identifier())
 			return index, index, validationFailure(err)
 		}
-		if candidate.Timestamp.Unix() == 0 {
-			return index, index, validationFailure(verifier.ErrMTimestampMissing)
-		}
-		if candidate.Timestamp.After(time.Now().Add(time.Second * 10)) {
-			return index, index, validationFailure(verifier.ErrMTimestampInTheFuture)
-		}
-		previous, err := frontierStore.GetFrontierMomentum()
-		if err != nil {
-			return index, index, verifier.InternalError(err)
-		}
-		if previous.TimestampUnix >= candidate.TimestampUnix {
-			return index, index, validationFailure(verifier.ErrMTimestampNotIncreasing)
+		if err := verifier.MomentumTimestamp(&candidate, frontierStore); err != nil {
+			return index, index, validationFailure(err)
 		}
 		isProducer, err := c.consensus.VerifyMomentumProducer(&candidate)
 		if err != nil {

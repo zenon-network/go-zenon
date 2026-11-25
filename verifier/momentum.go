@@ -158,22 +158,31 @@ func (rmv *rawMomentumVerifier) version(isDynamicPlasmaActive bool) error {
 	}
 	return nil
 }
-func (rmv *rawMomentumVerifier) timestamp() error {
-	if rmv.momentum.Timestamp.Unix() == 0 {
+
+// MomentumTimestamp verifies a candidate momentum's timestamp against the
+// local clock (+10s allowance) and strictly increasing relative to the
+// frontier momentum in previousStore. Callers must ensure momentum.Timestamp
+// is initialized (e.g. via EnsureCache).
+func MomentumTimestamp(momentum *nom.Momentum, previousStore store.Momentum) error {
+	if momentum.Timestamp.Unix() == 0 {
 		return ErrMTimestampMissing
 	}
-	if rmv.momentum.Timestamp.After(time.Now().Add(time.Second * 10)) {
+	if momentum.Timestamp.After(time.Now().Add(time.Second * 10)) {
 		return ErrMTimestampInTheFuture
 	}
 
-	previous, err := rmv.momentumStore.GetFrontierMomentum()
+	previous, err := previousStore.GetFrontierMomentum()
 	if err != nil {
 		return InternalError(err)
 	}
-	if previous.TimestampUnix >= rmv.momentum.TimestampUnix {
+	if previous.TimestampUnix >= momentum.TimestampUnix {
 		return ErrMTimestampNotIncreasing
 	}
 	return nil
+}
+
+func (rmv *rawMomentumVerifier) timestamp() error {
+	return MomentumTimestamp(rmv.momentum, rmv.momentumStore)
 }
 func (rmv *rawMomentumVerifier) previous() error {
 	// for consistency, check again

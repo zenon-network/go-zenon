@@ -391,11 +391,15 @@ func (s *Supervisor) applyBlockWithStatus(block *nom.AccountBlock, signFunc Sign
 	}
 	// For externally supplied blocks (signFunc == nil), verify hash,
 	// signature, producer, plasma fields, and descendants before opening any
-	// historical momentum store or executing the VM.
+	// historical momentum store or executing the VM. The block is not re-signed
+	// or mutated in fields covered by verify afterwards, so skip the duplicate
+	// verify pass in packBlockWith.
+	packVerify := verify
 	if signFunc == nil {
 		if err := verify(&nom.AccountBlockTransaction{Block: block}); err != nil {
 			return nil, false, err
 		}
+		packVerify = nil
 	}
 	context := s.newBlockContext(block)
 	vm := NewVM(context, s.chain.GetFrontierMomentumStore())
@@ -404,7 +408,7 @@ func (s *Supervisor) applyBlockWithStatus(block *nom.AccountBlock, signFunc Sign
 		return nil, methodFailed, err
 	}
 
-	transaction, err = s.packBlockWith(context, block, signFunc, verify)
+	transaction, err = s.packBlockWith(context, block, signFunc, packVerify)
 	if err != nil {
 		return nil, methodFailed, err
 	}
@@ -446,8 +450,10 @@ func (s *Supervisor) packBlockWith(context vm_context.AccountVmContext, block *n
 		Block:   block,
 		Changes: changes,
 	}
-	if err := verify(transaction); err != nil {
-		return nil, err
+	if verify != nil {
+		if err := verify(transaction); err != nil {
+			return nil, err
+		}
 	}
 
 	return transaction, nil
