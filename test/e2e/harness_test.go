@@ -46,6 +46,10 @@ var (
 	// live says which sporks are enforced on this chain when the run starts.
 	live = map[string]bool{}
 
+	// sporkHeights records the enforcement height of every activated spork,
+	// for cases that position a block at an enforcement boundary (E7).
+	sporkHeights = map[string]uint64{}
+
 	znn = types.ZnnTokenStandard
 	qsr = types.QsrTokenStandard
 )
@@ -191,6 +195,7 @@ func TestMain(m *testing.M) {
 	runTag = strconv.FormatUint(f.Height, 10)
 	var names []string
 	for name, height := range sporks {
+		sporkHeights[name] = height
 		if height <= f.Height {
 			live[name] = true
 			names = append(names, name)
