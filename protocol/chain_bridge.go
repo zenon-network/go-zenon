@@ -6,17 +6,77 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashicorp/golang-lru/simplelru"
 	"github.com/pkg/errors"
 
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common"
+	"github.com/zenon-network/go-zenon/common/db"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/protocol/downloader"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm"
+	"github.com/zenon-network/go-zenon/vm/constants"
 )
+
+const (
+	embeddedReceiveCacheSize           = 128
+	maxCachedEmbeddedReceivePatchBytes = 64 * 1024
+)
+
+type embeddedReceiveCacheKey struct {
+	frontier       types.HashHeight
+	address        types.Address
+	previous       types.HashHeight
+	prevPatchHash  types.Hash
+	ack            types.HashHeight
+	fromBlockHash  types.Hash
+	momentumHeight uint64
+}
+
+type embeddedReceiveCacheEntry struct {
+	changesHash types.Hash
+	hash        types.Hash
+	patchDump   []byte
+}
+
+// embeddedReceiveCache bounds repeated historical reconstruction for the same
+// canonical predecessor and embedded ContractReceive when a peer delivers
+// distinct invalid variants (e.g. mutated ChangesHash) of a signed momentum.
+type embeddedReceiveCache struct {
+	mu  sync.Mutex
+	lru *simplelru.LRU
+}
+
+func newEmbeddedReceiveCache(size int) *embeddedReceiveCache {
+	l, err := simplelru.NewLRU(size, nil)
+	common.DealWithErr(err)
+	return &embeddedReceiveCache{lru: l}
+}
+
+func (c *embeddedReceiveCache) get(key embeddedReceiveCacheKey) (embeddedReceiveCacheEntry, bool) {
+	if c == nil {
+		return embeddedReceiveCacheEntry{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.lru.Get(key)
+	if !ok {
+		return embeddedReceiveCacheEntry{}, false
+	}
+	return v.(embeddedReceiveCacheEntry), true
+}
+
+func (c *embeddedReceiveCache) put(key embeddedReceiveCacheKey, entry embeddedReceiveCacheEntry) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lru.Add(key, entry)
+}
 
 type chainBridge struct {
 	chain      chain.Chain
@@ -26,7 +86,8 @@ type chainBridge struct {
 	// rejected remembers momentums refused on a consensus check, on the
 	// side-chain or the extension path, so a later batch carrying one is
 	// refused before any rollback and before any content is applied.
-	rejected *rejectedCandidates
+	rejected         *rejectedCandidates
+	embeddedReceives *embeddedReceiveCache
 }
 
 func (c chainBridge) rollbackSideChain(insert sync.Locker, identifier types.HashHeight) error {
@@ -50,11 +111,12 @@ func (c chainBridge) rollbackSideChain(insert sync.Locker, identifier types.Hash
 // side-chain arrives.
 func NewChainBridge(chain chain.Chain, consensus consensus.Consensus, verifier verifier.Verifier, supervisor *vm.Supervisor) ChainBridge {
 	return chainBridge{
-		chain:      chain,
-		consensus:  consensus,
-		verifier:   verifier,
-		supervisor: supervisor,
-		rejected:   newRejectedCandidates(rejectedCandidateTTL, rejectedCandidateCap),
+		chain:            chain,
+		consensus:        consensus,
+		verifier:         verifier,
+		supervisor:       supervisor,
+		rejected:         newRejectedCandidates(rejectedCandidateTTL, rejectedCandidateCap),
+		embeddedReceives: newEmbeddedReceiveCache(embeddedReceiveCacheSize),
 	}
 }
 
@@ -77,6 +139,7 @@ func (c chainBridge) AddAccountBlocks(blocks []*nom.AccountBlock) error {
 	if frontierStore != nil {
 		frontierHeight = frontierStore.Identifier().Height
 	}
+	var policyErr error
 	for _, block := range blocks {
 		if patch := c.chain.GetPatch(block.Address, block.Identifier()); patch != nil {
 			continue
@@ -87,7 +150,10 @@ func (c chainBridge) AddAccountBlocks(blocks []*nom.AccountBlock) error {
 		if types.IsEmbeddedAddress(block.Address) && frontierHeight > block.MomentumAcknowledged.Height && frontierHeight-block.MomentumAcknowledged.Height >= maxPeerEmbeddedAckGap {
 			err := errors.Errorf("refusing peer embedded account-block with stale momentum-acknowledged height %d (frontier %d)", block.MomentumAcknowledged.Height, frontierHeight)
 			log.Info("ignoring peer embedded account-block with stale momentum-acknowledged", "account-block-header", block.Header(), "ma-height", block.MomentumAcknowledged.Height, "frontier-height", frontierHeight)
-			return err
+			if policyErr == nil {
+				policyErr = err
+			}
+			continue
 		}
 		transaction, err := c.supervisor.ApplyBlock(block)
 		if err != nil {
@@ -100,7 +166,7 @@ func (c chainBridge) AddAccountBlocks(blocks []*nom.AccountBlock) error {
 			return err
 		}
 	}
-	return nil
+	return policyErr
 }
 
 // poolHoldsSameBytes reports whether the account pool's frontier chain already
@@ -668,6 +734,24 @@ func momentumAddresses(detailed *nom.DetailedMomentum) []types.Address {
 // frontierBefore is the canonical frontier the caller observed before the
 // call; it tells a commit failure apart from a failure after the commit.
 func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMomentum, frontierBefore types.HashHeight) error {
+	// Verify every prefetched account block's body commitment matches its
+	// declared hash before executing any block in the momentum. The momentum
+	// signature authenticates only the content headers; without this pre-pass,
+	// a peer delivering a tampered body under an honest header could trigger
+	// historical store reconstruction for an earlier block in the momentum or
+	// for the tampered block itself.
+	for _, block := range detailed.AccountBlocks {
+		if block.BlockType == nom.BlockTypeContractSend {
+			continue
+		}
+		if block.Hash.IsZero() {
+			return validationFailure(verifier.ErrABHashMissing)
+		}
+		if block.ComputeHash() != block.Hash {
+			return validationFailure(verifier.ErrABHashInvalid)
+		}
+	}
+
 	// The content limit was already checked by insertMomentums before
 	// the copy and snapshot; the verifier applies the same rule to the
 	// momentum later.
@@ -679,10 +763,78 @@ func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMo
 			// already applied
 			continue
 		}
-		transaction, err := c.supervisor.ApplyBlockInMomentum(block, detailed.Momentum.Height)
-		if err != nil {
-			log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
-			return validationFailure(err)
+
+		var (
+			transaction *nom.AccountBlockTransaction
+			err         error
+			cacheKey    embeddedReceiveCacheKey
+			useCache    = block.BlockType == nom.BlockTypeContractReceive && c.embeddedReceives != nil
+		)
+		if useCache {
+			var prevPatchHash types.Hash
+			if prevPatch := c.chain.GetPatch(block.Address, block.Previous()); prevPatch != nil {
+				prevPatchHash = db.PatchHash(prevPatch)
+			}
+			cacheKey = embeddedReceiveCacheKey{
+				frontier:       frontierBefore,
+				address:        block.Address,
+				previous:       block.Previous(),
+				prevPatchHash:  prevPatchHash,
+				ack:            block.MomentumAcknowledged,
+				fromBlockHash:  block.FromBlockHash,
+				momentumHeight: detailed.Momentum.Height,
+			}
+			if entry, ok := c.embeddedReceives.get(cacheKey); ok {
+				if block.ChangesHash != entry.changesHash {
+					err = errors.Wrapf(constants.ErrAutoReceiveChangesHashMismatch, "expected %v but got %v", entry.changesHash, block.ChangesHash)
+					log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
+					return validationFailure(err)
+				}
+				if block.Hash != entry.hash {
+					err = errors.Wrapf(constants.ErrAutoReceiveHashMismatch, "expected %v but got %v", entry.hash, block.Hash)
+					log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
+					return validationFailure(err)
+				}
+				if entry.patchDump != nil {
+					if err = c.supervisor.VerifyBlockInMomentum(block, detailed.Momentum.Height); err != nil {
+						log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
+						return validationFailure(err)
+					}
+					if patch, dumpErr := db.NewPatchFromDump(entry.patchDump); dumpErr == nil {
+						transaction = &nom.AccountBlockTransaction{
+							Block:   block,
+							Changes: patch,
+						}
+					}
+				}
+			}
+		}
+
+		if transaction == nil {
+			transaction, err = c.supervisor.ApplyBlockInMomentum(block, detailed.Momentum.Height)
+			if err != nil {
+				if useCache {
+					var mismatch *vm.AutoReceiveMismatchError
+					if errors.As(err, &mismatch) {
+						c.embeddedReceives.put(cacheKey, embeddedReceiveCacheEntry{
+							changesHash: mismatch.ExpectedChangesHash,
+							hash:        mismatch.ExpectedHash,
+						})
+					}
+				}
+				log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
+				return validationFailure(err)
+			}
+			if useCache && frontierBefore.Height > block.MomentumAcknowledged.Height && frontierBefore.Height-block.MomentumAcknowledged.Height >= maxPeerEmbeddedAckGap {
+				entry := embeddedReceiveCacheEntry{
+					changesHash: block.ChangesHash,
+					hash:        block.Hash,
+				}
+				if dump := transaction.Changes.Dump(); len(dump) <= maxCachedEmbeddedReceivePatchBytes {
+					entry.patchDump = dump
+				}
+				c.embeddedReceives.put(cacheKey, entry)
+			}
 		}
 		if err := c.chain.ForceAddAccountBlockTransaction(insert, transaction); err != nil {
 			log.Error("error while inserting account-block in pool", "reason", err, "account-block-header", block.Header())

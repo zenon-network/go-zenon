@@ -2,6 +2,7 @@ package protocol_test
 
 import (
 	"errors"
+	"math/big"
 	"sync"
 	"testing"
 	"time"
@@ -416,16 +417,45 @@ func TestAddAccountBlocks_RefusesStaleEmbeddedHeadWhilePreservingLocalAndMomentu
 	common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 1)
 	common.Expect(t, guarded.getMomentumStoreCalls, 1)
 
-	// Even the valid receive block is refused on standalone peer gossip at gap >= 360.
+	// Even the valid receive block is refused on standalone peer gossip at gap >= 360,
+	// and refusing it must NOT drop later valid user blocks in the same peer batch.
 	guarded.resetCounts()
 	if err := bridge.AddAccountBlocks([]*nom.AccountBlock{exec.Transaction.Block.Copy()}); err == nil {
 		t.Fatal("expected valid stale embedded receive to be refused on peer gossip")
 	}
 	common.Expect(t, guarded.getMomentumStoreCalls, 0)
 
+	genSupervisor := vm.NewSupervisor(z.Chain(), z.Consensus())
+	userTx, err := genSupervisor.GenerateFromTemplate(&nom.AccountBlock{
+		BlockType:     nom.BlockTypeUserSend,
+		Address:       g.User1.Address,
+		ToAddress:     g.User2.Address,
+		TokenStandard: types.ZnnTokenStandard,
+		Amount:        big.NewInt(1),
+	}, g.User1.Signer)
+	common.FailIfErr(t, err)
+
+	insert := z.Chain().AcquireInsert("snapshot user pool before mixed peer batch")
+	userSnap := z.Chain().SnapshotUncommitted(insert, []types.Address{g.User1.Address})
+	insert.Unlock()
+
+	guarded.resetCounts()
+	if err := bridge.AddAccountBlocks([]*nom.AccountBlock{exec.Transaction.Block.Copy(), userTx.Block.Copy()}); err == nil {
+		t.Fatal("expected mixed batch containing a stale embedded receive to report the policy error")
+	}
+	common.Expect(t, guarded.getMomentumStoreCalls, 0)
+	if z.Chain().GetPatch(userTx.Block.Address, userTx.Block.Identifier()) == nil {
+		t.Fatal("stale embedded receive refusal dropped a subsequent valid user transaction from the same batch")
+	}
+
+	insert = z.Chain().AcquireInsert("restore user pool after mixed peer batch")
+	common.FailIfErr(t, z.Chain().RestoreUncommitted(insert, userSnap))
+	insert.Unlock()
+
 	// Build a genuine producer-signed extension momentum containing the receive
-	// without leaving the receive in the local pool, then import it via InsertChain.
-	insert := z.Chain().AcquireInsert("build signed extension momentum for stalled head")
+	// without leaving the receive in the local pool, then test tampered
+	// deliveries followed by the genuine delivery via InsertChain.
+	insert = z.Chain().AcquireInsert("build signed extension momentum for stalled head")
 	snap := z.Chain().SnapshotUncommitted(insert, []types.Address{types.PillarContract})
 	common.FailIfErr(t, z.Chain().ForceAddAccountBlockTransaction(insert, exec.Transaction))
 	nextTs := time.Unix(int64(frontier.TimestampUnix+10), 0)
@@ -438,7 +468,6 @@ func TestAddAccountBlocks_RefusesStaleEmbeddedHeadWhilePreservingLocalAndMomentu
 		Timestamp:       &nextTs,
 		Content:         nom.NewMomentumContent([]*nom.AccountBlock{exec.Transaction.Block}),
 	}
-	genSupervisor := vm.NewSupervisor(z.Chain(), z.Consensus())
 	momTx, err := genSupervisor.GenerateMomentum(&nom.DetailedMomentum{
 		Momentum:      template,
 		AccountBlocks: []*nom.AccountBlock{exec.Transaction.Block.Copy()},
@@ -447,6 +476,59 @@ func TestAddAccountBlocks_RefusesStaleEmbeddedHeadWhilePreservingLocalAndMomentu
 	common.FailIfErr(t, z.Chain().RestoreUncommitted(insert, snap))
 	insert.Unlock()
 
+	// 1. A tampered body under the signed momentum's content header (declared
+	// Hash matches header, ComputeHash does not) must be rejected before any
+	// historical store reconstruction.
+	tamperedBody := exec.Transaction.Block.Copy()
+	tamperedBody.Data = []byte("tampered-body")
+	guarded.resetCounts()
+	_, err = bridge.InsertChain([]*nom.DetailedMomentum{{
+		Momentum:      momTx.Momentum,
+		AccountBlocks: []*nom.AccountBlock{tamperedBody},
+	}})
+	var rejected *protocol.SideChainRejected
+	if !errors.As(err, &rejected) || !errors.Is(err, verifier.ErrABHashInvalid) {
+		t.Fatalf("expected SideChainRejected(ErrABHashInvalid) for tampered body, got %v", err)
+	}
+	common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 0)
+
+	// 2. Tampering an unhashed credential field on the embedded receive under
+	// the signed header must also be rejected before historical reconstruction.
+	tamperedSig := exec.Transaction.Block.Copy()
+	tamperedSig.Signature = []byte("invalid-embedded-signature")
+	guarded.resetCounts()
+	_, err = bridge.InsertChain([]*nom.DetailedMomentum{{
+		Momentum:      momTx.Momentum,
+		AccountBlocks: []*nom.AccountBlock{tamperedSig},
+	}})
+	if !errors.As(err, &rejected) || !errors.Is(err, verifier.ErrABSignatureMustBeZero) {
+		t.Fatalf("expected SideChainRejected(ErrABSignatureMustBeZero), got %v", err)
+	}
+	common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 0)
+
+	// 3. Repeated distinct deliveries with tampered ChangesHash (distinct bytes
+	// that miss rejectedCandidates) must reconstruct the historical store at
+	// most once for this canonical predecessor and receive.
+	for i := 0; i < 4; i++ {
+		tamperedCH := exec.Transaction.Block.Copy()
+		tamperedCH.ChangesHash = types.NewHash([]byte{byte('a' + i), 'b', 'a', 'd'})
+		guarded.resetCounts()
+		_, err = bridge.InsertChain([]*nom.DetailedMomentum{{
+			Momentum:      momTx.Momentum,
+			AccountBlocks: []*nom.AccountBlock{tamperedCH},
+		}})
+		if !errors.As(err, &rejected) || !errors.Is(err, constants.ErrAutoReceiveChangesHashMismatch) {
+			t.Fatalf("attempt %d: expected SideChainRejected(ErrAutoReceiveChangesHashMismatch), got %v", i, err)
+		}
+		wantStoreCalls := 0
+		if i == 0 {
+			wantStoreCalls = 1
+		}
+		common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], wantStoreCalls)
+	}
+
+	// 4. After all those rejected tampered deliveries, the genuine delivery of
+	// the same signed momentum must still import cleanly.
 	guarded.resetCounts()
 	_, err = bridge.InsertChain([]*nom.DetailedMomentum{{
 		Momentum:      momTx.Momentum,

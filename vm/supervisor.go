@@ -131,6 +131,19 @@ func (s *Supervisor) ApplyBlockInMomentum(block *nom.AccountBlock, momentumHeigh
 	})
 }
 
+// VerifyBlockInMomentum runs the momentum-context account-block and
+// transaction-level verification checks without opening a historical momentum
+// store or executing the VM.
+func (s *Supervisor) VerifyBlockInMomentum(block *nom.AccountBlock, momentumHeight uint64) error {
+	if block.BlockType == nom.BlockTypeContractSend {
+		return errors.Errorf("can't apply BlockTypeContractSend")
+	}
+	if err := s.verifier.AccountBlock(block); err != nil {
+		return err
+	}
+	return s.verifier.AccountBlockTransactionInMomentum(&nom.AccountBlockTransaction{Block: block}, momentumHeight)
+}
+
 // ApplyBlock verifies and executes a fully-formed account block
 // received from outside (RPC publish, chain bridge) and returns the
 // transaction pairing it with the state patch it produces. The VM
@@ -352,6 +365,14 @@ func (s *Supervisor) applyBlockWith(block *nom.AccountBlock, signFunc SignFunc, 
 
 	if err := s.verifier.AccountBlock(block); err != nil {
 		return nil, err
+	}
+	// For externally supplied blocks (signFunc == nil), verify hash,
+	// signature, producer, plasma fields, and descendants before opening any
+	// historical momentum store or executing the VM.
+	if signFunc == nil {
+		if err := verify(&nom.AccountBlockTransaction{Block: block}); err != nil {
+			return nil, err
+		}
 	}
 	context := s.newBlockContext(block)
 	vm := NewVM(context, s.chain.GetFrontierMomentumStore())

@@ -27,6 +27,7 @@
 package vm
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/pkg/errors"
@@ -149,6 +150,31 @@ func enoughFunds(context vm_context.AccountVmContext, block *nom.AccountBlock) b
 	return true
 }
 
+// AutoReceiveMismatchError reports that an externally supplied ContractReceive
+// block disagreed with a deterministic local embedded execution
+// (executionErr == nil). It unwraps to Cause
+// (constants.ErrAutoReceiveChangesHashMismatch or
+// constants.ErrAutoReceiveHashMismatch) while carrying the unique expected
+// hashes produced for that canonical state.
+type AutoReceiveMismatchError struct {
+	Cause               error
+	ExpectedChangesHash types.Hash
+	ExpectedHash        types.Hash
+	GotChangesHash      types.Hash
+	GotHash             types.Hash
+}
+
+func (e *AutoReceiveMismatchError) Error() string {
+	if e.Cause == constants.ErrAutoReceiveChangesHashMismatch {
+		return fmt.Sprintf("expected %v but got %v: %v", e.ExpectedChangesHash, e.GotChangesHash, e.Cause)
+	}
+	return fmt.Sprintf("expected %v but got %v: %v", e.ExpectedHash, e.GotHash, e.Cause)
+}
+
+func (e *AutoReceiveMismatchError) Unwrap() error {
+	return e.Cause
+}
+
 // applyBlock is used to apply the block on top of the vm.context
 // After calling applyBlock vm.context.Changes() has all the changes necessary to create a nom.AccountBlockTransaction
 func (vm *VM) applyBlock(block *nom.AccountBlock) error {
@@ -167,6 +193,7 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 		if err != nil {
 			return err
 		}
+		computed := generated.ComputeHash()
 		if generated.ChangesHash != block.ChangesHash {
 			if executionErr != nil {
 				// The local generation failed inside the contract method. A
@@ -181,9 +208,14 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 				// do not yet. Unremembered fails safe; see issue #239.
 				return errors.Errorf("auto-received block has different changes-hash expected %v but got %v (local generation failed: %v)", generated.ChangesHash, block.ChangesHash, executionErr)
 			}
-			return errors.Wrapf(constants.ErrAutoReceiveChangesHashMismatch, "expected %v but got %v", generated.ChangesHash, block.ChangesHash)
+			return &AutoReceiveMismatchError{
+				Cause:               constants.ErrAutoReceiveChangesHashMismatch,
+				ExpectedChangesHash: generated.ChangesHash,
+				ExpectedHash:        computed,
+				GotChangesHash:      block.ChangesHash,
+				GotHash:             block.Hash,
+			}
 		}
-		computed := generated.ComputeHash()
 		if computed != block.Hash {
 			if executionErr != nil {
 				// Same reasoning as the changes-hash branch: a failed
@@ -194,7 +226,13 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 				// though the local read failed.
 				return errors.Errorf("auto-received block has different hash expected %v but got %v (local generation failed: %v)", computed, block.Hash, executionErr)
 			}
-			return errors.Wrapf(constants.ErrAutoReceiveHashMismatch, "expected %v but got %v", computed, block.Hash)
+			return &AutoReceiveMismatchError{
+				Cause:               constants.ErrAutoReceiveHashMismatch,
+				ExpectedChangesHash: generated.ChangesHash,
+				ExpectedHash:        computed,
+				GotChangesHash:      block.ChangesHash,
+				GotHash:             block.Hash,
+			}
 		}
 		return nil
 	default:
