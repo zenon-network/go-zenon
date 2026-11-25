@@ -25,6 +25,12 @@ const producerStallWindow = 60 * time.Second
 type producerProgress struct {
 	mu         sync.Mutex
 	lastImport time.Time
+	// imports counts the download imports that moved the chain, and
+	// failures the download imports that failed. The sync worker reads
+	// them around a session to tell what the session's blocks did (see
+	// judgeSession).
+	imports  uint64
+	failures uint64
 }
 
 func newProducerProgress() *producerProgress {
@@ -35,7 +41,28 @@ func (p *producerProgress) markImport() {
 	now := common.Clock.Now()
 	p.mu.Lock()
 	p.lastImport = now
+	p.imports++
 	p.mu.Unlock()
+}
+
+func (p *producerProgress) markFailure() {
+	p.mu.Lock()
+	p.failures++
+	p.mu.Unlock()
+}
+
+// importCount is the number of download imports recorded so far.
+func (p *producerProgress) importCount() uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.imports
+}
+
+// failureCount is the number of failed download imports recorded so far.
+func (p *producerProgress) failureCount() uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failures
 }
 
 // idleFor is the time since the last download import, or since start-up
@@ -59,6 +86,9 @@ func (pm *ProtocolManager) insertFromDownload(momentums []*nom.DetailedMomentum)
 	index, moved, err := pm.chainman.InsertChainMoved(momentums)
 	if moved {
 		pm.progress.markImport()
+	}
+	if err != nil {
+		pm.progress.markFailure()
 	}
 	return index, err
 }

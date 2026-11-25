@@ -92,6 +92,7 @@ var (
 	errCancelHashFetch  = errors.New("hash fetching canceled (requested)")
 	errCancelBlockFetch = errors.New("block downloading canceled (requested)")
 	errNoSyncActive     = errors.New("no sync active")
+	errTerminated       = errors.New("downloader terminated")
 	errStallNoProgress  = errors.New("block download stalled: no progress")
 	// errStallCacheFull ends a session whose block cache is exactly half
 	// full behind a missing window head: no reservation can ever succeed
@@ -339,6 +340,22 @@ func (d *Downloader) Processing() bool {
 	return atomic.LoadInt32(&d.processing) > 0
 }
 
+// ImportPending reports whether blocks a session fetched may still move the
+// chain: the import worker owns blocks, or the head of the block cache has
+// arrived, so the worker will take it. Blocks cached behind a head that
+// never arrived are not pending: no worker can take them, and the next
+// session discards them.
+//
+// The head is read before the worker's flag. The worker raises its flag
+// before it takes the head, so a batch taken between the two reads is seen
+// by the second.
+func (d *Downloader) ImportPending() bool {
+	if d.queue.GetHeadBlock() != nil {
+		return true
+	}
+	return d.Processing()
+}
+
 // RegisterPeer injects a new download peer into the set of block source to be
 // used for fetching hashes and blocks from.
 func (d *Downloader) RegisterPeer(id string, version int, head types.Hash, getRelHashes relativeHashFetcherFn, getAbsHashes absoluteHashFetcherFn, getBlocks blockFetcherFn) error {
@@ -369,10 +386,20 @@ func (d *Downloader) UnregisterPeer(id string) error {
 
 // Synchronise tries to sync up our local block chain with a remote peer, both
 // adding various sanity checks as well as wrapping it with various log entries.
-func (d *Downloader) Synchronise(id string, head types.Hash, td uint64) {
+//
+// It reports whether a session against id was attempted, and the error
+// the session ended with, if any. A session was not attempted when
+// another one was already running, when blocks of an earlier one were
+// still waiting in the queue, when id is not registered with the
+// downloader, or when the downloader has been terminated: nothing was
+// asked of the peer, so the outcome says nothing about it. It returns when
+// retrieval has ended; blocks the session fetched may still be importing
+// (see ImportPending).
+func (d *Downloader) Synchronise(id string, head types.Hash, td uint64) (attempted bool, err error) {
 	log.Debug("Attempting synchronisation", "peer-id", id, "head", head, "TD", td)
 
-	err := d.synchronise(id, head, td)
+	err = d.synchronise(id, head, td)
+	attempted = err != errBusy && err != errPendingQueue && err != errUnknownPeer && err != errTerminated
 	var stalled *stallNoProgressError
 	if errors.As(err, &stalled) {
 		// The deadline only proves that no handover happened for
@@ -388,7 +415,7 @@ func (d *Downloader) Synchronise(id string, head types.Hash, td uint64) {
 		} else {
 			log.Info("Synchronisation aborted", "peer-id", id, "reason", err)
 		}
-		return
+		return attempted, err
 	}
 	switch err {
 	case nil:
@@ -401,7 +428,7 @@ func (d *Downloader) Synchronise(id string, head types.Hash, td uint64) {
 		log.Info("Removing peer", "peer-id", id, "reason", err)
 		d.dropPeer(id)
 
-	case errPendingQueue:
+	case errPendingQueue, errTerminated:
 		log.Debug("Synchronisation aborted", "reason", err)
 
 	case errStallCacheFull:
@@ -413,6 +440,7 @@ func (d *Downloader) Synchronise(id string, head types.Hash, td uint64) {
 	default:
 		log.Warn("Synchronisation failed", "reason", err)
 	}
+	return attempted, err
 }
 
 // synchronise will select the peer and use it for synchronising. If an empty string is given
@@ -454,8 +482,15 @@ func (d *Downloader) synchronise(id string, hash types.Hash, td uint64) error {
 	default:
 	}
 
-	// Create cancel channel for aborting mid-flight
+	// Create cancel channel for aborting mid-flight. A terminated
+	// downloader starts no session: Terminate raises the flag before it
+	// takes the lock to cancel, so either this sees the flag or Terminate
+	// closes the channel made here.
 	d.cancelLock.Lock()
+	if atomic.LoadInt32(&d.interrupt) == 1 {
+		d.cancelLock.Unlock()
+		return errTerminated
+	}
 	d.cancelCh = make(chan struct{})
 	d.cancelLock.Unlock()
 	// Close it again when the session is over, whichever way it ends. A
@@ -912,6 +947,14 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 			}
 
 		case <-update:
+			// A session the import worker cancelled has had its queue
+			// reset: nothing below is about this session any more, and a
+			// verdict read from the empty queue would blame the origin.
+			select {
+			case <-d.cancelCh:
+				return errCancelBlockFetch
+			default:
+			}
 			// Short circuit if we lost all our peers
 			if d.peers.Len() == 0 {
 				return errNoPeers
@@ -990,6 +1033,13 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 			// can never make progress again — the guard can fire on the spot instead of
 			// waiting for the stall deadline (issue #247).
 			if err := d.queue.NoProgress(spaceAtLoop, d.Processing()); err != nil {
+				// The same holds for a cancellation that landed during
+				// the pass.
+				select {
+				case <-d.cancelCh:
+					return errCancelBlockFetch
+				default:
+				}
 				return err
 			}
 		}
