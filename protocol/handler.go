@@ -701,7 +701,7 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		child := height == head.Height+1 && detailed.Momentum.PreviousHash == head.Hash
 		enqueue := pm.SyncInfo().State == SyncDone
 		if !enqueue && child && !pm.downloader.Processing() {
-			enqueue = pm.gossipChildren.admit(p.id, head.Height, head.Hash)
+			enqueue = pm.gossipChildren.admit(p.id, head.Hash, pm.chainman.CurrentBlock)
 		}
 		if enqueue {
 			pm.fetcher.Enqueue(p.id, detailed)

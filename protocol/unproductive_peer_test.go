@@ -1016,31 +1016,40 @@ func TestMarkTurnStampsServedConnectionOnly(t *testing.T) {
 	}
 }
 
-// The child-admission table is reset only by a head above the last one
-// seen, declines a child of a stale head, and stops admitting at its cap
-// without evicting anyone.
+// The child-admission table is reset only by the current head: a reading
+// of a head that has since been replaced, at a lower or the same height,
+// is declined and leaves the table alone. The table stops admitting at its
+// cap without evicting anyone.
 func TestChildAdmissionStaleHeadAndCap(t *testing.T) {
 	var c childAdmission
-	h10, h11 := types.Hash{10}, types.Hash{11}
-	if !c.admit("a", 11, h11) {
+	h := &nom.Momentum{Height: 11, Hash: types.Hash{11}}
+	head := func() *nom.Momentum { return h }
+	h10, h11, j11 := types.Hash{10}, types.Hash{11}, types.Hash{0x11}
+	if !c.admit("a", h11, head) {
 		t.Fatal("first child of the head declined")
 	}
-	if c.admit("b", 10, h10) {
-		t.Fatal("a child of a stale head admitted")
+	if c.admit("b", h10, head) {
+		t.Fatal("a child of a stale lower head admitted")
 	}
-	if c.admit("a", 11, h11) {
+	// The head is replaced at the same height.
+	h = &nom.Momentum{Height: 11, Hash: j11}
+	if !c.admit("a", j11, head) {
+		t.Fatal("the first child of the replacing head was declined")
+	}
+	if c.admit("b", h11, head) {
+		t.Fatal("a child of the replaced head admitted")
+	}
+	if c.admit("a", j11, head) {
 		t.Fatal("a stale reading reset the table: the node got a second child")
 	}
 	for i := 0; i < childAdmissionCap; i++ {
-		c.admit(fmt.Sprintf("n%d", i), 11, h11)
+		c.admit(fmt.Sprintf("n%d", i), j11, head)
 	}
-	if c.admit("late", 11, h11) {
+	if c.admit("late", j11, head) {
 		t.Fatal("admitted past the cap")
 	}
-	if c.admit("a", 11, h11) {
-		t.Fatal("a node already admitted got in again at the cap")
-	}
-	if !c.admit("late", 12, types.Hash{12}) {
+	h = &nom.Momentum{Height: 12, Hash: types.Hash{12}}
+	if !c.admit("late", types.Hash{12}, head) {
 		t.Fatal("the first child of a new head was declined")
 	}
 }

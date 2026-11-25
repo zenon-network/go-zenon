@@ -387,28 +387,24 @@ const childAdmissionCap = 1024
 // childAdmission remembers which nodes have had a child of the local head
 // handed to the fetcher while the node was not in sync. It is keyed by
 // node id, which outlives a connection, and forgets everything when the
-// head moves up.
+// head changes.
 type childAdmission struct {
 	mu     sync.Mutex
-	height uint64
 	parent types.Hash
 	nodes  map[string]struct{}
 }
 
-// admit reports whether node id may hand over a child of parent, the
-// local head at height, and records it if so. A head below the one last
-// seen is a stale reading: it does not reset the table, and its child is
-// declined.
-func (c *childAdmission) admit(id string, height uint64, parent types.Hash) bool {
+// admit reports whether node id may hand over a child of parent, and
+// records it if so. head reads the current local head: a parent that is
+// no longer the head is a stale reading, declined without touching the
+// table, and only the current head resets it.
+func (c *childAdmission) admit(id string, parent types.Hash, head func() *nom.Momentum) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	switch {
-	case c.nodes == nil || height > c.height:
-		c.height, c.parent, c.nodes = height, parent, make(map[string]struct{})
-	case height < c.height:
+	if head().Hash != parent {
 		return false
-	case parent != c.parent:
-		// The head was replaced at the same height.
+	}
+	if c.nodes == nil || c.parent != parent {
 		c.parent, c.nodes = parent, make(map[string]struct{})
 	}
 	if _, ok := c.nodes[id]; ok {
