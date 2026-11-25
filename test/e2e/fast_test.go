@@ -498,10 +498,16 @@ func TestFastStake(t *testing.T) {
 		// Within the epoch a second cancel is accepted, and pays nothing:
 		// the contract sends a zero-amount block.
 		after := bal(t, a.Address, znn)
-		res := callOK(t, a, stake, cancel, znn, units(0))
-		if in := epochOf(ackTime(t, res)); in != firstIn {
-			t.Fatalf("the second cancel executed in epoch %d, the first in %d: this run is inconclusive; run the group again", in, firstIn)
+		// The epoch the second cancel executed in is read before its outcome
+		// is judged: a refusal after the epoch ended is inconclusive, not a
+		// contract failure.
+		res, err := call(a, stake, cancel, znn, units(0))
+		if err == nil && res != nil && res.Receive != nil {
+			if in := epochOf(ackTime(t, res)); in != firstIn {
+				t.Fatalf("the second cancel executed in epoch %d, the first in %d (status %d): this run is inconclusive; run the group again", in, firstIn, res.Status)
+			}
 		}
+		res = mustOK(t, res, err)
 		short.revoke = ackTime(t, res) // the second cancel stamps the revoke time again
 		if len(res.Receive.DescendantBlocks) != 1 || res.Receive.DescendantBlocks[0].Amount.Sign() != 0 {
 			t.Fatalf("second cancel of the same stake: descendants %v, want one block of amount 0", res.Receive.DescendantBlocks)

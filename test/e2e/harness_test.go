@@ -90,8 +90,27 @@ func TestMain(m *testing.M) {
 	// One driver process per devnet at a time: two runs that start at the
 	// same height derive the same accounts and names (runBase, runTag
 	// below), and the per-account locks of Net do not reach across
-	// processes. The lock is held until the process exits.
-	lockName := "go-zenon-e2e-" + regexp.MustCompile(`[^A-Za-z0-9]+`).ReplaceAllString(urls[0], "_") + ".lock"
+	// processes. The lock is named after the chain itself (its identifier
+	// and genesis momentum), so endpoints listed in another order or by
+	// another address take the same lock. It is a lock on this host, the
+	// one the devnet's containers run on (E2E_NODES reads them with docker
+	// exec), and it is held until the process exits.
+	var genesis struct {
+		List []struct {
+			Height uint64     `json:"height"`
+			Hash   types.Hash `json:"hash"`
+		} `json:"list"`
+	}
+	for deadline := time.Now().Add(3 * time.Minute); ; time.Sleep(2 * time.Second) {
+		err = net.Call(&genesis, "ledger.getMomentumsByHeight", 1, 1)
+		if err == nil && len(genesis.List) == 1 && genesis.List[0].Height == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			exit("the genesis momentum could not be read within 3 minutes: %v %+v", err, genesis.List)
+		}
+	}
+	lockName := fmt.Sprintf("go-zenon-e2e-%d-%s.lock", chainID, genesis.List[0].Hash)
 	if runLock, err = os.OpenFile(filepath.Join(os.TempDir(), lockName), os.O_CREATE|os.O_RDWR, 0o600); err != nil {
 		exit("run lock: %v", err)
 	}

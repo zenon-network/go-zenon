@@ -290,9 +290,10 @@ func (n *Net) Balance(addr types.Address, zts types.ZenonTokenStandard) (*big.In
 }
 
 // StageError says where a block was stopped: while the driver prepared it
-// ("prepare"), by the node when it was published ("publish"), or nowhere
-// known: the publish got no answer from the node ("publish-unknown"). A case
-// that expects the node to refuse a block must see "publish".
+// ("prepare"), by the node when it was published ("publish"), before the
+// publish because a deadline passed ("deadline"), or nowhere known: the
+// publish got no answer from the node ("publish-unknown"). A case that
+// expects the node to refuse a block must see "publish".
 type StageError struct {
 	Stage string
 	Err   error
@@ -939,6 +940,13 @@ func (n *Net) Publish(b *nom.AccountBlock) error {
 // change per momentum), so a plasma refusal is retried on a fresh quote.
 // Blocks with a mutator are never retried: their refusal is the result.
 func (n *Net) Send(kp *wallet.KeyPair, tmpl *nom.AccountBlock, mut *Mutator) (*nom.AccountBlock, error) {
+	return n.sendBy(kp, tmpl, mut, time.Time{})
+}
+
+// sendBy is Send with a deadline (none if zero): after the account lock and
+// each preparation, a block is published only while the deadline has not
+// passed; otherwise nothing is sent and the stage is "deadline".
+func (n *Net) sendBy(kp *wallet.KeyPair, tmpl *nom.AccountBlock, mut *Mutator, deadline time.Time) (*nom.AccountBlock, error) {
 	l := n.lock(kp.Address)
 	l.Lock()
 	defer l.Unlock()
@@ -946,6 +954,9 @@ func (n *Net) Send(kp *wallet.KeyPair, tmpl *nom.AccountBlock, mut *Mutator) (*n
 		b, err := n.Prepare(kp, tmpl, mut)
 		if err != nil {
 			return nil, &StageError{"prepare", err}
+		}
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			return nil, &StageError{"deadline", fmt.Errorf("the deadline passed before block %s could be published", b.Hash)}
 		}
 		err = n.Publish(b)
 		if err == nil {
@@ -1319,6 +1330,12 @@ func (n *Net) Receive(kp *wallet.KeyPair, from types.Hash, mut *Mutator) (*nom.A
 	return n.Send(kp, &nom.AccountBlock{BlockType: nom.BlockTypeUserReceive, FromBlockHash: from}, mut)
 }
 
+// receiveBy is Receive that publishes nothing once the deadline has passed,
+// however long the account lock and the preparation took.
+func (n *Net) receiveBy(kp *wallet.KeyPair, from types.Hash, deadline time.Time) (*nom.AccountBlock, error) {
+	return n.sendBy(kp, &nom.AccountBlock{BlockType: nom.BlockTypeUserReceive, FromBlockHash: from}, nil, deadline)
+}
+
 // ReceiveAll receives the sends the account is owed and has not received
 // yet, every one of them, and no other: a send the driver signed to it, a
 // send a contract made in answer to a call the driver waited for, or a
@@ -1439,7 +1456,7 @@ func (n *Net) ReceiveAll(kp *wallet.KeyPair, want int, timeout time.Duration) (i
 			}
 			n.reserved[p.Hash] = true
 			n.mu.Unlock()
-			b, err := n.Receive(kp, p.Hash, nil)
+			b, err := n.receiveBy(kp, p.Hash, deadline)
 			n.mu.Lock()
 			delete(n.reserved, p.Hash)
 			n.mu.Unlock()
