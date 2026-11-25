@@ -1,0 +1,2 @@
+# kind	item	why it can never have a passing case
+contract-method	bridge.SetRedeemDelay	declared in the bridge ABI (vm/embedded/definition/bridge.go) and registered in no spork state (vm/embedded/embedded.go); the driver pins that it answers "method not found" (LAD cases)

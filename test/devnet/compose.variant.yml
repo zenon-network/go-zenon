@@ -1,0 +1,16 @@
+# Overlay for docker-compose.yml: start the devnet on another genesis and,
+# with DEVNET_IMAGE, on another image.
+# Used by test/devnet/up.sh; DEVNET_GENESIS is an absolute path under the
+# home directory (Colima shares nothing else into the VM).
+x-genesis: &genesis
+  image: ${DEVNET_IMAGE:-go-zenon-devnet:latest}
+  volumes:
+    - ${DEVNET_GENESIS:?set DEVNET_GENESIS to a genesis file}:/devnet/genesis.json:ro
+
+services:
+  pillar: *genesis
+  pillar2: *genesis
+  pillar3: *genesis
+  rpc: *genesis
+  observer: *genesis
+  syncnode: *genesis

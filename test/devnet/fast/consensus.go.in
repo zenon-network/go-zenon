@@ -1,0 +1,10 @@
+// This file is NOT part of go-zenon. See constants.go.in in this directory.
+package consensus
+
+import "time"
+
+func init() {
+	// 60 momentums of 10 seconds, matching constants.MomentumsPerEpoch: two
+	// election periods, the shortest epoch that works (see constants.go.in).
+	EpochDuration = 10 * time.Minute
+}
