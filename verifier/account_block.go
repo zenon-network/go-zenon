@@ -89,6 +89,9 @@ func (av *accountVerifier) getContext(block *nom.AccountBlock) (store.Account, s
 	// replay time and memory). Every check in accountBlockVerifier and
 	// accountBlockTransactionVerifier reads from frontierStore and the cache.
 	frontierStore := av.chain.GetFrontierMomentumStore()
+	if frontierStore == nil {
+		return nil, nil, ErrABMAMissing
+	}
 	if types.IsEmbeddedAddress(block.Address) {
 		m, err := frontierStore.GetMomentumByHeight(block.MomentumAcknowledged.Height)
 		if err != nil {

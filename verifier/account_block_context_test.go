@@ -244,9 +244,12 @@ func TestAccountBlockVerifier_EmbeddedAddressDoesNotCallGetMomentumStore(t *test
 			if err := v.AccountBlock(tc.block); err != tc.wantErr {
 				t.Fatalf("AccountBlock: got %v, want %v", err, tc.wantErr)
 			}
-			if err := v.AccountBlockTransaction(&nom.AccountBlockTransaction{Block: tc.block}); err != nil && err != tc.wantErr && tc.wantErr != verifier.ErrABMAMissing {
-				// AccountBlockTransaction runs hash/signature rather than accountBlockVerifier.all(),
-				// so only check that it never calls GetMomentumStore.
+			wantTxErr := verifier.ErrABHashMissing
+			if tc.wantErr == verifier.ErrABMAMissing {
+				wantTxErr = verifier.ErrABMAMissing
+			}
+			if err := v.AccountBlockTransaction(&nom.AccountBlockTransaction{Block: tc.block}); err != wantTxErr {
+				t.Fatalf("AccountBlockTransaction: got %v, want %v", err, wantTxErr)
 			}
 			supervisor := vm.NewSupervisor(counting, z.Consensus())
 			if _, err := supervisor.ApplyBlock(tc.block); err != tc.wantErr {
@@ -334,5 +337,33 @@ func TestAccountBlockVerifier_EmbeddedSequencerRejectsOutOfOrderWithoutRollback(
 	}
 	if counting.getMomentumStoreCalls != 0 {
 		t.Fatalf("expected 0 GetMomentumStore calls, got %d", counting.getMomentumStoreCalls)
+	}
+}
+
+type nilFrontierChain struct {
+	chain.Chain
+}
+
+func (c *nilFrontierChain) GetFrontierMomentumStore() store.Momentum {
+	return nil
+}
+
+// When the frontier momentum store is unavailable (for example after manager
+// shutdown), getContext must return ErrABMAMissing instead of panicking on a
+// nil store dereference.
+func TestAccountBlockVerifier_NilFrontierStoreReturnsMAMissing(t *testing.T) {
+	v := verifier.NewAccountBlockVerifier(&nilFrontierChain{}, nil)
+	block := &nom.AccountBlock{
+		Version:              1,
+		BlockType:            nom.BlockTypeContractReceive,
+		Address:              types.StakeContract,
+		Height:               1,
+		MomentumAcknowledged: types.HashHeight{Hash: types.NewHash([]byte("m1")), Height: 1},
+	}
+	if err := v.AccountBlock(block); err != verifier.ErrABMAMissing {
+		t.Fatalf("AccountBlock: got %v, want ErrABMAMissing", err)
+	}
+	if err := v.AccountBlockTransaction(&nom.AccountBlockTransaction{Block: block}); err != verifier.ErrABMAMissing {
+		t.Fatalf("AccountBlockTransaction: got %v, want ErrABMAMissing", err)
 	}
 }

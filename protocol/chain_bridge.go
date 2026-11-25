@@ -58,15 +58,36 @@ func NewChainBridge(chain chain.Chain, consensus consensus.Consensus, verifier v
 	}
 }
 
+// maxPeerEmbeddedAckGap bounds how far behind the frontier a peer-gossiped
+// embedded-address block's MomentumAcknowledged may sit in AddAccountBlocks.
+// Normal contract receives acknowledge the send's confirmation momentum
+// immediately (gap 0-2, well inside ldbManager's 360-momentum near-cache
+// window where absDiff < 360 stays in l1Cache). If a contract queue has a
+// genuinely old stalled head at or beyond this gap, refusing peer gossip here
+// prevents repeated deep historical rollback replays under the chain insert
+// lock while local pillar generation (GenerateAutoReceive) and signed-momentum
+// import (ApplyBlockInMomentum) remain unrestricted.
+const maxPeerEmbeddedAckGap uint64 = 360
+
 func (c chainBridge) AddAccountBlocks(blocks []*nom.AccountBlock) error {
 	insert := c.chain.AcquireInsert(fmt.Sprintf("Insert blocks in chain-bridge. Len:%v", len(blocks)))
 	defer insert.Unlock()
+	frontierStore := c.chain.GetFrontierMomentumStore()
+	var frontierHeight uint64
+	if frontierStore != nil {
+		frontierHeight = frontierStore.Identifier().Height
+	}
 	for _, block := range blocks {
 		if patch := c.chain.GetPatch(block.Address, block.Identifier()); patch != nil {
 			continue
 		}
 		if block.BlockType == nom.BlockTypeContractSend {
 			continue
+		}
+		if types.IsEmbeddedAddress(block.Address) && frontierHeight > block.MomentumAcknowledged.Height && frontierHeight-block.MomentumAcknowledged.Height >= maxPeerEmbeddedAckGap {
+			err := errors.Errorf("refusing peer embedded account-block with stale momentum-acknowledged height %d (frontier %d)", block.MomentumAcknowledged.Height, frontierHeight)
+			log.Info("ignoring peer embedded account-block with stale momentum-acknowledged", "account-block-header", block.Header(), "ma-height", block.MomentumAcknowledged.Height, "frontier-height", frontierHeight)
+			return err
 		}
 		transaction, err := c.supervisor.ApplyBlock(block)
 		if err != nil {
@@ -546,10 +567,11 @@ func (c chainBridge) insertMomentums(insert sync.Locker, momentums []*nom.Detail
 		// The caller keeps using its own objects concurrently (the fetcher
 		// broadcasts the same DetailedMomentum while importing it), and the
 		// VM writes computed plasma fields onto whatever block it applies,
-		// so insert works on private copies of the blocks. Copies are made
-		// one momentum at a time so a batch that fails early does not pay
-		// for the momentums it never reaches.
-		detailed := &nom.DetailedMomentum{Momentum: supplied.Momentum, AccountBlocks: copyAccountBlocks(supplied.AccountBlocks)}
+		// so insert works on private copies of both the momentum (with its
+		// cached Timestamp already initialized above) and its blocks. Copies
+		// are made one momentum at a time so a batch that fails early does not
+		// pay for the momentums it never reaches.
+		detailed := &nom.DetailedMomentum{Momentum: &candidate, AccountBlocks: copyAccountBlocks(supplied.AccountBlocks)}
 
 		// Blocks are force-inserted into the pool before the momentum itself
 		// is validated, so keep a snapshot of every account the momentum
