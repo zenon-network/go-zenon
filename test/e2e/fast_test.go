@@ -512,7 +512,6 @@ func TestFastStake(t *testing.T) {
 		mustFail(t, res, err)
 		wantBig(t, "ZNN after a second cancel", bal(t, a.Address, znn), after)
 		cover(t, "E4", "contract-method", "stake.Cancel")
-		cover(t, "E4", "error", "vm/constants.ErrStakeAlreadyRevoked")
 	})
 
 	t.Run("FS-2_collect_the_reward_of_a_finished_epoch", func(t *testing.T) {
