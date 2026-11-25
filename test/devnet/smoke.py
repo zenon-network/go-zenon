@@ -338,14 +338,19 @@ def main():
     if network_checks:
         attempt("momentum-version", versions)
 
+    # Methods whose reply passed a check, for --cov: the getters below, and
+    # the two sync readers once a node's sync check passed.
+    passed_getters = []
     for n in NODES if network_checks else []:
         def synced(n=n):
             si = envelope(inside(n, "stats.syncInfo"), "syncInfo")
             ni = envelope(inside(n, "stats.networkInfo"), "networkInfo")
-            return si["state"] == 2 and ni["numPeers"] >= 2, "%s peers=%s" % (si, ni["numPeers"])
+            ok = si["state"] == 2 and ni["numPeers"] >= 2
+            if ok and "stats.syncInfo" not in passed_getters:
+                passed_getters.extend(["stats.syncInfo", "stats.networkInfo"])
+            return ok, "%s peers=%s" % (si, ni["numPeers"])
         attempt("sync-" + n, synced)
 
-    passed_getters = []
     for method, params, valid in getters(genesis) if network_checks else []:
         def getter(method=method, params=params, valid=valid):
             r = envelope(host(method, params), method)

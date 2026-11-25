@@ -103,6 +103,7 @@ done
 
 # 5. Prove what is running: image, binary, genesis, and that the chain is new.
 out=""
+first_version=""   # its own name: an exported VERSION must not be taken as the first node's
 for n in $NODES; do
   c="znnd-devnet-$n"
   img="$(docker inspect -f '{{.Image}}' "$c")"
@@ -157,7 +158,7 @@ for n in $NODES; do
   [ "$g1" = "$GENESIS_MOMENTUM" ] || die "$c has genesis momentum $g1; the genesis file gives $GENESIS_MOMENTUM"
   g1p="$(printf '%s' "$first" | field list 0 previousHash)" && [ "$g1p" = "$ZERO" ] || die "$c serves genesis momentum $g1 with parent '${g1p:-}', not the zero hash"
   ver="$(rpc "$n" stats.processInfo '[]' | field version)" || die "$c gave no version"
-  [ "$ver" = "${VERSION:=$ver}" ] || die "$c reports version $ver, the nodes before it $VERSION"
+  [ "$ver" = "${first_version:=$ver}" ] || die "$c reports version $ver, the nodes before it $first_version"
   out="$out$n image=$img znnd=$bsha genesis-file=$gsha genesis-momentum=$g1 version=$ver height-at-start=$h frontier-hash=$fx frontier-parent=$fp genesis-parent=$g1p
 "
 done

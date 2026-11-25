@@ -700,6 +700,10 @@ func TestFastPillar(t *testing.T) {
 		}
 	}
 	var electorateProject types.Hash
+	// revokedAt is the revoke's time as the contract stamps it: the
+	// timestamp of the momentum its receive acknowledges. getByName does
+	// not return a revoked pillar, so FPI-8 cannot read it there.
+	var revokedAt int64
 
 	t.Run("FPI-7_one_vote_of_four_active_pillars_does_not_accept_a_project", func(t *testing.T) {
 		cover(t, "E1", "contract-method", "accelerator.VoteByName")
@@ -750,7 +754,7 @@ func TestFastPillar(t *testing.T) {
 			return str(info["isRevocable"]) == "true"
 		})
 		before := bal(t, owner.Address, znn)
-		callOK(t, owner, pillar, revoke, znn, units(0))
+		revokedAt = ackTime(t, callOK(t, owner, pillar, revoke, znn, units(0)))
 		receiveAll(t, owner, 1)
 		wantBig(t, "ZNN after the revoke", bal(t, owner.Address, znn), new(big.Int).Add(before, constants.PillarStakeAmount))
 		var all obj
@@ -782,11 +786,27 @@ func TestFastPillar(t *testing.T) {
 		at := updateExecutedAbove(t, delegator, frontierHeight(t))
 		var got obj
 		get(t, &got, "embedded.accelerator.getProjectById", electorateProject)
+		// The case says something only if every tally after the voting
+		// window ran with the pillar already revoked. FPI-4 can wait up to
+		// twelve minutes before it revokes; if the window ended first, the
+		// final tally counted one vote of four active pillars and closed the
+		// project, as a node that counts every stored vote would too.
+		var project struct {
+			CreationTimestamp int64 `json:"creationTimestamp"`
+		}
+		get(t, &project, "embedded.accelerator.getProjectById", electorateProject)
+		created, revoked := project.CreationTimestamp, revokedAt
+		if created == 0 || revoked == 0 {
+			t.Fatalf("project created at %d, pillar revoked at %d: cannot tell whether the revoke came before the window ended", created, revoked)
+		}
+		if end := created + constants.AcceleratorProjectVotingPeriod; revoked > end {
+			t.Fatalf("the pillar was revoked at %d, %d s after the project's voting window ended at %d: the final tally may have run before the revoke, so this run is inconclusive; run the group again", revoked, revoked-end, end)
+		}
 		// Voting while the window is open; closed if the window ended first
 		// and the final tally ran. Accepted only on the revoked vote.
 		switch str(got["status"]) {
 		case fmt.Sprint(definition.VotingStatus), fmt.Sprint(definition.ClosedStatus):
-			t.Logf("project status %v after the update at momentum %d", got["status"], at)
+			t.Logf("project status %v after the update at momentum %d (window ends at %d, revoked at %d)", got["status"], at, created+constants.AcceleratorProjectVotingPeriod, revoked)
 		case fmt.Sprint(definition.ActiveStatus):
 			t.Fatalf("project accepted at or before the update at momentum %d on the stored vote of the revoked pillar %s alone; post-spork only the votes of active pillars count", at, name)
 		default:

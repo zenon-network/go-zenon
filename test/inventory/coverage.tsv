@@ -159,8 +159,8 @@ rpc-method	LedgerApi.GetMomentumsByPage	E1:SMOKE
 rpc-method	LedgerApi.GetDetailedMomentumsByHeight	E1:SMOKE
 rpc-method	StatsApi.OsInfo	E1:SMOKE
 rpc-method	StatsApi.ProcessInfo	E1:SMOKE
-rpc-method	StatsApi.NetworkInfo	
-rpc-method	StatsApi.SyncInfo	
+rpc-method	StatsApi.NetworkInfo	E1:SMOKE
+rpc-method	StatsApi.SyncInfo	E1:SMOKE
 rpc-method	RPCService.Modules	
 subscription	Momentums	
 subscription	AllAccountBlocks	

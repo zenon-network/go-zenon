@@ -6,7 +6,7 @@ How to run each procedure, and how gaps are tracked: [TESTING.md](TESTING.md).
 
 ## 1. What is being tested
 
-`dev` is 159 merged pull requests ahead of the v0.0.9 line and now contains everything in `master` (v0.0.10, merged by #309). Against `master` the difference is 548 files, about 98,000 added lines. Six pull requests are open against `dev` (section 9).
+`dev` is 159 merged pull requests ahead of the v0.0.9 line and now contains everything in `master` (v0.0.10, merged by #309). Against `master` the difference is 548 files, about 98,000 added lines. Six pull requests were open against `dev` when this was written; section 9 has their state on 2026-11-25.
 
 The plan has two goals:
 
@@ -250,7 +250,7 @@ Follows `docs/libp2p-rollout.md`, which has the expected log lines.
 | N-2 | Sync with a peer that withholds the head, sends empty hash replies, or stalls mid-batch: the session ends within the deadline (#226, #272) | fault peer |
 | N-3 | A peer serving an invalid side-chain: one rollback at most, branch remembered for an hour, serving peer quarantined, relayers of a gossiped invalid momentum not quarantined (#244, #287, #304, #305, #309) | the fault peer (section 8) |
 | N-4 | Failed side-chain replacement restores the canonical branch and the pending pool (#83, #120, #175) | forced fork with `docker pause` |
-| N-5 | Production readiness: a pillar restarts 100 momentums behind, catches up, and produces in its next slot; a peer that claims a higher TD and delivers nothing holds production for at most the stall window (#245; #291 is open, fix in #306) | fault peer |
+| N-5 | Production readiness: a pillar restarts 100 momentums behind, catches up, and produces in its next slot; a peer that claims a higher TD and delivers nothing holds production for at most the stall window (#245; #291, fixed by #306) | fault peer |
 | N-6 | Network partition of 1 pillar from 2 for 5, 25 and 40 momentums, then heal. At 40 the 30-momentum rollback cap is passed (#312 is open: expected to fail today, record the behaviour) | `docker network disconnect` |
 | N-7 | Request budget: a peer over the lookup or byte budget is dropped; honest peers under load are not (#84, #129, #220) | fault peer |
 | N-8 | Broadcast with one peer that stops reading: other peers still get momentums on time (#275) | fault peer |
@@ -324,14 +324,14 @@ The first row exists (`test/e2e/`, 97 cases on a chain with every spork (the `al
 
 ## 9. Open pull requests
 
-Tested on their own branch before merge, then again as part of `dev`.
+Tested on their own branch before merge, then again as part of `dev`. State on 2026-11-25: #306, #311 and #274 were merged into `dev` on 2026-11-21, so their tests now run as part of `dev`; the other three are still open. This section goes out of date as pull requests merge; check each one's state before relying on it.
 
 | PR | What | Extra tests |
 |---|---|---|
-| #306 | Sessions that import nothing no longer hold production (fixes #291) | N-5 with the fault peer; its description says it has not been run on a devnet |
-| #311 | Sentinels for deterministic momentum refusals (part of #299); changes requested | N-3 with each of the four refusal types |
-| #274 | Accelerator tally against the active electorate, gated by `DynamicPlasmaSpork` (fixes #270) | Vote, revoke, tally before and after the spork |
-| #310 (draft) | Pillar jail and paid unjail behind a new spork | Its own suite: missed-slot counting, jail, unjail fee burn, election without jailed pillars, S-1 to S-5 |
+| #306 (merged) | Sessions that import nothing no longer hold production (fixes #291) | N-5 with the fault peer; its description says it has not been run on a devnet |
+| #311 (merged) | Sentinels for deterministic momentum refusals (part of #299) | N-3 with each of the four refusal types |
+| #274 (merged) | Accelerator tally against the active electorate, gated by `DynamicPlasmaSpork` (fixes #270) | Vote, revoke, tally before and after the spork; FPI-7 and FPI-8 |
+| #310 | Pillar jail and paid unjail behind a new spork | Its own suite: missed-slot counting, jail, unjail fee burn, election without jailed pillars, S-1 to S-5 |
 | #155 (draft) | Remove legacy devp2p; must wait for libp2p activation on mainnet | Repeat 6.2 without legacy; conflicts with `dev` today |
 | #72 (draft) | Protocol-level multisig behind `MultisigSpork` | Its own suite; conflicts with `dev` today |
 
@@ -341,7 +341,7 @@ Tested on their own branch before merge, then again as part of `dev`.
 2. **Issue #78.** Gate the PoW-target and bridge-key changes, or accept them on the strength of the M-3 scan. The scan can run first.
 3. **Spork ids.** Four are placeholders. Testing uses genesis-seeded ids; a release needs the real ones and a re-run of 6.1 on that build.
 4. **Go toolchain.** Tests run on 1.23, release binaries on 1.24.1. Pick one, or test on both (L0-1 assumes both).
-5. **Scope of the release candidate.** Which of the six open pull requests are in. #310 and #72 add sporks and their own suites.
+5. **Scope of the release candidate.** Which of the open pull requests (section 9) are in. #310 and #72 add sporks and their own suites.
 6. **Coverage floor** for L1-6, if any.
 7. **Where the driver and this plan live**: in the repository (`test/e2e/`, `docs/`) or outside it.
 8. **Soak lengths**: 6 hours for X-1, 24 hours for N-10 and 7 days for M-4 are proposals.

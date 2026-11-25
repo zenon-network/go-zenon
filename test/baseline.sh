@@ -114,9 +114,15 @@ go env > "$S/go-env.txt" 2>&1
 go build ./... > "$S/build.out" 2>&1; stage build $? "go build ./..."
 go test ./... -count=1 > "$S/unit.out" 2>&1
 stage unit $? "$(grep -c '^ok' "$S/unit.out") packages ok, $(grep -cE '^(FAIL|--- FAIL)' "$S/unit.out") failures"
-go vet ./... 2>&1 | grep -v '^#' | sed -E 's/:[0-9]+:[0-9]+:/:/' | sort > "$S/vet.txt"
-if diff test/known-vet.txt "$S/vet.txt" > "$S/vet.diff"; then ok vet "exactly the $(wc -l < test/known-vet.txt | tr -d ' ') known lines"
-else bad vet "differs from test/known-vet.txt, see vet.diff"; fi
+# Only lines that name a .go file are compared: the host's C compiler adds
+# cgo warnings of its own (gopsutil on macOS), which depend on the toolchain.
+# Everything else is kept in vet-other.txt and counted in the detail.
+go vet ./... > "$S/vet.out" 2>&1
+grep -E '^[^[:space:]]+\.go:[0-9]+:[0-9]+: ' "$S/vet.out" | sed -E 's/:[0-9]+:[0-9]+:/:/' | sort > "$S/vet.txt"
+grep -vE '^#|^[^[:space:]]+\.go:[0-9]+:[0-9]+: ' "$S/vet.out" > "$S/vet-other.txt"
+vet_other="$(wc -l < "$S/vet-other.txt" | tr -d ' ') other lines in vet-other.txt"
+if diff test/known-vet.txt "$S/vet.txt" > "$S/vet.diff"; then ok vet "exactly the $(wc -l < test/known-vet.txt | tr -d ' ') known lines; $vet_other"
+else bad vet "differs from test/known-vet.txt, see vet.diff; $vet_other"; fi
 go run ./cmd/devnet-keygen --verify-genesis docker/devnet/genesis.json > "$S/genesis.out" 2>&1; stage verify-genesis $? "stock genesis"
 ( python3 test/devnet/genesis.py && for v in all-off mainnet-like all-on staged; do
     go run ./cmd/devnet-keygen --verify-genesis "test/devnet/genesis/$v.json" || exit 1

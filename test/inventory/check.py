@@ -13,8 +13,12 @@ case tokens and is counted on its own.
 
 The check fails on: an item with no case and no disposition; an item of the
 source missing from the map, or one in the map that the source no longer has; a
-duplicate or malformed row; a token that is not of the form above; a disposed
-item that carries tokens; an inventory that came out empty for any kind.
+duplicate or malformed row; a token that is not of the form above; a token
+whose case id no test defines (a subtest "<id>_..." in test/e2e, or SMOKE for
+test/devnet/smoke.py), as left by a renamed or deleted case; a disposed item
+that carries tokens; an inventory that came out empty for any kind. A token
+that names a case which still exists but no longer exercises the item is not
+caught here: rebuild the map with record.py --replace from a full run.
 --sync prints what it adds and drops before it rewrites the map, and never
 touches the tokens of an item that stays. It writes nothing when the map or the
 dispositions have a problem: a duplicate or malformed row, a disposition for an
@@ -27,6 +31,8 @@ COV, DISP = os.path.join(DIR, "coverage.tsv"), os.path.join(DIR, "dispositions.t
 KINDS = ["contract-method", "rpc-method", "subscription", "spork", "verifier-rule", "protocol-msg",
          "protocol-error", "error", "cli-flag", "config-field"]
 TOKEN = re.compile(r"^E([1-9]|1[0-2]):[A-Za-z0-9][A-Za-z0-9.-]*$")
+E2E = os.path.join(DIR, "..", "e2e")
+SUBTEST = re.compile(r'\bt\.Run\("([A-Za-z0-9][A-Za-z0-9.-]*)_')
 
 
 def fail(msg):
@@ -70,6 +76,17 @@ def read_map():
             problems.append("line %d: %s has malformed or repeated tokens: %s" % (n, "\t".join(key), " ".join(bad or tokens)))
         rows[key] = tokens
     return rows, problems
+
+
+def case_ids():
+    """Every case id a token may name: the subtests of the driver, and SMOKE."""
+    ids = {"SMOKE"}
+    for name in sorted(os.listdir(E2E)):
+        if name.endswith("_test.go"):
+            ids.update(SUBTEST.findall(open(os.path.join(E2E, name)).read()))
+    if len(ids) == 1:
+        fail("no subtest ids found in %s; the extraction for them is broken" % os.path.normpath(E2E))
+    return ids
 
 
 def read_dispositions():
@@ -121,6 +138,9 @@ def main():
     problems += ["STALE   %s\t%s (in the map, not in the source; run --sync)" % k for k in stale]
     problems += ["disposition for %s\t%s, which the source does not have" % k for k in sorted(set(disposed) - set(items))]
     problems += ["%s\t%s has a disposition and case tokens; it cannot have both" % k for k in sorted(disposed) if rows.get(k)]
+    ids = case_ids()
+    problems += ["UNKNOWN %s\t%s\t%s (no test defines case %s)" % (k[0], k[1], t, t.split(":", 1)[1])
+                 for k in sorted(rows) for t in rows[k] if t.split(":", 1)[1] not in ids]
     for p in problems:
         print(p)
     open_items = [k for k in items if k in rows and not rows[k] and k not in disposed]

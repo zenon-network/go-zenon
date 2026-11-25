@@ -3,6 +3,14 @@
 
     E2E_COVERAGE="$PWD/run.tsv" go test -tags e2e ./test/e2e/ ...
     test/inventory/record.py run.tsv [more.tsv ...]
+    test/inventory/record.py --replace smoke.tsv stock.tsv fast.tsv ...
+
+By default the rows are added: no token is ever removed, so a case that stops
+exercising an item, or is renamed, leaves its token behind. --replace instead
+rebuilds every item's tokens from the inputs alone and prints each token it
+drops. Give it the coverage files of one complete baseline run (the smoke test
+and every driver stage); with fewer, the cases that did not run lose their
+tokens.
 
 Each input row is kind, item, "class:case", written for a case that passed.
 Every input is read and checked first. If any row is malformed, names an item
@@ -30,10 +38,13 @@ if os.path.exists(DISP):
         if not line.startswith("#") and len(parts) == 3:
             disposed.add((parts[0], parts[1]))
 
-if len(sys.argv) < 2:
-    sys.exit("usage: record.py <coverage-file> [...]")
+args = sys.argv[1:]
+replace = "--replace" in args
+args = [a for a in args if a != "--replace"]
+if not args:
+    sys.exit("usage: record.py [--replace] <coverage-file> [...]")
 new, problems = [], []
-for src in sys.argv[1:]:
+for src in args:
     if not os.path.isfile(src):
         problems.append("%s: no such file (E2E_COVERAGE must be an absolute path: the driver runs in test/e2e)" % src)
         continue
@@ -54,11 +65,19 @@ if problems:
     print("\n".join(problems))
     sys.exit("record: nothing was written")
 
+old = {key: list(tokens) for key, tokens in rows.items()}
+if replace:
+    rows = {key: [] for key in rows}
 added = 0
 for key, token in new:
     if token not in rows[key]:
         rows[key].append(token)
         added += 1
+dropped = [(key, t) for key in order for t in old[key] if t not in rows[key]]
+for key, t in dropped:
+    print("DROPPED %s\t%s\t%s" % (key[0], key[1], t))
+if replace:
+    added = sum(1 for key in order for t in rows[key] if t not in old[key])
 
 
 def sort_key(token):
@@ -71,4 +90,4 @@ with os.fdopen(fd, "w") as f:
     for key in order:
         f.write("%s\t%s\t%s\n" % (key[0], key[1], " ".join(sorted(rows[key], key=sort_key))))
 os.replace(tmp, COV)
-print("%d tokens added to %s from %d file(s)" % (added, os.path.relpath(COV), len(sys.argv) - 1))
+print("%d tokens added%s to %s from %d file(s)" % (added, ", %d dropped" % len(dropped) if replace else "", os.path.relpath(COV), len(args)))
