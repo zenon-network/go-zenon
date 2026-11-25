@@ -18,7 +18,7 @@ What it checks, against the genesis file the devnet was started on:
 - every node reports sync done with at least two peers;
 - one getter per RPC namespace answers with a well-formed JSON-RPC reply whose
   result has the expected shape and content;
-- with --sync, the late joiner on port 35999 is synced and on the same chain, and
+- with --sync, the late joiner (host port --sync-port) is synced and on the same chain, and
   its frontier is what it serves at that height and what the RPC node has there;
   with --expect-105, that it shows exactly the signature of issue #105 instead.
 
@@ -52,7 +52,12 @@ def envelope(reply, what):
     return reply["result"]
 
 
-def host(method, params=None, port=35997):
+# Host ports of the devnet's HTTP RPC, set from --port and --sync-port.
+PORT, SYNC_PORT = 35997, 35999
+
+
+def host(method, params=None, port=None):
+    port = port or PORT
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or []}).encode()
     req = urllib.request.Request("http://localhost:%d" % port, body, {"Content-Type": "application/json"})
     try:
@@ -178,12 +183,18 @@ def main():
     ap.add_argument("--joiner-only", action="store_true", help="with --sync or --expect-105: judge only the late joiner")
     ap.add_argument("--genesis", default=os.path.join(ROOT, "docker", "devnet", "genesis.json"),
                     help="the genesis file the devnet was started on")
-    ap.add_argument("--sync", action="store_true", help="also require the late joiner on port 35999 to be synced")
+    ap.add_argument("--sync", action="store_true", help="also require the late joiner (host port --sync-port) to be synced")
     ap.add_argument("--expect-105", action="store_true",
                     help="require the late joiner to show the signature of issue #105: height 1, no peers")
+    ap.add_argument("--port", type=int, default=int(os.environ.get("DEVNET_HTTP_PORT", "35997")),
+                    help="host port of the rpc node's HTTP RPC (DEVNET_HTTP_PORT, default 35997)")
+    ap.add_argument("--sync-port", type=int, default=int(os.environ.get("DEVNET_SYNC_HTTP_PORT", "35999")),
+                    help="host port of the late joiner's HTTP RPC (DEVNET_SYNC_HTTP_PORT, default 35999)")
     ap.add_argument("--out", help="write results as JSON to this file")
     ap.add_argument("--cov", help="write coverage rows for the getters that passed to this file")
     args = ap.parse_args()
+    global PORT, SYNC_PORT
+    PORT, SYNC_PORT = args.port, args.sync_port
     genesis = json.load(open(args.genesis))
     results = []
 
@@ -348,10 +359,10 @@ def main():
         state = {}
 
         def read_joiner():
-            state["si"] = envelope(host("stats.syncInfo", port=35999), "joiner syncInfo")
-            state["peers"] = envelope(host("stats.networkInfo", port=35999), "joiner networkInfo")["numPeers"]
-            state["frontier"] = envelope(host("ledger.getFrontierMomentum", port=35999), "joiner frontier")
-            state["first"] = momentums(lambda m, p: host(m, p, port=35999), 1, 1)[0]
+            state["si"] = envelope(host("stats.syncInfo", port=SYNC_PORT), "joiner syncInfo")
+            state["peers"] = envelope(host("stats.networkInfo", port=SYNC_PORT), "joiner networkInfo")["numPeers"]
+            state["frontier"] = envelope(host("ledger.getFrontierMomentum", port=SYNC_PORT), "joiner frontier")
+            state["first"] = momentums(lambda m, p: host(m, p, port=SYNC_PORT), 1, 1)[0]
             if type(state["peers"]) is not int or type(state["frontier"].get("height")) is not int or not is_hash(state["frontier"].get("hash")):
                 raise ValueError("ill-typed peers or frontier")
             if not all(type(state["si"].get(k)) is int for k in ("state", "currentHeight", "targetHeight")):
@@ -361,14 +372,14 @@ def main():
             fh = state["frontier"]["height"]
             if fh < 1:
                 raise ValueError("the joiner reports frontier height %d" % fh)
-            own = momentums(lambda m, p: host(m, p, port=35999), max(1, fh - 1), fh)
+            own = momentums(lambda m, p: host(m, p, port=SYNC_PORT), max(1, fh - 1), fh)
             state["own"] = own[-1]["hash"]
             if fh > 1 and state["frontier"].get("previousHash") != own[0]["hash"]:
                 raise ValueError("the joiner reports frontier %s at height %d with parent %s, but serves %s at height %d" % (
                     state["frontier"]["hash"], fh, state["frontier"].get("previousHash"), own[0]["hash"], fh - 1))
             if state["own"] != state["frontier"]["hash"]:
                 # One more look: the frontier may have moved between the two reads.
-                again = envelope(host("ledger.getFrontierMomentum", port=35999), "joiner frontier")
+                again = envelope(host("ledger.getFrontierMomentum", port=SYNC_PORT), "joiner frontier")
                 if again.get("height") == fh and again.get("hash") == state["frontier"]["hash"]:
                     raise ValueError("the joiner reports frontier %s at height %d and serves %s at that height" % (state["frontier"]["hash"], fh, state["own"]))
                 raise ValueError("the joiner's frontier moved while it was read; read again")
@@ -400,7 +411,7 @@ def main():
                 # so its tip is tied to the history below it, and the same range
                 # from the RPC node. momentums() checks every parent link.
                 fh = state["frontier"]["height"]
-                mine = momentums(lambda m, p: host(m, p, port=35999), 1, fh)
+                mine = momentums(lambda m, p: host(m, p, port=SYNC_PORT), 1, fh)
                 ref = momentums(host, 1, fh)
                 return ([m["hash"] for m in mine] == [m["hash"] for m in ref] and mine[-1]["hash"] == state["frontier"]["hash"]
                         and [m["hash"] for m in ref[:len(ms)]] == [m["hash"] for m in ms][:fh],

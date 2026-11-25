@@ -11,7 +11,7 @@ services:
     expose:
       - "35995"
     ports:
-      - "35991:35997" # HTTP RPC write endpoint for local integration tests
+      - "${DEVNET_PILLAR_HTTP_PORT:-35991}:35997" # HTTP RPC write endpoint for local integration tests
     volumes:
       - pillar-data:/root/.znn
     networks:
@@ -60,8 +60,8 @@ services:
     environment:
       ZNND_ROLE: rpc
     ports:
-      - "35997:35997" # HTTP RPC
-      - "35998:35998" # WS RPC
+      - "${DEVNET_HTTP_PORT:-35997}:35997" # HTTP RPC
+      - "${DEVNET_WS_PORT:-35998}:35998" # WS RPC
     volumes:
       - rpc-data:/root/.znn
     networks:
@@ -105,8 +105,8 @@ services:
     expose:
       - "35995"
     ports:
-      - "35999:35997" # HTTP RPC — watch catch-up via stats.syncInfo
-      - "36001:35998" # WS RPC
+      - "${DEVNET_SYNC_HTTP_PORT:-35999}:35997" # HTTP RPC — watch catch-up via stats.syncInfo
+      - "${DEVNET_SYNC_WS_PORT:-36001}:35998" # WS RPC
     networks:
       devnet:
         ipv4_address: 172.30.0.15

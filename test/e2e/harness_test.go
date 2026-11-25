@@ -77,7 +77,7 @@ func envNumber(key string, def uint64) uint64 {
 }
 
 func TestMain(m *testing.M) {
-	urls := strings.Split(envOr("E2E_RPC", "http://localhost:35997,http://localhost:35991"), ",")
+	urls := strings.Split(envOr("E2E_RPC", "http://localhost:"+envOr("DEVNET_HTTP_PORT", "35997")+",http://localhost:"+envOr("DEVNET_PILLAR_HTTP_PORT", "35991")), ",")
 	chainID := envNumber("E2E_CHAIN_ID", 69)
 	minHeight := envNumber("E2E_MIN_HEIGHT", 0)
 	if len(urls) < 2 {

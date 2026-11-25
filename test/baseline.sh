@@ -100,6 +100,7 @@ git status --porcelain > "$S/dirty.txt"; git diff HEAD > "$S/dirty.diff"
   echo "docker          $(docker version --format '{{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}}' 2>&1)"
   echo "compose         $(docker compose version --short 2>&1)"
   python3 --version
+  echo "host-ports      http ${DEVNET_HTTP_PORT:-35997} ws ${DEVNET_WS_PORT:-35998} pillar-http ${DEVNET_PILLAR_HTTP_PORT:-35991} sync-http ${DEVNET_SYNC_HTTP_PORT:-35999} sync-ws ${DEVNET_SYNC_WS_PORT:-36001}"
   # The clock of the machine the nodes run on. A pillar drops its slot when its
   # wall clock is even slightly behind the timer that woke it, which happens
   # while the clock is being corrected, for example after the host was
