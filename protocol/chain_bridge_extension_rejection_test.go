@@ -16,6 +16,7 @@ import (
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/protocol"
+	"github.com/zenon-network/go-zenon/protocol/downloader"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm"
 	"github.com/zenon-network/go-zenon/vm/constants"
@@ -865,20 +866,35 @@ func TestInsertChain_FarEmbeddedOversizedPatchAndFailureReceiptRetryBounds(t *te
 		common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 1)
 
 		// Subsequent retries during cooldown perform 0 historical lookups and
-		// return an unclassified deferral error (not SideChainRejected).
+		// return an ImportDeferredError carrying RetryAfter (so the downloader
+		// preserves the peer connection and retries after expiry).
 		for i := 2; i <= 4; i++ {
 			bad := cloneDetailed(genuine)
 			bad.AccountBlocks[userIdx].ChangesHash = types.NewHash([]byte{byte('0' + i), 'b', 'a', 'd'})
 			guarded.resetCounts()
 			_, err = bridge.InsertChain([]*nom.DetailedMomentum{bad})
-			if err == nil {
-				t.Fatalf("attempt %d: expected deferral error during cooldown", i)
+			var deferred *downloader.ImportDeferredError
+			if !errors.As(err, &deferred) || !errors.Is(err, downloader.ErrImportDeferred) {
+				t.Fatalf("attempt %d: expected ImportDeferredError during cooldown, got %v", i, err)
+			}
+			if !deferred.RetryAfter.Equal(now.Add(30 * time.Second)) {
+				t.Fatalf("attempt %d: RetryAfter=%v, want %v", i, deferred.RetryAfter, now.Add(30*time.Second))
 			}
 			if errors.As(err, &rejected) {
 				t.Fatalf("attempt %d: cooldown deferral must not be classified as SideChainRejected: %v", i, err)
 			}
 			common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 0)
 		}
+
+		// Even delivering the genuine momentum during cooldown returns
+		// ImportDeferredError (never dropping/quarantining the peer).
+		guarded.resetCounts()
+		_, err = bridge.InsertChain([]*nom.DetailedMomentum{cloneDetailed(genuine)})
+		var deferred *downloader.ImportDeferredError
+		if !errors.As(err, &deferred) || !errors.Is(err, downloader.ErrImportDeferred) {
+			t.Fatalf("expected genuine delivery during cooldown to return ImportDeferredError, got %v", err)
+		}
+		common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 0)
 
 		// Once cooldown elapses, the genuine momentum is eligible again and commits.
 		now = now.Add(31 * time.Second)
@@ -887,6 +903,215 @@ func TestInsertChain_FarEmbeddedOversizedPatchAndFailureReceiptRetryBounds(t *te
 		common.FailIfErr(t, err)
 		common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 1)
 		expectFrontierAt(t, z.Chain(), genuine.Momentum)
+	})
+
+	t.Run("matching failure receipt stays unclassified after sibling failure", func(t *testing.T) {
+		z := mock.NewMockZenon(t)
+		defer z.StopPanic()
+
+		held := types.PillarContract
+		holder := z.(interface{ HoldInsertsFor(*types.Address) })
+		holder.HoldInsertsFor(&held)
+		defer holder.HoldInsertsFor(nil)
+
+		send := z.InsertSendBlock(&nom.AccountBlock{
+			Address:   g.User1.Address,
+			ToAddress: types.PillarContract,
+			Data:      definition.ABIPillars.PackMethodPanic(definition.CollectRewardMethodName),
+		}, nil, mock.SkipVmChanges)
+
+		z.InsertNewMomentum()
+		confirmHeight, err := z.Chain().GetFrontierMomentumStore().GetBlockConfirmationHeight(send.Hash)
+		common.FailIfErr(t, err)
+		confirmMomentum := momentumAt(t, z.Chain(), confirmHeight)
+		z.InsertMomentumsTo(confirmHeight + 360)
+
+		genSupervisor := vm.NewSupervisor(z.Chain(), z.Consensus())
+		exec, err := genSupervisor.GenerateAutoReceive(send)
+		common.FailIfErr(t, err)
+		if !errors.Is(exec.ReturnedError, constants.ErrNothingToWithdraw) {
+			t.Fatalf("expected ErrNothingToWithdraw failure receipt, got %v", exec.ReturnedError)
+		}
+		userTx, err := genSupervisor.GenerateFromTemplate(&nom.AccountBlock{
+			BlockType:     nom.BlockTypeUserSend,
+			Address:       g.User1.Address,
+			ToAddress:     g.User2.Address,
+			TokenStandard: types.ZnnTokenStandard,
+			Amount:        big.NewInt(5),
+		}, g.User1.Signer)
+		common.FailIfErr(t, err)
+		genuine := buildSignedExtensionMomentum(t, z, exec.Transaction, userTx)
+
+		recvIdx, userIdx := -1, -1
+		for i, b := range genuine.AccountBlocks {
+			switch b.Address {
+			case types.PillarContract:
+				recvIdx = i
+			case g.User1.Address:
+				userIdx = i
+			}
+		}
+
+		guarded := &extensionGuardChain{Chain: z.Chain()}
+		cs := consensus.NewConsensus(db.NewMemDB(), guarded, true)
+		common.FailIfErr(t, cs.Init())
+		common.FailIfErr(t, cs.Start())
+		defer func() { common.FailIfErr(t, cs.Stop()) }()
+
+		supervisor := vm.NewSupervisor(guarded, cs)
+		bridge := protocol.NewChainBridge(guarded, cs, verifier.NewVerifier(guarded, cs, vm.CanonicalBasePlasma), supervisor)
+		now := time.Unix(2000000000, 0)
+		protocol.ConfigureEmbeddedReceiveCacheForTest(bridge, 64*1024, 30*time.Second, func() time.Time { return now })
+
+		// 1. Matching failure receipt succeeds while the later user sibling fails
+		// ApplyMomentum, restoring the pool. The cached bound must stay on the
+		// soft/unclassified path (NOT hasDeterministic).
+		badSibling := cloneDetailed(genuine)
+		badSibling.AccountBlocks[userIdx].ChangesHash = types.NewHash([]byte("fail-receipt-bad-sibling"))
+		guarded.resetCounts()
+		_, err = bridge.InsertChain([]*nom.DetailedMomentum{badSibling})
+		var rejected *protocol.SideChainRejected
+		if !errors.As(err, &rejected) || !errors.Is(err, verifier.ErrMChangesHashInvalid) {
+			t.Fatalf("expected SideChainRejected(ErrMChangesHashInvalid) for bad sibling, got %v", err)
+		}
+		common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 1)
+
+		// 2. A subsequent tampered ChangesHash on the failure receipt must NOT
+		// become a permanent SideChainRejected verdict under issue #239; during
+		// cooldown it returns ImportDeferredError with 0 historical lookups.
+		badReceipt := cloneDetailed(genuine)
+		badReceipt.AccountBlocks[recvIdx].ChangesHash = types.NewHash([]byte("fail-receipt-tampered"))
+		guarded.resetCounts()
+		_, err = bridge.InsertChain([]*nom.DetailedMomentum{badReceipt})
+		if errors.As(err, &rejected) {
+			t.Fatalf("matching failure receipt must not turn later mismatch into SideChainRejected: %v", err)
+		}
+		if !errors.Is(err, downloader.ErrImportDeferred) {
+			t.Fatalf("expected ImportDeferredError during cooldown, got %v", err)
+		}
+		common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 0)
+
+		// 3. The genuine momentum reuses the cached patchDump (0 historical lookups)
+		// and commits cleanly.
+		guarded.resetCounts()
+		_, err = bridge.InsertChain([]*nom.DetailedMomentum{cloneDetailed(genuine)})
+		common.FailIfErr(t, err)
+		common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 0)
+		expectFrontierAt(t, z.Chain(), genuine.Momentum)
+	})
+
+	t.Run("historical multi-receive unhashed predecessor plasma mutation stays bounded", func(t *testing.T) {
+		savedRuleHeight := definition.CommunitySporkAddressRenewalStartHeight
+		definition.CommunitySporkAddressRenewalStartHeight = 1 << 40
+		defer func() { definition.CommunitySporkAddressRenewalStartHeight = savedRuleHeight }()
+
+		z := mock.NewMockZenon(t)
+		defer z.StopPanic()
+
+		held := types.PillarContract
+		holder := z.(interface{ HoldInsertsFor(*types.Address) })
+		holder.HoldInsertsFor(&held)
+		defer holder.HoldInsertsFor(nil)
+
+		send1 := z.InsertSendBlock(&nom.AccountBlock{
+			Address:       g.Pillar4.Address,
+			ToAddress:     types.PillarContract,
+			Data:          definition.ABIPillars.PackMethodPanic(definition.DepositQsrMethodName),
+			TokenStandard: types.QsrTokenStandard,
+			Amount:        big.NewInt(10 * g.Zexp),
+		}, nil, mock.SkipVmChanges)
+		send2 := z.InsertSendBlock(&nom.AccountBlock{
+			Address:       g.Pillar4.Address,
+			ToAddress:     types.PillarContract,
+			Data:          definition.ABIPillars.PackMethodPanic(definition.DepositQsrMethodName),
+			TokenStandard: types.QsrTokenStandard,
+			Amount:        big.NewInt(10 * g.Zexp),
+		}, nil, mock.SkipVmChanges)
+
+		z.InsertNewMomentum()
+		confirmHeight, err := z.Chain().GetFrontierMomentumStore().GetBlockConfirmationHeight(send1.Hash)
+		common.FailIfErr(t, err)
+		confirmMomentum := momentumAt(t, z.Chain(), confirmHeight)
+		z.InsertMomentumsTo(confirmHeight + 360)
+
+		genSupervisor := vm.NewSupervisor(z.Chain(), z.Consensus())
+		insert := z.Chain().AcquireInsert("generate sequential stalled receives below renewal")
+		snap := z.Chain().SnapshotUncommitted(insert, []types.Address{types.PillarContract})
+		exec1, err := genSupervisor.GenerateAutoReceive(send1)
+		common.FailIfErr(t, err)
+		p1Dump := exec1.Transaction.Changes.Dump()
+		common.FailIfErr(t, z.Chain().ForceAddAccountBlockTransaction(insert, exec1.Transaction))
+		exec2, err := genSupervisor.GenerateAutoReceive(send2)
+		common.FailIfErr(t, err)
+		p2Dump := exec2.Transaction.Changes.Dump()
+		common.FailIfErr(t, z.Chain().RestoreUncommitted(insert, snap))
+		insert.Unlock()
+
+		p1, err := db.NewPatchFromDump(p1Dump)
+		common.FailIfErr(t, err)
+		p2, err := db.NewPatchFromDump(p2Dump)
+		common.FailIfErr(t, err)
+		genuine := buildSignedExtensionMomentum(t, z,
+			&nom.AccountBlockTransaction{Block: exec1.Transaction.Block, Changes: p1},
+			&nom.AccountBlockTransaction{Block: exec2.Transaction.Block, Changes: p2},
+		)
+
+		guarded := &extensionGuardChain{Chain: z.Chain()}
+		cs := consensus.NewConsensus(db.NewMemDB(), guarded, true)
+		common.FailIfErr(t, cs.Init())
+		common.FailIfErr(t, cs.Start())
+		defer func() { common.FailIfErr(t, cs.Stop()) }()
+
+		supervisor := vm.NewSupervisor(guarded, cs)
+		bridge := protocol.NewChainBridge(guarded, cs, verifier.NewVerifier(guarded, cs, vm.CanonicalBasePlasma), supervisor)
+		now := time.Unix(2000000000, 0)
+		protocol.ConfigureEmbeddedReceiveCacheForTest(bridge, 64*1024, 30*time.Second, func() time.Time { return now })
+
+		// Mutate recv1's unhashed BasePlasma (changing recv1's pool patch hash
+		// below the renewal height) while tampering recv2's ChangesHash across
+		// retries: recv2's reconstruction bound must NOT depend on prevPatchHash.
+		attempt1 := cloneDetailed(genuine)
+		attempt1.AccountBlocks[0].BasePlasma = 101
+		attempt1.AccountBlocks[1].ChangesHash = types.NewHash([]byte("multi-recv-bad-1"))
+		guarded.resetCounts()
+		_, err = bridge.InsertChain([]*nom.DetailedMomentum{attempt1})
+		var rejected *protocol.SideChainRejected
+		if !errors.As(err, &rejected) || !errors.Is(err, constants.ErrAutoReceiveChangesHashMismatch) {
+			t.Fatalf("attempt 1: expected SideChainRejected(ErrAutoReceiveChangesHashMismatch), got %v", err)
+		}
+		common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 2)
+
+		attempt2 := cloneDetailed(genuine)
+		attempt2.AccountBlocks[0].BasePlasma = 202
+		attempt2.AccountBlocks[1].ChangesHash = types.NewHash([]byte("multi-recv-bad-2"))
+		guarded.resetCounts()
+		_, err = bridge.InsertChain([]*nom.DetailedMomentum{attempt2})
+		if !errors.As(err, &rejected) || !errors.Is(err, constants.ErrAutoReceiveChangesHashMismatch) {
+			t.Fatalf("attempt 2: expected SideChainRejected(ErrAutoReceiveChangesHashMismatch), got %v", err)
+		}
+		// recv1 reuses its patchDump (0 lookups) and recv2 hits the bound
+		// keyed without prevPatchHash (0 lookups).
+		common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 0)
+
+		// Even when recv2 matches its expected hashes but recv1's mutated
+		// BasePlasma misses recv2's patchDump key, cooldown bounds recv2.
+		attempt3 := cloneDetailed(genuine)
+		attempt3.AccountBlocks[0].BasePlasma = 303
+		guarded.resetCounts()
+		_, err = bridge.InsertChain([]*nom.DetailedMomentum{attempt3})
+		if !errors.As(err, &rejected) || !errors.Is(err, verifier.ErrMChangesHashInvalid) {
+			t.Fatalf("attempt 3: expected SideChainRejected(ErrMChangesHashInvalid), got %v", err)
+		}
+		common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 1)
+
+		attempt4 := cloneDetailed(genuine)
+		attempt4.AccountBlocks[0].BasePlasma = 404
+		guarded.resetCounts()
+		_, err = bridge.InsertChain([]*nom.DetailedMomentum{attempt4})
+		if !errors.Is(err, downloader.ErrImportDeferred) {
+			t.Fatalf("attempt 4: expected ImportDeferredError under cooldown, got %v", err)
+		}
+		common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 0)
 	})
 
 	t.Run("failed contract receipt cooldown and genuine import", func(t *testing.T) {
@@ -985,4 +1210,36 @@ func TestInsertChain_FarEmbeddedOversizedPatchAndFailureReceiptRetryBounds(t *te
 		common.Expect(t, guarded.getMomentumStoreByID[confirmMomentum.Identifier()], 1)
 		expectFrontierAt(t, z.Chain(), genuine.Momentum)
 	})
+}
+
+// A direct InsertChain caller supplying a prefetched block with a nil
+// DescendantBlocks entry must be rejected in validatePrefetchedBlocks before
+// firstRemembered serializes the block (avoiding a nil-pointer panic).
+func TestInsertChain_NilDescendantRejectedBeforeSerialization(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(4)
+
+	frontier := momentumAt(t, z.Chain(), 4)
+	block := &nom.AccountBlock{
+		Version:          1,
+		ChainIdentifier:  frontier.ChainIdentifier,
+		BlockType:        nom.BlockTypeContractReceive,
+		Address:          types.StakeContract,
+		Height:           1,
+		Hash:             types.NewHash([]byte("nil-descendant")),
+		DescendantBlocks: []*nom.AccountBlock{nil},
+	}
+	m := unsignedMomentum(frontier, frontier.Height+1)
+	m.Content = nom.NewMomentumContent([]*nom.AccountBlock{block})
+	m.Hash = m.ComputeHash()
+
+	_, bridge := newSideChainBridge(z)
+	_, err := bridge.InsertChain([]*nom.DetailedMomentum{{
+		Momentum:      m,
+		AccountBlocks: []*nom.AccountBlock{block},
+	}})
+	if err == nil {
+		t.Fatal("expected nil descendant block to be rejected")
+	}
 }
