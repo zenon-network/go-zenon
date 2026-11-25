@@ -275,7 +275,7 @@ func (pm *ProtocolManager) synchronise(peer *peer) {
 	if !attempted {
 		return
 	}
-	pm.peers.markTurn(peer.id)
+	pm.peers.markTurn(peer)
 	// Retrieval has ended; wait until the blocks the session fetched have
 	// been imported or discarded before judging it.
 	for pm.downloader.ImportPending() {
@@ -378,25 +378,43 @@ func (s *syncSession) drops() (origin, other bool) {
 	return s.originDropped, s.otherDropped
 }
 
+// childAdmissionCap bounds the nodes childAdmission remembers for one
+// head. Once it is full, further children of that head are declined
+// rather than older entries evicted, which would let an evicted node in
+// again; they still arrive once the node is in sync or by download.
+const childAdmissionCap = 1024
+
 // childAdmission remembers which nodes have had a child of the local head
 // handed to the fetcher while the node was not in sync. It is keyed by
 // node id, which outlives a connection, and forgets everything when the
-// head moves.
+// head moves up.
 type childAdmission struct {
 	mu     sync.Mutex
+	height uint64
 	parent types.Hash
 	nodes  map[string]struct{}
 }
 
-// admit reports whether node id may hand over a child of parent, and
-// records it if so.
-func (c *childAdmission) admit(id string, parent types.Hash) bool {
+// admit reports whether node id may hand over a child of parent, the
+// local head at height, and records it if so. A head below the one last
+// seen is a stale reading: it does not reset the table, and its child is
+// declined.
+func (c *childAdmission) admit(id string, height uint64, parent types.Hash) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.nodes == nil || c.parent != parent {
+	switch {
+	case c.nodes == nil || height > c.height:
+		c.height, c.parent, c.nodes = height, parent, make(map[string]struct{})
+	case height < c.height:
+		return false
+	case parent != c.parent:
+		// The head was replaced at the same height.
 		c.parent, c.nodes = parent, make(map[string]struct{})
 	}
 	if _, ok := c.nodes[id]; ok {
+		return false
+	}
+	if len(c.nodes) >= childAdmissionCap {
 		return false
 	}
 	c.nodes[id] = struct{}{}

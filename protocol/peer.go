@@ -445,13 +445,15 @@ func (ps *peerSet) bestPeerWhere(eligible func(*peer) bool) *peer {
 	return bestPeer
 }
 
-// markTurn stamps the registered peer id as served now: it goes behind
-// every peer waiting for a turn (see leastRecentlyServedWhere).
-func (ps *peerSet) markTurn(id string) {
+// markTurn stamps p as served now: it goes behind every peer waiting for a
+// turn (see leastRecentlyServedWhere). Nothing is stamped when p is no
+// longer registered, so a later connection of the same node, which has
+// had no session, keeps its place.
+func (ps *peerSet) markTurn(p *peer) {
 	ps.lock.Lock()
 	defer ps.lock.Unlock()
 
-	if p := ps.peers[id]; p != nil {
+	if ps.peers[p.id] == p {
 		ps.turns++
 		p.turn = ps.turns
 	}

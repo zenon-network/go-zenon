@@ -989,6 +989,15 @@ func (d *Downloader) fetchBlocks(from uint64) error {
 			} else if d.queue.Pending() > 0 || d.queue.InFlight() > 0 {
 				if time.Since(lastHandover) > stallTimeout {
 					inFlight := d.queue.InFlight()
+					// A cancellation that reset the queue before the read
+					// reports nothing in flight, which would blame the
+					// origin. cancel closes cancelCh before it resets the
+					// queue, so this sees any reset the count reflects.
+					select {
+					case <-d.cancelCh:
+						return errCancelBlockFetch
+					default:
+					}
 					log.Warn("Block download stalled: no progress", "pending", d.queue.Pending(), "in-flight", inFlight, "last-handover", lastHandover)
 					return &stallNoProgressError{inFlight: inFlight}
 				}

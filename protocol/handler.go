@@ -701,20 +701,21 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		child := height == head.Height+1 && detailed.Momentum.PreviousHash == head.Hash
 		enqueue := pm.SyncInfo().State == SyncDone
 		if !enqueue && child && !pm.downloader.Processing() {
-			enqueue = pm.gossipChildren.admit(p.id, head.Hash)
+			enqueue = pm.gossipChildren.admit(p.id, head.Height, head.Hash)
 		}
 		if enqueue {
 			pm.fetcher.Enqueue(p.id, detailed)
 		}
 		if height > p.Td() {
 			p.SetTd(height)
-			// A momentum above the local head that is not its child shows
-			// a gap, or a branch, the fetcher cannot import; ask the sync
-			// worker for a session. A child needs none.
-			// TODO: Schedule a sync to cover potential gaps (this needs proto update)
-			if !child && height > head.Height {
-				pm.requestSync()
-			}
+		}
+		// A momentum above the local head that is not its child shows a
+		// gap, or a branch, the fetcher cannot import; ask the sync worker
+		// for a session, also when the peer advertised as much already. A
+		// child needs none.
+		// TODO: Schedule a sync to cover potential gaps (this needs proto update)
+		if !child && height > head.Height {
+			pm.requestSync()
 		}
 
 	case TxMsg:

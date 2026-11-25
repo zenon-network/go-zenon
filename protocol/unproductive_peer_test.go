@@ -347,6 +347,11 @@ func TestBusyDownloaderKeepsPeer(t *testing.T) {
 		pm.downloader.Synchronise(running.id, running.Head(), running.Td())
 		close(done)
 	}()
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		<-done
+	})
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -356,7 +361,7 @@ func TestBusyDownloaderKeepsPeer(t *testing.T) {
 	if pm.unproductive.active(waiting.id) {
 		t.Fatal("a sync refused as busy passed the peer over")
 	}
-	close(release)
+	releaseOnce.Do(func() { close(release) })
 	<-done
 }
 
@@ -511,6 +516,11 @@ func TestJudgementWaitsForPendingImports(t *testing.T) {
 		pm.synchronise(p)
 		close(done)
 	}()
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(bridge.release) })
+		<-done
+	})
 	select {
 	case <-bridge.entered:
 	case <-time.After(10 * time.Second):
@@ -527,7 +537,7 @@ func TestJudgementWaitsForPendingImports(t *testing.T) {
 	if pm.unproductive.active(p.id) {
 		t.Fatal("the session was judged while the import worker held its blocks")
 	}
-	close(bridge.release)
+	releaseOnce.Do(func() { close(bridge.release) })
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -729,7 +739,7 @@ func TestEqualHeightTieGoesToWaitingPeer(t *testing.T) {
 	if got := pm.syncPeer(); got != first {
 		t.Fatalf("sync peer = %v, want the peer registered first", got)
 	}
-	pm.peers.markTurn(first.id)
+	pm.peers.markTurn(first)
 	if got := pm.syncPeer(); got != second {
 		t.Fatalf("sync peer after the first was served = %v, want the other", got)
 	}
@@ -807,13 +817,18 @@ func TestChildAdmittedOncePerPeerWhileSyncing(t *testing.T) {
 	waitImports(2)
 }
 
-// failingBridge fails every download import with a verdict the downloader
-// holds against nobody.
+// failingBridge holds every download import until released, then fails it
+// with a verdict the downloader holds against nobody.
 type failingBridge struct {
 	readinessBridge
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
 }
 
 func (b *failingBridge) InsertChainMoved([]*nom.DetailedMomentum) (int, bool, error) {
+	b.once.Do(func() { close(b.entered) })
+	<-b.release
 	return 0, false, fmt.Errorf("refused: %w", downloader.ErrBatchInconclusive)
 }
 
@@ -823,12 +838,42 @@ func (b *failingBridge) InsertChainMoved([]*nom.DetailedMomentum) (int, bool, er
 // another path moved; peers are still chosen by how long they have waited.
 func TestImportFailureAfterCompleteSessionKeepsOrigin(t *testing.T) {
 	useReadinessClock(t)
-	bridge := &failingBridge{readinessBridge: readinessBridge{height: 10}}
+	bridge := &failingBridge{readinessBridge: readinessBridge{height: 10}, entered: make(chan struct{}), release: make(chan struct{})}
 	pm := NewProtocolManager(1, 1, bridge)
 	t.Cleanup(pm.Stop)
 	p := addPeer(t, pm, 1, 1_000_000)
 	servingPeer(t, pm, p, testChain(3))
-	pm.synchronise(p)
+
+	done := make(chan struct{})
+	go func() {
+		pm.synchronise(p)
+		close(done)
+	}()
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(bridge.release) })
+		<-done
+	})
+	// Retrieval completes while the import is held, so the failure comes
+	// after a session that ended without an error.
+	select {
+	case <-bridge.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the session did not reach the import")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for pm.downloader.Synchronising() {
+		if time.Now().After(deadline) {
+			t.Fatal("retrieval did not complete")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	releaseOnce.Do(func() { close(bridge.release) })
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the session was not judged after the import")
+	}
 	if pm.unproductive.active(p.id) {
 		t.Fatal("the peer was passed over for an import failure held against nobody")
 	}
@@ -904,4 +949,98 @@ func TestChildAdmissionByNodeAndParent(t *testing.T) {
 	again, app2 := connect(1, 10)
 	gossip(again, app2, 1_700_000_011)
 	waitImports(1)
+}
+
+// A momentum showing a gap asks for a session also when its sender had
+// advertised that much already.
+func TestGapFromPeerAlreadyAheadRequestsSync(t *testing.T) {
+	useReadinessClock(t)
+	parent := &nom.Momentum{Height: 10, TimestampUnix: 1_700_000_000}
+	parent.Hash = parent.ComputeHash()
+	pm := NewProtocolManager(1, 1, &gossipBridge{parent: parent, inserted: make(chan struct{})})
+	t.Cleanup(pm.Stop)
+	pm.fetcher.Start()
+	t.Cleanup(pm.fetcher.Stop)
+
+	app, net := p2p.MsgPipe()
+	t.Cleanup(func() { _ = app.Close() })
+	var nodeID discover.NodeID
+	nodeID[0] = 1
+	relay := newPeer(1, 1, &readinessPeer{id: nodeID}, net)
+	relay.SetTd(15)
+	if err := pm.peers.Register(relay); err != nil {
+		t.Fatal(err)
+	}
+	block := &nom.Momentum{Height: 13, PreviousHash: types.Hash{1}, TimestampUnix: parent.TimestampUnix + 30}
+	block.Hash = block.ComputeHash()
+	sent := make(chan error, 1)
+	go func() { sent <- p2p.Send(app, NewBlockMsg, &nom.DetailedMomentum{Momentum: block}) }()
+	if err := pm.handleMsg(relay); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	if relay.Td() != 15 {
+		t.Fatalf("relay Td = %d, want 15 kept", relay.Td())
+	}
+	select {
+	case <-pm.syncReqCh:
+	default:
+		t.Fatal("a gap from a peer already advertising more did not ask for a session")
+	}
+}
+
+// A turn is stamped on the connection that was served only: a later
+// connection of the same node keeps its place.
+func TestMarkTurnStampsServedConnectionOnly(t *testing.T) {
+	ps := newPeerSet()
+	served := newStubPeer(1)
+	if err := ps.Register(served); err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.Unregister(served.id); err != nil {
+		t.Fatal(err)
+	}
+	again := newStubPeer(1)
+	if err := ps.Register(again); err != nil {
+		t.Fatal(err)
+	}
+	other := newStubPeer(2)
+	if err := ps.Register(other); err != nil {
+		t.Fatal(err)
+	}
+	ps.markTurn(served)
+	if got := ps.leastRecentlyServedWhere(nil); got != again {
+		t.Fatalf("least recently served = %v, want the node's new connection", got)
+	}
+}
+
+// The child-admission table is reset only by a head above the last one
+// seen, declines a child of a stale head, and stops admitting at its cap
+// without evicting anyone.
+func TestChildAdmissionStaleHeadAndCap(t *testing.T) {
+	var c childAdmission
+	h10, h11 := types.Hash{10}, types.Hash{11}
+	if !c.admit("a", 11, h11) {
+		t.Fatal("first child of the head declined")
+	}
+	if c.admit("b", 10, h10) {
+		t.Fatal("a child of a stale head admitted")
+	}
+	if c.admit("a", 11, h11) {
+		t.Fatal("a stale reading reset the table: the node got a second child")
+	}
+	for i := 0; i < childAdmissionCap; i++ {
+		c.admit(fmt.Sprintf("n%d", i), 11, h11)
+	}
+	if c.admit("late", 11, h11) {
+		t.Fatal("admitted past the cap")
+	}
+	if c.admit("a", 11, h11) {
+		t.Fatal("a node already admitted got in again at the cap")
+	}
+	if !c.admit("late", 12, types.Hash{12}) {
+		t.Fatal("the first child of a new head was declined")
+	}
 }
