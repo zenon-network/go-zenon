@@ -2267,7 +2267,12 @@ func TestLevelDBManagerL2CacheByteBudget(t *testing.T) {
 			if !ok {
 				t.Fatalf("key %v missing from l2Cache", k)
 			}
-			total += v.(*rollbackCache).size
+			entry := v.(*rollbackCache)
+			actualSize := memDBSize(entry.raw)
+			if entry.size != actualSize {
+				t.Fatalf("l2 entry %v recorded size %d != memdb size %d", k, entry.size, actualSize)
+			}
+			total += actualSize
 		}
 		return total
 	}
@@ -2337,6 +2342,85 @@ func TestLevelDBManagerL2CacheByteBudget(t *testing.T) {
 	if m.l2Bytes <= 0 {
 		t.Fatal("expected early[3] to be cached once budget is restored")
 	}
+	common.FailIfErr(t, m.Pop())
+	common.Expect(t, m.l2Cache.Len(), 0)
+	common.Expect(t, m.l2Bytes, 0)
+}
+
+// TestLevelDBManagerL2CacheInterruptedReplayKeepsAccountingConsistent pins that
+// detaching a cached overlay before replaying new rollbacks into it prevents a
+// mid-replay panic (recovered by a caller) from leaving an enlarged overlay in
+// l2Cache under its stale pre-replay size.
+func TestLevelDBManagerL2CacheInterruptedReplayKeepsAccountingConsistent(t *testing.T) {
+	m := mustNewLevelDBManager(t, t.TempDir()).(*ldbManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+
+	var early [2]types.HashHeight
+	for i := 0; i < len(early); i++ {
+		common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), fmt.Sprintf("early-%d", i), fmt.Sprintf("val-%d", i))))
+		early[i] = GetFrontierIdentifier(m.Frontier())
+	}
+	for i := 0; i < maximumCacheHeightDifference+len(early)+2; i++ {
+		common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), fmt.Sprintf("pad-%04d", i), "0123456789abcdef0123456789abcdef")))
+	}
+
+	// Populate both early[0] and early[1] in l2Cache.
+	expectValue(t, m.Get(early[0]), "early-0", "val-0")
+	expectValue(t, m.Get(early[1]), "early-1", "val-1")
+	if !m.l2Cache.Contains(early[0]) || !m.l2Cache.Contains(early[1]) {
+		t.Fatal("expected early[0] and early[1] to be cached in l2Cache")
+	}
+
+	// Advance frontier by two entries, then corrupt the second rollback record
+	// so replaying early[0] mutates its overlay on the first step and panics
+	// on the second step.
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "step-1", "0123456789abcdef0123456789abcdef")))
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "step-2", "0123456789abcdef0123456789abcdef")))
+	frontierHeight := GetFrontierIdentifier(m.Frontier()).Height
+	badKey := common.JoinBytes(rollbackByte, common.Uint64ToBytes(frontierHeight))
+	savedRollback, err := m.ldb.Get(badKey, nil)
+	common.FailIfErr(t, err)
+	common.FailIfErr(t, m.ldb.Put(badKey, []byte("corrupt-rollback-payload"), nil))
+
+	var panicked bool
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		m.Get(early[0])
+	}()
+	if !panicked {
+		t.Fatal("expected corrupted rollback record to panic during Get replay")
+	}
+
+	// Restore the rollback record before further assertions and cleanup.
+	common.FailIfErr(t, m.ldb.Put(badKey, savedRollback, nil))
+
+	if m.l2Cache.Contains(early[0]) {
+		t.Fatal("interrupted replay must not leave early[0] cached in l2Cache")
+	}
+	if !m.l2Cache.Contains(early[1]) {
+		t.Fatal("expected untouched early[1] to remain resident in l2Cache")
+	}
+	actualBytes := 0
+	for _, k := range m.l2Cache.Keys() {
+		v, ok := m.l2Cache.Peek(k)
+		if !ok {
+			t.Fatalf("key %v missing from l2Cache", k)
+		}
+		entry := v.(*rollbackCache)
+		actual := memDBSize(entry.raw)
+		if entry.size != actual {
+			t.Fatalf("l2 entry %v recorded size %d != memdb size %d", k, entry.size, actual)
+		}
+		actualBytes += actual
+	}
+	common.Expect(t, m.l2Bytes, actualBytes)
+
+	// Re-reading early[0] after restoring the rollback succeeds and Pop resets l2Bytes to 0.
+	expectValue(t, m.Get(early[0]), "early-0", "val-0")
 	common.FailIfErr(t, m.Pop())
 	common.Expect(t, m.l2Cache.Len(), 0)
 	common.Expect(t, m.l2Bytes, 0)

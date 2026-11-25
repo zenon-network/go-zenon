@@ -616,10 +616,15 @@ func (m *ldbManager) Get(identifier types.HashHeight) DB {
 	var rawChanges db
 	var toIdentifier types.HashHeight
 
+	// Detach any cached overlay before mutating it in place so an interrupted
+	// rollback replay (e.g., a recovered panic) cannot leave a grown overlay
+	// cached under its stale pre-replay size.
 	if cache, ok := m.l1Cache.Get(identifier); ok {
+		m.l1Cache.Remove(identifier)
 		toIdentifier = cache.(*rollbackCache).frontier
 		rawChanges = cache.(*rollbackCache).raw
 	} else if cache, ok := m.l2Cache.Get(identifier); ok {
+		m.l2Cache.Remove(identifier)
 		toIdentifier = cache.(*rollbackCache).frontier
 		rawChanges = cache.(*rollbackCache).raw
 	} else {
@@ -636,7 +641,6 @@ func (m *ldbManager) Get(identifier types.HashHeight) DB {
 
 	size := memDBSize(rawChanges)
 	if absDiff(identifier.Height, frontierIdentifier.Height) < maximumCacheHeightDifference {
-		m.l2Cache.Remove(identifier)
 		m.l1Cache.Add(identifier, &rollbackCache{
 			frontier: frontierIdentifier,
 			raw:      rawChanges,
@@ -647,8 +651,6 @@ func (m *ldbManager) Get(identifier types.HashHeight) DB {
 		// must not stay pinned in l1Cache as it grows. Far overlays are kept
 		// in l2Cache only within l2MaxBytes so deep historical lookups cannot
 		// ratchet process memory.
-		m.l1Cache.Remove(identifier)
-		m.l2Cache.Remove(identifier)
 		if size <= m.l2MaxBytes {
 			for m.l2Bytes+size > m.l2MaxBytes {
 				if _, _, ok := m.l2Cache.RemoveOldest(); !ok {
