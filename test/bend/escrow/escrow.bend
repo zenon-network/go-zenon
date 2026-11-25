@@ -17,7 +17,8 @@ import ../ledger/ledger.bend as L
 #   HtlcInfo.Delete, PtlcInfo.Delete             the entry leaves the list
 #   StakeMethod, FuseMethod                      Create, with the maker as payee
 #   CancelFuseMethod (FusionInfo.Delete)         Reclaim
-#   CancelStakeMethod (StakeInfo.Amount = 0)     Cancel
+#   CancelStakeMethod (before DynamicPlasmaSpork) Cancel
+#   CancelStakeMethod (from DynamicPlasmaSpork)  Reclaim (active entries)
 #   VM.rollbackEmbedded (the refund)             Failed
 #   the timestamp of the confirming momentum     now
 #
@@ -36,9 +37,10 @@ type Entry is Data:
 #   Claim is PTLC's unlock: key is whether the caller shows a signature of
 #   the entry's point over this entry and the account to, and to is paid.
 #   Reclaim pays the maker from the expiry on and removes the entry: HTLC,
-#   PTLC, and the cancel of a fusion.
-#   Cancel is the cancel of a stake: it pays the maker from the expiry on
-#   and leaves the entry in place, holding nothing.
+#   PTLC, the cancel of a fusion, and (for active entries) a stake cancel
+#   from DynamicPlasmaSpork.
+#   Cancel is the pre-DynamicPlasmaSpork cancel of a stake: it pays the
+#   maker from the expiry on and leaves the entry in place, holding nothing.
 #   Failed is a call to any contract that carries an amount and that the
 #   contract refuses: the amount leaves the caller with the call and comes
 #   back with the refund.
@@ -146,9 +148,9 @@ def Entries.reclaim(+es: +List<Entry>, +want: Nat, +from: Nat, +now: Nat) -> Fou
     case Con{Entry{id, maker, payee, amount, expiry}, t}:
       Entries.pick(Nat.is_eq(id, want), Entries.here(Entries.may_reclaim(from, maker, now, expiry), maker, amount, t), Entries.skip(Entry{id, maker, payee, amount, expiry}, Entries.reclaim(t, want, from, now)))
 
-# Cancel: the maker is paid what the entry holds, and the entry stays,
-# holding nothing. A cancel of an entry that was cancelled before is
-# accepted too, and pays zero.
+# Cancel (pre-DynamicPlasmaSpork): the maker is paid what the entry holds,
+# and the entry stays, holding nothing. Before DynamicPlasmaSpork a cancel
+# of an entry that was cancelled before is accepted too, and pays zero.
 def Entries.cancel(+es: +List<Entry>, +want: Nat, +from: Nat, +now: Nat) -> Found:
   match es:
     case Nil{}:

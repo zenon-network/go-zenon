@@ -374,10 +374,11 @@ law cancel_only_by_the_maker:
 law covered_failed_call_is_accepted:
   {E.step(start(), E.Failed{0n, 6n}) == E.Accepted{start()} : E.Out}
 
-# LAW 33. One example of a second cancel: in the stake story of LAW 11 it
-# is accepted, pays zero and leaves the vault as the first cancel left it.
-# (LAW 11 alone would also hold if the second cancel were refused. That
-# every later cancel pays nothing is LAW 12; this is one case of it being
-# accepted.)
+# LAW 33. One example of a second cancel before DynamicPlasmaSpork: in the
+# stake story of LAW 11 it is accepted, pays zero and leaves the vault as
+# the first cancel left it. (LAW 11 alone would also hold if the second
+# cancel were refused. That every later cancel pays nothing is LAW 12; this
+# is one case of it being accepted before the spork. From DynamicPlasmaSpork
+# a second cancel is refused with ErrStakeAlreadyRevoked, matching Reclaim.)
 law second_cancel_is_accepted:
   {E.step(E.run([E.Create{0n, 0n, 6n, 120n}, E.Tick{}, E.Tick{}, E.Cancel{0n, 0n}], start()), E.Cancel{0n, 0n}) == E.Accepted{E.Vault{[10n, 0n, 0n], [E.Entry{0n, 0n, 0n, 0n, 120n}], 120n, 1n}} : E.Out}

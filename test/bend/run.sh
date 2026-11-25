@@ -39,7 +39,7 @@ WITNESSED="ledger escrow"
 # these, and each must be seen to pass: a test that is renamed, removed or
 # added without a word here fails the step. For step 6 each has the number
 # of steps in its list and how far past DEPTH it goes.
-NODE_TESTS="TestLedgerModelMatchesNode TestReplacementSpendsOnce TestRollbackKeepsTotal TestEscrowModelMatchesHtlc TestEscrowModelMatchesPtlc TestEscrowModelMatchesStake TestEscrowModelMatchesFusion"
+NODE_TESTS="TestLedgerModelMatchesNode TestReplacementSpendsOnce TestRollbackKeepsTotal TestEscrowModelMatchesHtlc TestEscrowModelMatchesPtlc TestEscrowModelMatchesStake TestEscrowModelMatchesStakeAfterSpork TestEscrowModelMatchesFusion"
 # Also the letter its scenarios' names begin with.
 EXHAUSTIVE_TESTS="TestExhaustiveLedger:11:0:x TestExhaustiveLedgerAfterSend:11:0:y TestExhaustiveHtlc:9:0:x TestExhaustivePtlc:9:0:x TestExhaustiveStake:6:1:x TestExhaustiveFusion:6:1:x"
 # The tests the go tool finds in the package, one name a line: its own

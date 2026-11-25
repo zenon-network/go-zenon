@@ -234,7 +234,7 @@ func exhaustiveLock(t *testing.T, stake bool, id string) {
 			for i, v := range seq {
 				steps[i] = alphabet[v]
 			}
-			results = append(results, runLock(t, stake, seqName(seq), steps))
+			results = append(results, runLock(t, stake, false, seqName(seq), steps))
 		}
 		var src strings.Builder
 		src.WriteString(escrowHeader)
