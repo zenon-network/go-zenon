@@ -275,6 +275,53 @@ func TestRPCLedger_PublishRawTransactionReportsPoolRejection(t *testing.T) {
 	common.ExpectTrue(t, errors.Is(err, chain.ErrFailedToAddAccountBlockTransaction))
 }
 
+// PublishRawTransaction must reject blocks whose address belongs to the
+// embedded-contract address class before running the supervisor/verifier.
+func TestRPCLedger_PublishRawTransactionRejectsEmbeddedAddress(t *testing.T) {
+	z := mock.NewMockZenon(t)
+	defer z.StopPanic()
+	z.InsertMomentumsTo(5)
+	ledgerApi := api.NewLedgerApi(z)
+
+	m1, err := z.Chain().GetFrontierMomentumStore().GetMomentumByHeight(1)
+	common.FailIfErr(t, err)
+
+	cases := []struct {
+		name      string
+		address   types.Address
+		blockType uint64
+	}{
+		{
+			name:      "contract receive on stake contract",
+			address:   types.StakeContract,
+			blockType: nom.BlockTypeContractReceive,
+		},
+		{
+			name:      "user send on arbitrary embedded-class address",
+			address:   types.Address{types.ContractAddrByte, 0xaa, 0xbb},
+			blockType: nom.BlockTypeUserSend,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			block := &api.AccountBlock{}
+			block.Version = 1
+			block.ChainIdentifier = z.Chain().ChainIdentifier()
+			block.BlockType = tc.blockType
+			block.Address = tc.address
+			block.Height = 1
+			block.MomentumAcknowledged = m1.Identifier()
+			block.TokenStandard = types.ZnnTokenStandard
+			block.Amount = common.Big0
+			err := ledgerApi.PublishRawTransaction(block)
+			if !errors.Is(err, api.ErrEmbeddedAddressNotAllowed) {
+				t.Fatalf("expected ErrEmbeddedAddressNotAllowed, got %v", err)
+			}
+		})
+	}
+}
+
 func ExpectGetFrontierAccountBlock(t *testing.T, z mock.MockZenon) {
 	ledgerApi := api.NewLedgerApi(z)
 	common.Json(ledgerApi.GetFrontierAccountBlock(g.User1.Address)).SubJson(&Height{}).Equals(t, `
