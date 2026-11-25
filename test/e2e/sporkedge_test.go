@@ -102,7 +102,7 @@ func TestSporkEdge(t *testing.T) {
 
 	t.Run("S-7_ack_below_the_highest_enforcement_refused", func(t *testing.T) {
 		cover(t, "E7", "error", "chain.ErrStaleMomentumAcknowledged")
-		cover(t, "E7", "verifier-rule", "account_block.acknowledgementRecency")
+		cover(t, "E7", "verifier-rule", "accountBlockVerifier.acknowledgementRecency")
 		cover(t, "E7", "spork", topName)
 		err := tryTransfer(a, b.Address, znn, units(1), acking(enf-1))
 		mustReject(t, err, "momentum-acknowledged")
