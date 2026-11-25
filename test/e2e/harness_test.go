@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"math/big"
 	"os"
@@ -114,7 +115,7 @@ func TestMain(m *testing.M) {
 	// In /tmp, not os.TempDir(): runs with different TMPDIR values must meet
 	// the same file. It is readable by everyone, so another user's run can
 	// open it read-only and take the same lock.
-	if runLock, err = os.OpenFile(filepath.Join("/tmp", lockName), os.O_CREATE|os.O_RDONLY, 0o644); err != nil {
+	if runLock, err = openRunLock(filepath.Join("/tmp", lockName)); err != nil {
 		exit("run lock: %v", err)
 	}
 	if err = syscall.Flock(int(runLock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
@@ -1230,4 +1231,37 @@ func refusedGone() string {
 		time.Sleep(2 * time.Second)
 	}
 	return "a refused block's account holds more unconfirmed blocks than one RPC page; whether a node still holds a refused block is not established"
+}
+
+// openRunLock opens the run lock file read-only, creating it if it is
+// absent. An existing file is opened without O_CREATE: with Linux's
+// fs.protected_regular, O_CREATE on a file another user owns in sticky /tmp
+// is refused even when the file could be read. A new file is created with
+// O_EXCL (a run that loses that race opens the winner's file), given mode
+// 0644 whatever the umask, and must be a regular file.
+func openRunLock(path string) (*os.File, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		f, err := os.Open(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDONLY, 0o644)
+			if errors.Is(err, fs.ErrExist) {
+				continue
+			}
+			if err == nil {
+				if err = f.Chmod(0o644); err != nil {
+					f.Close()
+					return nil, err
+				}
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+			f.Close()
+			return nil, fmt.Errorf("%s is not a regular file (%v)", path, err)
+		}
+		return f, nil
+	}
+	return nil, fmt.Errorf("%s: created and removed by another run repeatedly", path)
 }
