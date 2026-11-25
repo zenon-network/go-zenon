@@ -55,6 +55,11 @@ type peer struct {
 	network int // Network ID being on
 
 	id string
+	// turn orders peers by when they were last served: it is stamped
+	// from the peer set's counter at registration and again whenever a
+	// download session is run against the peer (markTurn). A lower turn
+	// has waited longer. The peer set's lock guards it.
+	turn uint64
 
 	head types.Hash
 	td   uint64
@@ -325,6 +330,8 @@ func (p *peer) requestBudget() *requestBudget {
 type peerSet struct {
 	peers map[string]*peer
 	lock  sync.RWMutex
+	// turns is the last turn stamp given out (see peer.turn).
+	turns uint64
 }
 
 // newPeerSet creates a new peer set to track the active participants.
@@ -343,6 +350,8 @@ func (ps *peerSet) Register(p *peer) error {
 	if _, ok := ps.peers[p.id]; ok {
 		return errAlreadyRegistered
 	}
+	ps.turns++
+	p.turn = ps.turns
 	ps.peers[p.id] = p
 	return nil
 }
@@ -408,6 +417,15 @@ func (ps *peerSet) PeersWithoutTx(hash types.Hash) []*peer {
 
 // BestPeer retrieves the known peer with the currently highest total difficulty.
 func (ps *peerSet) BestPeer() *peer {
+	return ps.bestPeerWhere(nil)
+}
+
+// bestPeerWhere retrieves the peer with the highest total difficulty among
+// those eligible accepts, or among all peers when eligible is nil; among
+// peers advertising the same height, the one that has waited longest for a
+// download session (see peer.turn). It returns nil when no peer is
+// eligible.
+func (ps *peerSet) bestPeerWhere(eligible func(*peer) bool) *peer {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
@@ -416,9 +434,47 @@ func (ps *peerSet) BestPeer() *peer {
 		bestTd   uint64
 	)
 	for _, p := range ps.peers {
-		if td := p.Td(); bestPeer == nil || bestTd < td {
+		if eligible != nil && !eligible(p) {
+			continue
+		}
+		td := p.Td()
+		if bestPeer == nil || bestTd < td || (bestTd == td && p.turn < bestPeer.turn) {
 			bestPeer, bestTd = p, td
 		}
 	}
 	return bestPeer
+}
+
+// markTurn stamps p as served now: it goes behind every peer waiting for a
+// turn (see leastRecentlyServedWhere). Nothing is stamped when p is no
+// longer registered, so a later connection of the same node, which has
+// had no session, keeps its place.
+func (ps *peerSet) markTurn(p *peer) {
+	ps.lock.Lock()
+	defer ps.lock.Unlock()
+
+	if ps.peers[p.id] == p {
+		ps.turns++
+		p.turn = ps.turns
+	}
+}
+
+// leastRecentlyServedWhere retrieves, among the peers eligible accepts (all
+// peers when eligible is nil), the one whose last session, or registration
+// when it has had none, lies furthest back. It returns nil when no peer is
+// eligible.
+func (ps *peerSet) leastRecentlyServedWhere(eligible func(*peer) bool) *peer {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	var waiting *peer
+	for _, p := range ps.peers {
+		if eligible != nil && !eligible(p) {
+			continue
+		}
+		if waiting == nil || p.turn < waiting.turn {
+			waiting = p
+		}
+	}
+	return waiting
 }

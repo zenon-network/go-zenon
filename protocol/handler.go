@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/rlp"
@@ -47,8 +48,9 @@ func errResp(code errCode, format string, v ...interface{}) error {
 // Two background loops complete the picture: the syncer, on new
 // connections and every few seconds, runs the downloader against the
 // best peer once at least minPeers are connected, and only downloads
-// when that peer advertises a higher frontier; the txsync loop sends
-// pending account blocks to each newly connected peer.
+// when that peer advertises a higher frontier; a peer whose session
+// imported nothing is passed over for a while (see judgeSession). The
+// txsync loop sends pending account blocks to each newly connected peer.
 type ProtocolManager struct {
 	minPeers       int
 	protVer, netId int
@@ -62,6 +64,19 @@ type ProtocolManager struct {
 	// quarantine holds peers refused after serving a side-chain the
 	// bridge rejected on a consensus check; see rejectPeer.
 	quarantine *peerQuarantine
+	// unproductive holds peers passed over for download sessions after
+	// one that imported nothing; see judgeSession. They stay connected.
+	unproductive *peerQuarantine
+	// preferWaiting is set by a session that imported nothing and
+	// cleared by one that imported a batch; while it is set the sync
+	// worker gives the session to the peer ahead of the node that has
+	// waited longest for one (see syncPeer).
+	preferWaiting atomic.Bool
+	// session is the session the sync worker is running, if any.
+	session syncSession
+	// gossipChildren bounds the children of the local head gossip hands
+	// to the fetcher while the node is not in sync; see NewBlockMsg.
+	gossipChildren childAdmission
 	// admission serializes admitting a connection (the quarantine check
 	// and both registrations, see admit) with quarantining a node and
 	// removing its connection (rejectPeer, removePeer). A verdict on a
@@ -75,6 +90,7 @@ type ProtocolManager struct {
 
 	// channels for fetcher, syncer, txsyncLoop
 	newPeerCh chan *peer
+	syncReqCh chan struct{} // requestSync; one pending request at most
 	txsyncCh  chan *txsync
 	quitSync  chan struct{}
 
@@ -91,16 +107,18 @@ type ProtocolManager struct {
 func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *ProtocolManager {
 	// Create the protocol manager with the base fields
 	manager := &ProtocolManager{
-		minPeers:   minPeers,
-		txpool:     bridge,
-		chainman:   bridge,
-		peers:      newPeerSet(),
-		quarantine: newPeerQuarantine(peerQuarantinePeriod, peerQuarantineCap),
-		progress:   newProducerProgress(),
-		newPeerCh:  make(chan *peer, 1),
-		txsyncCh:   make(chan *txsync),
-		quitSync:   make(chan struct{}),
-		netId:      int(networkId),
+		minPeers:     minPeers,
+		txpool:       bridge,
+		chainman:     bridge,
+		peers:        newPeerSet(),
+		quarantine:   newPeerQuarantine(peerQuarantinePeriod, peerQuarantineCap),
+		unproductive: newPeerQuarantine(unproductivePeerBackoff, peerQuarantineCap),
+		progress:     newProducerProgress(),
+		newPeerCh:    make(chan *peer, 1),
+		syncReqCh:    make(chan struct{}, 1),
+		txsyncCh:     make(chan *txsync),
+		quitSync:     make(chan struct{}),
+		netId:        int(networkId),
 	}
 	// Initiate a sub-protocol for every implemented version we can handle
 	manager.SubProtocols = make([]p2p.Protocol, len(ProtocolVersions))
@@ -126,7 +144,7 @@ func NewProtocolManager(minPeers int, networkId uint64, bridge ChainBridge) *Pro
 		manager.chainman.GetBlock,
 		manager.chainman.CurrentBlock,
 		manager.insertFromDownload,
-		manager.removePeer,
+		manager.dropFromDownload,
 		manager.rejectPeer)
 
 	verifier := func(detailed *nom.DetailedMomentum) error {
@@ -182,6 +200,13 @@ func (pm *ProtocolManager) rejectPeer(id string, err error) {
 	if peer != nil {
 		peer.Peer.Disconnect(p2p.DiscUselessPeer)
 	}
+}
+
+// dropFromDownload is the downloader's peer drop hook: it removes the
+// peer, noting it against the session being run (see judgeSession).
+func (pm *ProtocolManager) dropFromDownload(id string) {
+	pm.session.dropped(id)
+	pm.removePeer(id)
 }
 
 func (pm *ProtocolManager) removePeer(id string) {
@@ -660,16 +685,37 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		p.MarkBlock(detailed.Momentum.Hash)
 		p.SetHead(detailed.Momentum.Hash)
 
-		if pm.SyncInfo().State == SyncDone {
+		// Hand the momentum to the fetcher once the node is in sync, as
+		// before. Otherwise hand it over when it is a child of the local
+		// head, no download batch is being imported, and the sending node
+		// has not had a child of that head handed over already: the
+		// fetcher then imports or discards it as soon as the chain is
+		// free, and each node has at most one such momentum with the
+		// fetcher while the head stays where it is. Gated on SyncDone
+		// alone, gossip would stop for as long as any peer advertised a
+		// height above the node's, whether or not a download session ever
+		// delivered it. A child skipped while a batch imports shows up as
+		// a gap with the next momentum.
+		height := detailed.Momentum.Height
+		head := pm.chainman.CurrentBlock()
+		child := height == head.Height+1 && detailed.Momentum.PreviousHash == head.Hash
+		enqueue := pm.SyncInfo().State == SyncDone
+		if !enqueue && child && !pm.downloader.Processing() {
+			enqueue = pm.gossipChildren.admit(p.id, head.Hash, pm.chainman.CurrentBlock)
+		}
+		if enqueue {
 			pm.fetcher.Enqueue(p.id, detailed)
-
-			// TODO: Schedule a sync to cover potential gaps (this needs proto update)
-			if detailed.Momentum.Height > p.Td() {
-				p.SetTd(detailed.Momentum.Height)
-				go func() {
-					pm.synchronise(p)
-				}()
-			}
+		}
+		if height > p.Td() {
+			p.SetTd(height)
+		}
+		// A momentum above the local head that is not its child shows a
+		// gap, or a branch, the fetcher cannot import; ask the sync worker
+		// for a session, also when the peer advertised as much already. A
+		// child needs none.
+		// TODO: Schedule a sync to cover potential gaps (this needs proto update)
+		if !child && height > head.Height {
+			pm.requestSync()
 		}
 
 	case TxMsg:
