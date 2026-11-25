@@ -1,0 +1,535 @@
+contract-method	accelerator.Update	E1:FAZ-1 E7:LAD-2
+contract-method	accelerator.Donate	E1:AZ-1 E5:AZ-1
+contract-method	accelerator.CreateProject	E1:AZ-2 E2:AZ-3 E5:AZ-3 E7:LAD-2
+contract-method	accelerator.AddPhase	E1:FAZ-2 E3:FAZ-2 E4:AZ-6 E7:LAD-2
+contract-method	accelerator.UpdatePhase	E1:FAZ-2 E7:LAD-2
+contract-method	accelerator.VoteByName	E1:AZ-4 E2:AZ-5 E3:AZ-5 E4:AZ-5 E7:LAD-2
+contract-method	accelerator.VoteByProdAddress	E3:AZ-5 E7:LAD-2
+contract-method	bridge.WrapToken	E7:LAD-2
+contract-method	bridge.UpdateWrapRequest	E7:LAD-2
+contract-method	bridge.SetNetwork	E1:FB-2 E2:FB-2 E3:FB-2 E6:FB-2 E7:LAD-2
+contract-method	bridge.RemoveNetwork	E1:FB-6 E3:FB-6 E7:LAD-2
+contract-method	bridge.SetTokenPair	E1:FB-3 E2:FB-3 E3:FB-3 E7:LAD-2 E12:FB-3
+contract-method	bridge.SetNetworkMetadata	E1:FB-4 E3:FB-4 E7:LAD-2
+contract-method	bridge.RemoveTokenPair	E1:FB-6 E3:FB-6 E7:LAD-2
+contract-method	bridge.Halt	E1:FB-7 E3:FB-7 E4:FB-7 E7:LAD-2
+contract-method	bridge.Unhalt	E1:FB-7 E3:FB-7 E4:FB-7 E7:LAD-2
+contract-method	bridge.Emergency	E7:LAD-2
+contract-method	bridge.ChangeTssECDSAPubKey	E7:LAD-2
+contract-method	bridge.ChangeAdministrator	E7:LAD-2
+contract-method	bridge.ProposeAdministrator	E7:LAD-2
+contract-method	bridge.SetAllowKeyGen	E7:LAD-2
+contract-method	bridge.SetRedeemDelay	
+contract-method	bridge.SetBridgeMetadata	E1:FB-4 E3:FB-4 E7:LAD-2
+contract-method	bridge.UnwrapToken	E7:LAD-2
+contract-method	bridge.RevokeUnwrapRequest	E7:LAD-2
+contract-method	bridge.Redeem	E7:LAD-2
+contract-method	bridge.NominateGuardians	E7:LAD-2
+contract-method	bridge.SetOrchestratorInfo	E1:FB-5 E2:FB-5 E3:FB-5 E7:LAD-2
+contract-method	htlc.Create	E1:HT-1 E1:HT-10 E2:HT-2 E5:HT-2 E7:LAD-2 E12:HT-3
+contract-method	htlc.Reclaim	E1:HT-11 E3:HT-7 E7:LAD-2 E12:HT-11 E12:HT-6
+contract-method	htlc.Unlock	E1:HT-10 E1:HT-8 E3:HT-5 E4:HT-9 E5:HT-4 E7:LAD-2 E12:HT-11
+contract-method	htlc.DenyProxyUnlock	E1:HT-5 E7:LAD-2
+contract-method	htlc.AllowProxyUnlock	E1:HT-5 E7:LAD-2
+contract-method	liquidity.Update	
+contract-method	liquidity.Donate	
+contract-method	liquidity.Fund	E7:LAD-2
+contract-method	liquidity.BurnZnn	E7:LAD-2
+contract-method	liquidity.SetTokenTuple	E7:LAD-2
+contract-method	liquidity.NominateGuardians	E7:LAD-2
+contract-method	liquidity.ProposeAdministrator	E7:LAD-2
+contract-method	liquidity.Emergency	E7:LAD-2
+contract-method	liquidity.SetIsHalted	E7:LAD-2
+contract-method	liquidity.LiquidityStake	E7:LAD-2
+contract-method	liquidity.CancelLiquidityStake	E7:LAD-2
+contract-method	liquidity.UnlockLiquidityStakeEntries	E7:LAD-2
+contract-method	liquidity.SetAdditionalReward	E7:LAD-2
+contract-method	liquidity.CollectReward	E7:LAD-2
+contract-method	liquidity.ChangeAdministrator	E7:LAD-2
+contract-method	pillars.Update	
+contract-method	pillars.Register	E1:FPI-1 E2:PI-7 E4:PI-6 E5:PI-7
+contract-method	pillars.RegisterLegacy	
+contract-method	pillars.UpdatePillar	E1:FPI-3 E3:FPI-3 E3:PI-8
+contract-method	pillars.DepositQsr	E1:FPI-1 E1:PI-5 E5:PI-5
+contract-method	pillars.WithdrawQsr	E1:PI-5 E4:PI-5
+contract-method	pillars.Revoke	E1:FPI-4 E3:PI-8 E12:FPI-4 E12:PI-9
+contract-method	pillars.Delegate	E1:PI-2 E4:PI-3 E5:PI-3
+contract-method	pillars.Undelegate	E1:PI-4 E4:PI-4
+contract-method	pillars.CollectReward	E1:FPI-5
+contract-method	plasma.Fuse	E1:PL-1 E2:PL-2 E5:PL-2 E6:PL-8
+contract-method	plasma.CancelFuse	E1:FP-1 E3:PL-4 E4:FP-2 E4:PL-3 E5:PL-6 E12:FP-1 E12:PL-3
+contract-method	plasma.SetVariables	E3:PL-7 E7:LAD-2 E7:PL-7
+contract-method	ptlc.Create	E1:PT-1 E1:PT-7 E1:PT-8 E2:PT-2 E5:PT-2 E6:PT-2 E7:LAD-2 E12:PT-3
+contract-method	ptlc.Reclaim	E1:PT-9 E3:PT-5 E4:PT-10 E7:LAD-2 E12:PT-5 E12:PT-9
+contract-method	ptlc.Unlock	E1:PT-6 E1:PT-8 E3:PT-4 E3:PT-8 E4:PT-6 E5:PT-4 E6:PT-4 E7:LAD-2 E12:PT-9
+contract-method	ptlc.ProxyUnlock	E1:PT-7 E3:PT-7 E5:PT-7 E7:LAD-2
+contract-method	ptlc.CreateWithReclaimLock	E1:PT-10 E2:PT-10 E7:LAD-2
+contract-method	ptlc.ReclaimWithSignature	E1:PT-10 E4:PT-9 E5:PT-10 E7:LAD-2 E12:PT-10
+contract-method	sentinel.DepositQsr	E1:FSE-1 E1:SE-2
+contract-method	sentinel.WithdrawQsr	E1:FSE-1 E4:SE-6
+contract-method	sentinel.Register	E1:SE-2 E2:SE-3 E4:SE-1 E4:SE-4 E5:SE-3
+contract-method	sentinel.Revoke	E1:FSE-2 E12:FSE-2 E12:SE-5
+contract-method	sentinel.Update	
+contract-method	sentinel.CollectReward	
+contract-method	spork.CreateSpork	E1:SP-3 E2:SP-2 E3:SP-1 E5:SP-2
+contract-method	spork.ActivateSpork	E1:SP-5 E3:SP-1 E4:SP-4 E4:SP-6
+contract-method	stake.Stake	E1:ST-1 E2:ST-1 E2:ST-2 E5:ST-2
+contract-method	stake.Cancel	E1:FS-1 E3:ST-4 E4:FS-1 E4:ST-3 E12:FS-1 E12:ST-3
+contract-method	stake.CollectReward	E1:FS-2 E4:FS-3
+contract-method	stake.Update	
+contract-method	swap.RetrieveAssets	E6:SW-1
+contract-method	token.IssueToken	E1:TK-1 E2:TK-2 E5:TK-2
+contract-method	token.Mint	E1:TK-3 E2:TK-5 E3:TK-4 E4:TK-9
+contract-method	token.Burn	E1:TK-7 E5:TK-7
+contract-method	token.UpdateToken	E1:TK-10 E1:TK-9 E3:TK-8
+rpc-method	AcceleratorApi.GetAll	E1:AZ-2 E1:SMOKE
+rpc-method	AcceleratorApi.GetProjectById	E1:AZ-2 E1:FAZ-1 E1:FAZ-2
+rpc-method	AcceleratorApi.GetPhaseById	E1:FAZ-2
+rpc-method	AcceleratorApi.GetVoteBreakdown	E1:AZ-4 E1:AZ-5 E1:FAZ-2
+rpc-method	AcceleratorApi.GetPillarVotes	E1:AZ-4
+rpc-method	BridgeApi.GetBridgeInfo	E1:FB-1 E1:FB-4 E1:FB-7 E1:SMOKE
+rpc-method	BridgeApi.GetSecurityInfo	E1:FB-3
+rpc-method	BridgeApi.GetOrchestratorInfo	E1:FB-5
+rpc-method	BridgeApi.GetTimeChallengesInfo	E1:FB-3
+rpc-method	BridgeApi.GetNetworkInfo	E1:FB-2 E1:FB-3 E1:FB-4 E1:FB-6
+rpc-method	BridgeApi.GetAllNetworks	E1:FB-2 E1:FB-6 E1:LAD-3
+rpc-method	BridgeApi.GetWrapTokenRequestById	
+rpc-method	BridgeApi.GetAllWrapTokenRequests	E1:LAD-3
+rpc-method	BridgeApi.GetAllWrapTokenRequestsByToAddress	
+rpc-method	BridgeApi.GetAllWrapTokenRequestsByToAddressNetworkClassAndChainId	
+rpc-method	BridgeApi.GetAllUnsignedWrapTokenRequests	
+rpc-method	BridgeApi.GetUnwrapTokenRequestByHashAndLog	
+rpc-method	BridgeApi.GetAllUnwrapTokenRequests	E1:LAD-3
+rpc-method	BridgeApi.GetAllUnwrapTokenRequestsByToAddress	
+rpc-method	BridgeApi.GetFeeTokenPair	
+rpc-method	HtlcApi.GetById	E1:HT-1 E1:HT-4
+rpc-method	HtlcApi.GetProxyUnlockStatus	E1:HT-5
+rpc-method	LiquidityApi.GetLiquidityInfo	E1:SMOKE
+rpc-method	LiquidityApi.GetSecurityInfo	
+rpc-method	LiquidityApi.GetLiquidityStakeEntriesByAddress	E1:LAD-3
+rpc-method	LiquidityApi.GetUncollectedReward	E1:LAD-3
+rpc-method	LiquidityApi.GetFrontierRewardByPage	
+rpc-method	LiquidityApi.GetTimeChallengesInfo	
+rpc-method	PillarApi.GetDepositedQsr	E1:FPI-1 E1:PI-5
+rpc-method	PillarApi.GetUncollectedReward	E1:FPI-5
+rpc-method	PillarApi.GetFrontierRewardByPage	E1:FPI-5
+rpc-method	PillarApi.GetQsrRegistrationCost	E1:PI-1 E1:SMOKE
+rpc-method	PillarApi.GetAll	E1:FPI-1 E1:FPI-4 E1:PI-1 E1:PI-6 E1:PI-9 E1:SMOKE
+rpc-method	PillarApi.GetByOwner	E1:PI-1
+rpc-method	PillarApi.GetByName	E1:FPI-1 E1:FPI-3 E1:FPI-4 E1:PI-1 E1:PI-8 E1:PI-9
+rpc-method	PillarApi.CheckNameAvailability	E1:FPI-1 E1:PI-1
+rpc-method	PillarApi.GetDelegatedPillar	E1:PI-2 E1:PI-3 E1:PI-4
+rpc-method	PillarApi.GetPillarEpochHistory	E1:FPI-6 E1:PI-1
+rpc-method	PillarApi.GetPillarsHistoryByEpoch	E1:FPI-6 E1:PI-1
+rpc-method	PlasmaApi.Get	E1:PL-1 E1:SMOKE
+rpc-method	PlasmaApi.GetEntriesByAddress	E1:FP-1 E1:PL-1 E1:PL-3
+rpc-method	PlasmaApi.GetRequiredPoWForAccountBlock	E1:B-1 E1:LAD-1
+rpc-method	PlasmaApi.GetVariables	E1:PL-7 E1:SMOKE
+rpc-method	PtlcApi.GetById	E1:PT-1 E1:PT-4
+rpc-method	PtlcApi.GetReclaimLockById	E1:PT-10
+rpc-method	SentinelApi.GetByOwner	E1:FSE-2 E1:SE-2 E1:SE-5
+rpc-method	SentinelApi.GetAllActive	E1:SE-2 E1:SMOKE
+rpc-method	SentinelApi.GetDepositedQsr	E1:SE-2
+rpc-method	SentinelApi.GetUncollectedReward	E1:SE-7
+rpc-method	SentinelApi.GetFrontierRewardByPage	E1:SE-7
+rpc-method	SporkApi.GetAll	E1:SMOKE E1:SP-3 E1:SP-5 E1:SP-6
+rpc-method	StakeApi.GetUncollectedReward	E1:FS-2 E1:ST-5
+rpc-method	StakeApi.GetFrontierRewardByPage	E1:FS-2 E1:ST-5
+rpc-method	StakeApi.GetEntriesByAddress	E1:FS-1 E1:SMOKE E1:ST-1 E1:ST-4
+rpc-method	SwapApi.GetAssetsByKeyIdHash	
+rpc-method	SwapApi.GetAssets	E1:SW-1
+rpc-method	SwapApi.GetLegacyPillars	E1:SMOKE
+rpc-method	TokenAPI.GetAll	E1:SMOKE E1:TK-1
+rpc-method	TokenAPI.GetByOwner	E1:TK-1
+rpc-method	TokenAPI.GetByZts	E1:TK-1 E1:TK-10 E1:TK-3 E1:TK-4 E1:TK-5 E1:TK-7 E1:TK-8 E1:TK-9
+rpc-method	LedgerApi.String	
+rpc-method	LedgerApi.PublishRawTransaction	E1:B-1
+rpc-method	LedgerApi.GetUnconfirmedBlocksByAddress	E1:B-9
+rpc-method	LedgerApi.GetFrontierAccountBlock	E1:B-1 E1:B-2b E1:FB-3
+rpc-method	LedgerApi.GetAccountBlockByHash	E1:B-1
+rpc-method	LedgerApi.GetAccountBlocksByHeight	E1:B-9
+rpc-method	LedgerApi.GetAccountBlocksByPage	
+rpc-method	LedgerApi.GetAccountInfoByAddress	E1:B-1 E1:SMOKE
+rpc-method	LedgerApi.GetUnreceivedBlocksByAddress	E1:B-1
+rpc-method	LedgerApi.GetFrontierMomentum	E1:B-1
+rpc-method	LedgerApi.GetMomentumBeforeTime	
+rpc-method	LedgerApi.GetMomentumByHash	
+rpc-method	LedgerApi.GetMomentumsByHeight	E1:FS-1 E1:FS-2 E1:SP-5
+rpc-method	LedgerApi.GetMomentumsByPage	E1:SMOKE
+rpc-method	LedgerApi.GetDetailedMomentumsByHeight	E1:SMOKE
+rpc-method	StatsApi.OsInfo	E1:SMOKE
+rpc-method	StatsApi.ProcessInfo	E1:SMOKE
+rpc-method	StatsApi.NetworkInfo	E1:SMOKE
+rpc-method	StatsApi.SyncInfo	E1:SMOKE
+rpc-method	RPCService.Modules	
+subscription	Momentums	
+subscription	AllAccountBlocks	
+subscription	AccountBlocksByAddress	
+subscription	UnreceivedAccountBlocksByAddress	
+spork	AcceleratorSpork	E7:LAD-1
+spork	HtlcSpork	E7:LAD-1
+spork	PtlcSpork	E7:LAD-1
+spork	BridgeAndLiquiditySpork	E7:LAD-1
+spork	Libp2pSpork	
+spork	DynamicPlasmaSpork	E7:LAD-1
+spork	EmbeddedRefundSpork	
+spork	EpochRewardTermsSpork	
+verifier-rule	accountVerifier.getContext	
+verifier-rule	accountVerifier.verifyTransaction	
+verifier-rule	accountBlockVerifier.all	
+verifier-rule	accountBlockVerifier.version	
+verifier-rule	accountBlockVerifier.chainIdentifier	
+verifier-rule	accountBlockVerifier.blockType	
+verifier-rule	accountBlockVerifier.amounts	
+verifier-rule	accountBlockVerifier.pow	
+verifier-rule	accountBlockVerifier.previous	
+verifier-rule	accountBlockVerifier.momentumAcknowledged	
+verifier-rule	accountBlockVerifier.acknowledgementRecency	
+verifier-rule	accountBlockVerifier.fromHash	
+verifier-rule	accountBlockVerifier.sequencer	
+verifier-rule	accountBlockVerifier.isDynamicPlasmaActiveAtMA	
+verifier-rule	accountBlockVerifier.receiveData	
+verifier-rule	accountBlockTransactionVerifier.all	
+verifier-rule	accountBlockTransactionVerifier.contractReceiveRulesActive	
+verifier-rule	accountBlockTransactionVerifier.plasmaFields	
+verifier-rule	accountBlockTransactionVerifier.signature	
+verifier-rule	accountBlockTransactionVerifier.hash	
+verifier-rule	accountBlockTransactionVerifier.producer	
+verifier-rule	accountBlockTransactionVerifier.descendantBlocks	
+verifier-rule	momentumVerifier.getContext	
+verifier-rule	rawMomentumVerifier.all	
+verifier-rule	rawMomentumVerifier.chainIdentifier	
+verifier-rule	rawMomentumVerifier.version	
+verifier-rule	rawMomentumVerifier.timestamp	
+verifier-rule	rawMomentumVerifier.previous	
+verifier-rule	rawMomentumVerifier.data	
+verifier-rule	rawMomentumVerifier.nextFusionPrice	
+verifier-rule	rawMomentumVerifier.nextWorkPrice	
+verifier-rule	rawMomentumVerifier.contentByteBound	
+verifier-rule	rawMomentumVerifier.content	
+verifier-rule	rawMomentumVerifier.acknowledgementRecency	
+verifier-rule	momentumTransactionVerifier.all	
+verifier-rule	momentumTransactionVerifier.changesHash	
+verifier-rule	momentumTransactionVerifier.producer	
+protocol-msg	StatusMsg	
+protocol-msg	NewBlockHashesMsg	
+protocol-msg	TxMsg	
+protocol-msg	GetBlockHashesMsg	
+protocol-msg	BlockHashesMsg	
+protocol-msg	GetBlocksMsg	
+protocol-msg	BlocksMsg	
+protocol-msg	NewBlockMsg	
+protocol-msg	GetBlockHashesFromNumberMsg	
+protocol-error	ErrMsgTooLarge	
+protocol-error	ErrDecode	
+protocol-error	ErrInvalidMsgCode	
+protocol-error	ErrProtocolVersionMismatch	
+protocol-error	ErrNetworkIdMismatch	
+protocol-error	ErrGenesisBlockMismatch	
+protocol-error	ErrNoStatusMsg	
+protocol-error	ErrExtraStatusMsg	
+protocol-error	ErrSuspendedPeer	
+protocol-error	ErrRequestBudgetExceeded	
+error	chain.ErrFailedToAddAccountBlockTransaction	
+error	chain.ErrPlasmaRatioIsWorse	
+error	chain.ErrHashTieBreak	
+error	chain.ErrBlockHeightNotFound	
+error	chain.ErrStaleMomentumAcknowledged	
+error	chain.ErrMomentumAcknowledgedNotCanonical	
+error	chain/cache/storage.ErrCacheStopped	
+error	chain.ErrSporkAddressMismatch	
+error	chain/genesis.ErrInvalidGenesisPath	
+error	chain/genesis.ErrInvalidGenesisJson	
+error	chain/genesis.ErrIncompleteGenesisJson	
+error	chain/genesis.ErrInvalidGenesisConfig	
+error	chain/genesis.ErrNoEmbeddedGenesis	
+error	chain/genesis.ErrGenesisNilEntry	
+error	chain/genesis.ErrGenesisNilAmount	
+error	chain/genesis.ErrGenesisNegativeBalance	
+error	chain/genesis.ErrGenesisNegativeFusion	
+error	chain/genesis.ErrGenesisNegativeSwapAmount	
+error	chain/genesis.ErrGenesisNegativeSupply	
+error	chain/genesis.ErrGenesisAmountOverflow	
+error	chain/genesis.ErrGenesisInvalidFusionAmount	
+error	chain/genesis.ErrGenesisDuplicateAddress	
+error	chain/genesis.ErrGenesisZeroLegacySlots	
+error	chain/genesis.ErrGenesisPillarStakeAmount	
+error	consensus.ErrElectionBeforeGenesis	
+error	consensus.ErrNoActivePillars	
+error	dp.ErrBlockPriceWorse	
+error	dp.ErrBlockPriceSame	
+error	node.ErrDataDirUsed	
+error	node.ErrNodeStopped	
+error	p2p.ErrPipeClosed	
+error	pillar.ErrSyncNotDone	
+error	pillar.ErrPillarNotDefined	
+error	pillar.ErrNotOurEvent	
+error	pillar.ErrEventHasNotStarted	
+error	pillar.ErrEventEnded	
+error	pillar.ErrUpdatePredecessorMissing	
+error	pillar.ErrUpdateCacheStoreMissing	
+error	pillar.ErrNothingToGenerate	
+error	protocol/downloader.ErrBatchRejected	
+error	protocol/downloader.ErrBatchMisplaced	
+error	protocol/downloader.ErrBatchInconclusive	
+error	protocol.ErrSideChainKnownInvalid	
+error	rpc/api.ErrPageSizeParamTooBig	
+error	rpc/api.ErrPageIndexParamTooBig	
+error	rpc/api.ErrCountParamTooBig	
+error	rpc/api.ErrHeightParamIsZero	
+error	rpc/api.ErrDetailedMomentumTooLarge	
+error	rpc/api.ErrParamIsNull	
+error	rpc/api.ErrNameParamTooLong	
+error	rpc/api.ErrListParamTooBig	
+error	rpc/api/subscribe.ErrSubscribeBacklogFull	
+error	rpc/api/subscribe.ErrSubscriptionLimitReached	
+error	rpc/server.ErrClientQuit	
+error	rpc/server.ErrNoResult	
+error	rpc/server.ErrSubscriptionQueueOverflow	
+error	rpc/server.ErrMissingBatchResponse	
+error	rpc/server.ErrNotificationsUnsupported	
+error	rpc/server.ErrSubscriptionNotFound	
+error	rpc/server.ErrTooManySubscriptions	
+error	rpc/server.ErrNotificationBufferFull	
+error	verifier.ErrVerifierInternal	
+error	verifier.ErrABVersionMissing	E6:B-5j
+error	verifier.ErrABVersionInvalid	E6:B-5j
+error	verifier.ErrABChainIdentifierMissing	
+error	verifier.ErrABChainIdentifierMismatch	
+error	verifier.ErrABTypeInvalidExternal	
+error	verifier.ErrABTypeMissing	E6:B-5j
+error	verifier.ErrABTypeMustNotBeGenesis	E3:B-5k
+error	verifier.ErrABTypeUnsupported	E6:B-5j
+error	verifier.ErrABTypeMustBeContract	
+error	verifier.ErrABTypeMustBeUser	E3:B-5k
+error	verifier.ErrABMHeightMissing	E2:B-5d
+error	verifier.ErrABPrevHeightExists	
+error	verifier.ErrABPrevHasCementedOnTop	E2:B-5d
+error	verifier.ErrABPrevHashMissing	
+error	verifier.ErrABPrevHashMustBeZero	
+error	verifier.ErrABAmountNegative	
+error	verifier.ErrABAmountTooBig	
+error	verifier.ErrABAmountMustBeZero	E6:B-5l
+error	verifier.ErrABZtsMissing	
+error	verifier.ErrABZtsMustBeZero	
+error	verifier.ErrABToAddressMustBeZero	E6:B-5l
+error	verifier.ErrABHashMissing	E6:B-5i
+error	verifier.ErrABHashInvalid	E6:B-5i
+error	verifier.ErrABDataTooBig	E2:B-3b
+error	verifier.ErrABPublicKeyWrongAddress	E6:B-5e
+error	verifier.ErrABPublicKeyMissing	E6:B-5e
+error	verifier.ErrABPublicKeyMustBeZero	
+error	verifier.ErrABSignatureInvalid	E6:B-5e
+error	verifier.ErrABSignatureMissing	E6:B-5e
+error	verifier.ErrABSignatureMustBeZero	
+error	verifier.ErrABPoWInvalid	E6:B-2e
+error	verifier.ErrABDescendantMustBeZero	
+error	verifier.ErrABDescendantVerify	
+error	verifier.ErrABPlasmaMustBeZero	
+error	verifier.ErrABPreviousMissing	E2:B-5d E6:B-5c
+error	verifier.ErrABMAGap	
+error	verifier.ErrABMAMustBeTheSame	
+error	verifier.ErrABMAInvalidForAutoGenerated	
+error	verifier.ErrABMAMissing	E6:B-5m
+error	verifier.ErrABMAMustNotBeZero	E6:B-5m
+error	verifier.ErrABMAStale	
+error	verifier.ErrABFromBlockHashMissing	
+error	verifier.ErrABFromBlockHashMustBeZero	
+error	verifier.ErrABFromBlockMissing	E4:B-5b
+error	verifier.ErrABFromBlockAlreadyReceived	E4:B-5a
+error	verifier.ErrABFromBlockReceiverMismatch	E3:B-4
+error	verifier.ErrABSequencerNothing	
+error	verifier.ErrABSequencerNotNext	
+error	verifier.ErrABDataMustBeEmpty	
+error	verifier.ErrMVersionMissing	
+error	verifier.ErrMVersionInvalid	
+error	verifier.ErrMChainIdentifierMissing	E6:B-5f
+error	verifier.ErrMChainIdentifierMismatch	
+error	verifier.ErrMDataMustBeZero	
+error	verifier.ErrMChangesHashInvalid	
+error	verifier.ErrMHashInvalid	
+error	verifier.ErrMContentTooBig	
+error	verifier.ErrMTimestampMissing	
+error	verifier.ErrMTimestampInTheFuture	
+error	verifier.ErrMTimestampNotIncreasing	
+error	verifier.ErrMSignatureMissing	
+error	verifier.ErrMPublicKeyMissing	
+error	verifier.ErrMSignatureInvalid	
+error	verifier.ErrMPrevHashMissing	
+error	verifier.ErrMNotGenesis	
+error	verifier.ErrMProducerInvalid	
+error	verifier.ErrMPreviousMissing	
+error	verifier.ErrMMinimumValueInvalid	
+error	verifier.ErrMStaleAcknowledgement	
+error	verifier.ErrMContractBlocksTooMany	
+error	verifier.ErrMBlockPriceTooSmall	
+error	verifier.ErrMFusionPriceMismatch	
+error	verifier.ErrMWorkPriceMismatch	
+error	vm/constants.ErrVmRunPanic	
+error	vm/constants.ErrAutoReceiveChangesHashMismatch	
+error	vm/constants.ErrAutoReceiveHashMismatch	
+error	vm/constants.ErrNothingToWithdraw	
+error	vm/constants.ErrNotEnoughDepositedQsr	
+error	vm/constants.ErrInvalidTokenOrAmount	E2:PL-2
+error	vm/constants.ErrNotContractAddress	
+error	vm/constants.ErrContractDoesntExist	E7:LAD-2
+error	vm/constants.ErrContractMethodNotFound	E6:PL-8 E7:LAD-2
+error	vm/constants.ErrDataNonExistent	
+error	vm/constants.ErrUnpackError	E6:PL-8
+error	vm/constants.ErrInsufficientBalance	E5:B-5g
+error	vm/constants.ErrPermissionDenied	E3:PL-7
+error	vm/constants.ErrInvalidArguments	
+error	vm/constants.ErrInvalidB64Decode	E6:SW-1
+error	vm/constants.ErrForbiddenParam	
+error	vm/constants.ErrNotEnoughSlots	
+error	vm/constants.ReclaimNotDue	
+error	vm/constants.ErrInvalidExpirationTime	
+error	vm/constants.ErrExpired	
+error	vm/constants.ErrUpdateTooRecent	
+error	vm/constants.ErrEpochUpdateTooRecent	
+error	vm/constants.ErrAcceleratorEnded	
+error	vm/constants.ErrAcceleratorInvalidFunds	
+error	vm/constants.ErrInvalidDescription	
+error	vm/constants.ErrInvalidName	
+error	vm/constants.ErrNotUnique	
+error	vm/constants.ErrNotActive	
+error	vm/constants.ErrIDNotUnique	
+error	vm/constants.ErrTokenInvalidText	E2:TK-2
+error	vm/constants.ErrTokenInvalidAmount	E2:TK-2
+error	vm/constants.RevokeNotDue	
+error	vm/constants.ErrInvalidStakingPeriod	E2:ST-2
+error	vm/constants.ErrBlockPlasmaLimitReached	
+error	vm/constants.ErrNotEnoughPlasma	E5:B-2d
+error	vm/constants.ErrNotEnoughTotalPlasma	E2:B-2c
+error	vm/constants.ErrInvalidSwapCode	
+error	vm/constants.ErrInvalidSignature	
+error	vm/constants.ErrAlreadyRevoked	
+error	vm/constants.ErrAlreadyRegistered	
+error	vm/constants.ErrAlreadyActivated	
+error	vm/constants.ErrInvalidHashType	E2:HT-2
+error	vm/constants.ErrInvalidHashDigest	E2:HT-2
+error	vm/constants.ErrInvalidPreimage	
+error	vm/constants.ErrInvalidPointType	E2:PT-2
+error	vm/constants.ErrInvalidPointLock	E2:PT-2
+error	vm/constants.ErrInvalidPointSignature	E6:PT-4
+error	vm/constants.ErrInvalidPointScalar	E5:PT-8
+error	vm/constants.ErrInvalidDestination	E2:PT-2
+error	vm/constants.ErrReclaimSignatureRequired	
+error	vm/constants.ErrNoReclaimLock	
+error	vm/constants.ErrUnknownNetwork	
+error	vm/constants.ErrInvalidToAddress	
+error	vm/constants.ErrBridgeNotInitialized	
+error	vm/constants.ErrOrchestratorNotInitialized	
+error	vm/constants.ErrTokenNotBridgeable	
+error	vm/constants.ErrNotGuardian	
+error	vm/constants.ErrTokenNotRedeemable	
+error	vm/constants.ErrBridgeHalted	
+error	vm/constants.ErrInvalidRedeemPeriod	
+error	vm/constants.ErrInvalidRedeemRequest	
+error	vm/constants.ErrInvalidTransactionHash	
+error	vm/constants.ErrInvalidNetworkName	
+error	vm/constants.ErrInvalidContractAddress	
+error	vm/constants.ErrInvalidToken	
+error	vm/constants.ErrTokenNotFound	
+error	vm/constants.ErrInvalidEDDSASignature	
+error	vm/constants.ErrInvalidEDDSAPubKey	
+error	vm/constants.ErrInvalidECDSASignature	
+error	vm/constants.ErrInvalidDecompressedECDSAPubKeyLength	
+error	vm/constants.ErrInvalidCompressedECDSAPubKeyLength	
+error	vm/constants.ErrInvalidCompressedECDSAPubKey	
+error	vm/constants.ErrNotAllowedToChangeTss	
+error	vm/constants.ErrInvalidJsonContent	
+error	vm/constants.ErrInvalidMinAmount	
+error	vm/constants.ErrTimeChallengeNotDue	
+error	vm/constants.ErrNotEmergency	
+error	vm/constants.ErrInvalidGuardians	
+error	vm/constants.ErrSecurityNotInitialized	
+error	vm/constants.ErrBridgeNotHalted	
+error	vm/constants.ErrInvalidPercentages	
+error	vm/constants.ErrInvalidRewards	
+error	vm/constants.ErrABDataTrailingBytes	E7:PL-8
+error	wallet.ErrKeyFileInvalidVersion	
+error	wallet.ErrKeyFileInvalidCipher	
+error	wallet.ErrKeyFileInvalidKDF	
+error	wallet.ErrKeyFileInvalidNonce	
+error	wallet.ErrKeyFileAddressMismatch	
+error	wallet.ErrKeyFileNotDurable	
+error	wallet.ErrAddressNotFound	
+error	wallet.ErrWrongPassword	
+error	wallet.ErrKeyStoreNoEntropy	
+error	wallet.ErrKeyStoreLocked	
+error	wallet.ErrKeyStoreNotFound	
+error	wallet.ErrInvalidPath	
+error	wallet.ErrInvalidSeed	
+error	wallet.ErrNoPublicDerivation	
+cli-flag	pprof	
+cli-flag	pprof.port	
+cli-flag	pprof.addr	
+cli-flag	config	
+cli-flag	data	
+cli-flag	wallet	
+cli-flag	genesis	
+cli-flag	name	
+cli-flag	host	
+cli-flag	port	
+cli-flag	max-peers	
+cli-flag	max-pending-peers	
+cli-flag	http	
+cli-flag	http-addr	
+cli-flag	http-port	
+cli-flag	ws	
+cli-flag	ws-addr	
+cli-flag	ws-port	
+cli-flag	loglevel	
+config-field	node.Address	
+config-field	node.Index	
+config-field	node.KeyFilePath	
+config-field	node.Password	
+config-field	node.EnableHTTP	
+config-field	node.EnableWS	
+config-field	node.HTTPHost	
+config-field	node.HTTPPort	
+config-field	node.WSHost	
+config-field	node.WSPort	
+config-field	node.Endpoints	
+config-field	node.HTTPVirtualHosts	
+config-field	node.HTTPCors	
+config-field	node.WSOrigins	
+config-field	node.MaxSubscriptionsPerConn	
+config-field	node.MaxSubscriptions	
+config-field	node.MaxWSConnectionsPerIP	
+config-field	node.MaxConcurrentHTTPRequests	
+config-field	node.MaxHTTPConnections	
+config-field	node.MaxWSConnections	
+config-field	node.ListenHost	
+config-field	node.ListenPort	
+config-field	node.P2PBackend	
+config-field	node.MinPeers	
+config-field	node.MinConnectedPeers	
+config-field	node.MaxPeers	
+config-field	node.MaxPendingPeers	
+config-field	node.Seeders	
+config-field	node.BootstrapPeers	
+config-field	node.NATPortMap	
+config-field	node.PeerstoreDir	
+config-field	node.DataPath	
+config-field	node.WalletPath	
+config-field	node.GenesisFile	
+config-field	node.Name	
+config-field	node.LogLevel	
+config-field	node.Producer	
+config-field	node.RPC	
+config-field	node.Net	
+config-field	p2p.PrivateKeyFile	
+config-field	p2p.MaxPeers	
+config-field	p2p.MinConnectedPeers	
+config-field	p2p.MaxPendingPeers	
+config-field	p2p.Name	
+config-field	p2p.Seeders	
+config-field	p2p.BootstrapPeers	
+config-field	p2p.NATPortMap	
+config-field	p2p.PeerstoreDir	
+config-field	p2p.NodeDatabase	
+config-field	p2p.P2PBackend	
+config-field	p2p.ListenAddr	
+config-field	p2p.ListenPort	

@@ -1,0 +1,3 @@
+TestHaltOnUnknownSpork/SP-5_activate
+TestHaltOnUnknownSpork/SP-6_second_activation_fails
+TestHaltOnUnknownSpork/SP-7_every_node_stops_one_below_the_enforcement_height

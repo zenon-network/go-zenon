@@ -1,0 +1,56 @@
+// This file is NOT part of go-zenon. test/devnet/build-image.sh adds it to
+// package vm/constants through a Go build overlay (FAST=1) to make a test
+// binary on which rewards, lock expiry and bridge administration can be
+// reached in minutes. The node source on disk is not changed.
+//
+// A binary built with this file must never join a network that other
+// binaries are on: these values are consensus rules.
+package constants
+
+import "github.com/zenon-network/go-zenon/common/types"
+
+// FastConstants marks the test build; the end-to-end driver is built with
+// the same overlay and expects these values.
+const FastConstants = true
+
+func init() {
+	// One epoch is 60 momentums (10 minutes) instead of 8,640 (24 hours).
+	// consensus.EpochDuration is shortened to match by the second overlay file.
+	// It cannot be shorter. An epoch has to be a whole number of election
+	// periods of BlockTime * NodeCount = 300 seconds, and with exactly one
+	// period per epoch a fresh node panics at its first momentum:
+	// consensus/points.go computes the last completed epoch as
+	// (lastCompletedPeriod / periodsPerEpoch) - 1, which is -2 instead of -1
+	// when the divisor is 1, and then asks for epoch -1.
+	MomentumsPerEpoch = 60
+	// A finished epoch can be rewarded 10 seconds after it ends instead of an hour.
+	RewardTimeLimit = 10
+	// A contract update can run every 3 momentums instead of every 300.
+	UpdateMinNumMomentums = 3
+
+	// Plasma: a fusion can be cancelled after 12 momentums instead of 3,600.
+	FuseExpiration = 12
+
+	// Stake: the unit is one minute instead of 30 days, so 1 to 12 minutes.
+	StakeTimeUnitSec = 60
+	StakeTimeMinSec = StakeTimeUnitSec * 1
+	StakeTimeMaxSec = StakeTimeUnitSec * 12
+
+	// Pillar and sentinel: 2 minutes locked, then a 1 minute revoke window.
+	PillarEpochLockTime = 120
+	PillarEpochRevokeTime = 60
+	SentinelLockTimeWindow = 120
+	SentinelRevokeTimeWindow = 60
+
+	// Accelerator: a phase unit is one minute, a vote stays open for 10.
+	PhaseTimeUnit = 60
+	AcceleratorProjectVotingPeriod = 10 * PhaseTimeUnit
+
+	// Bridge and Liquidity: the administrator is devnet account 9, whose key
+	// the driver derives from the committed devnet mnemonic.
+	InitialBridgeAdministrator = types.ParseAddressPanic("z1qqcam4ycu0ta8333hx38r5j2z3ry9jjfxkc7t5")
+	// Time challenges and the unhalt delay pass in about a minute or two.
+	MinUnhaltDurationInMomentums = 6
+	MinAdministratorDelay = 12
+	MinSoftDelay = 6
+}

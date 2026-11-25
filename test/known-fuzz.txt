@@ -1,0 +1,10 @@
+./vm/embedded/implementation	FuzzPtlcBIP340DomainMutationRejected
+./vm/embedded/implementation	FuzzPtlcED25519DomainMutationRejected
+./vm/embedded/implementation	FuzzPtlcPointLockEncoding
+./vm/embedded/implementation	FuzzPtlcPointScalarWitness
+./vm/embedded/implementation	FuzzPtlcReclaimLockCheckAndVerify
+./vm/embedded/implementation	FuzzPtlcReclaimLockValidateSendBlockNoPanic
+./vm/embedded/implementation	FuzzPtlcReclaimSignatureDomainMutationRejected
+./vm/embedded/implementation	FuzzPtlcStoredInfoValidation
+./vm/embedded/implementation	FuzzPtlcValidateSendBlockNoPanic
+./vm/embedded/implementation	FuzzPtlc_CheckAndVerify

@@ -1,0 +1,6 @@
+p2p/legacy/nat/natupnp.go: github.com/huin/goupnp/dcps/internetgateway1.WANIPConnection1 struct literal uses unkeyed fields
+p2p/legacy/nat/natupnp.go: github.com/huin/goupnp/dcps/internetgateway1.WANPPPConnection1 struct literal uses unkeyed fields
+p2p/legacy/nat/natupnp.go: github.com/huin/goupnp/dcps/internetgateway2.WANIPConnection1 struct literal uses unkeyed fields
+p2p/legacy/nat/natupnp.go: github.com/huin/goupnp/dcps/internetgateway2.WANIPConnection2 struct literal uses unkeyed fields
+p2p/legacy/nat/natupnp.go: github.com/huin/goupnp/dcps/internetgateway2.WANPPPConnection1 struct literal uses unkeyed fields
+p2p/legacy/rlpx.go: crypto/ecdsa.PublicKey struct literal uses unkeyed fields
