@@ -423,7 +423,8 @@ func TestFastStake(t *testing.T) {
 	// The two stakes as the contract holds them: start and revoke times are
 	// the timestamps of the momentums their receives acknowledge (the
 	// contract stamps its frontier momentum's time), weights from the
-	// contract's own entries. A second cancel stamps the revoke time again.
+	// contract's own entries. From DynamicPlasmaSpork a second cancel is
+	// refused and leaves the revoke time unchanged.
 	var short, long stakeRecord
 
 	t.Run("FS-1_cancel_after_expiry_returns_the_znn", func(t *testing.T) {
@@ -495,24 +496,20 @@ func TestFastStake(t *testing.T) {
 		if now := epochOf(frontierTime(t)); now != firstIn {
 			t.Fatalf("epoch %d ended before the second cancel (the first executed in it, now %d): its reward update may have removed the entry, so this run is inconclusive; run the group again", firstIn, now)
 		}
-		// Within the epoch a second cancel is accepted, and pays nothing:
-		// the contract sends a zero-amount block.
+		// Within the epoch, once DynamicPlasmaSpork is active, a second cancel
+		// is refused with ErrStakeAlreadyRevoked, emits no descendant block,
+		// and leaves short.revoke at the first cancel's timestamp.
 		after := bal(t, a.Address, znn)
 		// The epoch the second cancel executed in is read before its outcome
-		// is judged: a refusal after the epoch ended is inconclusive, not a
-		// contract failure.
+		// is judged: a refusal after the epoch ended could come after the
+		// reward update removed the entry, making the run inconclusive.
 		res, err := call(a, stake, cancel, znn, units(0))
 		if err == nil && res != nil && res.Receive != nil {
 			if in := epochOf(ackTime(t, res)); in != firstIn {
 				t.Fatalf("the second cancel executed in epoch %d, the first in %d (status %d): this run is inconclusive; run the group again", in, firstIn, res.Status)
 			}
 		}
-		res = mustOK(t, res, err)
-		short.revoke = ackTime(t, res) // the second cancel stamps the revoke time again
-		if len(res.Receive.DescendantBlocks) != 1 || res.Receive.DescendantBlocks[0].Amount.Sign() != 0 {
-			t.Fatalf("second cancel of the same stake: descendants %v, want one block of amount 0", res.Receive.DescendantBlocks)
-		}
-		receiveAll(t, a, 1)
+		mustFail(t, res, err)
 		wantBig(t, "ZNN after a second cancel", bal(t, a.Address, znn), after)
 		cover(t, "E4", "contract-method", "stake.Cancel")
 	})

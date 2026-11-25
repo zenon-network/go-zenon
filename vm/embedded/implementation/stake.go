@@ -128,10 +128,14 @@ func (p *CancelStakeMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 // address and the given id — a missing entry fails with
 // constants.ErrDataNonExistent, so only the staker can cancel — once
 // the frontier momentum has reached the expiration time
-// (constants.RevokeNotDue before that). The revoke time is stamped
-// and the stored amount zeroed; the entry itself is kept until
-// computeStakeRewardsForEpoch pays its final epoch and deletes it.
-// One descendant send refunds the locked ZNN to the staker.
+// (constants.RevokeNotDue before that). From DynamicPlasmaSpork an
+// already-revoked entry cannot be cancelled again
+// (constants.ErrStakeAlreadyRevoked). The revoke time is stamped and
+// the stored amount zeroed; the entry itself is kept until
+// computeStakeRewardsForEpoch processes the first epoch ending after
+// the revoke time and deletes it (including zero-weight epochs from
+// DynamicPlasmaSpork). One descendant send refunds the locked ZNN to
+// the staker.
 func (p *CancelStakeMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -145,6 +149,10 @@ func (p *CancelStakeMethod) ReceiveBlock(context vm_context.AccountVmContext, se
 		return nil, constants.ErrDataNonExistent
 	} else {
 		common.DealWithErr(err)
+	}
+
+	if stakeInfo.RevokeTime != 0 && context.IsDynamicPlasmaSporkEnforced() {
+		return nil, constants.ErrStakeAlreadyRevoked
 	}
 
 	momentum, err := context.GetFrontierMomentum()
@@ -256,6 +264,17 @@ func computeStakeRewardsForEpoch(context vm_context.AccountVmContext, epoch uint
 
 	stakeLog.Debug("updating stake reward", "epoch", epoch, "total-reward", constants.StakeQsrRewardPerEpoch(epoch), "cumulated-stake", cumulatedStake, "start-time", startTime.Unix(), "end-time", endTime.Unix())
 	if cumulatedStake.Sign() == 0 {
+		// Nothing to distribute, but from DynamicPlasmaSpork entries revoked
+		// before endTime still leave storage during this epoch's update.
+		if context.IsDynamicPlasmaSporkEnforced() {
+			return definition.IterateStakeEntries(context.Storage(), func(stakeInfo *definition.StakeInfo) error {
+				if stakeInfo.RevokeTime != 0 && stakeInfo.RevokeTime < endTime.Unix() {
+					stakeLog.Debug("deleted stake entry", "id", stakeInfo.Id, "revoke-time", stakeInfo.RevokeTime)
+					common.DealWithErr(stakeInfo.Delete(context.Storage()))
+				}
+				return nil
+			})
+		}
 		return nil
 	}
 

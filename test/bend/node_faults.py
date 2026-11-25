@@ -128,11 +128,22 @@ FAULTS = [
      "\tstakeInfo.Amount = big.NewInt(0)\n",
      "",
      "TestEscrowModelMatchesStake",
-     # the cancels after the first, which a sound node accepts as paying zero, are refused
+     # before DynamicPlasmaSpork (which TestEscrowModelMatchesStake runs
+     # without), a sound node accepts cancels after the first as paying zero;
+     # with the fault, the second cancel tries to pay again and is refused
      ("cancel-twice",
       "AARR 1200000000000 800000000000 100000000000 50000000000 entries 1",
       "AAAA 1200000000000 800000000000 100000000000 50000000000 entries 1",
       r"cancel-twice step 4: reclaim or cancel entry 0 by 0: accepted, and the stake is there: true, holding 5000000000, want it there and empty")),
+    ("stake-cancel-twice-after-spork", "accepts a second cancel of an already-revoked stake after DynamicPlasmaSpork", "vm/embedded/implementation/stake.go",
+     "\tif stakeInfo.RevokeTime != 0 && context.IsDynamicPlasmaSporkEnforced() {\n",
+     "\tif false && stakeInfo.RevokeTime != 0 && context.IsDynamicPlasmaSporkEnforced() {\n",
+     "TestEscrowModelMatchesStakeAfterSpork",
+     # once DynamicPlasmaSpork is active, cancels after the first must be refused
+     ("cancel-twice",
+      "AAAA 1200000000000 800000000000 100000000000 50000000000 entries 0",
+      "AARR 1200000000000 800000000000 100000000000 50000000000 entries 0",
+      r"cancel-twice step 5: reclaim or cancel entry 0 by 0: accepted a second cancel of an already-revoked stake \(revoke time \d+ -> \d+\)")),
     ("fusion-cancel-keeps-entry", "pays a fusion cancel and keeps the entry", "vm/embedded/implementation/plasma.go",
      "\tcommon.DealWithErr(fusionInfo.Delete(context.Storage()))\n",
      "",
