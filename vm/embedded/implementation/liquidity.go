@@ -594,14 +594,16 @@ func (p *CancelLiquidityStakeMethod) ValidateSendBlock(block *nom.AccountBlock) 
 // ReceiveBlock refunds the staked amount in one descendant send. The
 // entry is looked up by id and sender (constants.ErrDataNonExistent
 // when absent) and must have expired, else constants.RevokeNotDue.
-// Rather than deleting the entry it records the revoke time and
-// zeroes the amount, so later reward runs can still credit the stake's
-// active time. A reward run deletes the entry when it processes the
-// first epoch ending after the revoke time and actually reaches it:
-// while the contract is halted, or when the stake's token tuple has
-// been removed or carries zero weight, that epoch's run returns before
-// the deletion and the row stays — see
-// computeLiquidityStakeRewardsForEpoch.
+// From DynamicPlasmaSpork an already-revoked entry cannot be
+// cancelled again (constants.ErrStakeAlreadyRevoked). Rather than
+// deleting the entry it records the revoke time and zeroes the
+// amount, so later reward runs can still credit the stake's active
+// time. A reward run deletes the entry when it processes the first
+// epoch ending after the revoke time: before DynamicPlasmaSpork only
+// entries that reach the reward calculation are deleted, while from
+// DynamicPlasmaSpork revoked entries on removed-tuple and zero-weight
+// paths are deleted as well (the halted-contract return still leaves
+// them in storage) — see computeLiquidityStakeRewardsForEpoch.
 func (p *CancelLiquidityStakeMethod) ReceiveBlock(context vm_context.AccountVmContext, sendBlock *nom.AccountBlock) ([]*nom.AccountBlock, error) {
 	if err := p.ValidateSendBlock(sendBlock); err != nil {
 		return nil, err
@@ -615,6 +617,10 @@ func (p *CancelLiquidityStakeMethod) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, constants.ErrDataNonExistent
 	} else {
 		common.DealWithErr(err)
+	}
+
+	if stakeInfo.RevokeTime != 0 && context.IsDynamicPlasmaSporkEnforced() {
+		return nil, constants.ErrStakeAlreadyRevoked
 	}
 
 	momentum, err := context.GetFrontierMomentum()
@@ -817,25 +823,22 @@ func computeLiquidityStakeRewardsForEpoch(context vm_context.AccountVmContext, e
 	}
 
 	for _, stakeEntry := range liquidityStakeList {
-		znnReward, ok := znnRewards[stakeEntry.TokenStandard.String()]
-		if !ok {
-			continue
-		}
-		qsrReward, ok := qsrRewards[stakeEntry.TokenStandard.String()]
-		if !ok {
+		tokenKey := stakeEntry.TokenStandard.String()
+		znnReward, hasZnn := znnRewards[tokenKey]
+		qsrReward, hasQsr := qsrRewards[tokenKey]
+		totalCumulatedStake, hasStake := cumulatedStake[tokenKey]
+		if !hasZnn || !hasQsr || !hasStake || totalCumulatedStake.Sign() == 0 {
+			// From DynamicPlasmaSpork, entries revoked before endTime are
+			// still deleted when their token has no reward share or zero
+			// cumulated weight for this epoch.
+			if stakeEntry.RevokeTime != 0 && stakeEntry.RevokeTime < endTime.Unix() && context.IsDynamicPlasmaSporkEnforced() {
+				common.DealWithErr(stakeEntry.Delete(context.Storage()))
+			}
 			continue
 		}
 
 		znnAmount := new(big.Int).Set(znnReward)
 		qsrAmount := new(big.Int).Set(qsrReward)
-
-		totalCumulatedStake, ok := cumulatedStake[stakeEntry.TokenStandard.String()]
-		if !ok {
-			continue
-		}
-		if totalCumulatedStake.Sign() == 0 {
-			continue
-		}
 
 		weight := getWeightedLiquidityStake(stakeEntry, startTime.Unix(), endTime.Unix())
 		znnAmount.Mul(znnAmount, weight)

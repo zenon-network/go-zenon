@@ -120,6 +120,9 @@ var (
 	// RevokeNotDue rejects a stake cancellation before the chosen
 	// staking period has expired.
 	RevokeNotDue = errors.New("staking period still active")
+	// ErrStakeAlreadyRevoked rejects a second cancellation of a stake or
+	// liquidity-stake entry that has already been revoked (Dynamic Plasma spork).
+	ErrStakeAlreadyRevoked = errors.New("stake entry is already revoked")
 	// ErrInvalidStakingPeriod rejects a stake whose duration is not a
 	// whole number of StakeTimeUnitSec units between StakeTimeMinSec
 	// and StakeTimeMaxSec.
