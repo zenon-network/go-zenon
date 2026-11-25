@@ -30,8 +30,6 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/pkg/errors"
-
 	"github.com/zenon-network/go-zenon/chain"
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/chain/store"
@@ -175,6 +173,31 @@ func (e *AutoReceiveMismatchError) Unwrap() error {
 	return e.Cause
 }
 
+// AutoReceiveFailedGenerationMismatchError reports that an externally supplied
+// ContractReceive block disagreed with a local embedded execution that itself
+// returned a non-nil contract error (executionErr != nil). It intentionally
+// does NOT unwrap to ErrAutoReceiveChangesHashMismatch or
+// ErrAutoReceiveHashMismatch so callers treat it as an unclassified import
+// failure rather than a permanent consensus verdict (see issue #239), while
+// still exposing the locally produced hashes so the bridge can bound repeated
+// historical reconstructions without blocking the matching receipt or later
+// retries after transient storage failures.
+type AutoReceiveFailedGenerationMismatchError struct {
+	ChangesHashMismatch bool
+	ExpectedChangesHash types.Hash
+	ExpectedHash        types.Hash
+	GotChangesHash      types.Hash
+	GotHash             types.Hash
+	ExecutionErr        error
+}
+
+func (e *AutoReceiveFailedGenerationMismatchError) Error() string {
+	if e.ChangesHashMismatch {
+		return fmt.Sprintf("auto-received block has different changes-hash expected %v but got %v (local generation failed: %v)", e.ExpectedChangesHash, e.GotChangesHash, e.ExecutionErr)
+	}
+	return fmt.Sprintf("auto-received block has different hash expected %v but got %v (local generation failed: %v)", e.ExpectedHash, e.GotHash, e.ExecutionErr)
+}
+
 // applyBlock is used to apply the block on top of the vm.context
 // After calling applyBlock vm.context.Changes() has all the changes necessary to create a nom.AccountBlockTransaction
 func (vm *VM) applyBlock(block *nom.AccountBlock) error {
@@ -206,7 +229,14 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 				// here, say) unremembered: telling the two apart needs
 				// the embedded methods to report provenance, which they
 				// do not yet. Unremembered fails safe; see issue #239.
-				return errors.Errorf("auto-received block has different changes-hash expected %v but got %v (local generation failed: %v)", generated.ChangesHash, block.ChangesHash, executionErr)
+				return &AutoReceiveFailedGenerationMismatchError{
+					ChangesHashMismatch: true,
+					ExpectedChangesHash: generated.ChangesHash,
+					ExpectedHash:        computed,
+					GotChangesHash:      block.ChangesHash,
+					GotHash:             block.Hash,
+					ExecutionErr:        executionErr,
+				}
 			}
 			return &AutoReceiveMismatchError{
 				Cause:               constants.ErrAutoReceiveChangesHashMismatch,
@@ -224,7 +254,14 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 				// nothing produces a rollback patch byte-identical to
 				// the success patch, so the changes-hash can match even
 				// though the local read failed.
-				return errors.Errorf("auto-received block has different hash expected %v but got %v (local generation failed: %v)", computed, block.Hash, executionErr)
+				return &AutoReceiveFailedGenerationMismatchError{
+					ChangesHashMismatch: false,
+					ExpectedChangesHash: generated.ChangesHash,
+					ExpectedHash:        computed,
+					GotChangesHash:      block.ChangesHash,
+					GotHash:             block.Hash,
+					ExecutionErr:        executionErr,
+				}
 			}
 			return &AutoReceiveMismatchError{
 				Cause:               constants.ErrAutoReceiveHashMismatch,

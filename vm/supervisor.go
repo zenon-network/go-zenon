@@ -133,8 +133,20 @@ func (s *Supervisor) ApplyBlockInMomentum(block *nom.AccountBlock, momentumHeigh
 
 // VerifyBlockInMomentum runs the momentum-context account-block and
 // transaction-level verification checks without opening a historical momentum
-// store or executing the VM.
-func (s *Supervisor) VerifyBlockInMomentum(block *nom.AccountBlock, momentumHeight uint64) error {
+// store or executing the VM. Panics inside the verifier (e.g., storage read
+// failures) are recovered and surfaced as constants.ErrVmRunPanic, matching
+// ApplyBlockInMomentum.
+func (s *Supervisor) VerifyBlockInMomentum(block *nom.AccountBlock, momentumHeight uint64) (internalErr error) {
+	defer func() {
+		if err := recover(); err != nil {
+			l := s.log
+			if block != nil {
+				l = l.New("block", block.Header())
+			}
+			l.Error("vm panic when verifying block", "reason", err, "stack", string(debug.Stack()))
+			internalErr = constants.ErrVmRunPanic
+		}
+	}()
 	if block.BlockType == nom.BlockTypeContractSend {
 		return errors.Errorf("can't apply BlockTypeContractSend")
 	}
