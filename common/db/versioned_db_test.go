@@ -2259,13 +2259,67 @@ func TestLevelDBManagerL2CacheByteBudget(t *testing.T) {
 	// adding early[2] must evict early[0] to stay within budget.
 	m.l2MaxBytes = entrySize*2 + entrySize/2
 	expectValue(t, m.Get(early[1]), "early-1", "val-1")
+
+	residentL2Bytes := func() int {
+		total := 0
+		for _, k := range m.l2Cache.Keys() {
+			v, ok := m.l2Cache.Peek(k)
+			if !ok {
+				t.Fatalf("key %v missing from l2Cache", k)
+			}
+			total += v.(*rollbackCache).size
+		}
+		return total
+	}
+	common.Expect(t, m.l2Bytes, residentL2Bytes())
+
+	// Repeated hits on the same cached far identifier must not double-count
+	// l2Bytes or falsely evict other resident entries.
+	for i := 0; i < 5; i++ {
+		expectValue(t, m.Get(early[0]), "early-0", "val-0")
+		common.Expect(t, m.l2Bytes, residentL2Bytes())
+		if !m.l2Cache.Contains(early[1]) {
+			t.Fatalf("hit %d on early[0] falsely evicted early[1] (l2Bytes=%d, budget=%d)", i, m.l2Bytes, m.l2MaxBytes)
+		}
+	}
+
+	// Advancing the frontier grows early[0] in place; re-reading it repeatedly
+	// must keep l2Bytes synchronized with the updated overlay size.
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "pad-extra-1", "0123456789abcdef0123456789abcdef")))
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "pad-extra-2", "0123456789abcdef0123456789abcdef")))
+	for i := 0; i < 3; i++ {
+		expectValue(t, m.Get(early[0]), "early-0", "val-0")
+		common.Expect(t, m.l2Bytes, residentL2Bytes())
+	}
+
+	// Touch early[1] so early[0] is oldest, then adding early[2] must evict
+	// early[0] to stay within the byte budget.
+	expectValue(t, m.Get(early[1]), "early-1", "val-1")
 	expectValue(t, m.Get(early[2]), "early-2", "val-2")
+	common.Expect(t, m.l2Bytes, residentL2Bytes())
 	if m.l2Bytes > m.l2MaxBytes {
 		t.Fatalf("l2Bytes %d exceeded budget %d", m.l2Bytes, m.l2MaxBytes)
 	}
 	if m.l2Cache.Contains(early[0]) {
 		t.Fatal("expected oldest l2 entry early[0] to be evicted under byte budget")
 	}
+
+	// An existing cached L2 entry that grows beyond l2MaxBytes as the frontier
+	// advances must be evicted (releasing its overlay) without corrupting
+	// l2Bytes on removal or later Purge.
+	v1, ok := m.l2Cache.Peek(early[1])
+	if !ok {
+		t.Fatal("expected early[1] to remain resident in l2Cache")
+	}
+	early1Size := v1.(*rollbackCache).size
+	m.l2MaxBytes = early1Size + 16
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "grow-past-budget-1", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")))
+	common.FailIfErr(t, m.Add(keyedTransaction(m.Frontier(), "grow-past-budget-2", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")))
+	expectValue(t, m.Get(early[1]), "early-1", "val-1")
+	if m.l2Cache.Contains(early[1]) {
+		t.Fatal("expected overgrown early[1] to be removed from l2Cache")
+	}
+	common.Expect(t, m.l2Bytes, residentL2Bytes())
 
 	// An overlay whose own size exceeds l2MaxBytes must not be retained, while
 	// still returning the exact historical view.

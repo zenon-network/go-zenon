@@ -5,7 +5,7 @@ import (
 	"sort"
 	"sync"
 
-	lru "github.com/hashicorp/golang-lru"
+	"github.com/hashicorp/golang-lru/simplelru"
 	"github.com/pkg/errors"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
@@ -15,8 +15,11 @@ import (
 )
 
 const (
-	l1CacheSize                  = 400
-	l2CacheSize                  = 16
+	l1CacheSize = 400
+	l2CacheSize = 16
+	// l2CacheMaxBytes bounds the total logical key+value payload (measured by
+	// memdb.DB.Size(), excluding skip-list index overhead and backing-buffer
+	// slack) retained across far rollback overlays in l2Cache.
 	l2CacheMaxBytes              = 32 * 1024 * 1024
 	maximumCacheHeightDifference = 360
 )
@@ -503,8 +506,8 @@ func memDBSize(d db) int {
 
 type ldbManager struct {
 	location   string
-	l1Cache    *lru.Cache
-	l2Cache    *lru.Cache
+	l1Cache    *simplelru.LRU
+	l2Cache    *simplelru.LRU
 	l2Bytes    int
 	l2MaxBytes int
 	ldb        *leveldb.DB
@@ -547,12 +550,12 @@ func newLDBManager(location string, ldb *leveldb.DB) (*ldbManager, error) {
 		},
 		rollbackPatch: RollbackPatch,
 	}
-	l1Cache, err := lru.New(l1CacheSize)
+	l1Cache, err := simplelru.NewLRU(l1CacheSize, nil)
 	if err != nil {
 		ldb.Close()
 		return nil, errors.Wrap(err, "create l1 cache")
 	}
-	l2Cache, err := lru.NewWithEvict(l2CacheSize, func(_ interface{}, value interface{}) {
+	l2Cache, err := simplelru.NewLRU(l2CacheSize, func(_ interface{}, value interface{}) {
 		m.l2Bytes -= value.(*rollbackCache).size
 	})
 	if err != nil {
