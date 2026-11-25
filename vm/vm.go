@@ -201,20 +201,28 @@ func (e *AutoReceiveFailedGenerationMismatchError) Error() string {
 // applyBlock is used to apply the block on top of the vm.context
 // After calling applyBlock vm.context.Changes() has all the changes necessary to create a nom.AccountBlockTransaction
 func (vm *VM) applyBlock(block *nom.AccountBlock) error {
+	_, err := vm.applyBlockOutcome(block)
+	return err
+}
+
+// applyBlockOutcome applies block like applyBlock and also reports whether a
+// matching ContractReceive came from a local embedded execution whose contract
+// method returned a non-nil error (executionErr != nil).
+func (vm *VM) applyBlockOutcome(block *nom.AccountBlock) (bool, error) {
 	if err := enoughPlasma(vm.context, block); err != nil {
-		return err
+		return false, err
 	}
 
 	// In case vm will update some fields of block, make a copy of block.
 	switch block.BlockType {
 	case nom.BlockTypeUserSend, nom.BlockTypeContractSend:
-		return vm.applySend(block)
+		return false, vm.applySend(block)
 	case nom.BlockTypeUserReceive:
-		return vm.applyReceive(block)
+		return false, vm.applyReceive(block)
 	case nom.BlockTypeContractReceive:
 		generated, executionErr, err := vm.generateEmbeddedReceive(block.FromBlockHash)
 		if err != nil {
-			return err
+			return false, err
 		}
 		computed := generated.ComputeHash()
 		if generated.ChangesHash != block.ChangesHash {
@@ -229,7 +237,7 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 				// here, say) unremembered: telling the two apart needs
 				// the embedded methods to report provenance, which they
 				// do not yet. Unremembered fails safe; see issue #239.
-				return &AutoReceiveFailedGenerationMismatchError{
+				return true, &AutoReceiveFailedGenerationMismatchError{
 					ChangesHashMismatch: true,
 					ExpectedChangesHash: generated.ChangesHash,
 					ExpectedHash:        computed,
@@ -238,7 +246,7 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 					ExecutionErr:        executionErr,
 				}
 			}
-			return &AutoReceiveMismatchError{
+			return false, &AutoReceiveMismatchError{
 				Cause:               constants.ErrAutoReceiveChangesHashMismatch,
 				ExpectedChangesHash: generated.ChangesHash,
 				ExpectedHash:        computed,
@@ -254,7 +262,7 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 				// nothing produces a rollback patch byte-identical to
 				// the success patch, so the changes-hash can match even
 				// though the local read failed.
-				return &AutoReceiveFailedGenerationMismatchError{
+				return true, &AutoReceiveFailedGenerationMismatchError{
 					ChangesHashMismatch: false,
 					ExpectedChangesHash: generated.ChangesHash,
 					ExpectedHash:        computed,
@@ -263,7 +271,7 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 					ExecutionErr:        executionErr,
 				}
 			}
-			return &AutoReceiveMismatchError{
+			return false, &AutoReceiveMismatchError{
 				Cause:               constants.ErrAutoReceiveHashMismatch,
 				ExpectedChangesHash: generated.ChangesHash,
 				ExpectedHash:        computed,
@@ -271,7 +279,7 @@ func (vm *VM) applyBlock(block *nom.AccountBlock) error {
 				GotHash:             block.Hash,
 			}
 		}
-		return nil
+		return executionErr != nil, nil
 	default:
 		panic("unknown block type")
 	}
