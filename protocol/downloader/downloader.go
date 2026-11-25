@@ -131,7 +131,30 @@ var (
 	//
 	// Whichever kind it is, the session ends, as after any failed import.
 	ErrBatchInconclusive = errors.New("batch inconclusive")
+	// ErrImportDeferred indicates that chain import deferred a momentum
+	// locally (for example due to a per-receive historical reconstruction
+	// cooldown) rather than rejecting the peer's bytes. The peer is not
+	// dropped or quarantined, and the downloader retries after RetryAfter.
+	ErrImportDeferred = errors.New("import deferred")
 )
+
+// ImportDeferredError wraps a local import deferral with the time at which the
+// caller may retry. errors.Is matches ErrImportDeferred.
+type ImportDeferredError struct {
+	RetryAfter time.Time
+	Cause      error
+}
+
+func (e *ImportDeferredError) Error() string {
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	return ErrImportDeferred.Error()
+}
+
+func (e *ImportDeferredError) Unwrap() error { return e.Cause }
+
+func (e *ImportDeferredError) Is(target error) bool { return target == ErrImportDeferred }
 
 // hashCheckFn is a callback type for verifying a hash's presence in the local chain.
 type hashCheckFn func(types.Hash) bool
@@ -1053,6 +1076,7 @@ func (d *Downloader) process() {
 
 		// Actually import the blocks
 		log.Info("Inserting side-chain", "num-account-blocks", len(blocks), "start-height", blocks[0].RawBlock.Momentum.Height, "end-height", blocks[len(blocks)-1].RawBlock.Momentum.Height)
+		var lastDeferredID types.HashHeight
 		for len(blocks) != 0 {
 			// Check for any termination requests
 			if atomic.LoadInt32(&d.interrupt) == 1 {
@@ -1067,11 +1091,46 @@ func (d *Downloader) process() {
 			// Try to insert the blocks, drop the peer the failure belongs to if there's an error
 			index, err := d.insertChain(raw)
 			if err != nil {
+				var deferred *ImportDeferredError
+				if errors.As(err, &deferred) {
+					if index > 0 {
+						if s := blocks[index-1].session; s != nil {
+							s.imported(raw[index-1].Momentum.Hash)
+						}
+					}
+					deferredID := raw[index].Momentum.Identifier()
+					if deferredID != lastDeferredID {
+						lastDeferredID = deferredID
+						d.cancelLock.RLock()
+						cancel := d.cancelCh
+						d.cancelLock.RUnlock()
+						wait := time.Until(deferred.RetryAfter)
+						if wait > 0 {
+							timer := time.NewTimer(wait)
+							if cancel != nil {
+								select {
+								case <-timer.C:
+								case <-cancel:
+									timer.Stop()
+									return
+								}
+							} else {
+								<-timer.C
+							}
+						}
+						if atomic.LoadInt32(&d.interrupt) == 1 {
+							return
+						}
+						blocks = blocks[index:]
+						continue
+					}
+				}
 				log.Info("Block import failed", "momentum-height", raw[index].Momentum.Height, "reason", err)
 				d.dropForImportFailure(blocks[index], err)
 				d.cancel()
 				return
 			}
+			lastDeferredID = types.ZeroHashHeight
 			// The chain now holds the batch. If nothing else moves it, its
 			// last momentum is the head, where this session's next batch
 			// attaches. If the chain already held the batch and reaches
@@ -1108,6 +1167,8 @@ func (d *Downloader) process() {
 // block.
 func (d *Downloader) dropForImportFailure(block *Block, err error) {
 	switch {
+	case errors.Is(err, ErrImportDeferred):
+		log.Info("Import deferred locally, not held against a peer", "reason", err)
 	case errors.Is(err, ErrBatchInconclusive):
 		log.Info("Import failure not held against a peer", "reason", err)
 	case errors.Is(err, ErrBatchRejected):
