@@ -19,11 +19,13 @@ import (
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm"
 	"github.com/zenon-network/go-zenon/vm/constants"
+	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
 const (
 	embeddedReceiveCacheSize           = 128
 	maxCachedEmbeddedReceivePatchBytes = 64 * 1024
+	farEmbeddedRetryCooldown           = 30 * time.Second
 )
 
 type embeddedReceiveCacheKey struct {
@@ -37,23 +39,62 @@ type embeddedReceiveCacheKey struct {
 }
 
 type embeddedReceiveCacheEntry struct {
-	changesHash types.Hash
-	hash        types.Hash
-	patchDump   []byte
+	hasDeterministic    bool
+	changesHash         types.Hash
+	hash                types.Hash
+	patchDump           []byte
+	oversizedPatch      bool
+	oversizedRetryAfter time.Time
+	hasSoftMismatch     bool
+	softChangesHash     types.Hash
+	softHash            types.Hash
+	softRetryAfter      time.Time
 }
 
 // embeddedReceiveCache bounds repeated historical reconstruction for the same
 // canonical predecessor and embedded ContractReceive when a peer delivers
-// distinct invalid variants (e.g. mutated ChangesHash) of a signed momentum.
+// distinct invalid variants (e.g. mutated ChangesHash) of a signed momentum,
+// including failed-execution receipts and oversized patches.
 type embeddedReceiveCache struct {
-	mu  sync.Mutex
-	lru *simplelru.LRU
+	mu            sync.Mutex
+	lru           *simplelru.LRU
+	maxPatchBytes int
+	retryCooldown time.Duration
+	now           func() time.Time
 }
 
 func newEmbeddedReceiveCache(size int) *embeddedReceiveCache {
 	l, err := simplelru.NewLRU(size, nil)
 	common.DealWithErr(err)
-	return &embeddedReceiveCache{lru: l}
+	return &embeddedReceiveCache{
+		lru:           l,
+		maxPatchBytes: maxCachedEmbeddedReceivePatchBytes,
+		retryCooldown: farEmbeddedRetryCooldown,
+		now:           time.Now,
+	}
+}
+
+func (c *embeddedReceiveCache) currentTime() time.Time {
+	if c == nil || c.now == nil {
+		return time.Now()
+	}
+	c.mu.Lock()
+	fn := c.now
+	c.mu.Unlock()
+	return fn()
+}
+
+func (c *embeddedReceiveCache) limits() (maxPatchBytes int, retryCooldown time.Duration, now time.Time) {
+	if c == nil {
+		return maxCachedEmbeddedReceivePatchBytes, farEmbeddedRetryCooldown, time.Now()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fn := c.now
+	if fn == nil {
+		fn = time.Now
+	}
+	return c.maxPatchBytes, c.retryCooldown, fn()
 }
 
 func (c *embeddedReceiveCache) get(key embeddedReceiveCacheKey) (embeddedReceiveCacheEntry, bool) {
@@ -76,6 +117,30 @@ func (c *embeddedReceiveCache) put(key embeddedReceiveCacheKey, entry embeddedRe
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lru.Add(key, entry)
+}
+
+func (c *embeddedReceiveCache) armOversizedCooldown(keys []embeddedReceiveCacheKey) {
+	if c == nil || len(keys) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fn := c.now
+	if fn == nil {
+		fn = time.Now
+	}
+	retryAfter := fn().Add(c.retryCooldown)
+	for _, key := range keys {
+		v, ok := c.lru.Get(key)
+		if !ok {
+			continue
+		}
+		entry := v.(embeddedReceiveCacheEntry)
+		if entry.oversizedPatch {
+			entry.oversizedRetryAfter = retryAfter
+			c.lru.Add(key, entry)
+		}
+	}
 }
 
 type chainBridge struct {
@@ -733,16 +798,26 @@ func momentumAddresses(detailed *nom.DetailedMomentum) []types.Address {
 // commits the momentum with its cache state. Under the caller's insert lock.
 // frontierBefore is the canonical frontier the caller observed before the
 // call; it tells a commit failure apart from a failure after the commit.
-func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMomentum, frontierBefore types.HashHeight) error {
+func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMomentum, frontierBefore types.HashHeight) (retErr error) {
 	// Verify every prefetched account block's body commitment matches its
 	// declared hash before executing any block in the momentum. The momentum
-	// signature authenticates only the content headers; without this pre-pass,
-	// a peer delivering a tampered body under an honest header could trigger
-	// historical store reconstruction for an earlier block in the momentum or
-	// for the tampered block itself.
+	// signature authenticates only the content headers, and BlockType itself
+	// is authenticated only by ComputeHash; checking all non-ContractSend
+	// bodies first and only exempting ContractSend blocks that are genuine
+	// historical descendants (below CommunitySporkAddressRenewalStartHeight,
+	// committed by a hash-verified ContractReceive in the same momentum)
+	// prevents a mislabeled body from bypassing this check and triggering
+	// historical store reconstruction for an earlier block.
+	contractReceiveRules := detailed.Momentum.Height >= definition.CommunitySporkAddressRenewalStartHeight
+	var historicalDescendants map[types.AccountHeader]struct{}
 	for _, block := range detailed.AccountBlocks {
 		if block.BlockType == nom.BlockTypeContractSend {
 			continue
+		}
+		for _, d := range block.DescendantBlocks {
+			if d == nil {
+				return validationFailure(verifier.ErrABHashInvalid)
+			}
 		}
 		if block.Hash.IsZero() {
 			return validationFailure(verifier.ErrABHashMissing)
@@ -750,7 +825,45 @@ func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMo
 		if block.ComputeHash() != block.Hash {
 			return validationFailure(verifier.ErrABHashInvalid)
 		}
+		if !contractReceiveRules && block.BlockType == nom.BlockTypeContractReceive && len(block.DescendantBlocks) > 0 {
+			for _, d := range block.DescendantBlocks {
+				if d.BlockType == nom.BlockTypeContractSend && d.Address == block.Address {
+					if historicalDescendants == nil {
+						historicalDescendants = make(map[types.AccountHeader]struct{})
+					}
+					historicalDescendants[d.Header()] = struct{}{}
+				}
+			}
+		}
 	}
+	for _, block := range detailed.AccountBlocks {
+		if block.BlockType != nom.BlockTypeContractSend {
+			continue
+		}
+		for _, d := range block.DescendantBlocks {
+			if d == nil {
+				return validationFailure(verifier.ErrABHashInvalid)
+			}
+		}
+		if block.Hash.IsZero() {
+			return validationFailure(verifier.ErrABHashMissing)
+		}
+		if !contractReceiveRules {
+			if _, ok := historicalDescendants[block.Header()]; ok {
+				continue
+			}
+		}
+		if block.ComputeHash() != block.Hash {
+			return validationFailure(verifier.ErrABHashInvalid)
+		}
+	}
+
+	var oversizedFarKeys []embeddedReceiveCacheKey
+	defer func() {
+		if retErr != nil && len(oversizedFarKeys) > 0 {
+			c.embeddedReceives.armOversizedCooldown(oversizedFarKeys)
+		}
+	}()
 
 	// The content limit was already checked by insertMomentums before
 	// the copy and snapshot; the verifier applies the same rule to the
@@ -769,6 +882,7 @@ func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMo
 			err         error
 			cacheKey    embeddedReceiveCacheKey
 			useCache    = block.BlockType == nom.BlockTypeContractReceive && c.embeddedReceives != nil
+			isFar       = frontierBefore.Height > block.MomentumAcknowledged.Height && frontierBefore.Height-block.MomentumAcknowledged.Height >= maxPeerEmbeddedAckGap
 		)
 		if useCache {
 			var prevPatchHash types.Hash
@@ -785,26 +899,44 @@ func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMo
 				momentumHeight: detailed.Momentum.Height,
 			}
 			if entry, ok := c.embeddedReceives.get(cacheKey); ok {
-				if block.ChangesHash != entry.changesHash {
-					err = errors.Wrapf(constants.ErrAutoReceiveChangesHashMismatch, "expected %v but got %v", entry.changesHash, block.ChangesHash)
-					log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
-					return validationFailure(err)
-				}
-				if block.Hash != entry.hash {
-					err = errors.Wrapf(constants.ErrAutoReceiveHashMismatch, "expected %v but got %v", entry.hash, block.Hash)
-					log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
-					return validationFailure(err)
-				}
-				if entry.patchDump != nil {
-					if err = c.supervisor.VerifyBlockInMomentum(block, detailed.Momentum.Height); err != nil {
+				now := c.embeddedReceives.currentTime()
+				if entry.hasDeterministic {
+					if block.ChangesHash != entry.changesHash {
+						err = errors.Wrapf(constants.ErrAutoReceiveChangesHashMismatch, "expected %v but got %v", entry.changesHash, block.ChangesHash)
 						log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
 						return validationFailure(err)
 					}
-					if patch, dumpErr := db.NewPatchFromDump(entry.patchDump); dumpErr == nil {
-						transaction = &nom.AccountBlockTransaction{
-							Block:   block,
-							Changes: patch,
+					if block.Hash != entry.hash {
+						err = errors.Wrapf(constants.ErrAutoReceiveHashMismatch, "expected %v but got %v", entry.hash, block.Hash)
+						log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
+						return validationFailure(err)
+					}
+					if entry.patchDump != nil {
+						if err = c.supervisor.VerifyBlockInMomentum(block, detailed.Momentum.Height); err != nil {
+							log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
+							return validationFailure(err)
 						}
+						if patch, dumpErr := db.NewPatchFromDump(entry.patchDump); dumpErr == nil {
+							transaction = &nom.AccountBlockTransaction{
+								Block:   block,
+								Changes: patch,
+							}
+						}
+					} else if entry.oversizedPatch && now.Before(entry.oversizedRetryAfter) {
+						err = errors.Errorf("deferring repeated historical reconstruction for oversized embedded receive %v until %v", block.Header(), entry.oversizedRetryAfter)
+						log.Info("deferring repeated historical reconstruction for oversized embedded receive", "account-block-header", block.Header(), "retry-after", entry.oversizedRetryAfter)
+						return err
+					}
+				} else if entry.hasSoftMismatch && now.Before(entry.softRetryAfter) {
+					// A previous failed-generation execution (executionErr != nil)
+					// disagreed with another delivery for this receive. Bound
+					// mismatched retries during the cooldown as an unclassified
+					// error while still allowing the matching receipt immediately
+					// and allowing any retry once the cooldown elapses.
+					if block.ChangesHash != entry.softChangesHash || block.Hash != entry.softHash {
+						err = errors.Errorf("deferring repeated historical reconstruction for failed embedded receive %v until %v", block.Header(), entry.softRetryAfter)
+						log.Info("deferring repeated historical reconstruction for failed embedded receive", "account-block-header", block.Header(), "retry-after", entry.softRetryAfter)
+						return err
 					}
 				}
 			}
@@ -815,23 +947,38 @@ func (c chainBridge) insertMomentum(insert sync.Locker, detailed *nom.DetailedMo
 			if err != nil {
 				if useCache {
 					var mismatch *vm.AutoReceiveMismatchError
+					var failedMismatch *vm.AutoReceiveFailedGenerationMismatchError
 					if errors.As(err, &mismatch) {
 						c.embeddedReceives.put(cacheKey, embeddedReceiveCacheEntry{
-							changesHash: mismatch.ExpectedChangesHash,
-							hash:        mismatch.ExpectedHash,
+							hasDeterministic: true,
+							changesHash:      mismatch.ExpectedChangesHash,
+							hash:             mismatch.ExpectedHash,
+						})
+					} else if isFar && errors.As(err, &failedMismatch) {
+						_, cooldown, now := c.embeddedReceives.limits()
+						c.embeddedReceives.put(cacheKey, embeddedReceiveCacheEntry{
+							hasSoftMismatch: true,
+							softChangesHash: failedMismatch.ExpectedChangesHash,
+							softHash:        failedMismatch.ExpectedHash,
+							softRetryAfter:  now.Add(cooldown),
 						})
 					}
 				}
 				log.Error("error while applying account-block", "reason", err, "account-block-header", block.Header())
 				return validationFailure(err)
 			}
-			if useCache && frontierBefore.Height > block.MomentumAcknowledged.Height && frontierBefore.Height-block.MomentumAcknowledged.Height >= maxPeerEmbeddedAckGap {
+			if useCache && isFar {
+				maxPatchBytes, _, _ := c.embeddedReceives.limits()
 				entry := embeddedReceiveCacheEntry{
-					changesHash: block.ChangesHash,
-					hash:        block.Hash,
+					hasDeterministic: true,
+					changesHash:      block.ChangesHash,
+					hash:             block.Hash,
 				}
-				if dump := transaction.Changes.Dump(); len(dump) <= maxCachedEmbeddedReceivePatchBytes {
+				if dump := transaction.Changes.Dump(); len(dump) <= maxPatchBytes {
 					entry.patchDump = dump
+				} else {
+					entry.oversizedPatch = true
+					oversizedFarKeys = append(oversizedFarKeys, cacheKey)
 				}
 				c.embeddedReceives.put(cacheKey, entry)
 			}
