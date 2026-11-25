@@ -284,7 +284,7 @@ func (n *lockNode) do(c call) (accepted, settled bool, note string) {
 	if n.stake && n.afterSpork {
 		sendBlock, err := n.ledger.GetAccountBlockByHash(b.Hash)
 		if err != nil || sendBlock == nil || sendBlock.PairedAccountBlock == nil {
-			n.t.Fatalf("unreadable: %v: the call could not be read back for descendant check: %v", c, err)
+			n.t.Fatalf("unreadable: %v: the call could not be read back: descendant check: %v", c, err)
 		}
 		wantDesc := 0
 		if ok {
