@@ -43,6 +43,10 @@ func TestLedger(t *testing.T) {
 		cover(t, "E1", "rpc-method", "LedgerApi.PublishRawTransaction", "LedgerApi.GetFrontierAccountBlock",
 			"LedgerApi.GetAccountBlockByHash", "LedgerApi.GetUnreceivedBlocksByAddress", "LedgerApi.GetAccountInfoByAddress",
 			"LedgerApi.GetFrontierMomentum", "PlasmaApi.GetRequiredPoWForAccountBlock")
+		// A published block passes the whole account-block pipeline
+		// (getContext, every rule in all(), then the transaction-level
+		// verifyTransaction checks) on every node that admits it.
+		cover(t, "E1", "verifier-rule", "accountBlockVerifier.all", "accountVerifier.getContext", "accountVerifier.verifyTransaction")
 		aZnn, aQsr := bal(t, a.Address, znn), bal(t, a.Address, qsr)
 
 		sendZnn = transfer(t, a, b.Address, znn, coins(1), nil)
@@ -102,6 +106,7 @@ func TestLedger(t *testing.T) {
 	t.Run("B-2e_difficulty_without_work_refused", func(t *testing.T) {
 		requires(t, "B-1")
 		cover(t, "E6", "error", "verifier.ErrABPoWInvalid")
+		cover(t, "E6", "verifier-rule", "accountBlockVerifier.pow")
 		err := tryTransfer(b, a.Address, znn, units(1), &Mutator{SkipPoW: true,
 			Plasma: func(b *nom.AccountBlock) {
 				b.FusedPlasma, b.Difficulty = 0, constants.AccountBlockBasePlasma*constants.PoWDifficultyPerPlasma
@@ -132,6 +137,7 @@ func TestLedger(t *testing.T) {
 	t.Run("B-4_receive_by_the_wrong_account_refused", func(t *testing.T) {
 		requires(t, "B-1", "B-3a")
 		cover(t, "E3", "error", "verifier.ErrABFromBlockReceiverMismatch")
+		cover(t, "E3", "verifier-rule", "accountBlockVerifier.fromHash")
 		blk := transfer(t, a, b.Address, znn, units(5), nil)
 		if _, err := net.WaitConfirmed(blk.Hash, wait); err != nil {
 			t.Fatal(err)
@@ -144,12 +150,14 @@ func TestLedger(t *testing.T) {
 	t.Run("B-5a_double_receive_refused", func(t *testing.T) {
 		requires(t, "B-1")
 		cover(t, "E4", "error", "verifier.ErrABFromBlockAlreadyReceived")
+		cover(t, "E4", "verifier-rule", "accountBlockVerifier.fromHash")
 		_, err := net.Receive(b, sendZnn.Hash, nil)
 		mustReject(t, err, "already received")
 	})
 
 	t.Run("B-5b_receive_of_an_unknown_send_refused", func(t *testing.T) {
 		cover(t, "E4", "error", "verifier.ErrABFromBlockMissing")
+		cover(t, "E4", "verifier-rule", "accountBlockVerifier.fromHash")
 		_, err := net.Receive(b, types.NewHash([]byte("no such block "+runTag)), nil)
 		mustReject(t, err, "from-block doesn't exist")
 	})
@@ -158,6 +166,7 @@ func TestLedger(t *testing.T) {
 		err := tryTransfer(a, b.Address, znn, units(1), &Mutator{Fields: func(b *nom.AccountBlock) { b.PreviousHash = types.NewHash([]byte("wrong")) }})
 		mustReject(t, err, "previous block is missing")
 		cover(t, "E6", "error", "verifier.ErrABPreviousMissing")
+		cover(t, "E6", "verifier-rule", "accountBlockVerifier.previous")
 	})
 
 	t.Run("B-5d_wrong_height_refused", func(t *testing.T) {
@@ -169,10 +178,12 @@ func TestLedger(t *testing.T) {
 		err := tryTransfer(a, b.Address, znn, units(1), &Mutator{Fields: func(b *nom.AccountBlock) { b.Height = 0 }})
 		mustReject(t, err, "height must be higher than 0")
 		cover(t, "E2", "error", "verifier.ErrABMHeightMissing")
+		cover(t, "E2", "verifier-rule", "accountBlockVerifier.previous")
 	})
 
 	t.Run("B-5e_bad_signature_refused", func(t *testing.T) {
 		cover(t, "E6", "error", "verifier.ErrABSignatureInvalid", "verifier.ErrABSignatureMissing", "verifier.ErrABPublicKeyWrongAddress", "verifier.ErrABPublicKeyMissing")
+		cover(t, "E6", "verifier-rule", "accountBlockTransactionVerifier.signature", "accountBlockTransactionVerifier.producer")
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Signed: func(b *nom.AccountBlock) { b.Signature[0] ^= 0xff }}), "signature is invalid")
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Signed: func(b *nom.AccountBlock) { b.Signature = nil }}), "signature is missing")
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Signed: func(blk *nom.AccountBlock) {
@@ -190,6 +201,7 @@ func TestLedger(t *testing.T) {
 		// missing"); the account-block value ErrABChainIdentifierMissing is
 		// never returned. The case pins what the node does.
 		cover(t, "E6", "error", "verifier.ErrMChainIdentifierMissing")
+		cover(t, "E6", "verifier-rule", "accountBlockVerifier.chainIdentifier")
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Fields: func(b *nom.AccountBlock) { b.ChainIdentifier = net.ChainID + 1 }}), "the block has a different network Id")
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Fields: func(b *nom.AccountBlock) { b.ChainIdentifier = 0 }}), "momentum chain-identifier is missing")
 	})
@@ -207,12 +219,14 @@ func TestLedger(t *testing.T) {
 
 	t.Run("B-5i_hash_not_matching_the_fields_refused", func(t *testing.T) {
 		cover(t, "E6", "error", "verifier.ErrABHashInvalid", "verifier.ErrABHashMissing")
+		cover(t, "E6", "verifier-rule", "accountBlockTransactionVerifier.hash")
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Signed: func(b *nom.AccountBlock) { b.Amount = units(2) }}), "hash is different than the one computed")
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Signed: func(b *nom.AccountBlock) { b.Hash = types.ZeroHash }}), "hash must not be zero")
 	})
 
 	t.Run("B-5j_version_and_type_refused", func(t *testing.T) {
 		cover(t, "E6", "error", "verifier.ErrABVersionMissing", "verifier.ErrABVersionInvalid", "verifier.ErrABTypeMissing", "verifier.ErrABTypeUnsupported")
+		cover(t, "E6", "verifier-rule", "accountBlockVerifier.version", "accountBlockVerifier.blockType")
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Fields: func(b *nom.AccountBlock) { b.Version = 0 }}), "version is missing")
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Fields: func(b *nom.AccountBlock) { b.Version = 2 }}), "version is invalid")
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Plasma: func(b *nom.AccountBlock) { b.BlockType = 0; b.FusedPlasma = constants.AccountBlockBasePlasma }}), "type is missing")
@@ -221,6 +235,7 @@ func TestLedger(t *testing.T) {
 
 	t.Run("B-5k_contract_block_types_from_a_user_refused", func(t *testing.T) {
 		cover(t, "E3", "error", "verifier.ErrABTypeMustBeUser", "verifier.ErrABTypeMustNotBeGenesis")
+		cover(t, "E3", "verifier-rule", "accountBlockVerifier.blockType")
 		for typ, want := range map[uint64]string{nom.BlockTypeContractSend: "can't apply BlockTypeContractSend", nom.BlockTypeContractReceive: "not suitable for user-blocks"} {
 			err := tryTransfer(a, b.Address, znn, units(1), &Mutator{Plasma: func(b *nom.AccountBlock) { b.BlockType = typ; b.FusedPlasma = constants.AccountBlockBasePlasma }})
 			mustReject(t, err, want)
@@ -234,6 +249,7 @@ func TestLedger(t *testing.T) {
 
 	t.Run("B-5l_receive_block_with_send_fields_refused", func(t *testing.T) {
 		cover(t, "E6", "error", "verifier.ErrABAmountMustBeZero", "verifier.ErrABToAddressMustBeZero")
+		cover(t, "E6", "verifier-rule", "accountBlockVerifier.amounts")
 		blk := transfer(t, a, b.Address, znn, units(7), nil)
 		if _, err := net.WaitConfirmed(blk.Hash, wait); err != nil {
 			t.Fatal(err)
@@ -247,6 +263,7 @@ func TestLedger(t *testing.T) {
 
 	t.Run("B-5m_momentum_acknowledged_refused", func(t *testing.T) {
 		cover(t, "E6", "error", "verifier.ErrABMAMustNotBeZero", "verifier.ErrABMAMissing")
+		cover(t, "E6", "verifier-rule", "accountBlockVerifier.momentumAcknowledged")
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Fields: func(b *nom.AccountBlock) { b.MomentumAcknowledged = types.HashHeight{} }}), "momentum-acknowledged missing")
 		mustReject(t, tryTransfer(a, b.Address, znn, units(1), &Mutator{Fields: func(b *nom.AccountBlock) { b.MomentumAcknowledged.Hash = types.NewHash([]byte("x")) }}), "momentum-acknowledged points to missing momentum")
 	})

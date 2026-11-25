@@ -153,6 +153,14 @@ Rewards need epochs. The mainnet epoch is 24 hours. Use a devnet build or genesi
 | B-6 | An account with more than 500 pending receives pages correctly (#285) |
 | B-7 | Contract-receive blocks and descendants: plasma fields must be zero, descendants fully checked (v0.0.10 rule from #309) |
 | B-8 | A momentum is produced every 10 seconds by the three pillars in rotation for 1,000 momentums with no gap |
+| B-10 | Amount and from-hash fields of a send: negative amount, missing ZTS, from-hash must be zero: each refused with the verifier's own error |
+| B-11 | Acknowledgement gap between the account frontier and the confirmed momentum: refused |
+| B-12 | Receive carrying data: refused with the right error while the rule is in force |
+| B-13 | Forged embedded receive: not next in line (sequencer), a base-plasma field, and an acknowledgement that must match the confirmation: each refused |
+| B-14 | Descendant blocks attached to a user send: refused |
+| B-15 | Walk the recent momentums: chain identifier, version 2 only past the dynamic-plasma enforcement, timestamp, previous, data, fusion and work prices, content, producer a registered pillar |
+| B-16 | Acknowledgement recency of the content blocks inside a momentum |
+| B-17 | The dynamic-plasma boundary read back from history: version 1 at and below the enforcement height, 2 past it |
 
 ### 5.3 RPC
 
