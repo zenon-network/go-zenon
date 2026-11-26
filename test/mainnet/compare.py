@@ -92,12 +92,15 @@ EXPECTED_API_ADDITIONS = {
 # cache, which is refreshed asynchronously (at most every 5 min), so a cold
 # node reports all-zero weights and the order degrades to ascending name
 # while a warm node reports weight order (rpc/api/embedded/pillar.go,
-# PillarInfoByWeight).  These lists are sorted by a stable key before
-# comparison; the cache-derived fields themselves (weight/rank/
-# currentStats) are stripped by normalize().
+# PillarInfoByWeight).  embedded.pillar.getByOwner answers with the same
+# PillarInfo list and the same node-local ordering.  These lists are
+# sorted by a stable key before comparison; the cache-derived fields
+# themselves (weight/rank/currentStats) are stripped by normalize().
 SORT_BEFORE_COMPARE = {
     "embedded.pillar.getAll": lambda p: (p.get("name") or "",
                                          p.get("ownerAddress") or ""),
+    "embedded.pillar.getByOwner": lambda p: (p.get("name") or "",
+                                             p.get("ownerAddress") or ""),
 }
 
 PAGE = 1000          # RpcMaxPageSize / RpcMaxCountSize
@@ -380,10 +383,12 @@ def compare_momentum_answer(ref_a, test_a):
 
 
 def is_method_missing(err):
-    """True iff the error string reports JSON-RPC method-not-found (-32601,
-    'the method X does not exist/is not available')."""
-    return err is not None and ("-32601" in err or "does not exist" in err
-                                or "not available" in err)
+    """True iff the error string reports JSON-RPC method-not-found.  Only
+    the -32601 code qualifies: message substrings such as "not available"
+    or "does not exist" also appear in unrelated errors (account-state and
+    not-found messages) and would misclassify a real error as an absent
+    method."""
+    return err is not None and "-32601" in err
 
 
 def allowlisted_diff_only(method, nr, nt):
@@ -419,9 +424,11 @@ def classify_getter(method, ref_obs, test_obs):
       - any transport failure is ERROR, never PASS/FAIL: identical
         transport failures on both sides mean neither getter answered;
       - method-missing is classified before the one-sided-error rule:
-        missing on exactly one side is INFO either way (added on dev /
-        absent on the binary under test), missing on both is INFO
-        (consistent: neither build serves it);
+        missing on the reference only is INFO (a getter added on dev
+        after the reference release); missing on the test side only is
+        FAIL (the reference serves it and the binary under test dropped
+        it — a removed RPC surface is a regression, not a note); missing
+        on both is INFO (consistent: neither build serves it);
       - identical RPC errors on both sides are PASS, different ones FAIL;
       - one-sided RPC error is FAIL;
       - results are compared after normalization (and list reordering for
@@ -457,9 +464,10 @@ def classify_getter(method, ref_obs, test_obs):
             return "INFO", d
         if tmiss:
             # The reference serves it but the binary under test does not:
-            # symmetric detection, INFO for review, never silently PASS.
+            # a removed RPC surface is a regression and must gate the run,
+            # not degrade to a note.
             d["detail"] = "method-missing-on-test"
-            return "INFO", d
+            return "FAIL", d
         if rerr is not None and terr is not None:
             # Identical errors on both sides are agreement (not-found id,
             # ...).  Different errors are a real difference in the error
@@ -885,15 +893,29 @@ def run(ref, test, args, fh):
                 diffs = [a for a, x, y in zip(batch, infos_ref, infos_test) if x != y]
                 if diffs:
                     try:
+                        hp_before = (frontier_hash(ref), frontier_hash(test))
                         still = []
                         for a in diffs:
                             x2 = rpc(ref, "ledger.getAccountInfoByAddress", [a], timeout=30)
                             y2 = rpc(test, "ledger.getAccountInfoByAddress", [a], timeout=30)
                             if x2 != y2:
                                 still.append(a)
+                        hp_after = (frontier_hash(ref), frontier_hash(test))
                     except Exception as e:
                         r["status"] = "ERROR"; r["error"] = ("pool-retry: " + str(e))[:200]
                         compared_batches += 1
+                        break
+                    if not (hp_before[0] == hp_before[1] == hp_after[0] == hp_after[1]):
+                        # The frontier advanced during the pool re-read:
+                        # the re-read then compares different chain states
+                        # and would report pool noise as a chain diff.
+                        # Retry the batch; degrade to INFO (uncounted) at
+                        # the retry bound.
+                        if attempt < FRONTIER_RETRIES:
+                            continue
+                        r["status"] = "INFO"
+                        r["detail"] = "frontier-moved-during-batch"
+                        r["attempts"] = attempt
                         break
                     if still:
                         r["status"] = "FAIL"
@@ -946,16 +968,22 @@ def run(ref, test, args, fh):
             h_after = (frontier_hash(ref), frontier_hash(test))
             status, detail = classify_getter(method, ref_obs, test_obs)
             stable = h_before[0] == h_before[1] == h_after[0] == h_after[1]
-            if "result" in ref_obs and "result" in test_obs and not stable:
-                # A result comparison across a moved frontier proves
-                # nothing; retry, and degrade to INFO after the bound.
-                # Not counted as compared: an all-frontier-moved run must
-                # not pass as exit 0 (see the no-getter-compared ERROR).
-                if attempt < FRONTIER_RETRIES:
-                    continue
-                status, detail = "INFO", {"detail": "frontier-moved-during-getter"}
-            else:
-                compared_getters += 1
+            if "result" in ref_obs and "result" in test_obs:
+                if not stable:
+                    # A result comparison across a moved frontier proves
+                    # nothing; retry, and degrade to INFO after the bound.
+                    # Not counted as compared: an all-frontier-moved run
+                    # must not pass as exit 0 (see the no-getter-compared
+                    # ERROR).
+                    if attempt < FRONTIER_RETRIES:
+                        continue
+                    status, detail = "INFO", {"detail": "frontier-moved-during-getter"}
+                else:
+                    compared_getters += 1
+            # Error and missing-method outcomes are verdicts too, but they
+            # do not count toward the no-getter-compared guard: a run
+            # whose result-bearing getters all degraded to frontier-moved
+            # must not pass on error agreements alone.
             r["status"] = status
             r.update(detail)
             for k, v in ref_meta.items():
@@ -978,8 +1006,9 @@ def run(ref, test, args, fh):
                        "retry of every batch"}, fh)
     if compared_getters == 0:
         log({"case": "M-2c-getters", "status": "ERROR",
-             "detail": "no-getter-compared: the frontier moved through every "
-                       "retry of every getter"}, fh)
+             "detail": "no-getter-compared: no result-bearing getter "
+                       "comparison completed (frontier moved through every "
+                       "retry, or only error/missing-method outcomes)"}, fh)
 
     # ---- M-2d: controls
     try:

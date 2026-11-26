@@ -82,11 +82,12 @@ consensus cache refreshed asynchronously at most every 5 minutes
 page; while the cache is cold the weights are zero placeholders and the
 order degrades to ascending name). Two nodes on the same frontier therefore
 legitimately report the same pillars in different orders with different
-cache values. The lists are sorted by `(name, ownerAddress)` before
-comparison and the cache-derived fields `weight`/`rank`/`currentStats` are
-excluded from equality; the strip is guarded by the `producerAddress`
-discriminator so a same-named field elsewhere is never silently dropped.
-Every other pillar field is compared.
+cache values. `embedded.pillar.getByOwner` answers with the same PillarInfo
+list and the same node-local ordering. These lists are sorted by
+`(name, ownerAddress)` before comparison and the cache-derived fields
+`weight`/`rank`/`currentStats` are excluded from equality; the strip is
+guarded by the `producerAddress` discriminator so a same-named field
+elsewhere is never silently dropped. Every other pillar field is compared.
 
 Classification of one getter pair (see `classify_getter`):
 
@@ -99,9 +100,10 @@ Classification of one getter pair (see `classify_getter`):
   reference but answered by the test node is `INFO`
   (`method-missing-on-ref`: a getter added on dev after the reference
   release, e.g. `embedded.plasma.getVariables`). Missing on the test node
-  but answered by the reference is also `INFO` (`method-missing-on-test`) —
-  the detection is symmetric, and a getter dropped by the binary under test
-  stays visible for review instead of hiding in a generic FAIL. Missing on
+  but answered by the reference is a `FAIL` (`method-missing-on-test`): a
+  getter the reference release serves but the binary under test dropped is
+  a removed RPC surface, i.e. a regression that must gate the run, not a
+  note. Missing on
   both is `INFO` (`method-missing-on-both`): consistent, documented as INFO
   rather than PASS so the missing surface stays visible.
 - Identical RPC-level errors on both sides are a `PASS` (e.g. a not-found
@@ -131,10 +133,15 @@ address is used and the fallback is recorded; the resolved address book
 Frontier guards: an account-info batch or a getter result comparison counts
 only when the frontier hashes of both nodes are identical before and after
 it. If the frontier moved, the comparison is retried up to 3 times before
-degrading to `INFO` (`frontier-moved-during-batch` / `-getter`), and if
-zero batches (or zero getters) were actually compared because the frontier
-kept moving, the run logs an `ERROR` record and exits non-zero — an
-all-INFO run cannot pass as exit 0 without having compared anything.
+degrading to `INFO` (`frontier-moved-during-batch` / `-getter`). The pool
+re-read of a differing account-info batch is wrapped in the same check, so
+a frontier advance during the re-read retries the batch instead of
+turning pool noise into a false `FAIL`. Only result-bearing getter
+comparisons count toward the guard: if zero batches, or zero result-bearing
+getters, were actually compared (frontier kept moving, or only
+error/missing-method outcomes), the run logs an `ERROR` record and exits
+non-zero — an all-INFO run cannot pass as exit 0 without having compared
+anything.
 
 One known false-FAIL source is handled explicitly:
 `ledger.getAccountInfoByAddress` reads the frontier account store, which

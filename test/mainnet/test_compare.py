@@ -65,14 +65,15 @@ class MethodMissing(unittest.TestCase):
         self.assertEqual(status, "INFO")
         self.assertEqual(detail["detail"], "method-missing-on-ref")
 
-    def test_missing_on_test_success_on_ref_is_info_not_fail(self):
-        # Symmetric detection: missing on the binary under test is the
-        # method-missing branch, not the one-sided-error FAIL.
+    def test_missing_on_test_success_on_ref_is_fail(self):
+        # A getter the reference serves but the binary under test dropped
+        # is a removed RPC surface: FAIL (regression), not the
+        # one-sided-error branch and not a note.
         status, detail = compare.classify_getter(
             "embedded.token.getAll",
             {"result": {"count": 0, "list": []}},
             {"rpcError": METHOD_MISSING})
-        self.assertEqual(status, "INFO")
+        self.assertEqual(status, "FAIL")
         self.assertEqual(detail["detail"], "method-missing-on-test")
 
     def test_missing_on_both_is_info_consistent(self):
@@ -81,6 +82,22 @@ class MethodMissing(unittest.TestCase):
             {"rpcError": METHOD_MISSING}, {"rpcError": METHOD_MISSING})
         self.assertEqual(status, "INFO")
         self.assertEqual(detail["detail"], "method-missing-on-both")
+
+
+class IsMethodMissing(unittest.TestCase):
+    def test_code_minus_32601_is_method_missing(self):
+        self.assertTrue(compare.is_method_missing(METHOD_MISSING))
+
+    def test_message_substring_without_code_is_not_method_missing(self):
+        # "not available" / "does not exist" in an unrelated message must
+        # not misclassify a real error as an absent method.
+        self.assertFalse(compare.is_method_missing(
+            "ledger.getAccountInfoByAddress: {'code': -32000, 'message': "
+            "'account not available'}"))
+        self.assertFalse(compare.is_method_missing(
+            "embedded.htlc.getById: {'code': -32000, 'message': "
+            "'the requested resource does not exist'}"))
+        self.assertFalse(compare.is_method_missing(None))
 
 
 class RpcErrors(unittest.TestCase):
@@ -165,6 +182,17 @@ class PillarGetAllNormalization(unittest.TestCase):
         self.assertEqual(status, "FAIL")
         self.assertEqual(detail["firstDiff"]["path"],
                          "list[0].giveMomentumRewardPercentage")
+
+    def test_get_by_owner_order_normalizes_to_pass(self):
+        # embedded.pillar.getByOwner answers with the same PillarInfo list
+        # (a plain list, not a {"list": ...} page) in the same node-local
+        # weight order as getAll; the same sort key applies.
+        warm = [pillar("bbb", "999999", 0, 55), pillar("aaa", "111111", 1, 10)]
+        cold = [pillar("aaa", "0", 0, 0), pillar("bbb", "0", 1, 0)]
+        status, detail = compare.classify_getter("embedded.pillar.getByOwner",
+                                                 {"result": warm},
+                                                 {"result": cold})
+        self.assertEqual(status, "PASS", detail)
 
 
 class ResultComparison(unittest.TestCase):
