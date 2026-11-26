@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"crypto/ed25519"
 	"math/big"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/zenon-network/go-zenon/consensus"
 	"github.com/zenon-network/go-zenon/verifier"
 	"github.com/zenon-network/go-zenon/vm/constants"
+	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
 // stubMomentumStore returns a fixed frontier momentum and nil for every
@@ -262,4 +264,177 @@ func TestApplyBlock_VerifiesTransactionOnce(t *testing.T) {
 	if counting.lastTx == nil || counting.lastTx.Changes == nil || len(tx.Block.Signature) == 0 {
 		t.Fatalf("expected GenerateFromTemplate to verify after signing and packing")
 	}
+
+	// ApplyBlock on an externally supplied embedded send whose Data is re-packed
+	// in place by ValidateSendBlock must re-run transaction verification in
+	// packBlockWith so a real verifier catches the resulting hash mismatch.
+	counting.txCalls = 0
+	acctStore := account.NewAccountStore(userAddr, db.NewMemDB())
+	common.FailIfErr(t, acctStore.SetBalance(types.QsrTokenStandard, new(big.Int).Mul(constants.FuseMinAmount, big.NewInt(10))))
+	chainStub.accountStore = acctStore
+	fuseData := definition.ABIPlasma.PackMethodPanic(definition.FuseMethodName, userAddr)
+	trailingFuse := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      1,
+		BlockType:            nom.BlockTypeUserSend,
+		Address:              userAddr,
+		ToAddress:            types.PlasmaContract,
+		Amount:               new(big.Int).Set(constants.FuseMinAmount),
+		TokenStandard:        types.QsrTokenStandard,
+		MomentumAcknowledged: frontier.Identifier(),
+		Height:               1,
+		Data:                 append(append([]byte{}, fuseData...), 0x00),
+		Difficulty:           constants.EmbeddedSimplePlasma * constants.PoWDifficultyPerPlasma,
+	}
+	_, err = s.ApplyBlock(trailingFuse)
+	common.FailIfErr(t, err)
+	common.Expect(t, counting.txCalls, 2)
+}
+
+type reverifyMomentumStore struct {
+	store.Momentum
+	frontier *nom.Momentum
+}
+
+func (s *reverifyMomentumStore) ChainIdentifier() uint64 { return 1 }
+
+func (s *reverifyMomentumStore) Identifier() types.HashHeight {
+	return s.frontier.Identifier()
+}
+
+func (s *reverifyMomentumStore) GetFrontierMomentum() (*nom.Momentum, error) {
+	return s.frontier, nil
+}
+
+func (s *reverifyMomentumStore) GetMomentumByHeight(height uint64) (*nom.Momentum, error) {
+	if height == s.frontier.Height {
+		return s.frontier, nil
+	}
+	return nil, nil
+}
+
+type reverifyCacheStore struct {
+	store.Cache
+	dynamicPlasma bool
+	fusedQsr      *big.Int
+}
+
+func (c *reverifyCacheStore) IsSporkActive(spork *types.ImplementedSpork) (bool, error) {
+	return spork == types.DynamicPlasmaSpork && c.dynamicPlasma, nil
+}
+
+func (c *reverifyCacheStore) GetChainPlasma(types.Address) (*big.Int, error) {
+	return big.NewInt(0), nil
+}
+
+func (c *reverifyCacheStore) GetStakeBeneficialAmount(types.Address) (*big.Int, error) {
+	return new(big.Int).Set(c.fusedQsr), nil
+}
+
+// TestApplyBlock_RejectsRePackedEmbeddedData pins that externally supplied
+// embedded-contract send blocks whose Data is mutated in place by
+// ValidateSendBlock (trailing bytes before DynamicPlasmaSpork, or non-canonical
+// ABI padding even after DynamicPlasmaSpork) are rejected with
+// verifier.ErrABHashInvalid rather than accepted with a corrupted Data/Hash
+// pair.
+func TestApplyBlock_RejectsRePackedEmbeddedData(t *testing.T) {
+	seed := make([]byte, ed25519.SeedSize)
+	seed[0] = 42
+	priv := ed25519.NewKeyFromSeed(seed)
+	pub := priv.Public().(ed25519.PublicKey)
+	userAddr := types.PubKeyToAddress(pub)
+
+	frontier := &nom.Momentum{
+		Hash:   types.HexToHashPanic("01aab631b44daf47f68810a416bea4ed3695e89c0ab9668a0ab8acb834dfb900"),
+		Height: 1,
+	}
+
+	newSupervisor := func(dynamicPlasma bool) *Supervisor {
+		tenFuse := new(big.Int).Mul(constants.FuseMinAmount, big.NewInt(10))
+		acctStore := account.NewAccountStore(userAddr, db.NewMemDB())
+		common.FailIfErr(t, acctStore.SetBalance(types.QsrTokenStandard, tenFuse))
+		chainStub := &stubChainForGenerate{
+			momentumStore: &reverifyMomentumStore{frontier: frontier},
+			accountStore:  acctStore,
+			cacheStore: &reverifyCacheStore{
+				dynamicPlasma: dynamicPlasma,
+				fusedQsr:      tenFuse,
+			},
+		}
+		return NewSupervisor(chainStub, nil)
+	}
+
+	canonicalFuse := definition.ABIPlasma.PackMethodPanic(definition.FuseMethodName, userAddr)
+	trailingFuse := append(append([]byte{}, canonicalFuse...), 0x00)
+	nonCanonicalPadFuse := append([]byte{}, canonicalFuse...)
+	// Flip a byte in the 12-byte left-padding of the 32-byte ABI address word
+	// (bytes [4..15]): same exact length as canonical (passes CheckNoTrailingBytes),
+	// unpacked identically by ABIPlasma.UnpackMethod, then zeroed by PackMethod.
+	nonCanonicalPadFuse[4] = 0x01
+
+	makeSignedFuse := func(data []byte) *nom.AccountBlock {
+		b := &nom.AccountBlock{
+			Version:              1,
+			ChainIdentifier:      1,
+			BlockType:            nom.BlockTypeUserSend,
+			Address:              userAddr,
+			ToAddress:            types.PlasmaContract,
+			Amount:               new(big.Int).Set(constants.FuseMinAmount),
+			TokenStandard:        types.QsrTokenStandard,
+			MomentumAcknowledged: frontier.Identifier(),
+			Height:               1,
+			Data:                 append([]byte{}, data...),
+			FusedPlasma:          constants.EmbeddedSimplePlasma + uint64(len(data))*constants.ABByteDataPlasma,
+		}
+		b.Hash = b.ComputeHash()
+		b.PublicKey = append([]byte{}, pub...)
+		b.Signature = ed25519.Sign(priv, b.Hash.Bytes())
+		return b
+	}
+
+	t.Run("pre_dynamic_plasma_trailing_bytes_ApplyBlock", func(t *testing.T) {
+		s := newSupervisor(false)
+		tx, err := s.ApplyBlock(makeSignedFuse(trailingFuse))
+		common.ExpectError(t, err, verifier.ErrABHashInvalid)
+		common.Expect(t, tx, nil)
+	})
+
+	t.Run("pre_dynamic_plasma_trailing_bytes_ApplyBlockInMomentum", func(t *testing.T) {
+		s := newSupervisor(false)
+		tx, err := s.ApplyBlockInMomentum(makeSignedFuse(trailingFuse), 10)
+		common.ExpectError(t, err, verifier.ErrABHashInvalid)
+		common.Expect(t, tx, nil)
+	})
+
+	t.Run("pre_dynamic_plasma_canonical_accepted", func(t *testing.T) {
+		s := newSupervisor(false)
+		tx, err := s.ApplyBlock(makeSignedFuse(canonicalFuse))
+		common.FailIfErr(t, err)
+		if tx == nil || tx.Block.ComputeHash() != tx.Block.Hash {
+			t.Fatalf("expected valid transaction with matching hash, got %+v", tx)
+		}
+	})
+
+	t.Run("post_dynamic_plasma_trailing_bytes_rejected_by_spork_rule", func(t *testing.T) {
+		s := newSupervisor(true)
+		tx, err := s.ApplyBlock(makeSignedFuse(trailingFuse))
+		common.ExpectError(t, err, constants.ErrABDataTrailingBytes)
+		common.Expect(t, tx, nil)
+	})
+
+	t.Run("post_dynamic_plasma_noncanonical_padding_rejected", func(t *testing.T) {
+		s := newSupervisor(true)
+		tx, err := s.ApplyBlock(makeSignedFuse(nonCanonicalPadFuse))
+		common.ExpectError(t, err, verifier.ErrABHashInvalid)
+		common.Expect(t, tx, nil)
+	})
+
+	t.Run("post_dynamic_plasma_canonical_accepted", func(t *testing.T) {
+		s := newSupervisor(true)
+		tx, err := s.ApplyBlock(makeSignedFuse(canonicalFuse))
+		common.FailIfErr(t, err)
+		if tx == nil || tx.Block.ComputeHash() != tx.Block.Hash {
+			t.Fatalf("expected valid transaction with matching hash, got %+v", tx)
+		}
+	})
 }
