@@ -167,14 +167,17 @@ func (s *Supervisor) VerifyBlockInMomentum(block *nom.AccountBlock, momentumHeig
 // ApplyBlock verifies and executes a fully-formed account block
 // received from outside (RPC publish, chain bridge) and returns the
 // transaction pairing it with the state patch it produces. The VM
-// never signs the block and leaves the author's hashed and signature
-// fields alone, but it does populate the plasma accounting fields
+// never signs the block, populates the plasma accounting fields
 // (TotalPlasma from PoW plus fused plasma, BasePlasma from the
-// block's cost) during execution. ChangesHash is validated only for
-// ContractReceive blocks, whose regenerated counterpart must match;
-// for user blocks it is recorded as authored, not checked against
-// the produced patch. ContractSend blocks are rejected — they only
-// exist as descendants of a ContractReceive.
+// block's cost) during execution, and may canonically re-pack Data in
+// place inside an embedded method's ValidateSendBlock; any externally
+// supplied block whose hash changes during execution is re-verified in
+// packBlockWith and rejected with verifier.ErrABHashInvalid.
+// ChangesHash is validated only for ContractReceive blocks, whose
+// regenerated counterpart must match; for user blocks it is recorded
+// as authored, not checked against the produced patch. ContractSend
+// blocks are rejected — they only exist as descendants of a
+// ContractReceive.
 func (s *Supervisor) ApplyBlock(block *nom.AccountBlock) (*nom.AccountBlockTransaction, error) {
 	if block.BlockType == nom.BlockTypeContractSend {
 		return nil, errors.Errorf("can't apply BlockTypeContractSend")
@@ -391,14 +394,16 @@ func (s *Supervisor) applyBlockWithStatus(block *nom.AccountBlock, signFunc Sign
 	}
 	// For externally supplied blocks (signFunc == nil), verify hash,
 	// signature, producer, plasma fields, and descendants before opening any
-	// historical momentum store or executing the VM. The block is not re-signed
-	// or mutated in fields covered by verify afterwards, so skip the duplicate
-	// verify pass in packBlockWith.
+	// historical momentum store or executing the VM. Skip the duplicate verify
+	// pass in packBlockWith unless VM execution mutates a hash-covered field
+	// (e.g. embedded ValidateSendBlock canonically re-packing block.Data).
 	packVerify := verify
+	var preHash types.Hash
 	if signFunc == nil {
 		if err := verify(&nom.AccountBlockTransaction{Block: block}); err != nil {
 			return nil, false, err
 		}
+		preHash = block.ComputeHash()
 		packVerify = nil
 	}
 	context := s.newBlockContext(block)
@@ -406,6 +411,9 @@ func (s *Supervisor) applyBlockWithStatus(block *nom.AccountBlock, signFunc Sign
 	methodFailed, err := vm.applyBlockOutcome(block)
 	if err != nil {
 		return nil, methodFailed, err
+	}
+	if signFunc == nil && block.ComputeHash() != preHash {
+		packVerify = verify
 	}
 
 	transaction, err = s.packBlockWith(context, block, signFunc, packVerify)

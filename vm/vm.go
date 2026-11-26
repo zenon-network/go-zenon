@@ -213,7 +213,6 @@ func (vm *VM) applyBlockOutcome(block *nom.AccountBlock) (bool, error) {
 		return false, err
 	}
 
-	// In case vm will update some fields of block, make a copy of block.
 	switch block.BlockType {
 	case nom.BlockTypeUserSend, nom.BlockTypeContractSend:
 		return false, vm.applySend(block)
