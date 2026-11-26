@@ -23,37 +23,50 @@ func TestSporkEdge(t *testing.T) {
 	if !live["dynamic-plasma"] {
 		t.Skip("acknowledgement recency (#280) is enforced only once dynamic plasma is")
 	}
-	// enf is the highest enforcement height of a spork that is in force at
-	// the frontier, and top the spork first enforced there whose id sorts
-	// first: a block acknowledging one momentum below enf is refused, and
-	// the refusal names top (the rule sorts the enforced set by id so every
-	// node names the same spork). Sporks whose enforcement height is still
-	// ahead (a staged run positioned below them) are not counted: the rule
+	// enforcedNow returns the highest spork enforcement height in force at
+	// the current frontier and, of the sporks first enforced there, the one
+	// whose id sorts first: a block acknowledging one momentum below that
+	// height is refused, and the refusal names that spork (the rule sorts
+	// the enforced set by id so every node names the same spork). Sporks
+	// whose enforcement height is still ahead are not counted: the rule
 	// compares against the sporks enforced at the frontier, and acking a
-	// height that does not exist yet would fail for the wrong reason.
-	enf := uint64(0)
-	for name, h := range sporkHeights {
-		if live[name] && h > enf {
-			enf = h
+	// height that does not exist yet would fail for the wrong reason. The
+	// frontier is read at call time, like the verifier reads chain state
+	// when the block is checked, so a spork enforced after the harness took
+	// its startup snapshot (a staged run crossing an enforcement during
+	// setup) is counted.
+	enforcedNow := func(t *testing.T) (uint64, types.Hash, string) {
+		t.Helper()
+		f, err := net.Frontier()
+		if err != nil {
+			t.Fatal(err)
 		}
+		enf := uint64(0)
+		for _, h := range sporkHeights {
+			if h <= f.Height && h > enf {
+				enf = h
+			}
+		}
+		var top types.Hash
+		topName := ""
+		for name, h := range sporkHeights {
+			if h != enf {
+				continue
+			}
+			id := sporkIDs[name]
+			if top == types.ZeroHash || bytes.Compare(id.Bytes(), top.Bytes()) < 0 {
+				top = id
+				topName = sporkItem(t, name)
+			}
+		}
+		return enf, top, topName
 	}
+	enf, _, _ := enforcedNow(t)
 	if enf == 0 {
 		t.Skip("every spork is enforced from height 0; there is no momentum before them")
 	}
 	if enf < 2 {
 		t.Skipf("the highest enforcement in force is %d; there is no momentum below it to acknowledge", enf)
-	}
-	var top types.Hash
-	topName := ""
-	for name, h := range sporkHeights {
-		if !live[name] || h != enf {
-			continue
-		}
-		id := sporkIDs[name]
-		if top == types.ZeroHash || bytes.Compare(id.Bytes(), top.Bytes()) < 0 {
-			top = id
-			topName = sporkItem(t, name)
-		}
 	}
 
 	// a is funded by hand and deliberately kept unreceived: the refused
@@ -84,8 +97,10 @@ func TestSporkEdge(t *testing.T) {
 		return list.List[0].Hash
 	}
 	// acking builds a block that acknowledges the canonical momentum at the
-	// given height, however far in the past that is.
-	acking := func(height uint64) *Mutator {
+	// given height, however far in the past that is. The subtest's t is
+	// passed in so the momentum lookup's coverage lands on the case, not on
+	// the outer test.
+	acking := func(t *testing.T, height uint64) *Mutator {
 		h := momentumHash(t, height)
 		return &Mutator{Fields: func(blk *nom.AccountBlock) {
 			blk.MomentumAcknowledged = types.HashHeight{Hash: h, Height: height}
@@ -94,11 +109,15 @@ func TestSporkEdge(t *testing.T) {
 
 	t.Run("S-7_ack_below_the_highest_enforcement_refused", func(t *testing.T) {
 		// The refusal wraps both sentinels: the verifier's ErrABMAStale
-		// around the chain rule's ErrStaleMomentumAcknowledged.
+		// around the chain rule's ErrStaleMomentumAcknowledged. The expected
+		// spork is read from the frontier now, not from the startup snapshot:
+		// the funding setup above takes momentums, and a staged run can cross
+		// an enforcement in between.
+		enf, top, topName := enforcedNow(t)
 		cover(t, "E7", "error", "chain.ErrStaleMomentumAcknowledged", "verifier.ErrABMAStale")
 		cover(t, "E7", "verifier-rule", "accountBlockVerifier.acknowledgementRecency")
 		cover(t, "E7", "spork", topName)
-		err := tryTransfer(a, b.Address, znn, units(1), acking(enf-1))
+		err := tryTransfer(a, b.Address, znn, units(1), acking(t, enf-1))
 		mustReject(t, err, "momentum-acknowledged")
 		if msg := err.Error(); !strings.Contains(msg, top.String()) {
 			t.Errorf("refusal %q does not name the spork first enforced at %d (%s)", msg, enf, top)

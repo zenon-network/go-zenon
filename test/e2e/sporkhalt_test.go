@@ -149,7 +149,7 @@ func TestSporkUnknownBinary(t *testing.T) {
 		}
 		return m.Result.Height, nil
 	}
-	waitFrontier := func(atLeast uint64, what string) uint64 {
+	waitFrontier := func(t *testing.T, atLeast uint64, what string) uint64 {
 		t.Helper()
 		deadline := time.Now().Add(wait)
 		for {
@@ -167,8 +167,11 @@ func TestSporkUnknownBinary(t *testing.T) {
 	// image and waits for its RPC to answer. The staged genesis and the
 	// libp2p syncnode config override are mounted exactly as the oldnode
 	// compose service mounts them (test/devnet/compose.oldnode.yml), so a
-	// first boot seeds the same chain as the five standard nodes.
-	run := func(name, img string) uint64 {
+	// first boot seeds the same chain as the five standard nodes. The
+	// subtest's t is passed in and the container's removal is registered on
+	// it right after docker run succeeds: a fatal in the readiness wait must
+	// not leave the container holding its fixed name and RPC port.
+	run := func(t *testing.T, name, img string) uint64 {
 		t.Helper()
 		out, err := docker("run", "-d", "--name", name, "--network", network,
 			"-v", volume+":/root/.znn",
@@ -179,7 +182,8 @@ func TestSporkUnknownBinary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("start %s (%s): %v (%s)", name, img, err, out)
 		}
-		return waitFrontier(1, "boot of "+name)
+		t.Cleanup(func() { docker("rm", "-f", name) })
+		return waitFrontier(t, 1, "boot of "+name)
 	}
 	logsContain := func(name, needle string) bool {
 		out, _ := docker("logs", name)
@@ -197,7 +201,15 @@ func TestSporkUnknownBinary(t *testing.T) {
 	// confusingly. test/devnet/up.sh removes the volume with the old
 	// chain; a manual oldnode start must reset it first.
 	if status, _, err := state(oldnode); err != nil || status != "running" {
-		t.Fatalf("the oldnode container %s is not running (%q, %v): start it per the group comment (compose.oldnode.yml)", oldnode, status, err)
+		// An old binary that exited on a stale volume (past the enforcement
+		// height) fails here, before the frontier check below can name the
+		// cause: say so and give the reset, or the fast-fail sends the
+		// reader looking for a start problem instead.
+		hint := ""
+		if status == "exited" && logsContain(oldnode, "unimplemented spork") {
+			hint = fmt.Sprintf(" — the logs name an unimplemented spork, so the volume %s is likely stale (already past the enforcement height): reset it (docker rm -f %s; docker volume rm %s) and start the oldnode again", volume, oldnode, volume)
+		}
+		t.Fatalf("the oldnode container %s is not running (%q, %v)%s: start it per the group comment (compose.oldnode.yml)", oldnode, status, err, hint)
 	}
 	if got, err := frontierAt(); err == nil && got > enf-1 {
 		t.Fatalf("the oldnode volume is stale: its frontier %d is past the enforcement height %d; reset it (docker rm -f %s; docker volume rm %s) and start the oldnode again", got, enf, oldnode, volume)
@@ -210,7 +222,7 @@ func TestSporkUnknownBinary(t *testing.T) {
 		// enforcement height, still running. (On released v0.0.10 the
 		// same condition exited 2; this tree rolls back and stays up —
 		// see the group comment.)
-		waitFrontier(enf-1, "old node syncing to one below the enforcement height")
+		waitFrontier(t, enf-1, "old node syncing to one below the enforcement height")
 		time.Sleep(30 * time.Second) // three producer slots: it must not advance
 		got, err := frontierAt()
 		if err != nil {
@@ -255,10 +267,8 @@ func TestSporkUnknownBinary(t *testing.T) {
 		if out, err := docker("rm", "-f", oldnode); err != nil {
 			t.Fatalf("remove the live old node: %v (%s)", err, out)
 		}
-		run("oldnode-sync-past", image)
-		// A fatal below must not leave the helper holding the RPC port.
-		t.Cleanup(func() { docker("rm", "-f", "oldnode-sync-past") })
-		volumeAt = waitFrontier(enf+3, "stock binary syncing the oldnode volume past the enforcement height")
+		run(t, "oldnode-sync-past", image)
+		volumeAt = waitFrontier(t, enf+3, "stock binary syncing the oldnode volume past the enforcement height")
 		if out, err := docker("rm", "-f", "oldnode-sync-past"); err != nil {
 			t.Fatalf("remove the sync-past container: %v (%s)", err, out)
 		}
@@ -310,8 +320,7 @@ func TestSporkUnknownBinary(t *testing.T) {
 		// had reached. (Polling the first RPC frontier instead would be
 		// racy: on a short devnet the node can sync past the volume height
 		// before the first successful poll.)
-		run(oldnode, image)
-		t.Cleanup(func() { docker("rm", "-f", oldnode) })
+		run(t, oldnode, image)
 		var loaded uint64
 		deadline := time.Now().Add(2 * time.Minute)
 		for {
@@ -332,7 +341,7 @@ func TestSporkUnknownBinary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := waitFrontier(want.Height, "recovered node catching up on its existing data")
+		got := waitFrontier(t, want.Height, "recovered node catching up on its existing data")
 		t.Logf("recovered node loaded height %d from disk and reached height %d (frontier at start %d) on its existing data", loaded, got, want.Height)
 	})
 }

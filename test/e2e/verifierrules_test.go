@@ -6,32 +6,28 @@ import (
 	"math/big"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
-	"github.com/zenon-network/go-zenon/wallet"
 )
 
 // TestVerifierAccountRules covers the account-block verifier rules that the
 // B-series in ledger_test.go does not reach: send-side amount fields, the
 // momentum-acknowledged gap check, the Dynamic-Plasma-gated receive-data
-// rule, the transaction-level plasma/descendant/public-key rules, and the
-// embedded-receive sequencer order. Every case publishes a block a correct
-// client would never build and expects the pool to refuse it with the
-// verifier's own message; refusals leave no trace on the chain.
+// rule, and the transaction-level plasma/descendant/public-key rules. Every
+// case publishes a block a correct client would never build and expects the
+// pool to refuse it with the verifier's own message; refusals leave no
+// trace on the chain.
 //
-// The sequencer and plasma-fields cases race the pillar that
-// auto-generates contract receives. Measured on the devnet: sends
-// confirm in momentum N and sit unreceived until the auto-receives
-// commit in momentum N+1, but the pool's sequencer front advances
-// earlier, as the auto-receive blocks arrive over gossip inside that
-// window. The cases forge receives in tight retry loops and publish a
-// fresh set of sends only when the sequencer drained before the
-// expected refusal.
+// The forged embedded-receive cases (B-13) are gone: since #327 the RPC
+// boundary refuses any block addressed to an embedded contract
+// (ErrEmbeddedAddressNotAllowed, pinned by TestLedger/B-5n), so the
+// sequencer, changes-hash and acknowledgement rules behind it are not
+// reachable over JSON-RPC. They stay covered by the verifier and
+// vm/embedded/tests unit tests.
 func TestVerifierAccountRules(t *testing.T) {
 	group(t)
 	a := newAccount(t, 130, 50, 800, 1000)
@@ -116,303 +112,6 @@ func TestVerifierAccountRules(t *testing.T) {
 		_, err := net.Receive(b, blk.Hash, withData)
 		mustReject(t, err, "data must be empty on receive blocks")
 		receiveAll(t, b, 1)
-	})
-
-	t.Run("B-13_forged_embedded_receive_refused", func(t *testing.T) {
-		// Each refusal is credited on the child that exercises it, not here:
-		// a -run selection of one child must not record the others' items.
-
-		// prepareForge pre-builds a forged contract receive for fromHash:
-		// every field except the acknowledging momentum, which only exists
-		// once the send confirms. The contract frontier is read when the
-		// forge is built; it stays valid until the contract's own pool
-		// blocks move, which is exactly the arrival of the auto-receives
-		// the forge races.
-		prepareForge := func(t *testing.T, fromHash types.Hash, tail func(*nom.AccountBlock)) *nom.AccountBlock {
-			t.Helper()
-			var frontier *api.AccountBlock
-			get(t, &frontier, "ledger.getFrontierAccountBlock", types.PlasmaContract)
-			height, prevHash := uint64(1), types.ZeroHash
-			if frontier != nil {
-				height, prevHash = frontier.Height+1, frontier.Hash
-			}
-			blk := &nom.AccountBlock{
-				Version:         1,
-				ChainIdentifier: net.ChainID,
-				BlockType:       nom.BlockTypeContractReceive,
-				Address:         types.PlasmaContract,
-				FromBlockHash:   fromHash,
-				Height:          height,
-				PreviousHash:    prevHash,
-				Amount:          new(big.Int),
-				TokenStandard:   types.ZeroTokenStandard,
-			}
-			if tail != nil {
-				tail(blk)
-			}
-			return blk
-		}
-
-		// fireForge patches the acknowledgement, hashes and publishes with a
-		// single RPC round trip, so the forge lands inside the pre-pop
-		// window. Publishing directly bypasses sendBy's refusal recording,
-		// so a refusal is recorded here: the end-of-run no-trace check must
-		// see every refused hash.
-		fireForge := func(planned *nom.AccountBlock, conf types.HashHeight) error {
-			planned.MomentumAcknowledged = conf
-			planned.Hash = planned.ComputeHash()
-			err := net.Publish(planned)
-			if err != nil {
-				net.NoteRefused(planned, err)
-			}
-			return err
-		}
-
-		// waitConfirmedAll polls until every send is confirmed and returns
-		// the momentum that confirmed the last one. The poll is tight: the
-		// forge races the auto-receives, which the producer generates and
-		// gossips right after broadcasting the confirming momentum, so the
-		// pool's sequencer front on this node starts advancing within
-		// milliseconds of the confirmation becoming visible.
-		waitConfirmedAll := func(t *testing.T, sends ...*nom.AccountBlock) types.HashHeight {
-			t.Helper()
-			deadline := time.Now().Add(wait)
-			var conf types.HashHeight
-			for {
-				done := true
-				for i, s := range sends {
-					cb, err := net.Block(0, s.Hash)
-					if err != nil || cb == nil || cb.ConfirmationDetail == nil {
-						done = false
-					} else if i == len(sends)-1 {
-						conf = types.HashHeight{Hash: cb.ConfirmationDetail.MomentumHash, Height: cb.ConfirmationDetail.MomentumHeight}
-					}
-				}
-				if done {
-					return conf
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("sends not confirmed in time")
-				}
-				time.Sleep(5 * time.Millisecond)
-			}
-		}
-
-		// raceForgery publishes a fresh set of five valid Fuse sends to the
-		// plasma contract and, the moment they confirm, fires a forged
-		// receive of the LAST one; it returns the last send's hash once the
-		// verifier refuses with want.
-		//
-		// The committed mailbox keeps the sends unreceived until the
-		// momentum after their confirmation, but the producer generates the
-		// real auto-receives right after broadcasting that momentum and
-		// gossips them, so the pool's sequencer front advances within
-		// milliseconds of the confirmation becoming visible. The forge must
-		// arrive while the front is still behind the last send: five sends
-		// widen that window to the gossip spacing of four auto-receives,
-		// and the forge is built only after the set confirms (so the
-		// contract frontier it chains onto is current) and fired on a tight
-		// poll, because a forge built and sent after a slow poll lands
-		// after the front has advanced and never reaches the rule. Reaching
-		// the VM (a changes-hash refusal) or finding the queue drained
-		// means the window was missed, not that the sequencer accepts the
-		// forgery, so the case retries with a fresh send set; a sequencer
-		// that never refuses fails by the deadline. The deadline is checked
-		// at the top of every attempt so a losing streak fails instead of
-		// spinning (and draining the sending accounts).
-		raceForgery := func(t *testing.T, want string, tail func(*nom.AccountBlock)) types.Hash {
-			t.Helper()
-			deadline := time.Now().Add(wait)
-		attempts:
-			for {
-				if time.Now().After(deadline) {
-					t.Fatalf("no %q refusal within the deadline", want)
-				}
-				fuse := definition.ABIPlasma.PackMethodPanic(definition.FuseMethodName, a.Address)
-				sends := []*nom.AccountBlock{
-					transfer(t, a, types.PlasmaContract, qsr, coins(10), fuse),
-					transfer(t, b, types.PlasmaContract, qsr, coins(10), fuse),
-					transfer(t, a, types.PlasmaContract, qsr, coins(10), fuse),
-					transfer(t, b, types.PlasmaContract, qsr, coins(10), fuse),
-					transfer(t, a, types.PlasmaContract, qsr, coins(10), fuse),
-				}
-				target := sends[len(sends)-1].Hash
-				conf := waitConfirmedAll(t, sends...)
-				planned := prepareForge(t, target, tail)
-				switch err := fireForge(planned, conf); {
-				case err == nil:
-					t.Fatalf("forged receive (%q case) was accepted", want)
-				case contains(err, want):
-					return target
-				case contains(err, "changes-hash"):
-					// The pool's sequencer front advanced past the target
-					// before the forge arrived, so the forge was next in line
-					// and the VM rightly refused the stale forge. Not a
-					// verdict on the sequencer rule: try a fresh send set.
-					t.Logf("attempt lost to the changes-hash wall (front already past the target): %v", err)
-					continue attempts
-				case contains(err, "already received") || contains(err, "Nothing to receive") || contains(err, "cemented"):
-					// The sequencer drained, or a momentum committed the real
-					// receives: the pool state this attempt raced is gone, so
-					// try a fresh send set rather than reading a verdict into
-					// a timing outcome.
-					t.Logf("attempt lost, pool state gone: %v", err)
-					continue attempts
-				default:
-					t.Fatalf("refused with %q, want %q", err, want)
-				}
-			}
-		}
-
-		t.Run("B-13a_not_next_in_line_refused", func(t *testing.T) {
-			cover(t, "E6", "error", "verifier.ErrABSequencerNotNext")
-			cover(t, "E6", "verifier-rule", "accountBlockVerifier.sequencer")
-			target := raceForgery(t, "Not next in line", nil)
-			// The race sends are followed by auto-generated contract
-			// receives that pass the sequencer and the contract-receive
-			// rules on every node that inserts them — the happy path this
-			// race depends on. Credit that positive coverage only after
-			// the target's receive is committed: the committed mailbox no
-			// longer lists the send (the driver's received map only tracks
-			// receives it published itself, so it cannot see the pillars'
-			// auto-receives). The refusal above alone does not show a
-			// valid receive passed the rules.
-			deadline := time.Now().Add(wait)
-			for {
-				un, err := net.Unreceived(types.PlasmaContract)
-				if err != nil {
-					t.Fatalf("unreceived sends of the plasma contract: %v", err)
-				}
-				pending := false
-				for _, u := range un {
-					if u.Hash == target {
-						pending = true
-						break
-					}
-				}
-				if !pending {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatalf("the auto-generated receive of %s not committed within %v", target, wait)
-				}
-				time.Sleep(500 * time.Millisecond)
-			}
-			cover(t, "E1", "verifier-rule", "accountBlockTransactionVerifier.contractReceiveRulesActive")
-		})
-
-		// The forged receive of the actual next send passes the block-level
-		// rules and reaches the transaction-level plasma and signature rules:
-		// a contract receive must carry zero base/total plasma and no public
-		// key (both excluded from the hash, so the honest hash still checks
-		// out — that binding is what these rules add).
-		// publishOne puts a single valid Fuse send into the pool and
-		// returns its hash. The plasma-fields and public-key cases forge
-		// the FIRST send, whose pool-level pre-pop window opens at its
-		// confirmation and ends when the producer's auto-receives arrive
-		// over gossip — measured at well under two seconds.
-		publishOne := func(t *testing.T, from *wallet.KeyPair) types.Hash {
-			t.Helper()
-			fuse := definition.ABIPlasma.PackMethodPanic(definition.FuseMethodName, a.Address)
-			return transfer(t, from, types.PlasmaContract, qsr, coins(10), fuse).Hash
-		}
-
-		t.Run("B-13b_changes_hash_wall_refused", func(t *testing.T) {
-			cover(t, "E6", "error", "vm/constants.ErrAutoReceiveChangesHashMismatch")
-			// This case tests the VM changes-hash wall, not the
-			// transaction-level plasmaFields rule: the forged receive
-			// carries a lying BasePlasma (excluded from the block hash, so
-			// the forgery rides an honest hash), but a contract receive is
-			// re-generated by the VM on arrival and its changes-hash and
-			// hash must match the regeneration — the refusal fires there,
-			// before plasmaFields is reached. Removing the BasePlasma
-			// mutation gives the same refusal. The plasmaFields rule's
-			// contract-receive arm is only reachable by a forger who
-			// executes the contract to compute a valid changes-hash — it
-			// is covered by unit tests (vm/embedded/tests) instead.
-			deadline := time.Now().Add(wait)
-		attempts2:
-			for {
-				if time.Now().After(deadline) {
-					t.Fatal("no changes-hash refusal within the deadline")
-				}
-				send := publishOne(t, a)
-				planned := prepareForge(t, send, func(blk *nom.AccountBlock) { blk.BasePlasma = 1 })
-				inner := time.Now().Add(45 * time.Second)
-				for {
-					cb, err := net.Block(0, send)
-					if err == nil && cb != nil && cb.ConfirmationDetail != nil {
-						conf := types.HashHeight{Hash: cb.ConfirmationDetail.MomentumHash, Height: cb.ConfirmationDetail.MomentumHeight}
-						switch err := fireForge(planned, conf); {
-						case err == nil:
-							t.Fatal("forged receive with base plasma was accepted")
-						case contains(err, "changes-hash"):
-							return // the VM regeneration refused the forgery
-						case contains(err, "already received") || contains(err, "Nothing to receive") || contains(err, "cemented"):
-							// the auto-receives won; wait for the pool to
-							// settle and try a fresh send
-							time.Sleep(12 * time.Second)
-							continue attempts2
-						case contains(err, "Not next in line"):
-							// stale sends still ahead in the mailbox; keep firing
-						default:
-							t.Fatalf("refused with %q, want the changes-hash wall", err)
-						}
-					}
-					if time.Now().After(inner) {
-						t.Fatal("no changes-hash refusal within the inner window")
-					}
-					time.Sleep(10 * time.Millisecond)
-					if time.Now().After(deadline) {
-						t.Fatal("no changes-hash refusal within the deadline")
-					}
-				}
-			}
-		})
-
-		t.Run("B-13c_acknowledgement_must_match_confirmation", func(t *testing.T) {
-			cover(t, "E6", "error", "verifier.ErrABMAInvalidForAutoGenerated")
-			// An auto-generated receive must acknowledge the momentum that
-			// confirmed its send; this forge acknowledges the momentum
-			// before it. That is a block-level rule, refused before any
-			// execution — no changes-hash needed, no wall to pass.
-			deadline := time.Now().Add(wait)
-		attempts3:
-			for {
-				if time.Now().After(deadline) {
-					t.Fatal("no acknowledgement refusal within the deadline")
-				}
-				send := publishOne(t, a)
-				planned := prepareForge(t, send, nil)
-				inner := time.Now().Add(45 * time.Second)
-				for {
-					cb, err := net.Block(0, send)
-					if err == nil && cb != nil && cb.ConfirmationDetail != nil {
-						conf := cb.ConfirmationDetail.MomentumHeight
-						wrong := momentumAt(t, conf-1)
-						switch err := fireForge(planned, wrong); {
-						case err == nil:
-							t.Fatal("forged receive with a stale acknowledgement was accepted")
-						case contains(err, "invalid momentum for auto-generated"):
-							return
-						case contains(err, "already received") || contains(err, "Nothing to receive") || contains(err, "cemented"):
-							time.Sleep(12 * time.Second)
-							continue attempts3
-						case contains(err, "Not next in line"):
-						default:
-							t.Fatalf("refused with %q, want the auto-generated-MA message", err)
-						}
-					}
-					if time.Now().After(inner) {
-						t.Fatal("no acknowledgement refusal within the inner window")
-					}
-					time.Sleep(10 * time.Millisecond)
-					if time.Now().After(deadline) {
-						t.Fatal("no acknowledgement refusal within the deadline")
-					}
-				}
-			}
-		})
 	})
 
 	t.Run("B-14_descendant_blocks_on_a_user_send_refused", func(t *testing.T) {
@@ -600,11 +299,16 @@ func TestVerifierMomentumRules(t *testing.T) {
 			c := net.Key(runBase + 140)
 			funder := net.Key(IdxFunder)
 			genesis := read(t, 1)
-			err := tryTransfer(c, funder.Address, znn, units(0), &Mutator{Fields: func(blk *nom.AccountBlock) {
+			sent, err := net.Send(c, &nom.AccountBlock{BlockType: nom.BlockTypeUserSend, ToAddress: funder.Address, TokenStandard: znn, Amount: units(0)}, &Mutator{Fields: func(blk *nom.AccountBlock) {
 				blk.MomentumAcknowledged = types.HashHeight{Hash: genesis.Hash, Height: 1}
 			}})
 			if err != nil {
 				t.Fatalf("first send acknowledging momentum 1 before dynamic plasma: %v (the recency rule must be off)", err)
+			}
+			// Pool acceptance alone is not the off state: the momentum-side
+			// arm of the rule must also let the block confirm.
+			if _, err := net.WaitConfirmed(sent.Hash, wait); err != nil {
+				t.Fatalf("off-state send acknowledging momentum 1 not confirmed: %v (the recency rule must be off)", err)
 			}
 			return
 		}
@@ -666,7 +370,7 @@ func TestVerifierMomentumRules(t *testing.T) {
 	})
 
 	t.Run("B-17_dynamic_plasma_boundary_from_history", func(t *testing.T) {
-		if !dpKnown || dpEnf < 2 {
+		if !dpKnown {
 			// No Dynamic Plasma boundary on this chain: the pre-spork
 			// invariant must hold at every momentum — version 1, zero
 			// resource prices. Assert that instead of skipping, so the case
@@ -693,8 +397,19 @@ func TestVerifierMomentumRules(t *testing.T) {
 		cover(t, "E7", "verifier-rule", "rawMomentumVerifier.version", "rawMomentumVerifier.nextFusionPrice", "rawMomentumVerifier.nextWorkPrice")
 		// The version switch lands one momentum late: a producer builds
 		// momentum N on its parent N-1's spork state, so at the enforcement
-		// height the momentum is still Version 1 with zero prices.
-		for _, h := range []uint64{dpEnf - 1, dpEnf, dpEnf + 1} {
+		// height the momentum is still Version 1 with zero prices. With the
+		// spork enforced at height 0 or 1 there is no momentum below the
+		// boundary to read (and dpEnf-1 would underflow); the heights above
+		// it follow the B-15 rule — version 2 past the enforcement.
+		heights := []uint64{}
+		if dpEnf >= 2 {
+			heights = append(heights, dpEnf-1)
+		}
+		if dpEnf >= 1 {
+			heights = append(heights, dpEnf)
+		}
+		heights = append(heights, dpEnf+1)
+		for _, h := range heights {
 			m := read(t, h)
 			wantVersion, wantPriced := uint64(1), false
 			if h > dpEnf {

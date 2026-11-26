@@ -106,9 +106,22 @@ func containerCaller(ctx context.Context, container string) sporkCaller {
 		}
 		var envelope struct {
 			Result json.RawMessage `json:"result"`
+			Error  *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
 		}
 		if err := dockerRPCParams(ctx, container, method, string(params), &envelope); err != nil {
 			return err
+		}
+		// An RPC-level error carries no result: without this check the
+		// unmarshal below fails with "unexpected end of JSON input" and the
+		// node's actual refusal is lost.
+		if envelope.Error != nil {
+			return fmt.Errorf("%s on %s: RPC error %d: %s", method, container, envelope.Error.Code, envelope.Error.Message)
+		}
+		if len(envelope.Result) == 0 {
+			return fmt.Errorf("%s on %s: reply has neither result nor error", method, container)
 		}
 		return json.Unmarshal(envelope.Result, result)
 	}
@@ -149,8 +162,10 @@ func TestSporkStagedEnforcement(t *testing.T) {
 	}
 	// noExitYet fails when a container is not running or has ever
 	// restarted: across an enforcement height a node that exited (e.g. on
-	// an unknown spork, the S-4 case) would show here.
-	noExitYet := func(what string) {
+	// an unknown spork, the S-4 case) would show here. The calling subtest's
+	// t is passed in so failures and coverage land on the case, not on the
+	// outer test.
+	noExitYet := func(t *testing.T, what string) {
 		t.Helper()
 		args := append([]string{"inspect", "-f", "{{.Name}} {{.State.Status}} {{.RestartCount}}"}, containers...)
 		out, err := docker(args...)
@@ -167,8 +182,9 @@ func TestSporkStagedEnforcement(t *testing.T) {
 	}
 
 	// momentum is one momentum at exactly the given height from the primary
-	// endpoint.
-	momentum := func(height uint64) struct {
+	// endpoint. The calling subtest's t is passed in so the lookup's
+	// coverage lands on the case, not on the outer test.
+	momentum := func(t *testing.T, height uint64) struct {
 		Hash            types.Hash `json:"hash"`
 		Height          uint64     `json:"height"`
 		Version         uint64     `json:"version"`
@@ -196,7 +212,7 @@ func TestSporkStagedEnforcement(t *testing.T) {
 	// hash they all share at the height; a node on a different branch (or
 	// dead) fails the deadline. Every node is read through docker exec
 	// (net.Containers), each request bounded by the polling deadline.
-	agree := func(height uint64) types.Hash {
+	agree := func(t *testing.T, height uint64) types.Hash {
 		t.Helper()
 		deadline := time.Now().Add(wait)
 		ctx, cancel := context.WithDeadline(context.Background(), deadline)
@@ -256,7 +272,7 @@ func TestSporkStagedEnforcement(t *testing.T) {
 		// Dynamic Plasma's consensus-visible gate pre-spork: version 1 and
 		// zero resource prices (verifier/momentum.go requires both).
 		for _, h := range []uint64{f.Height, f.Height - 1} {
-			m := momentum(h)
+			m := momentum(t, h)
 			if m.Version != 1 {
 				t.Errorf("momentum %d: version %d, want 1 before Dynamic Plasma", h, m.Version)
 			}
@@ -264,38 +280,38 @@ func TestSporkStagedEnforcement(t *testing.T) {
 				t.Errorf("momentum %d: prices %d/%d, want 0/0 before Dynamic Plasma", h, m.NextFusionPrice, m.NextWorkPrice)
 			}
 		}
-		noExitYet("before any staged enforcement")
+		noExitYet(t, "before any staged enforcement")
 	})
 
 	// boundary waits for the chain to pass onePast and then checks that all
 	// five nodes share one momentum hash at H-1, H and H+1. The jumps
 	// between staged heights are minutes of wall time (momentums are 10 s
 	// apart), far beyond the block-confirmation `wait`.
-	boundary := func(name string, H uint64, onePast uint64) {
+	boundary := func(t *testing.T, name string, H uint64, onePast uint64) {
 		t.Helper()
 		if err := net.WaitHeight(onePast, 10*time.Minute); err != nil {
 			t.Fatal(err)
 		}
 		for _, h := range []uint64{H - 1, H, H + 1} {
-			got := agree(h)
-			if canonical := momentum(h).Hash; got != canonical {
+			got := agree(t, h)
+			if canonical := momentum(t, h).Hash; got != canonical {
 				t.Errorf("node hashes at %d: %s, primary says %s", h, got, canonical)
 			}
 		}
-		noExitYet(fmt.Sprintf("across %s enforcement at %d", name, H))
+		noExitYet(t, fmt.Sprintf("across %s enforcement at %d", name, H))
 	}
 
 	t.Run("S-2_libp2p_at_enforcement", func(t *testing.T) {
 		cover(t, "E7", "spork", "Libp2pSpork")
 		// The transport swap leaves the momentum format untouched; the
 		// observable gate is that every node stays on one chain through it.
-		boundary("libp2p", want["libp2p"], want["libp2p"]+2)
+		boundary(t, "libp2p", want["libp2p"], want["libp2p"]+2)
 	})
 
 	t.Run("S-2_dynamic_plasma_at_enforcement", func(t *testing.T) {
 		cover(t, "E7", "spork", "DynamicPlasmaSpork")
 		H := want["dynamic-plasma"]
-		boundary("dynamic-plasma", H, H+2)
+		boundary(t, "dynamic-plasma", H, H+2)
 		// E7 semantic for Dynamic Plasma: momentum H is still produced by
 		// the pre-spork rules — a producer builds momentum N on its parent
 		// N-1's spork state (pillar/worker_momentum.go), so the version
@@ -303,13 +319,13 @@ func TestSporkStagedEnforcement(t *testing.T) {
 		// zero prices (which the momentum verifier requires pre-spork);
 		// H+1 and above: version 2 with both resource prices at the floor.
 		for _, h := range []uint64{H - 1, H} {
-			m := momentum(h)
+			m := momentum(t, h)
 			if m.Version != 1 || m.NextFusionPrice != 0 || m.NextWorkPrice != 0 {
 				t.Errorf("momentum %d: version %d prices %d/%d, want v1 0/0 before the format switch", h, m.Version, m.NextFusionPrice, m.NextWorkPrice)
 			}
 		}
 		for _, h := range []uint64{H + 1, H + 2} {
-			m := momentum(h)
+			m := momentum(t, h)
 			if m.Version != 2 {
 				t.Errorf("momentum %d: version %d, want 2 from one past Dynamic Plasma", h, m.Version)
 			}
@@ -321,13 +337,13 @@ func TestSporkStagedEnforcement(t *testing.T) {
 
 	t.Run("S-2_ptlc_and_embedded_refund_at_enforcement", func(t *testing.T) {
 		cover(t, "E7", "spork", "PtlcSpork", "EmbeddedRefundSpork")
-		boundary("ptlc", want["ptlc"], want["ptlc"]+2)
-		boundary("embedded-refund", want["embedded-refund"], want["embedded-refund"]+2)
+		boundary(t, "ptlc", want["ptlc"], want["ptlc"]+2)
+		boundary(t, "embedded-refund", want["embedded-refund"], want["embedded-refund"]+2)
 	})
 
 	t.Run("S-2_epoch_reward_terms_at_enforcement", func(t *testing.T) {
 		cover(t, "E7", "spork", "EpochRewardTermsSpork")
-		boundary("epoch-reward-terms", want["epoch-reward-terms"], want["epoch-reward-terms"]+2)
+		boundary(t, "epoch-reward-terms", want["epoch-reward-terms"], want["epoch-reward-terms"]+2)
 	})
 
 	t.Run("S-5_restart_after_activation", func(t *testing.T) {
@@ -352,8 +368,8 @@ func TestSporkStagedEnforcement(t *testing.T) {
 		// serve the same new tip (two of three pillars can still produce
 		// with one node down, so the primary alone would not notice), and
 		// every container is running with no restart-policy restart.
-		agree(f.Height + 2)
-		noExitYet("after the S-5 restart")
+		agree(t, f.Height+2)
+		noExitYet(t, "after the S-5 restart")
 		// The spork table survived on every node, read through docker exec.
 		ctx, cancel := context.WithTimeout(context.Background(), wait)
 		defer cancel()
@@ -375,10 +391,10 @@ func TestSporkStagedEnforcement(t *testing.T) {
 		// Same data, no resync: the pre-restart frontier is still
 		// canonical and the Dynamic Plasma format persisted (the switch
 		// lands on H+1 — see the S-2 dynamic-plasma subtest).
-		if m := momentum(f.Height); m.Hash != f.Hash {
+		if m := momentum(t, f.Height); m.Hash != f.Hash {
 			t.Errorf("momentum %d changed across the restart: %s, want %s", f.Height, m.Hash, f.Hash)
 		}
-		if m := momentum(want["dynamic-plasma"] + 1); m.Version != 2 {
+		if m := momentum(t, want["dynamic-plasma"]+1); m.Version != 2 {
 			t.Errorf("momentum %d after restart: version %d, want 2", want["dynamic-plasma"]+1, m.Version)
 		}
 	})
