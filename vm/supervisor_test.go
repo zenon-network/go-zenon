@@ -265,14 +265,36 @@ func TestApplyBlock_VerifiesTransactionOnce(t *testing.T) {
 		t.Fatalf("expected GenerateFromTemplate to verify after signing and packing")
 	}
 
-	// ApplyBlock on an externally supplied embedded send whose Data is re-packed
-	// in place by ValidateSendBlock must re-run transaction verification in
-	// packBlockWith so a real verifier catches the resulting hash mismatch.
+	// ApplyBlock on an externally supplied embedded send with canonical Data:
+	// ValidateSendBlock re-packs Data to the same bytes, so the hash is
+	// unchanged and transaction verification still runs once pre-VM.
 	counting.txCalls = 0
 	acctStore := account.NewAccountStore(userAddr, db.NewMemDB())
 	common.FailIfErr(t, acctStore.SetBalance(types.QsrTokenStandard, new(big.Int).Mul(constants.FuseMinAmount, big.NewInt(10))))
 	chainStub.accountStore = acctStore
 	fuseData := definition.ABIPlasma.PackMethodPanic(definition.FuseMethodName, userAddr)
+	canonicalFuse := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      1,
+		BlockType:            nom.BlockTypeUserSend,
+		Address:              userAddr,
+		ToAddress:            types.PlasmaContract,
+		Amount:               new(big.Int).Set(constants.FuseMinAmount),
+		TokenStandard:        types.QsrTokenStandard,
+		MomentumAcknowledged: frontier.Identifier(),
+		Height:               1,
+		Data:                 append([]byte{}, fuseData...),
+		Difficulty:           constants.EmbeddedSimplePlasma * constants.PoWDifficultyPerPlasma,
+	}
+	_, err = s.ApplyBlock(canonicalFuse)
+	common.FailIfErr(t, err)
+	common.Expect(t, counting.txCalls, 1)
+
+	// ApplyBlock on an externally supplied embedded send whose Data is re-packed
+	// to different bytes by ValidateSendBlock must re-run transaction
+	// verification in packBlockWith so a real verifier catches the resulting
+	// hash mismatch.
+	counting.txCalls = 0
 	trailingFuse := &nom.AccountBlock{
 		Version:              1,
 		ChainIdentifier:      1,
