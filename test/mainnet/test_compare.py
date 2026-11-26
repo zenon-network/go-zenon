@@ -195,6 +195,67 @@ class PillarGetAllNormalization(unittest.TestCase):
         self.assertEqual(status, "PASS", detail)
 
 
+class ExpectedItemAdditions(unittest.TestCase):
+    def test_item_key_addition_is_info(self):
+        # embedded.plasma.getEntriesByAddress: dev adds isRevocable to
+        # every entry; when that is the only difference the pair is INFO.
+        ref = {"result": {"count": 1, "list": [{"amount": "1", "expirationHeight": 5}]}}
+        test = {"result": {"count": 1, "list": [{"amount": "1", "expirationHeight": 5,
+                                                "isRevocable": True}]}}
+        status, detail = compare.classify_getter("embedded.plasma.getEntriesByAddress",
+                                                 ref, test)
+        self.assertEqual(status, "INFO")
+        self.assertEqual(detail["detail"], "expected-api-addition")
+        self.assertEqual(detail["addedKeys"], ["isRevocable"])
+
+    def test_item_key_plus_other_diff_still_fails(self):
+        ref = {"result": {"count": 1, "list": [{"amount": "1"}]}}
+        test = {"result": {"count": 1, "list": [{"amount": "2", "isRevocable": True}]}}
+        status, _ = compare.classify_getter("embedded.plasma.getEntriesByAddress",
+                                            ref, test)
+        self.assertEqual(status, "FAIL")
+
+    def test_unlisted_item_key_still_fails(self):
+        ref = {"result": {"count": 1, "list": [{"amount": "1"}]}}
+        test = {"result": {"count": 1, "list": [{"amount": "1", "surprise": 1}]}}
+        status, _ = compare.classify_getter("embedded.plasma.getEntriesByAddress",
+                                            ref, test)
+        self.assertEqual(status, "FAIL")
+
+
+class ExpectedErrorSurface(unittest.TestCase):
+    REF_ERR = ("embedded.bridge.getAllUnwrapTokenRequests: {'code': -32000, "
+               "'message': 'unknown network'}")
+
+    def test_ref_error_test_answer_allowlisted_is_info(self):
+        # v0.0.10 fails the call on a stored request with a removed
+        # network; dev filters it and answers: intended, INFO with reason.
+        status, detail = compare.classify_getter(
+            "embedded.bridge.getAllUnwrapTokenRequests",
+            {"rpcError": self.REF_ERR},
+            {"result": {"count": 0, "list": []}})
+        self.assertEqual(status, "INFO")
+        self.assertEqual(detail["detail"], "expected-error-surface-change")
+
+    def test_ref_error_other_message_still_fails(self):
+        status, detail = compare.classify_getter(
+            "embedded.bridge.getAllUnwrapTokenRequests",
+            {"rpcError": "boom"},
+            {"result": {"count": 0, "list": []}})
+        self.assertEqual(status, "FAIL")
+        self.assertEqual(detail["detail"], "error-on-one-side")
+
+    def test_reverse_direction_not_allowlisted(self):
+        # The binary under test erroring where the reference answers is a
+        # regression, never an intended change.
+        status, detail = compare.classify_getter(
+            "embedded.bridge.getAllUnwrapTokenRequests",
+            {"result": {"count": 0, "list": []}},
+            {"rpcError": self.REF_ERR})
+        self.assertEqual(status, "FAIL")
+        self.assertEqual(detail["detail"], "error-on-one-side")
+
+
 class ResultComparison(unittest.TestCase):
     def test_equal_results_pass(self):
         status, _ = compare.classify_getter(

@@ -106,6 +106,35 @@ SORT_BEFORE_COMPARE = {
 PAGE = 1000          # RpcMaxPageSize / RpcMaxCountSize
 MAX_PAGES = 500      # guard against unbounded paging; truncation is reported
 
+# Known, intended API additions on dev INSIDE list items (the table above
+# covers top-level result keys).  The item key is stripped from every
+# element of the answer's "list" (or of the answer itself when it is a
+# list) before comparison; a pair whose only difference is allowlisted
+# item keys is INFO, not FAIL.
+EXPECTED_ITEM_ADDITIONS = {
+    "embedded.plasma.getEntriesByAddress": {
+        "isRevocable": "added on dev with Dynamic Plasma: reports whether "
+                       "the frontier height passed the entry's expiration "
+                       "height (rpc/api/embedded/plasma.go); absent in "
+                       "v0.0.10",
+    },
+}
+
+# Known, intended error-surface changes on dev: the reference fails the
+# call, the binary under test answers.  Key: method; value: (substring of
+# the reference error, reason).  Only this direction is allowlisted — the
+# binary under test erroring where the reference answers stays a FAIL.
+EXPECTED_ERROR_SURFACE = {
+    "embedded.bridge.getAllUnwrapTokenRequests": (
+        "unknown network",
+        "dev filters stored unwrap requests whose network or token pair "
+        "has been removed (unwrapRequestList); v0.0.10 fails the whole "
+        "call with ErrUnknownNetwork"),
+    "embedded.bridge.getAllUnwrapTokenRequestsByToAddress": (
+        "unknown network",
+        "same filter change as getAllUnwrapTokenRequests"),
+}
+
 # How often a frontier-state comparison (account-info batch or getter) is
 # retried when the frontier moved while it was being read.
 FRONTIER_RETRIES = 3
@@ -413,6 +442,27 @@ def sort_list_answer(answer, key):
     return answer
 
 
+def strip_item_keys(nt, allowed):
+    """A copy of the normalized answer `nt` with every key in `allowed`
+    removed from each element of its "list" (or of the answer itself when
+    it is a list).  Returns (stripped, set of keys actually removed)."""
+    removed = set()
+
+    def strip_item(it):
+        if isinstance(it, dict):
+            extra = set(it) & set(allowed)
+            if extra:
+                removed.update(extra)
+                return {k: v for k, v in it.items() if k not in extra}
+        return it
+
+    if isinstance(nt, dict) and isinstance(nt.get("list"), list):
+        return {**nt, "list": [strip_item(i) for i in nt["list"]]}, removed
+    if isinstance(nt, list):
+        return [strip_item(i) for i in nt], removed
+    return nt, removed
+
+
 def classify_getter(method, ref_obs, test_obs):
     """Classify one getter pair.  Each observation is one of
     {"result": answer}      the call returned a result
@@ -430,10 +480,14 @@ def classify_getter(method, ref_obs, test_obs):
         it — a removed RPC surface is a regression, not a note); missing
         on both is INFO (consistent: neither build serves it);
       - identical RPC errors on both sides are PASS, different ones FAIL;
-      - one-sided RPC error is FAIL;
+      - one-sided RPC error is FAIL, except a reference-side error listed
+        in EXPECTED_ERROR_SURFACE with a matching message: an intended
+        behavior change on dev, INFO with the reason;
       - results are compared after normalization (and list reordering for
-        SORT_BEFORE_COMPARE methods); an expected API addition is INFO,
-        anything else FAIL with the first difference recorded.
+        SORT_BEFORE_COMPARE methods); an expected API addition (top-level
+        key in EXPECTED_API_ADDITIONS or list-item key in
+        EXPECTED_ITEM_ADDITIONS) is INFO, anything else FAIL with the
+        first difference recorded.
     """
     rtrans = ref_obs.get("transportError")
     ttrans = test_obs.get("transportError")
@@ -476,6 +530,15 @@ def classify_getter(method, ref_obs, test_obs):
                 return "PASS", d
             d["detail"] = "error-surface-differs"
             return "FAIL", d
+        expected = EXPECTED_ERROR_SURFACE.get(method)
+        if (expected is not None and rerr is not None and terr is None
+                and expected[0] in rerr):
+            # The reference fails the call where dev answers by design
+            # (e.g. v0.0.10 errors a stored unwrap request whose network
+            # was removed; dev filters it): intended, INFO with reason.
+            d["detail"] = "expected-error-surface-change"
+            d["reason"] = expected[1]
+            return "INFO", d
         d["detail"] = "error-on-one-side"
         return "FAIL", d
     rr, tt = ref_obs["result"], test_obs["result"]
@@ -491,6 +554,14 @@ def classify_getter(method, ref_obs, test_obs):
         return "INFO", {"detail": "expected-api-addition", "addedKeys": extra,
                         "reasons": {k: EXPECTED_API_ADDITIONS[method][k]
                                     for k in extra}}
+    item_allowed = EXPECTED_ITEM_ADDITIONS.get(method)
+    if item_allowed is not None:
+        stripped, removed = strip_item_keys(nt, item_allowed)
+        if removed and stripped == nr:
+            return "INFO", {"detail": "expected-api-addition",
+                            "addedKeys": sorted(removed),
+                            "reasons": {k: item_allowed[k]
+                                        for k in sorted(removed)}}
     return "FAIL", {"detail": "result-differs", "firstDiff": first_diff(nr, nt)}
 
 

@@ -108,13 +108,24 @@ Classification of one getter pair (see `classify_getter`):
   rather than PASS so the missing surface stays visible.
 - Identical RPC-level errors on both sides are a `PASS` (e.g. a not-found
   id); different errors are a `FAIL` (`error-surface-differs`); an RPC
-  error on exactly one side is a `FAIL` (`error-on-one-side`).
+  error on exactly one side is a `FAIL` (`error-on-one-side`) — except a
+  reference-side error listed in `EXPECTED_ERROR_SURFACE` whose message
+  matches: an intended behavior change on dev (currently the two bridge
+  unwrap-request lists, where v0.0.10 fails the whole call on a stored
+  request whose network was removed and dev filters it), logged as `INFO`
+  (`expected-error-surface-change`) with the reason. Only that direction
+  is allowlisted; the binary under test erroring where the reference
+  answers stays a `FAIL`.
 - Results are compared after normalization. A diff consisting exactly of
   the known, intended API additions in `EXPECTED_API_ADDITIONS` (top of
   `compare.py`, one comment per entry — currently `requiredFusedPlasma` on
   `embedded.plasma.getRequiredPoWForAccountBlock`, added on dev with
   Dynamic Plasma) is `INFO` (`expected-api-addition`, logged with the
-  reason), so exit status 0 is a real gate for dev-vs-v0.0.10 runs. Any
+  reason), so exit status 0 is a real gate for dev-vs-v0.0.10 runs. The
+  same applies to additions inside list items via
+  `EXPECTED_ITEM_ADDITIONS` (currently `isRevocable` on
+  `embedded.plasma.getEntriesByAddress` entries, added on dev with
+  Dynamic Plasma). Any
   other diff is a `FAIL` with the first differing key/index in the record.
 - A getter whose argument cannot be built because the reference chain has
   no such entity (e.g. no accelerator project with a phase — `getAll` is
