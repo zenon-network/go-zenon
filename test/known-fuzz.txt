@@ -1,3 +1,4 @@
+./vm	FuzzApplyBlockEmbeddedRePackRejected
 ./vm/embedded/implementation	FuzzPtlcBIP340DomainMutationRejected
 ./vm/embedded/implementation	FuzzPtlcED25519DomainMutationRejected
 ./vm/embedded/implementation	FuzzPtlcPointLockEncoding

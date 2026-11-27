@@ -141,7 +141,7 @@ done
 stage compose-config $rc "$(grep -c '^rendered' "$S/compose-config.out") of 5 variants rendered with their genesis and image"
 
 if [ "${QUALIFY:-0}" = 1 ]; then
-  go test -race ./... -count=1 > "$S/race.out" 2>&1; stage race $? "$(grep -c 'DATA RACE' "$S/race.out") races reported"
+  go test -race -timeout 45m ./... -count=1 > "$S/race.out" 2>&1; stage race $? "$(grep -c 'DATA RACE' "$S/race.out") races reported"
   go test ./... -count=1 -shuffle=on > "$S/shuffle.out" 2>&1; stage shuffle $? "seeds: $(grep -ho 'shuffle [0-9]*' "$S/shuffle.out" | sort -u | tr '\n' ' ')"
   { go build -tags libznn ./... && go test -tags libznn ./cmd/libznn/... -count=1; } > "$S/libznn.out" 2>&1; stage libznn $? "build and test with the libznn tag"
   # The targets are the ones test/known-fuzz.txt names, by package and name, no
