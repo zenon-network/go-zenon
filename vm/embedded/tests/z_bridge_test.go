@@ -4011,16 +4011,18 @@ func insertMomentums(z mock.MockZenon, target int) {
 	}
 }
 
-// A valid compressed key whose X coordinate has a leading zero byte must be
-// stored as a fixed-width 0x04 || X[32] || Y[32] value. Minimal-width big.Int
-// encoding would store it as 64 bytes, which CheckECDSASignature (requiring
-// exactly 65) then rejects, disabling bridge signature operations after the
-// rotation.
+// Under DynamicPlasmaSpork, a valid compressed key whose X coordinate has a
+// leading zero byte must be stored as a fixed-width 0x04 || X[32] || Y[32]
+// value. Minimal-width big.Int encoding (preserved pre-spork for historical
+// replay compatibility) would store it as 64 bytes, which CheckECDSASignature
+// (requiring exactly 65) rejects.
 func TestBridge_ChangeTssShortCoordinateStoredFullWidth(t *testing.T) {
 	z := mock.NewMockZenonWithCustomEpochDuration(t, time.Hour)
 	defer z.StopPanic()
+	saveSporkState(t)
 
 	activateBridgeStep3(t, z)
+	activateDynamicPlasmaPastHeight(t, z)
 
 	bridgeAPI := embedded.NewBridgeApi(z)
 	securityInfo, err := bridgeAPI.GetSecurityInfo()

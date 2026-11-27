@@ -364,6 +364,9 @@ func isEmbeddedDeposit(sendBlock *nom.AccountBlock) bool {
 //     policy only (implementation.CheckSignatureStringLength).
 //   - Bridge and Liquidity NominateGuardians: guardian sets exceeding
 //     MaxGuardians or containing duplicate addresses are rejected (issue #229).
+//   - Bridge ChangeTssECDSAPubKey: a 33-byte payload that does not
+//     decompress to a point on secp256k1 is rejected
+//     (implementation.CheckCompressedECDSAPubKey, issue #78).
 func checkSporkGatedSendRules(method embedded.Method, block *nom.AccountBlock) error {
 	switch method.(type) {
 	case *implementation.SetTokenTupleMethod:
@@ -402,6 +405,12 @@ func checkSporkGatedSendRules(method embedded.Method, block *nom.AccountBlock) e
 			return constants.ErrUnpackError
 		}
 		return implementation.CheckNominatedGuardians(*guardians)
+	case *implementation.ChangeTssECDSAPubKeyMethod:
+		param := new(definition.ChangeECDSAPubKeyParam)
+		if err := definition.ABIBridge.UnpackMethod(param, definition.ChangeTssECDSAPubKeyMethodName, block.Data); err != nil {
+			return constants.ErrUnpackError
+		}
+		return implementation.CheckCompressedECDSAPubKey(param.PubKey)
 	}
 	return nil
 }
