@@ -48,6 +48,18 @@ func CheckPoWNonce(block *nom.AccountBlock) bool {
 	return greaterDifficulty(calc, target[:])
 }
 
+// CheckPoWNonceLegacy reports whether the block's Nonce satisfies the
+// v0.0.10-alphanet target calculation, which converted difficulty through
+// int64. It agrees with CheckPoWNonce for all difficulties below 2^63 and
+// exists solely to verify historical in-momentum blocks acknowledged before
+// DynamicPlasmaSpork.
+func CheckPoWNonceLegacy(block *nom.AccountBlock) bool {
+	dataHash := GetAccountBlockHash(block)
+	target := getTargetByDifficultyLegacy(block.Difficulty)
+	calc := hashWithNonce(dataHash, block.Nonce.Serialize())
+	return greaterDifficulty(calc, target[:])
+}
+
 // GetPoWNonce mines and returns an 8-byte nonce whose SHA3-256 digest,
 // together with dataHash, meets the threshold for difficulty. It seeds
 // the search from a cryptographically random start and increments until
@@ -127,6 +139,19 @@ func getTargetByDifficulty(difficulty uint64) [8]byte {
 	// difficulty is uint64 and must stay unsigned for the whole range; going
 	// through int64 wraps the upper half and inverts the resulting target.
 	y := big.NewInt(0).Quo(x, new(big.Int).SetUint64(difficulty))
+	x.Sub(x, y)
+	var target [8]byte
+	binary.LittleEndian.PutUint64(target[:], x.Uint64())
+	return target
+}
+
+func getTargetByDifficultyLegacy(difficulty uint64) [8]byte {
+	if difficulty == 0 {
+		return [8]byte{}
+	}
+	// Exact v0.0.10-alphanet calculation: 2^64 - (2^64 / int64(difficulty)).
+	x := new(big.Int).Exp(common.Big2, common.Big64, nil)
+	y := big.NewInt(0).Quo(x, big.NewInt(int64(difficulty)))
 	x.Sub(x, y)
 	var target [8]byte
 	binary.LittleEndian.PutUint64(target[:], x.Uint64())
