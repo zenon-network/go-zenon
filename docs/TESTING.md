@@ -50,7 +50,7 @@ Tokens in `coverage.tsv` are the class and the case id, for example `E1:PL-1 E4:
 
 | Tool | Version used here | Notes |
 |---|---|---|
-| Go | 1.23 or later on the host, with cgo | `go.mod` says 1.23; release binaries are built with 1.24.1. The driver (P9) runs on the host |
+| Go | 1.26 or later on the host, with cgo | `go.mod` minimum is 1.26.0 with `toolchain go1.27.4`. The driver (P9) runs on the host |
 | docker with compose | any current | about 2 GB of free disk in the docker VM for the stock build |
 | python3 | 3.9 or later | standard library only |
 | git | any | the commit under test must be checked out |

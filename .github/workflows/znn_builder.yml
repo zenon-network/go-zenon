@@ -143,6 +143,51 @@ jobs:
           buildvcs: false
           buildmode: c-shared
           trimpath: true
+      - name: Set up Go for artifact verification
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go.mod
+      - name: Verify built artifacts toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(awk '/^toolchain[[:space:]]+go/{print $2; exit}' go.mod)"
+          if [ -z "$expected" ]; then
+            echo "::error::Could not determine expected Go toolchain from go.mod"
+            exit 1
+          fi
+          echo "Expected Go toolchain: $expected"
+
+          checked=0
+          for f in build/*; do
+            case "$f" in
+              *.h) continue ;;
+            esac
+            [ -f "$f" ] || continue
+            checked=$((checked + 1))
+
+            actual=""
+            out="$(go version "$f" 2>/dev/null || true)"
+            if printf '%s\n' "$out" | grep -qE ': go[0-9]+\.[0-9]+'; then
+              actual="$(printf '%s\n' "$out" | sed -E 's/^.*: (go[0-9]+(\.[0-9]+)*).*$/\1/')"
+              echo "$out"
+              go version -m "$f" | awk '/^\tbuild\tDefaultGODEBUG=/' || true
+            else
+              actual="$({ strings -a "$f" || true; } | grep -m1 -oE 'go1\.[0-9]+(\.[0-9]+)*' || true)"
+              echo "$f: ${actual:-unknown} (via strings fallback)"
+            fi
+
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$f was built with '${actual:-unknown}', expected '$expected'"
+              exit 1
+            fi
+          done
+
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::No built binaries or libraries found in build/"
+            exit 1
+          fi
+          echo "Verified $checked artifacts built with $expected"
       - name: Upload Darwin builds for makefat
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
