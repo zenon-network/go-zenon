@@ -256,8 +256,10 @@ func (c *momentumPool) RollbackTo(insertLocker sync.Locker, identifier types.Has
 // activated sporks at or past their enforcement height that this
 // build does not know how to enforce, and justNow is the spork whose
 // enforcement height equals the frontier height, if any. It is called
-// at chain Init and after every momentum insertion; a non-nil
-// unimplemented list makes the node terminate with exit status 2.
+// at chain.Init (which logs Crit and returns an error to its caller
+// when unimplemented is non-nil) and in AddMomentumTransaction (which
+// logs Crit, rolls back the momentum, and returns an error, leaving
+// the node at H - 1 refusing momentums at or past enforcement).
 func GotAllActiveSporksImplemented(store store.Momentum) (justNow *definition.Spork, unimplemented []*definition.Spork, err error) {
 	momentum, err := store.GetFrontierMomentum()
 	if err != nil {

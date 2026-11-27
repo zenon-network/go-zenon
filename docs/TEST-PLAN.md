@@ -199,7 +199,7 @@ One rehearsal per spork on a fresh devnet, driven the way mainnet would be: `Cre
 | S-1 | Before activation, every gated method and rule is off | gated sends rejected; pre-spork behaviour matches a v0.0.10 node |
 | S-2 | Activation at height H | all five nodes switch at H, no fork, no node exits |
 | S-3 | A node that was offline across H syncs through it | reaches the frontier with the same state |
-| S-4 | A node built without the spork in `ImplementedSporksMap` | exits with status 2 at enforcement, as designed |
+| S-4 | A node built without the spork in `ImplementedSporksMap` | at runtime, rolls back the enforcing momentum, logs `Crit`, refuses momentums at or past enforcement, and stays at `H - 1`; on restart against a past-enforcement database, `chain.Init` refuses to start and returns an error (`cli.go` exits non-zero; note `v0.0.10` exited with status 2 on both paths) |
 | S-5 | Restart of every node after activation | spork state survives, chain continues |
 | S-6 | Sporks activated in different orders, including all in one momentum | the method table matches the released ladder for all 32 combinations (#300 fixed #290 here) |
 | S-7 | An account block that acknowledges a momentum from before H, sent after H | judged by the rule #280 sets (every enforced spork must be acknowledged) |
@@ -298,7 +298,7 @@ This is the part unit tests cannot settle. These changes are not behind a spork:
 |---|---|---|
 | M-1 | Full sync of a `dev` binary from genesis to the frontier with default config | reaches the frontier, no rejected momentum, no panic |
 | M-2 | State comparison against a v0.0.10 node at fixed heights: every spork activation height, the heights around 4,188,199 to 4,188,206 (the HTLC-before-Bridge window from #290), the renewal height 14,567,887, and the frontier | momentum hash and changes hash equal at each height; a sample of 1,000 account infos and every embedded getter equal |
-| M-3 | History scan for the #78 cases: any account block with `Difficulty >= 2^63`; any `ChangeTssECDSAPubKey` send with an off-curve key | none found, or each one listed with the height where `dev` and v0.0.10 would disagree |
+| M-3 | History scan for the #78 cases: any account block with `Difficulty >= 2^63` (plus visibility counts above the legacy and Dynamic Plasma difficulty caps); any `ChangeTssECDSAPubKey` send with an off-curve key or a leading-zero-byte `X`/`Y` coordinate (`< 2^248`); and live `embedded.bridge.getBridgeInfo` `decompressedTssECDSAPubKey` 65-byte on-curve check | none found, or each one listed with the height where `dev` and v0.0.10 would disagree |
 | M-4 | Follow the frontier for 7 days next to a v0.0.10 node | same frontier hash at every sampled height |
 | M-5 | Sync time, peak memory and disk for `dev` and v0.0.10 on the same host | recorded; `dev` not slower by more than an agreed margin |
 | M-6 | Same as M-1 with `P2PBackend` left at `auto` | stays on legacy, since `Libp2pSpork` is a placeholder |
@@ -346,7 +346,7 @@ Tested on their own branch before merge, then again as part of `dev`. State on 2
 ## 10. Decisions needed
 
 1. **Mainnet host for L6.** Where does the full sync run, and who operates it? Nothing in section 7 can start without it.
-2. **Issue #78.** Gate the PoW-target and bridge-key changes, or accept them on the strength of the M-3 scan. The scan can run first.
+2. **Issue #78 (resolved: must be spork-gated).** Both the PoW-target and bridge-key changes must be spork-gated behind `DynamicPlasmaSpork` and verified with L5 mixed-version rehearsal. Accepting #78 ungated on the strength of the M-3 scan is not an option: a history scan only covers past blocks and cannot protect against blocks produced during a mixed-version rollout window. M-3 still runs to inspect mainnet history and the live stored bridge key.
 3. **Spork ids.** Four are placeholders. Testing uses genesis-seeded ids; a release needs the real ones and a re-run of 6.1 on that build.
 4. **Go toolchain.** Tests run on 1.23, release binaries on 1.24.1. Pick one, or test on both (L0-1 assumes both).
 5. **Scope of the release candidate.** Which of the open pull requests (section 9) are in. #310 and #72 add sporks and their own suites.

@@ -192,9 +192,14 @@ python3 test/mainnet/scan.py --node http://127.0.0.1:35997 \
 # ChangeTssECDSAPubKey send to the embedded bridge contract (selector
 # 15a0c641 = first 4 bytes of the SHA3-256 of
 # "ChangeTssECDSAPubKey(string,string,string)", same computation as vm/abi
-# Method.Id), ABI-decodes the new key and checks it lies on secp256k1, and
-# reports every account block whose Difficulty read as unsigned 64-bit is
-# >= 2^63
+# Method.Id), ABI-decodes the new key and checks it lies on secp256k1 and
+# whether its decompressed X or Y coordinate has a leading zero byte
+# (< 2^248), checks the live stored decompressedTssECDSAPubKey via
+# embedded.bridge.getBridgeInfo (must be 65 bytes, 0x04 prefix, on-curve
+# when non-empty), reports every account block whose Difficulty read as
+# unsigned 64-bit is >= 2^63, and records visibility counts for blocks
+# above dp.MaxDifficultyForAccountBlock (315,000,000,000,000) and
+# constants.MaxDifficultyForAccountBlock (141,750,000)
 python3 test/mainnet/scan.py --node http://127.0.0.1:35997 \
     --blocks --from 1 --to 14661812 --out scan.jsonl
 ```
@@ -221,20 +226,33 @@ Outcome policy (one policy for both #78 checks, per `docs/TEST-PLAN.md`
 M-3 "none found, or each one listed with the height where `dev` and
 v0.0.10 would disagree"): **integrity problems FAIL the scan** — short
 reads, wrong heights in a page, a difficulty or block-data field that does
-not parse, a bridge key that does not base64/ABI-decode. **Findings are
-listed and counted but do not by themselves fail it** — an off-curve or
-unrecognized bridge key and a difficulty >= 2^63 are logged one by one
-(`M-3-bridgeKey` with `keyCheck`, `M-3-highDifficulty`) and counted in the
+not parse, a bridge key that does not base64/ABI-decode, or a malformed
+`getBridgeInfo` payload. **Findings are listed and counted but do not by
+themselves fail it** — an off-curve, unrecognized, or leading-zero-coordinate
+bridge key, an invalid/short live `decompressedTssECDSAPubKey`, and a
+difficulty >= 2^63 are logged one by one (`M-3-bridgeKey` with `keyCheck`,
+`shortCoord`, `leadingZeroCoord`; `M-3-liveBridgeKey` with `keyCheck`,
+`byteLength`, `finding`; `M-3-highDifficulty`) and counted in the
 `M-3-blocks` record (`offCurveKeys`, `unexpectedKeyFormats`,
+`shortCoordKeys`, `liveBridgeKeyCheck`, `liveBridgeKeyFindings`,
 `highDifficultyItems`, `findings`) and in the summary record (`findings`),
 so a run with findings is PASS-with-findings-listed, never silently clean.
+Blocks exceeding `dp.MaxDifficultyForAccountBlock` (`M-3-aboveDpMaxDifficulty`,
+`aboveDpMaxDifficulty`) and `constants.MaxDifficultyForAccountBlock`
+(`aboveLegacyMaxDifficulty`, `aboveLegacyMaxDifficultySample`, `maxDifficulty`)
+are also reported in `M-3-blocks` for visibility ahead of `DynamicPlasmaSpork`
+activation and are not counted as #78 findings.
 
 **Validation**: header walk 1..200,000 on a dev node — 200,000 momentums,
 0 link breaks; header walk `--to 1500` on the v0.0.10 node — exactly 1,500
 momentums, exit 0; block scan 1..200 on the v0.0.10 node — momentum-1
 exclusion logged, 199 momentums / 26 account blocks, exit 0; block scan over
 a known ChangeTssECDSAPubKey send — the send is found at the recorded
-height/block hash, its key decodes and is on-curve, exit 0.
+height/block hash, its key decodes and is on-curve, exit 0. Curve
+decompression, leading-zero coordinate detection, live bridge key checks, and
+difficulty threshold counters are unit-tested with canned answers in
+`test/mainnet/test_scan.py` (stdlib unittest; run
+`python3 -m unittest discover -s test/mainnet -v`).
 
 **Limits**: a block-level scan of the full chain is ~1.5M RPC calls; run it
 in slices. `ledger.getDetailedMomentumsByHeight(1, 10)` does not answer on
