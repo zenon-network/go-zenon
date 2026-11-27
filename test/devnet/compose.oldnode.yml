@@ -1,0 +1,46 @@
+# Overlay for docker-compose.yml: add a sixth node ("oldnode") running a
+# binary that lacks EmbeddedRefundSpork in ImplementedSporksMap, for the
+# TEST-PLAN.md S-4 / X-4 e2e case (test/e2e/sporkhalt_test.go, E2E_OLDNODE=1).
+#
+# Build the image once from a clean checkout (the one-line spork removal is
+# applied inside the build container):
+#
+#   OLDNODE=1 test/devnet/build-image.sh    # -> go-zenon-devnet-noref:latest
+#
+# Start it after the staged devnet (test/devnet/up.sh staged):
+#
+#   docker compose -f docker-compose.yml -f test/devnet/compose.variant.yml \
+#       -f test/devnet/compose.oldnode.yml up -d oldnode
+#
+# Notes:
+#   - restart "no" keeps the refused/halted container inspectable.
+#   - The config override mounts syncnode/config.json with
+#     "Net.P2PBackend": "libp2p": a stock-config late joiner cannot sync past
+#     the libp2p swap spork (zenon-network/go-zenon issue #105), and the
+#     oldnode always joins after height 20.
+#   - The volume name is fixed (not project-prefixed) so the e2e test can find
+#     it without knowing the compose project name. test/devnet/up.sh removes
+#     the volume with the rest of the old chain; when bringing the oldnode up
+#     without up.sh, reset it first or a stale database (already past the
+#     enforcement height) makes the old binary refuse startup:
+#       docker volume rm znnd-oldnode-data
+services:
+  oldnode:
+    image: go-zenon-devnet-noref:latest
+    container_name: znnd-devnet-oldnode
+    restart: "no"
+    environment:
+      ZNND_ROLE: syncnode
+    ports:
+      - "36996:35997" # HTTP RPC — watch the old node sync and halt
+    volumes:
+      - znnd-oldnode-data:/root/.znn
+      - ${DEVNET_GENESIS:?set DEVNET_GENESIS to a genesis file}:/devnet/genesis.json:ro
+      - ./test/devnet/oldnode/syncnode/config.json:/devnet/syncnode/config.json:ro
+    networks:
+      devnet:
+        ipv4_address: 172.30.0.16
+
+volumes:
+  znnd-oldnode-data:
+    name: znnd-oldnode-data

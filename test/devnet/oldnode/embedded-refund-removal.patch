@@ -1,0 +1,12 @@
+diff --git a/common/types/spork.go b/common/types/spork.go
+index 840cedd..4174526 100644
+--- a/common/types/spork.go
++++ b/common/types/spork.go
+@@ -79,7 +79,6 @@ var (
+ 		BridgeAndLiquiditySpork.SporkId: true,
+ 		Libp2pSpork.SporkId:             true,
+ 		DynamicPlasmaSpork.SporkId:      true,
+-		EmbeddedRefundSpork.SporkId:     true,
+ 		EpochRewardTermsSpork.SporkId:   true,
+ 	}
+ )
