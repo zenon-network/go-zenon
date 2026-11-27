@@ -94,7 +94,7 @@ make devnet-up        # builds with the repository Dockerfile and starts everyth
 When the docker VM is short on disk, or to pin the Go toolchain:
 
 ```sh
-GOIMG=golang:1.24.1-alpine test/devnet/build-image.sh
+GOIMG=golang:1.27.4-alpine test/devnet/build-image.sh
 ```
 
 The script compiles `znnd` in a Go container with the source mounted read-only (cgo is required), wraps it in a small alpine image tagged `go-zenon-devnet:latest`, and prints the binary's SHA-256 and `znnd version`. Check that the commit hash it prints is the one you wrote down.

@@ -8,7 +8,7 @@
 # read-only, then copied into a small alpine image that matches the final stage of
 # the repository Dockerfile.
 #
-#   GOIMG=golang:1.24.1-alpine test/devnet/build-image.sh
+#   GOIMG=golang:1.27.4-alpine test/devnet/build-image.sh
 #   FAST=1 test/devnet/build-image.sh     # the test build, image go-zenon-devnet-fast:latest
 #   OLDNODE=1 test/devnet/build-image.sh  # the S-4/X-4 oldnode build, image go-zenon-devnet-noref:latest
 #
@@ -27,7 +27,7 @@
 # The source directory must be mountable by the docker VM (with Colima: under $HOME).
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-GOIMG="${GOIMG:-golang:1.24.1-alpine}"
+GOIMG="${GOIMG:-golang:1.27.4-alpine}"
 FAST="${FAST:-0}"
 OLDNODE="${OLDNODE:-0}"
 if [ "$FAST" = 1 ] && [ "$OLDNODE" = 1 ]; then

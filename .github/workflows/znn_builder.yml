@@ -96,8 +96,9 @@ jobs:
       - name: Build znnd
         uses: crazy-max/ghaction-xgo@acf46aa99b919eb9ef6bba89dfd13bafa680667f
         with:
-          xgo_version: "v0.36.0"
-          go_version: 1.24.1
+          # xgo v0.43.0 ships up to Go 1.27.3 images (no 1.27.4 tag yet); with GOTOOLCHAIN=auto, builds switch to go1.27.4 via go.mod
+          xgo_version: "v0.43.0"
+          go_version: 1.27.3
           dest: build
           prefix: znnd
           pkg: cmd/znnd
@@ -111,8 +112,9 @@ jobs:
       - name: Build libznn
         uses: crazy-max/ghaction-xgo@acf46aa99b919eb9ef6bba89dfd13bafa680667f
         with:
-          xgo_version: "v0.36.0"
-          go_version: 1.24.1
+          # xgo v0.43.0 ships up to Go 1.27.3 images (no 1.27.4 tag yet); with GOTOOLCHAIN=auto, builds switch to go1.27.4 via go.mod
+          xgo_version: "v0.43.0"
+          go_version: 1.27.3
           dest: build
           prefix: libznn
           pkg: cmd/libznn
@@ -127,8 +129,9 @@ jobs:
       - name: Build libznn
         uses: crazy-max/ghaction-xgo@acf46aa99b919eb9ef6bba89dfd13bafa680667f
         with:
-          xgo_version: "v0.36.0"
-          go_version: 1.24.1
+          # xgo v0.43.0 ships up to Go 1.27.3 images (no 1.27.4 tag yet); with GOTOOLCHAIN=auto, builds switch to go1.27.4 via go.mod
+          xgo_version: "v0.43.0"
+          go_version: 1.27.3
           dest: build
           prefix: libznn
           pkg: cmd/libznn
