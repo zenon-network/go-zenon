@@ -1137,6 +1137,12 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, err
 	}
 
+	pubKey, _ := base64.StdEncoding.DecodeString(param.PubKey)
+	X, Y := secp256k1.DecompressPubkey(pubKey)
+	if X == nil || Y == nil {
+		return nil, constants.ErrInvalidCompressedECDSAPubKey
+	}
+
 	if _, err := CheckSecurityInitialized(context); err != nil {
 		return nil, err
 	}
@@ -1149,10 +1155,6 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, err
 	}
 
-	// we check it in the send block
-	pubKey, _ := base64.StdEncoding.DecodeString(param.PubKey)
-
-	X, Y := secp256k1.DecompressPubkey(pubKey)
 	dPubKeyBytes := make([]byte, 1)
 	dPubKeyBytes[0] = 4
 	dPubKeyBytes = append(dPubKeyBytes, X.Bytes()...)
