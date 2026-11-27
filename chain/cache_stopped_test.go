@@ -17,6 +17,7 @@ type stoppedManager struct{}
 func (m *stoppedManager) DB() db.DB                            { return nil }
 func (m *stoppedManager) Add(types.HashHeight, db.Patch) error { return storage.ErrCacheStopped }
 func (m *stoppedManager) Pop() error                           { return storage.ErrCacheStopped }
+func (m *stoppedManager) Compact() error                       { return storage.ErrCacheStopped }
 func (m *stoppedManager) Stop() error                          { return nil }
 
 func TestRollbackCacheTo_StoppedManager(t *testing.T) {
@@ -63,6 +64,7 @@ func (m *stopsAfter) DB() db.DB {
 }
 func (m *stopsAfter) Add(id types.HashHeight, p db.Patch) error { return m.inner.Add(id, p) }
 func (m *stopsAfter) Pop() error                                { return m.inner.Pop() }
+func (m *stopsAfter) Compact() error                            { return m.inner.Compact() }
 func (m *stopsAfter) Stop() error                               { return m.inner.Stop() }
 
 // One acquisition succeeds, the next returns nil: the store handed out must

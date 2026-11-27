@@ -59,6 +59,7 @@ func (c *chainCache) UpdateCache(insertLocker sync.Locker, detailed *nom.Detaile
 	}
 	c.changes.Lock()
 	defer c.changes.Unlock()
+	c.log.Info("inserting new momentum to chain cache", "identifier", detailed.Momentum.Identifier())
 	if err := c.update(detailed, changes); err != nil {
 		return err
 	}
@@ -67,7 +68,6 @@ func (c *chainCache) UpdateCache(insertLocker sync.Locker, detailed *nom.Detaile
 
 func (c *chainCache) update(detailed *nom.DetailedMomentum, changes db.Patch) error {
 	momentum := detailed.Momentum
-	c.log.Info("inserting new momentum to chain cache", "identifier", momentum.Identifier())
 	store := c.getFrontierStore()
 	if store == nil {
 		return errors.Errorf("cache frontier store is nil")
@@ -132,33 +132,48 @@ func (c *chainCache) rollbackTo(identifier types.HashHeight) error {
 }
 
 func (c *chainCache) Init(chainManager db.Manager, momentumStore store.Momentum) error {
+	replayed, err := c.initLocked(chainManager, momentumStore)
+	if err != nil {
+		return err
+	}
+	if replayed {
+		if err := c.manager.Compact(); err != nil {
+			c.log.Error("failed to compact chain cache after init backfill", "err", err)
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *chainCache) initLocked(chainManager db.Manager, momentumStore store.Momentum) (bool, error) {
 	c.changes.Lock()
 	defer c.changes.Unlock()
 	chainFrontier := db.GetFrontierIdentifier(chainManager.Frontier())
 	managerDB := c.manager.DB()
 	if managerDB == nil {
-		return storage.ErrCacheStopped
+		return false, storage.ErrCacheStopped
 	}
 	cacheFrontier, err := storage.ReadFrontierIdentifier(managerDB)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if cacheFrontier.Height == chainFrontier.Height {
 		if cacheFrontier.Hash != chainFrontier.Hash {
-			return errors.Errorf("The cache's state is incorrect. " +
+			return false, errors.Errorf("The cache's state is incorrect. " +
 				"You can fix the problem by removing the cache database manually.")
 		}
-		return nil
+		return false, nil
 	}
 
 	if cacheFrontier.Height > chainFrontier.Height {
 		if err := c.rollbackTo(chainFrontier); err != nil {
-			return err
+			return false, err
 		}
-		return nil
+		return false, nil
 	}
 
+	c.log.Info("backfilling chain cache", "from-height", cacheFrontier.Height+1, "to-height", chainFrontier.Height)
 	if chainFrontier.Height-cacheFrontier.Height >= 100000 {
 		fmt.Println("Initializing cache: 0%")
 	}
@@ -166,22 +181,23 @@ func (c *chainCache) Init(chainManager db.Manager, momentumStore store.Momentum)
 	for i := cacheFrontier.Height + 1; i <= chainFrontier.Height; i++ {
 		momentum, err := momentumStore.GetMomentumByHeight(i)
 		if err != nil {
-			return err
+			return false, err
 		}
 		changes := chainManager.GetPatch(momentum.Identifier())
 		detailed, err := momentumStore.PrefetchMomentum(momentum)
 		if err != nil {
-			return err
+			return false, err
 		}
+		c.log.Debug("inserting new momentum to chain cache", "identifier", detailed.Momentum.Identifier())
 		if err := c.update(detailed, changes); err != nil {
-			return err
+			return false, err
 		}
 		if i%100000 == 0 {
 			fmt.Printf("Initializing cache: %d%%\n", i*100/chainFrontier.Height)
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
 // NewChainCache returns the chain cache over cacheManager, the

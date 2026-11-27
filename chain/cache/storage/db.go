@@ -31,7 +31,7 @@ var (
 	rollbackByte = []byte{119}
 
 	// ErrCacheStopped is returned by cache operations that reach a
-	// stopped CacheManager. After Stop, DB returns nil and Add/Pop
+	// stopped CacheManager. After Stop, DB returns nil and Add/Pop/Compact
 	// return leveldb.ErrClosed; callers that hold no other reference
 	// to the manager's lifetime check for this sentinel instead of
 	// dereferencing the nil DB.
@@ -52,17 +52,23 @@ func getConsensusOpenFilesCacheCapacity() int {
 // CacheManager is the versioned cache database. DB returns the cache
 // key space as a db.DB (nil after Stop); Add applies the patch of the
 // momentum identified by the argument and stores its rollback patch;
-// Pop undoes the frontier momentum using the stored rollback patch.
+// Pop undoes the frontier momentum using the stored rollback patch;
+// Compact runs a full-range compaction of the backing LevelDB store.
 type CacheManager interface {
 	DB() db.DB
 
 	Add(types.HashHeight, db.Patch) error
 	Pop() error
 
+	// Compact compacts the full key range of the underlying LevelDB store.
+	// It does not hold the cache mutation lock across compaction I/O and
+	// returns leveldb.ErrClosed after Stop.
+	Compact() error
+
 	// Stop releases the LevelDB handle. It is idempotent: the first call
 	// closes the handle and reports any error from doing so, every later call
-	// is a no-op that returns nil. After Stop, DB returns nil and Add and Pop
-	// return leveldb.ErrClosed.
+	// is a no-op that returns nil. After Stop, DB returns nil and Add, Pop,
+	// and Compact return leveldb.ErrClosed.
 	Stop() error
 }
 
@@ -72,8 +78,16 @@ type cacheManager struct {
 	// rollbackPatch builds the inverse in Add; db.RollbackPatch in
 	// production, replaceable by tests like write.
 	rollbackPatch func(db.DB, db.Patch) (db.Patch, error)
-	changes       sync.Mutex
-	stopped       bool
+	// compact compacts the key range; ldb.CompactRange in production,
+	// replaceable by tests like write.
+	compact func(util.Range) error
+	// lifecycle keeps Stop from closing ldb while a Compact call is in
+	// flight without holding changes across compaction I/O: Compact takes a
+	// shared lock while Stop takes the exclusive lock before closing ldb.
+	// Lock order when both are acquired is always lifecycle then changes.
+	lifecycle sync.RWMutex
+	changes   sync.Mutex
+	stopped   bool
 }
 
 // NewCacheDBManager opens (or creates) the cache database at
@@ -91,6 +105,7 @@ func NewCacheDBManager(dataDir string) (CacheManager, error) {
 			return ldb.Write(batch, nil)
 		},
 		rollbackPatch: db.RollbackPatch,
+		compact:       ldb.CompactRange,
 	}, nil
 }
 
@@ -177,14 +192,22 @@ func (m *cacheManager) Add(identifier types.HashHeight, patch db.Patch) error {
 	if err := db.AppendPatchToLevelDBBatch(batch, storageByte, patch, true); err != nil {
 		return err
 	}
-	if err := m.write(batch); err != nil {
-		return err
+	return m.write(batch)
+}
+
+func (m *cacheManager) Compact() error {
+	m.lifecycle.RLock()
+	defer m.lifecycle.RUnlock()
+
+	m.changes.Lock()
+	if m.stopped {
+		m.changes.Unlock()
+		return leveldb.ErrClosed
 	}
-	// Compact the db manually since the automatic compaction mechanism causes performance issues when throughput increases.
-	if identifier.Height%100 == 0 {
-		m.ldb.CompactRange(*util.BytesPrefix([]byte{}))
-	}
-	return nil
+	compact := m.compact
+	m.changes.Unlock()
+
+	return compact(util.Range{})
 }
 
 func (m *cacheManager) Pop() error {
@@ -209,6 +232,9 @@ func (m *cacheManager) Pop() error {
 }
 
 func (m *cacheManager) Stop() error {
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
+
 	m.changes.Lock()
 	defer m.changes.Unlock()
 	// A second Stop is a no-op: the handle is already closed and nil.
