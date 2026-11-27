@@ -57,7 +57,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Check Go environment
@@ -76,7 +76,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Check for Go vulnerabilities
@@ -102,7 +102,8 @@ jobs:
           dest: build
           prefix: znnd
           pkg: cmd/znnd
-          targets: darwin/arm64,darwin/amd64,windows/amd64,linux/amd64,linux/arm64
+          # Go 1.27 requires macOS 13 (Ventura); override xgo's 10.16 default so LC_BUILD_VERSION minos matches
+          targets: darwin-13.0/arm64,darwin-13.0/amd64,windows/amd64,linux/amd64,linux/arm64
           v: true
           x: true
           ldflags: -s -w -X github.com/zenon-network/go-zenon/metadata.Version=${{ needs.version.outputs.version }} -X github.com/zenon-network/go-zenon/metadata.GitCommit=${{ github.sha }}
@@ -118,7 +119,8 @@ jobs:
           dest: build
           prefix: libznn
           pkg: cmd/libznn
-          targets: darwin/arm64,darwin/amd64,linux/amd64,linux/arm64
+          # Go 1.27 requires macOS 13 (Ventura); override xgo's 10.16 default so LC_BUILD_VERSION minos matches
+          targets: darwin-13.0/arm64,darwin-13.0/amd64,linux/amd64,linux/arm64
           v: true
           x: true
           tags: libznn
@@ -144,7 +146,7 @@ jobs:
           buildmode: c-shared
           trimpath: true
       - name: Set up Go for artifact verification
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Verify built artifacts toolchain

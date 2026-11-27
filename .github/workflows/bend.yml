@@ -43,7 +43,7 @@ jobs:
           # the merge commit and its first parent, the base branch
           fetch-depth: 2
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Did the Bend files change
