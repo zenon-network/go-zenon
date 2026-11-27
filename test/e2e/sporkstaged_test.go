@@ -361,14 +361,35 @@ func TestSporkStagedEnforcement(t *testing.T) {
 			t.Fatalf("docker restart: %v (%s)", err, out)
 		}
 		t.Logf("restarted %v; waiting for the chain to continue", containers)
-		if err := net.WaitHeight(f.Height+2, wait); err != nil {
+		// docker restart stops the containers one after another, so the
+		// chain can keep producing on the pre-restart frontier f while the
+		// restart is still in flight: f.Height+2 may already be reached
+		// when the wait below starts and would prove nothing about
+		// post-restart liveness. Take the frontier only after the restart
+		// returned and require two momenta above THAT. The RPC needs a
+		// moment to come back, so poll for the first post-restart frontier
+		// instead of failing on the first refusal.
+		var resumedHeight uint64
+		deadline := time.Now().Add(wait)
+		for {
+			resumed, err := net.Frontier()
+			if err == nil {
+				resumedHeight = resumed.Height
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("no frontier within %s after the restart: %v", wait, err)
+			}
+			time.Sleep(time.Second)
+		}
+		if err := net.WaitHeight(resumedHeight+2, wait); err != nil {
 			t.Fatal(err)
 		}
 		// Every node came back, not only the primary endpoint: all five
 		// serve the same new tip (two of three pillars can still produce
 		// with one node down, so the primary alone would not notice), and
 		// every container is running with no restart-policy restart.
-		agree(t, f.Height+2)
+		agree(t, resumedHeight+2)
 		noExitYet(t, "after the S-5 restart")
 		// The spork table survived on every node, read through docker exec.
 		ctx, cancel := context.WithTimeout(context.Background(), wait)

@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"math/big"
-	"strings"
 	"testing"
 
 	"github.com/zenon-network/go-zenon/chain/nom"
@@ -241,7 +240,11 @@ func TestVerifierMomentumRules(t *testing.T) {
 				t.Errorf("momentum %d: chain identifier %d, want %d", h, m.ChainIdentifier, net.ChainID)
 			}
 			wantVersion := uint64(1)
-			if dpKnown && h > dpEnf {
+			// A momentum built on the genesis parent is always version 1:
+			// IsSporkActive exempts a frontier at height 1, so the verifier
+			// required version 1 at height 2 even with the spork enforced
+			// at 0 or 1. Version 2 is only possible from height 3 on.
+			if dpKnown && h > dpEnf && h > 2 {
 				wantVersion = 2
 			}
 			if m.Version != wantVersion {
@@ -250,7 +253,7 @@ func TestVerifierMomentumRules(t *testing.T) {
 			if len(m.Data) != 0 {
 				t.Errorf("momentum %d: data is %d bytes, want empty", h, len(m.Data))
 			}
-			if dpKnown && h > dpEnf {
+			if dpKnown && h > dpEnf && h > 2 {
 				if m.NextFusionPrice < dp.MinResourcePrice || m.NextWorkPrice < dp.MinResourcePrice {
 					t.Errorf("momentum %d: prices %d/%d, want both >= %d once dynamic plasma is in force", h, m.NextFusionPrice, m.NextWorkPrice, dp.MinResourcePrice)
 				}
@@ -412,7 +415,11 @@ func TestVerifierMomentumRules(t *testing.T) {
 		for _, h := range heights {
 			m := read(t, h)
 			wantVersion, wantPriced := uint64(1), false
-			if h > dpEnf {
+			// Genesis-parent exemption: IsSporkActive is false on a store
+			// whose frontier is genesis (height 1), so momentum 2 is validly
+			// version 1 with zero prices even when the spork is enforced at
+			// 0 or 1 — the switch to version 2 can only show from height 3.
+			if h > dpEnf && h > 2 {
 				wantVersion, wantPriced = 2, true
 			}
 			if m.Version != wantVersion {
@@ -427,8 +434,4 @@ func TestVerifierMomentumRules(t *testing.T) {
 			}
 		}
 	})
-}
-
-func contains(err error, sub string) bool {
-	return err != nil && strings.Contains(err.Error(), sub)
 }

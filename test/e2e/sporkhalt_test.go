@@ -301,6 +301,9 @@ func TestSporkUnknownBinary(t *testing.T) {
 			time.Sleep(2 * time.Second)
 		}
 		t.Logf("old binary on a past-enforcement db exited with code %d (dev exits 1 via cli.go; v0.0.10 exited 2 from chain.Init)", code)
+		if code == 0 {
+			t.Error("old binary exited 0 on a past-enforcement database; want a nonzero refusal exit (dev exits 1 via cli.go, v0.0.10 exits 2 from chain.Init)")
+		}
 		if !logsContain(oldnode, "unimplemented spork") {
 			t.Error("old binary logs do not name the unimplemented spork")
 		}
