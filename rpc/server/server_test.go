@@ -1,8 +1,11 @@
 package server
 
 import (
+	"context"
+	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -304,6 +307,17 @@ func TestStopFromRegisteredMethod(t *testing.T) {
 	}
 }
 
+// funcLogHandler adapts a function into an slog.Handler that accepts all levels.
+type funcLogHandler func(slog.Record) error
+
+func (h funcLogHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h funcLogHandler) Handle(_ context.Context, r slog.Record) error { return h(r) }
+
+func (h funcLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h funcLogHandler) WithGroup(string) slog.Handler { return h }
+
 // Stop logs, and the root logger runs whatever handler the embedding
 // application installed, so the log call must not run under Stop's lock
 // either. The handler here calls Stop back.
@@ -312,12 +326,18 @@ func TestStopMayBeReenteredFromLogHandler(t *testing.T) {
 	if err := srv.RegisterName("probe", stopProbe{}); err != nil {
 		t.Fatal(err)
 	}
-	previous := log.Root().GetHandler()
-	t.Cleanup(func() { log.Root().SetHandler(previous) })
-	log.Root().SetHandler(log.FuncHandler(func(r *log.Record) error {
+	prevLog := log.Root()
+	prevSlog := slog.Default()
+	t.Cleanup(func() {
+		log.SetDefault(prevLog)
+		slog.SetDefault(prevSlog)
+	})
+	var reentered atomic.Bool
+	log.SetDefault(log.NewLogger(funcLogHandler(func(slog.Record) error {
+		reentered.Store(true)
 		srv.Stop()
 		return nil
-	}))
+	})))
 
 	codec, done := serveTestCodec(t, srv)
 	waitRegistered(t, srv, codec)
@@ -331,4 +351,7 @@ func TestStopMayBeReenteredFromLogHandler(t *testing.T) {
 	awaitClose(t, codec.closed(), "the codec being closed by Stop")
 	awaitClose(t, done, "ServeCodec returning")
 	assertNoCodecs(t, srv)
+	if !reentered.Load() {
+		t.Fatal("log handler was not invoked during Stop")
+	}
 }

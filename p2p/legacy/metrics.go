@@ -38,8 +38,11 @@ type meteredConn struct {
 }
 
 // newMeteredConn creates a new metered connection, also bumping the ingress or
-// egress connection meter.
+// egress connection meter. When metrics are disabled it returns conn directly.
 func newMeteredConn(conn net.Conn, ingress bool) net.Conn {
+	if !metrics.Enabled() {
+		return conn
+	}
 	if ingress {
 		ingressConnectMeter.Mark(1)
 	} else {
