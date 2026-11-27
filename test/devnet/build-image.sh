@@ -62,7 +62,7 @@ if [ "$OLDNODE" = 1 ]; then
   docker run --rm \
     -v "$ROOT":/src:ro -v "$OUT":/out \
     -v go-zenon-test-gomod:/go/pkg/mod -v go-zenon-test-gocache:/root/.cache/go-build \
-    -w /src -e CGO_ENABLED=1 -e GOWORK=off -e GOFLAGS=-buildvcs=false \
+    -w /src -e CGO_ENABLED=1 -e GOWORK=off -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local \
     "$GOIMG" sh -ec "apk add --no-cache gcc musl-dev patch >/dev/null && \
       mkdir /build && (cd /src && tar cf - --exclude=.git --exclude=./build .) | (cd /build && tar xf -) && \
       cd /build && patch -p1 </src/test/devnet/oldnode/embedded-refund-removal.patch && \
@@ -71,7 +71,7 @@ else
   docker run --rm \
     -v "$ROOT":/src:ro -v "$OUT":/out \
     -v go-zenon-test-gomod:/go/pkg/mod -v go-zenon-test-gocache:/root/.cache/go-build \
-    -w /src -e CGO_ENABLED=1 -e GOWORK=off -e GOFLAGS=-buildvcs=false \
+    -w /src -e CGO_ENABLED=1 -e GOWORK=off -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local \
     "$GOIMG" sh -ec "apk add --no-cache gcc musl-dev >/dev/null && go build $OVERLAY -o /out/znnd -ldflags '-X $PKG.Version=$VERSION -X $PKG.GitCommit=$COMMIT' ./cmd/znnd && go version"
 fi
 

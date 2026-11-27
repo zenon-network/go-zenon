@@ -84,7 +84,7 @@ Packages with source and no tests: `chain/store`, `cmd/znnd`, `consensus/api`, `
 
 | Id | Check | Pass when |
 |---|---|---|
-| L0-1 | `go build ./...` on Go 1.23 (the `go.mod` version) and on the release toolchain (1.24.1) | both build |
+| L0-1 | `GOTOOLCHAIN=local go build ./...` on Go 1.26 (the `go.mod` minimum) and `go build ./...` on the release toolchain (`go1.27.4`) | both build |
 | L0-2 | `make znnd` and `make libznn` on Linux, macOS, Windows | binaries produced; `znnd version` prints a non-empty version, including from a tree without `.git` |
 | L0-3 | `go build -tags libznn ./...` and `go test -tags libznn ./cmd/libznn/...` | pass |
 | L0-4 | `go vet ./...` | only the six known `p2p/legacy` warnings, or none once fixed |
