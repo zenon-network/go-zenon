@@ -213,6 +213,14 @@ func TestPlasma(t *testing.T) {
 			// the data, so the hash the sender signed no longer matches.
 			callReject(t, "hash is different than the one computed", a, plasma, trailing, qsr, coins(10))
 		}
+		// Non-canonical left-padding in the address word: the exact length
+		// passes the trailing-bytes rule and the ABI decoder reads the same
+		// address, but the node re-packs the decoded call to canonical form
+		// during execution, so the hash the sender signed no longer matches
+		// the mutated block — on either side of the spork.
+		padded := append([]byte{}, good...)
+		padded[4] = 0x01 // first byte of the 12-byte left-padding of the 32-byte address word
+		callReject(t, "hash is different than the one computed", a, plasma, padded, qsr, coins(10))
 	})
 }
 
