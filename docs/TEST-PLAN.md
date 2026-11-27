@@ -348,7 +348,7 @@ Tested on their own branch before merge, then again as part of `dev`. State on 2
 1. **Mainnet host for L6.** Where does the full sync run, and who operates it? Nothing in section 7 can start without it.
 2. **Issue #78.** Gate the PoW-target and bridge-key changes, or accept them on the strength of the M-3 scan. The scan can run first.
 3. **Spork ids.** Four are placeholders. Testing uses genesis-seeded ids; a release needs the real ones and a re-run of 6.1 on that build.
-4. **Go toolchain.** Tests run on 1.23, release binaries on 1.24.1. Pick one, or test on both (L0-1 assumes both).
+4. **Go toolchain.** `go.mod` sets minimum `go 1.26.0` and pins `toolchain go1.27.4` (used by CI tests, Docker, and xgo via `GOTOOLCHAIN=auto`); L0-1 verifies both the 1.26 minimum (`GOTOOLCHAIN=local`) and `go1.27.4`.
 5. **Scope of the release candidate.** Which of the open pull requests (section 9) are in. #310 and #72 add sporks and their own suites.
 6. **Coverage floor** for L1-6, if any.
 7. **Where the driver and this plan live**: in the repository (`test/e2e/`, `docs/`) or outside it.
