@@ -93,6 +93,11 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+      - name: Set up Go for artifact verification
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
       - name: Build znnd
         uses: crazy-max/ghaction-xgo@acf46aa99b919eb9ef6bba89dfd13bafa680667f
         with:
@@ -145,10 +150,6 @@ jobs:
           buildvcs: false
           buildmode: c-shared
           trimpath: true
-      - name: Set up Go for artifact verification
-        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
-        with:
-          go-version-file: go.mod
       - name: Verify built artifacts toolchain
         shell: bash
         run: |
@@ -169,11 +170,11 @@ jobs:
             checked=$((checked + 1))
 
             actual=""
-            out="$(go version "$f" 2>/dev/null || true)"
+            out="$(GOTOOLCHAIN=local go version "$f" 2>/dev/null || true)"
             if printf '%s\n' "$out" | grep -qE ': go[0-9]+\.[0-9]+'; then
               actual="$(printf '%s\n' "$out" | sed -E 's/^.*: (go[0-9]+(\.[0-9]+)*).*$/\1/')"
               echo "$out"
-              go version -m "$f" | awk '/^\tbuild\tDefaultGODEBUG=/' || true
+              GOTOOLCHAIN=local go version -m "$f" | awk '/^\tbuild\tDefaultGODEBUG=/' || true
             else
               actual="$({ strings -a "$f" || true; } | grep -m1 -oE 'go1\.[0-9]+(\.[0-9]+)*' || true)"
               echo "$f: ${actual:-unknown} (via strings fallback)"
