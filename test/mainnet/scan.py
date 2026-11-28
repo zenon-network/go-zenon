@@ -13,8 +13,13 @@ Two scans over mainnet history:
              momentums per call), reporting how many momentums and account
              blocks were read, all ChangeTssECDSAPubKey sends (bridge key
              changes, method id 15a0c641 — the first 4 bytes of the SHA3-256
-             of the method signature, computed below), and every account
-             block whose Difficulty read as unsigned 64-bit is >= 2^63.
+             of the method signature, computed below) including on-curve and
+             leading-zero-byte X/Y coordinate (< 2^248) checks, the live
+             stored decompressedTssECDSAPubKey from embedded.bridge.getBridgeInfo
+             (must be 65 bytes, 0x04 prefix, on-curve when non-empty), every
+             account block whose Difficulty read as unsigned 64-bit is >= 2^63,
+             and visibility counts for blocks above the Dynamic Plasma and
+             legacy difficulty caps.
 
 Refuses to run unless the endpoint reports chain identifier 1 and the
 mainnet genesis momentum hash at height 1.
@@ -23,9 +28,10 @@ Standard library Python 3 only.  Does not publish transactions.
 
 Outcome policy (docs/TEST-PLAN.md M-3: "none found, or each one listed"):
 integrity problems (short read, wrong heights in a page, parse or decode
-failures) FAIL the scan; #78 findings (an off-curve or unrecognized bridge
-key, a difficulty >= 2^63) are listed one by one and counted in the
-summary, but do not by themselves fail it.
+failures) FAIL the scan; #78 findings (an off-curve, unrecognized, or
+leading-zero-coordinate bridge key, an invalid/short live bridge key, or a
+difficulty >= 2^63) are listed one by one and counted in the summary, but
+do not by themselves fail it.
 
 Output: one JSON line per finding and per progress milestone, a final
 summary, and the commit the tool was built from.
@@ -57,12 +63,21 @@ BRIDGE_KEY_SIG = "ChangeTssECDSAPubKey(string,string,string)"
 BRIDGE_KEY_SELECTOR = hashlib.sha3_256(BRIDGE_KEY_SIG.encode()).digest()[:4]
 
 HIGH_DIFF_THRESHOLD = 2**63
+# Difficulty caps in go-zenon for visibility ahead of DynamicPlasmaSpork
+# activation (not #78 findings on their own):
+DP_MAX_DIFFICULTY = 315_000_000_000_000  # dp.MaxDifficultyForAccountBlock
+LEGACY_MAX_DIFFICULTY = 141_750_000      # constants.MaxDifficultyForAccountBlock
+DIFF_LOG_CAP = 100
+LEGACY_DIFF_SAMPLE_CAP = 20
 PAGE = 1000
 DETAILED = 10           # getDetailedMomentumsByHeight count per call
 PROGRESS_EVERY = 100_000
 
 # secp256k1 field prime, for the on-curve check of bridge key changes.
 SECP256K1_P = 2**256 - 2**32 - 977
+# Coordinates strictly below 2^248 have at least one leading zero byte in their
+# 32-byte big-endian representation (big.Int.Bytes() produces < 32 bytes).
+SHORT_COORD_THRESHOLD = 1 << 248
 
 # The embedded bridge contract: only sends to this address whose data starts
 # with the selector are real ChangeTssECDSAPubKey calls.
@@ -196,27 +211,122 @@ def abi_first_string(raw):
     return raw[start + 32:start + 32 + ln]
 
 
-def secp256k1_on_curve(dec):
-    """True iff dec is a secp256k1 public key on the curve: a 65-byte
-    uncompressed (0x04 || X || Y) or a 33-byte compressed (0x02/0x03 || X)
-    point.  None if it is neither format."""
+def secp256k1_decompress_coords(dec):
+    """Return (x, y) iff dec is a valid secp256k1 public key on the curve:
+    a 65-byte uncompressed (0x04 || X || Y) or a 33-byte compressed
+    (0x02/0x03 || X) point.  For compressed points, y is selected with the
+    parity matching dec[0] & 1 (otherwise SECP256K1_P - y).  Returns None
+    if dec is off-curve or not a recognized format."""
     if len(dec) == 65 and dec[0] == 4:
         x = int.from_bytes(dec[1:33], "big")
         y = int.from_bytes(dec[33:65], "big")
         if x >= SECP256K1_P or y >= SECP256K1_P:
-            return False
-        return (y * y - (pow(x, 3, SECP256K1_P) + 7)) % SECP256K1_P == 0
+            return None
+        if (y * y - (pow(x, 3, SECP256K1_P) + 7)) % SECP256K1_P != 0:
+            return None
+        return (x, y)
     if len(dec) == 33 and dec[0] in (2, 3):
         x = int.from_bytes(dec[1:33], "big")
         if x >= SECP256K1_P:
-            return False
+            return None
         rhs = (pow(x, 3, SECP256K1_P) + 7) % SECP256K1_P
         # p % 4 == 3, so the square root is rhs**((p+1)/4) mod p.
         y = pow(rhs, (SECP256K1_P + 1) // 4, SECP256K1_P)
-        if y * y % SECP256K1_P != rhs:
-            return False  # no square root: not on the curve at all
-        return (y & 1) == (dec[0] & 1) or ((SECP256K1_P - y) & 1) == (dec[0] & 1)
+        if (y * y) % SECP256K1_P != rhs:
+            return None  # no square root: not on the curve at all
+        if (y & 1) != (dec[0] & 1):
+            y = SECP256K1_P - y
+        if y >= SECP256K1_P or (y & 1) != (dec[0] & 1):
+            return None
+        return (x, y)
+    return None
+
+
+def secp256k1_on_curve(dec):
+    """True iff dec is a secp256k1 public key on the curve: a 65-byte
+    uncompressed (0x04 || X || Y) or a 33-byte compressed (0x02/0x03 || X)
+    point.  False for a 33-byte compressed-length key (including invalid
+    prefix bytes such as 33 zero bytes) or a 65-byte 0x04-prefixed key that
+    is not on the curve.  None if it is neither format."""
+    if secp256k1_decompress_coords(dec) is not None:
+        return True
+    if len(dec) == 33 or (len(dec) == 65 and dec[0] == 4):
+        return False
     return None  # not a key we recognize
+
+
+def check_live_bridge_key(endpoint, fh):
+    """Query embedded.bridge.getBridgeInfo and verify decompressedTssECDSAPubKey.
+
+    Only an explicit empty string (uninitialized bridge) logs INFO with no
+    finding and no failure.  Missing fields, null/non-string values, or RPC
+    errors count as parse failures so the scan never passes a skipped check.
+    If non-empty, verifies it base64-decodes to exactly 65 bytes with prefix
+    0x04 and lies on secp256k1.  An invalid or short stored key is logged and
+    counted as a finding without failing the scan.  Returns
+    (findings, parse_failures, key_check)."""
+    try:
+        info = rpc(endpoint, "embedded.bridge.getBridgeInfo")
+    except Exception as exc:
+        log({"case": "M-3-liveBridgeKey", "status": "FAIL",
+             "finding": False, "keyCheck": "rpc-error",
+             "error": str(exc)}, fh)
+        return 0, 1, "rpc-error"
+
+    if not isinstance(info, dict) or "decompressedTssECDSAPubKey" not in info:
+        log({"case": "M-3-liveBridgeKey", "status": "FAIL",
+             "finding": False, "keyCheck": "invalid-response"}, fh)
+        return 0, 1, "invalid-response"
+
+    decomp_b64 = info["decompressedTssECDSAPubKey"]
+    if not isinstance(decomp_b64, str):
+        log({"case": "M-3-liveBridgeKey", "status": "FAIL",
+             "finding": False, "keyCheck": "invalid-response"}, fh)
+        return 0, 1, "invalid-response"
+
+    if decomp_b64 == "":
+        log({"case": "M-3-liveBridgeKey", "status": "INFO",
+             "finding": False, "keyCheck": "empty", "byteLength": 0}, fh)
+        return 0, 0, "empty"
+
+    pub_sha = hashlib.sha256(decomp_b64.encode()).hexdigest()[:16]
+    try:
+        raw = base64.b64decode(decomp_b64, validate=True)
+    except Exception:
+        log({"case": "M-3-liveBridgeKey", "status": "INFO",
+             "finding": True, "keyCheck": "invalid-base64",
+             "byteLength": None, "pubKeySha256": pub_sha}, fh)
+        return 1, 0, "invalid-base64"
+
+    if len(raw) != 65:
+        log({"case": "M-3-liveBridgeKey", "status": "INFO",
+             "finding": True, "keyCheck": "invalid-length",
+             "byteLength": len(raw), "expectedLength": 65,
+             "pubKeySha256": pub_sha}, fh)
+        return 1, 0, "invalid-length"
+
+    if raw[0] != 4:
+        log({"case": "M-3-liveBridgeKey", "status": "INFO",
+             "finding": True, "keyCheck": "invalid-prefix",
+             "byteLength": len(raw), "prefix": f"0x{raw[0]:02x}",
+             "pubKeySha256": pub_sha}, fh)
+        return 1, 0, "invalid-prefix"
+
+    coords = secp256k1_decompress_coords(raw)
+    if coords is None:
+        log({"case": "M-3-liveBridgeKey", "status": "INFO",
+             "finding": True, "keyCheck": "OFF-CURVE",
+             "byteLength": len(raw), "pubKeySha256": pub_sha}, fh)
+        return 1, 0, "OFF-CURVE"
+
+    x_short = coords[0] < SHORT_COORD_THRESHOLD
+    y_short = coords[1] < SHORT_COORD_THRESHOLD
+    log({"case": "M-3-liveBridgeKey", "status": "PASS",
+         "finding": False, "keyCheck": "valid",
+         "byteLength": len(raw), "pubKeySha256": pub_sha,
+         "shortCoord": x_short or y_short,
+         "leadingZeroCoord": {"x": x_short, "y": y_short}}, fh)
+    return 0, 0, "valid"
 
 
 def scan_blocks(endpoint, from_h, to_h, fh):
@@ -228,14 +338,22 @@ def scan_blocks(endpoint, from_h, to_h, fh):
     height.
 
     Integrity problems (short read, wrong heights, parse or decode
-    failures) FAIL the scan.  #78 findings (an off-curve or unrecognized
-    bridge key, a difficulty >= 2^63) are listed and counted but do not by
+    failures) FAIL the scan.  #78 findings (an off-curve, unrecognized, or
+    leading-zero-coordinate bridge key, an invalid/short live stored bridge
+    key, or a difficulty >= 2^63) are listed and counted but do not by
     themselves fail it (docs/TEST-PLAN.md M-3: "none found, or each one
-    listed with the height where dev and v0.0.10 would disagree")."""
+    listed with the height where dev and v0.0.10 would disagree").  Blocks
+    above DP_MAX_DIFFICULTY and LEGACY_MAX_DIFFICULTY are also counted for
+    visibility ahead of DynamicPlasmaSpork activation."""
     momentums = 0
     blocks_read = 0
     bridge_keys = []
     high_diff = []
+    above_dp_max = 0
+    above_dp_entries = []
+    above_legacy_max = 0
+    above_legacy_sample = []
+    max_diff = 0
     parse_failures = 0
     bad_pages = []
     h = from_h
@@ -279,10 +397,25 @@ def scan_blocks(endpoint, from_h, to_h, fh):
                 except (ValueError, TypeError):
                     bdiff = 0
                     parse_failures += 1
+                if bdiff > max_diff:
+                    max_diff = bdiff
                 if bdiff >= HIGH_DIFF_THRESHOLD:
                     high_diff.append({"kind": "block", "height": m.get("height"),
                                       "hash": b.get("hash"),
                                       "difficulty": b.get("difficulty")})
+                if bdiff > DP_MAX_DIFFICULTY:
+                    above_dp_max += 1
+                    if len(above_dp_entries) < DIFF_LOG_CAP:
+                        above_dp_entries.append({"kind": "block",
+                                                 "height": m.get("height"),
+                                                 "hash": b.get("hash"),
+                                                 "difficulty": b.get("difficulty")})
+                if bdiff > LEGACY_MAX_DIFFICULTY:
+                    above_legacy_max += 1
+                    if len(above_legacy_sample) < LEGACY_DIFF_SAMPLE_CAP:
+                        above_legacy_sample.append({"height": m.get("height"),
+                                                    "hash": b.get("hash"),
+                                                    "difficulty": b.get("difficulty")})
                 data = b.get("data") or ""
                 raw = b""
                 try:
@@ -294,13 +427,26 @@ def scan_blocks(endpoint, from_h, to_h, fh):
                         and b.get("blockType") == USER_SEND):
                     key_b64 = abi_first_string(raw)
                     key_status = "not-decodable"
+                    short_coord = False
+                    leading_zero = None
                     if key_b64:
                         try:
-                            key_dec = base64.b64decode(key_b64)
-                            on_curve = secp256k1_on_curve(key_dec)
-                            key_status = ("on-curve" if on_curve else
-                                          "OFF-CURVE" if on_curve is False else
-                                          "unexpected-key-format")
+                            # Match Go's base64.StdEncoding.DecodeString, which
+                            # ignores CR and LF while rejecting other non-base64 bytes.
+                            key_dec = base64.b64decode(
+                                key_b64.replace(b"\r", b"").replace(b"\n", b""),
+                                validate=True)
+                            coords = secp256k1_decompress_coords(key_dec)
+                            if coords is not None:
+                                key_status = "on-curve"
+                                x_short = coords[0] < SHORT_COORD_THRESHOLD
+                                y_short = coords[1] < SHORT_COORD_THRESHOLD
+                                short_coord = x_short or y_short
+                                leading_zero = {"x": x_short, "y": y_short}
+                            else:
+                                on_curve = secp256k1_on_curve(key_dec)
+                                key_status = ("OFF-CURVE" if on_curve is False else
+                                              "unexpected-key-format")
                         except Exception:
                             key_status = "not-decodable"
                     if key_status == "not-decodable":
@@ -314,7 +460,9 @@ def scan_blocks(endpoint, from_h, to_h, fh):
                                         "selector": BRIDGE_KEY_SELECTOR.hex(),
                                         "pubKeySha256": key_b64 and
                                             hashlib.sha256(key_b64).hexdigest()[:16],
-                                        "keyCheck": key_status})
+                                        "keyCheck": key_status,
+                                        "shortCoord": short_coord,
+                                        "leadingZeroCoord": leading_zero})
         if not isinstance(page[-1]["momentum"].get("height"), int) \
                 or page[-1]["momentum"]["height"] < h:
             # No forward progress (garbage heights): the bad page above
@@ -337,10 +485,17 @@ def scan_blocks(endpoint, from_h, to_h, fh):
         log({"case": "M-3-bridgeKey", **k}, fh)
     for d in high_diff:
         log({"case": "M-3-highDifficulty", **d}, fh)
+    for d in above_dp_entries:
+        log({"case": "M-3-aboveDpMaxDifficulty", **d}, fh)
+    live_findings, live_parse_failures, live_key_check = check_live_bridge_key(
+        endpoint, fh)
+    parse_failures += live_parse_failures
     off_curve = sum(1 for k in bridge_keys if k["keyCheck"] == "OFF-CURVE")
     odd_format = sum(1 for k in bridge_keys
                      if k["keyCheck"] == "unexpected-key-format")
-    findings = off_curve + odd_format + len(high_diff)
+    short_coord_keys = sum(1 for k in bridge_keys if k["shortCoord"])
+    findings = (off_curve + odd_format + short_coord_keys
+                + live_findings + len(high_diff))
     status = "FAIL" if (short or last_h != to_h or parse_failures
                         or bad_pages) else "PASS"
     log({"case": "M-3-blocks", "status": status, "from": from_eff,
@@ -350,7 +505,14 @@ def scan_blocks(endpoint, from_h, to_h, fh):
          "distinctBridgeKeys": len({k["pubKeySha256"] for k in bridge_keys}),
          "offCurveKeys": off_curve,
          "unexpectedKeyFormats": odd_format,
+         "shortCoordKeys": short_coord_keys,
+         "liveBridgeKeyCheck": live_key_check,
+         "liveBridgeKeyFindings": live_findings,
          "highDifficultyItems": len(high_diff),
+         "aboveDpMaxDifficulty": above_dp_max,
+         "aboveLegacyMaxDifficulty": above_legacy_max,
+         "aboveLegacyMaxDifficultySample": above_legacy_sample,
+         "maxDifficulty": max_diff,
          "findings": findings,
          "badPages": bad_pages[:20], "badPageCount": len(bad_pages),
          "parseFailures": parse_failures}, fh)

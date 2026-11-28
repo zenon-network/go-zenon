@@ -68,10 +68,16 @@ var (
 	EpochRewardTermsSpork = NewImplementedSpork("0000000000000000000000000000000000000000000000000000000000000007")
 
 	// ImplementedSporksMap is the set of spork IDs this build knows
-	// how to enforce. After every momentum insertion the momentum pool
+	// how to enforce. On every momentum insertion the momentum pool
 	// checks each activated spork that has reached its enforcement
-	// height against this map; if any is missing, the node terminates
-	// and asks for a binary upgrade (see chain/momentum_pool.go).
+	// height against this map; if any is missing, AddMomentumTransaction
+	// logs Crit, rolls back the momentum, and returns an error — leaving
+	// the node at H - 1 refusing momentums at or past enforcement when
+	// rollback succeeds, or returning ErrCanonicalStateUncertain if
+	// rollback fails. At startup, chain.Init likewise returns an error
+	// to its caller if the stored frontier is already at or past an
+	// unimplemented spork (see chain/momentum_pool.go, chain/chain.go,
+	// and node/node.go).
 	ImplementedSporksMap = map[Hash]bool{
 		AcceleratorSpork.SporkId:        true,
 		HtlcSpork.SporkId:               true,

@@ -30,8 +30,7 @@ var initializedRe = regexp.MustCompile(`Initialized NoM\. Height: (\d+)`)
 // without a resync.
 //
 // What "cannot pass" means on this tree differs from the released v0.0.10
-// behavior and the TEST-PLAN wording ("exits with status 2"), and the case
-// pins the difference:
+// behavior (which exited with status 2), and the case pins both paths:
 //
 //   - live node (in sync or syncing): the momentum pool refuses the
 //     enforcement-height momentum, rolls it back and the node stays
