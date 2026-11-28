@@ -32,7 +32,7 @@ var (
 	overloadedHTTPCounter = metrics.NewRegisteredCounter("rpc/http/overloaded", nil)
 )
 
-func newRPCServingTimer(method string, valid bool) metrics.Timer {
+func newRPCServingTimer(method string, valid bool) *metrics.Timer {
 	flag := "success"
 	if !valid {
 		flag = "failure"

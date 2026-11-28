@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 )
 
 // handler handles JSON-RPC messages. There is one handler per connection. Note that
@@ -519,7 +520,7 @@ func (h *handler) handleCall(cp *callProc, msg *jsonrpcMessage) *jsonrpcMessage 
 
 	// Collect the statistics for RPC calls if metrics is enabled.
 	// We only care about pure rpc call. Filter out subscription.
-	if callb != h.unsubscribeCb {
+	if metrics.Enabled() && callb != h.unsubscribeCb {
 		rpcRequestGauge.Inc(1)
 		if answer.Error != nil {
 			failedReqeustGauge.Inc(1)
