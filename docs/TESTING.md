@@ -50,7 +50,7 @@ Tokens in `coverage.tsv` are the class and the case id, for example `E1:PL-1 E4:
 
 | Tool | Version used here | Notes |
 |---|---|---|
-| Go | 1.23 or later on the host, with cgo | `go.mod` says 1.23; release binaries are built with 1.24.1. The driver (P9) runs on the host |
+| Go | 1.26 or later on the host, with cgo | `go.mod` minimum is 1.26.0 with `toolchain go1.27.4`. The driver (P9) runs on the host |
 | docker with compose | any current | about 2 GB of free disk in the docker VM for the stock build |
 | python3 | 3.9 or later | standard library only |
 | git | any | the commit under test must be checked out |
@@ -94,7 +94,7 @@ make devnet-up        # builds with the repository Dockerfile and starts everyth
 When the docker VM is short on disk, or to pin the Go toolchain:
 
 ```sh
-GOIMG=golang:1.24.1-alpine test/devnet/build-image.sh
+GOIMG=golang:1.27.4-alpine test/devnet/build-image.sh
 ```
 
 The script compiles `znnd` in a Go container with the source mounted read-only (cgo is required), wraps it in a small alpine image tagged `go-zenon-devnet:latest`, and prints the binary's SHA-256 and `znnd version`. Check that the commit hash it prints is the one you wrote down.

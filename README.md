@@ -4,7 +4,7 @@ Reference Golang implementation of the Alphanet - Network of Momentum Phase 0.
 
 ## Building from source
 
-Building `znnd` requires both a Go (version 1.16 or later) and a C compiler. You can install them using your favourite package manager. Once the dependencies are installed, please run:
+Building `znnd` requires both a Go (version 1.26 or later) and a C compiler. You can install them using your favourite package manager. Once the dependencies are installed, please run:
 
 ```shell
 make znnd

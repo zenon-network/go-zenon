@@ -8,7 +8,7 @@
 # read-only, then copied into a small alpine image that matches the final stage of
 # the repository Dockerfile.
 #
-#   GOIMG=golang:1.24.1-alpine test/devnet/build-image.sh
+#   GOIMG=golang:1.27.4-alpine test/devnet/build-image.sh
 #   FAST=1 test/devnet/build-image.sh     # the test build, image go-zenon-devnet-fast:latest
 #   OLDNODE=1 test/devnet/build-image.sh  # the S-4/X-4 oldnode build, image go-zenon-devnet-noref:latest
 #
@@ -27,7 +27,7 @@
 # The source directory must be mountable by the docker VM (with Colima: under $HOME).
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-GOIMG="${GOIMG:-golang:1.24.1-alpine}"
+GOIMG="${GOIMG:-golang:1.27.4-alpine}"
 FAST="${FAST:-0}"
 OLDNODE="${OLDNODE:-0}"
 if [ "$FAST" = 1 ] && [ "$OLDNODE" = 1 ]; then
@@ -62,7 +62,7 @@ if [ "$OLDNODE" = 1 ]; then
   docker run --rm \
     -v "$ROOT":/src:ro -v "$OUT":/out \
     -v go-zenon-test-gomod:/go/pkg/mod -v go-zenon-test-gocache:/root/.cache/go-build \
-    -w /src -e CGO_ENABLED=1 -e GOWORK=off -e GOFLAGS=-buildvcs=false \
+    -w /src -e CGO_ENABLED=1 -e GOWORK=off -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local \
     "$GOIMG" sh -ec "apk add --no-cache gcc musl-dev patch >/dev/null && \
       mkdir /build && (cd /src && tar cf - --exclude=.git --exclude=./build .) | (cd /build && tar xf -) && \
       cd /build && patch -p1 </src/test/devnet/oldnode/embedded-refund-removal.patch && \
@@ -71,7 +71,7 @@ else
   docker run --rm \
     -v "$ROOT":/src:ro -v "$OUT":/out \
     -v go-zenon-test-gomod:/go/pkg/mod -v go-zenon-test-gocache:/root/.cache/go-build \
-    -w /src -e CGO_ENABLED=1 -e GOWORK=off -e GOFLAGS=-buildvcs=false \
+    -w /src -e CGO_ENABLED=1 -e GOWORK=off -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local \
     "$GOIMG" sh -ec "apk add --no-cache gcc musl-dev >/dev/null && go build $OVERLAY -o /out/znnd -ldflags '-X $PKG.Version=$VERSION -X $PKG.GitCommit=$COMMIT' ./cmd/znnd && go version"
 fi
 

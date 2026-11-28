@@ -57,7 +57,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Check Go environment
@@ -76,7 +76,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Check for Go vulnerabilities
@@ -93,15 +93,22 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+      - name: Set up Go for artifact verification
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
       - name: Build znnd
         uses: crazy-max/ghaction-xgo@acf46aa99b919eb9ef6bba89dfd13bafa680667f
         with:
-          xgo_version: "v0.36.0"
-          go_version: 1.24.1
+          # xgo v0.43.0 ships up to Go 1.27.3 images (no 1.27.4 tag yet); with GOTOOLCHAIN=auto, builds switch to go1.27.4 via go.mod
+          xgo_version: "v0.43.0"
+          go_version: 1.27.3
           dest: build
           prefix: znnd
           pkg: cmd/znnd
-          targets: darwin/arm64,darwin/amd64,windows/amd64,linux/amd64,linux/arm64
+          # Go 1.27 requires macOS 13 (Ventura); override xgo's 10.16 default so LC_BUILD_VERSION minos matches
+          targets: darwin-13.0/arm64,darwin-13.0/amd64,windows/amd64,linux/amd64,linux/arm64
           v: true
           x: true
           ldflags: -s -w -X github.com/zenon-network/go-zenon/metadata.Version=${{ needs.version.outputs.version }} -X github.com/zenon-network/go-zenon/metadata.GitCommit=${{ github.sha }}
@@ -111,12 +118,14 @@ jobs:
       - name: Build libznn
         uses: crazy-max/ghaction-xgo@acf46aa99b919eb9ef6bba89dfd13bafa680667f
         with:
-          xgo_version: "v0.36.0"
-          go_version: 1.24.1
+          # xgo v0.43.0 ships up to Go 1.27.3 images (no 1.27.4 tag yet); with GOTOOLCHAIN=auto, builds switch to go1.27.4 via go.mod
+          xgo_version: "v0.43.0"
+          go_version: 1.27.3
           dest: build
           prefix: libznn
           pkg: cmd/libznn
-          targets: darwin/arm64,darwin/amd64,linux/amd64,linux/arm64
+          # Go 1.27 requires macOS 13 (Ventura); override xgo's 10.16 default so LC_BUILD_VERSION minos matches
+          targets: darwin-13.0/arm64,darwin-13.0/amd64,linux/amd64,linux/arm64
           v: true
           x: true
           tags: libznn
@@ -127,8 +136,9 @@ jobs:
       - name: Build libznn
         uses: crazy-max/ghaction-xgo@acf46aa99b919eb9ef6bba89dfd13bafa680667f
         with:
-          xgo_version: "v0.36.0"
-          go_version: 1.24.1
+          # xgo v0.43.0 ships up to Go 1.27.3 images (no 1.27.4 tag yet); with GOTOOLCHAIN=auto, builds switch to go1.27.4 via go.mod
+          xgo_version: "v0.43.0"
+          go_version: 1.27.3
           dest: build
           prefix: libznn
           pkg: cmd/libznn
@@ -140,6 +150,47 @@ jobs:
           buildvcs: false
           buildmode: c-shared
           trimpath: true
+      - name: Verify built artifacts toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(awk '/^toolchain[[:space:]]+go/{print $2; exit}' go.mod)"
+          if [ -z "$expected" ]; then
+            echo "::error::Could not determine expected Go toolchain from go.mod"
+            exit 1
+          fi
+          echo "Expected Go toolchain: $expected"
+
+          checked=0
+          for f in build/*; do
+            case "$f" in
+              *.h) continue ;;
+            esac
+            [ -f "$f" ] || continue
+            checked=$((checked + 1))
+
+            actual=""
+            out="$(GOTOOLCHAIN=local go version "$f" 2>/dev/null || true)"
+            if printf '%s\n' "$out" | grep -qE ': go[0-9]+\.[0-9]+'; then
+              actual="$(printf '%s\n' "$out" | sed -E 's/^.*: (go[0-9]+(\.[0-9]+)*).*$/\1/')"
+              echo "$out"
+              GOTOOLCHAIN=local go version -m "$f" | awk '/^\tbuild\tDefaultGODEBUG=/' || true
+            else
+              actual="$({ strings -a "$f" || true; } | grep -m1 -oE 'go1\.[0-9]+(\.[0-9]+)*' || true)"
+              echo "$f: ${actual:-unknown} (via strings fallback)"
+            fi
+
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$f was built with '${actual:-unknown}', expected '$expected'"
+              exit 1
+            fi
+          done
+
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::No built binaries or libraries found in build/"
+            exit 1
+          fi
+          echo "Verified $checked artifacts built with $expected"
       - name: Upload Darwin builds for makefat
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
