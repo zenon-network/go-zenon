@@ -362,6 +362,28 @@ class ScanBlocksBridgeKeys(unittest.TestCase):
         self.assertEqual(summary["status"], "FAIL")
         self.assertEqual(summary["parseFailures"], 1)
 
+    def test_bridge_key_with_crlf_matches_go_base64_decoder(self):
+        # Go's base64.StdEncoding.DecodeString strips \r and \n; the scanner
+        # must decode such a historical send cleanly rather than failing.
+        with_crlf = VALID_COMPRESSED_B64[:12] + "\n" + VALID_COMPRESSED_B64[12:] + "\r\n"
+        pages = {
+            2: {
+                "momentum": {"height": 2, "hash": "mh2"},
+                "blocks": [make_bridge_key_block(with_crlf, "b-crlf")],
+            }
+        }
+        (_, _, findings, ok), records = run_scan_blocks(
+            pages, self._valid_bridge_info(), from_h=2, to_h=2
+        )
+        self.assertTrue(ok)
+        self.assertEqual(findings, 0)
+        by_hash = {r["blockHash"]: r for r in records if r["case"] == "M-3-bridgeKey"}
+        self.assertEqual(by_hash["b-crlf"]["keyCheck"], "on-curve")
+        self.assertFalse(by_hash["b-crlf"]["shortCoord"])
+        summary = [r for r in records if r["case"] == "M-3-blocks"][-1]
+        self.assertEqual(summary["status"], "PASS")
+        self.assertEqual(summary["parseFailures"], 0)
+
 
 class ScanBlocksLiveBridgeKey(unittest.TestCase):
     def _empty_page(self):
@@ -454,15 +476,73 @@ class ScanBlocksLiveBridgeKey(unittest.TestCase):
             self.assertTrue(live["finding"])
 
     def test_malformed_bridge_info_response_fails_scan(self):
-        (_, _, findings, ok), records = run_scan_blocks(self._empty_page(), None)
+        for bad_info in (
+            None,
+            "not-a-dict",
+            {},
+            {"otherField": "value"},
+            {"decompressedTssECDSAPubKey": None},
+            {"decompressedTssECDSAPubKey": 123},
+        ):
+            (_, _, findings, ok), records = run_scan_blocks(self._empty_page(), bad_info)
+            self.assertFalse(ok, f"expected FAIL for {bad_info!r}")
+            self.assertEqual(findings, 0, f"expected 0 findings for {bad_info!r}")
+            live = [r for r in records if r["case"] == "M-3-liveBridgeKey"][0]
+            self.assertEqual(live["status"], "FAIL", f"{bad_info!r}")
+            self.assertEqual(live["keyCheck"], "invalid-response", f"{bad_info!r}")
+            summary = [r for r in records if r["case"] == "M-3-blocks"][-1]
+            self.assertEqual(summary["status"], "FAIL", f"{bad_info!r}")
+            self.assertEqual(summary["parseFailures"], 1, f"{bad_info!r}")
+
+    def test_bridge_info_rpc_error_fails_without_losing_summary(self):
+        pages = self._empty_page()
+
+        def fake_rpc(_endpoint, method, params=None):
+            if method == "ledger.getDetailedMomentumsByHeight":
+                start, count = params
+                return {
+                    "list": [pages[h] for h in range(start, start + count) if h in pages],
+                    "more": False,
+                }
+            if method == "embedded.bridge.getBridgeInfo":
+                raise RuntimeError("embedded.bridge.getBridgeInfo: method not found")
+            raise AssertionError(f"unexpected rpc: {method}")
+
+        buf = io.StringIO()
+        with mock.patch.object(scan, "rpc", side_effect=fake_rpc):
+            momentums, blocks_read, findings, ok = scan.scan_blocks(
+                "http://127.0.0.1:0", 2, 2, buf
+            )
+        records = [json.loads(line) for line in buf.getvalue().splitlines() if line]
+        self.assertFalse(ok)
+        self.assertEqual(momentums, 1)
+        self.assertEqual(blocks_read, 0)
+        self.assertEqual(findings, 0)
+        live = [r for r in records if r["case"] == "M-3-liveBridgeKey"][0]
+        self.assertEqual(live["status"], "FAIL")
+        self.assertEqual(live["keyCheck"], "rpc-error")
+        summary = [r for r in records if r["case"] == "M-3-blocks"][-1]
+        self.assertEqual(summary["status"], "FAIL")
+        self.assertEqual(summary["parseFailures"], 1)
+        self.assertEqual(summary["liveBridgeKeyCheck"], "rpc-error")
+
+
+class ScanBlocksDifficultyThresholds(unittest.TestCase):
+    def test_difficulty_parse_failure_fails_scan(self):
+        pages = {
+            2: {
+                "momentum": {"height": 2, "hash": "mh2"},
+                "blocks": [make_plain_block("d-bad", "not-a-number")],
+            }
+        }
+        info = {"decompressedTssECDSAPubKey": uncompressed_b64(SECP256K1_GX, SECP256K1_GY)}
+        (_, _, findings, ok), records = run_scan_blocks(pages, info)
         self.assertFalse(ok)
         self.assertEqual(findings, 0)
         summary = [r for r in records if r["case"] == "M-3-blocks"][-1]
         self.assertEqual(summary["status"], "FAIL")
         self.assertEqual(summary["parseFailures"], 1)
 
-
-class ScanBlocksDifficultyThresholds(unittest.TestCase):
     def test_difficulty_counters_and_boundaries(self):
         blocks = [
             make_plain_block("d-zero", "0"),

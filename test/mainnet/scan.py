@@ -68,6 +68,7 @@ HIGH_DIFF_THRESHOLD = 2**63
 DP_MAX_DIFFICULTY = 315_000_000_000_000  # dp.MaxDifficultyForAccountBlock
 LEGACY_MAX_DIFFICULTY = 141_750_000      # constants.MaxDifficultyForAccountBlock
 DIFF_LOG_CAP = 100
+LEGACY_DIFF_SAMPLE_CAP = 20
 PAGE = 1000
 DETAILED = 10           # getDetailedMomentumsByHeight count per call
 PROGRESS_EVERY = 100_000
@@ -257,27 +258,36 @@ def secp256k1_on_curve(dec):
 def check_live_bridge_key(endpoint, fh):
     """Query embedded.bridge.getBridgeInfo and verify decompressedTssECDSAPubKey.
 
-    If empty (uninitialized bridge), logs INFO with no finding and no failure.
+    Only an explicit empty string (uninitialized bridge) logs INFO with no
+    finding and no failure.  Missing fields, null/non-string values, or RPC
+    errors count as parse failures so the scan never passes a skipped check.
     If non-empty, verifies it base64-decodes to exactly 65 bytes with prefix
     0x04 and lies on secp256k1.  An invalid or short stored key is logged and
-    counted as a finding without failing the scan; a malformed RPC payload
-    counts as a parse failure.  Returns (findings, parse_failures, key_check)."""
-    info = rpc(endpoint, "embedded.bridge.getBridgeInfo")
-    if not isinstance(info, dict):
+    counted as a finding without failing the scan.  Returns
+    (findings, parse_failures, key_check)."""
+    try:
+        info = rpc(endpoint, "embedded.bridge.getBridgeInfo")
+    except Exception as exc:
+        log({"case": "M-3-liveBridgeKey", "status": "FAIL",
+             "finding": False, "keyCheck": "rpc-error",
+             "error": str(exc)}, fh)
+        return 0, 1, "rpc-error"
+
+    if not isinstance(info, dict) or "decompressedTssECDSAPubKey" not in info:
         log({"case": "M-3-liveBridgeKey", "status": "FAIL",
              "finding": False, "keyCheck": "invalid-response"}, fh)
         return 0, 1, "invalid-response"
 
-    decomp_b64 = info.get("decompressedTssECDSAPubKey")
-    if decomp_b64 is None or decomp_b64 == "":
-        log({"case": "M-3-liveBridgeKey", "status": "INFO",
-             "finding": False, "keyCheck": "empty", "byteLength": 0}, fh)
-        return 0, 0, "empty"
-
+    decomp_b64 = info["decompressedTssECDSAPubKey"]
     if not isinstance(decomp_b64, str):
         log({"case": "M-3-liveBridgeKey", "status": "FAIL",
              "finding": False, "keyCheck": "invalid-response"}, fh)
         return 0, 1, "invalid-response"
+
+    if decomp_b64 == "":
+        log({"case": "M-3-liveBridgeKey", "status": "INFO",
+             "finding": False, "keyCheck": "empty", "byteLength": 0}, fh)
+        return 0, 0, "empty"
 
     pub_sha = hashlib.sha256(decomp_b64.encode()).hexdigest()[:16]
     try:
@@ -402,7 +412,7 @@ def scan_blocks(endpoint, from_h, to_h, fh):
                                                  "difficulty": b.get("difficulty")})
                 if bdiff > LEGACY_MAX_DIFFICULTY:
                     above_legacy_max += 1
-                    if len(above_legacy_sample) < 20:
+                    if len(above_legacy_sample) < LEGACY_DIFF_SAMPLE_CAP:
                         above_legacy_sample.append({"height": m.get("height"),
                                                     "hash": b.get("hash"),
                                                     "difficulty": b.get("difficulty")})
@@ -421,7 +431,11 @@ def scan_blocks(endpoint, from_h, to_h, fh):
                     leading_zero = None
                     if key_b64:
                         try:
-                            key_dec = base64.b64decode(key_b64, validate=True)
+                            # Match Go's base64.StdEncoding.DecodeString, which
+                            # ignores CR and LF while rejecting other non-base64 bytes.
+                            key_dec = base64.b64decode(
+                                key_b64.replace(b"\r", b"").replace(b"\n", b""),
+                                validate=True)
                             coords = secp256k1_decompress_coords(key_dec)
                             if coords is not None:
                                 key_status = "on-curve"

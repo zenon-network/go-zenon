@@ -255,6 +255,11 @@ difficulty threshold counters are unit-tested with canned answers in
 `python3 -m unittest discover -s test/mainnet -v`).
 
 **Limits**: a block-level scan of the full chain is ~1.5M RPC calls; run it
-in slices. `ledger.getDetailedMomentumsByHeight(1, 10)` does not answer on
-full-history nodes; start block scans at 1 (the tool skips momentum 1
+in slices. Note that `M-3-liveBridgeKey` queries `embedded.bridge.getBridgeInfo`
+at the node's live frontier (not at `--to`) once per `--blocks` invocation, so
+each slice repeats that check. `shortCoordKeys` counts every on-curve send with
+a leading-zero coordinate and is therefore an upper bound on actual state
+disagreements (e.g., sends whose receive fails identically on both versions when
+`AllowKeyGen` is false). `ledger.getDetailedMomentumsByHeight(1, 10)` does not
+answer on full-history nodes; start block scans at 1 (the tool skips momentum 1
 itself) and header walks wherever the question starts.

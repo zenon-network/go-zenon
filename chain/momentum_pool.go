@@ -258,8 +258,10 @@ func (c *momentumPool) RollbackTo(insertLocker sync.Locker, identifier types.Has
 // enforcement height equals the frontier height, if any. It is called
 // at chain.Init (which logs Crit and returns an error to its caller
 // when unimplemented is non-nil) and in AddMomentumTransaction (which
-// logs Crit, rolls back the momentum, and returns an error, leaving
-// the node at H - 1 refusing momentums at or past enforcement).
+// logs Crit, rolls back the momentum, and returns an error — leaving
+// the node at H - 1 refusing momentums at or past enforcement when
+// rollback succeeds, or returning ErrCanonicalStateUncertain if
+// rollback fails).
 func GotAllActiveSporksImplemented(store store.Momentum) (justNow *definition.Spork, unimplemented []*definition.Spork, err error) {
 	momentum, err := store.GetFrontierMomentum()
 	if err != nil {

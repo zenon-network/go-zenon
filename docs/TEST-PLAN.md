@@ -199,7 +199,7 @@ One rehearsal per spork on a fresh devnet, driven the way mainnet would be: `Cre
 | S-1 | Before activation, every gated method and rule is off | gated sends rejected; pre-spork behaviour matches a v0.0.10 node |
 | S-2 | Activation at height H | all five nodes switch at H, no fork, no node exits |
 | S-3 | A node that was offline across H syncs through it | reaches the frontier with the same state |
-| S-4 | A node built without the spork in `ImplementedSporksMap` | at runtime, rolls back the enforcing momentum, logs `Crit`, refuses momentums at or past enforcement, and stays at `H - 1`; on restart against a past-enforcement database, `chain.Init` refuses to start and returns an error (`cli.go` exits non-zero; note `v0.0.10` exited with status 2 on both paths) |
+| S-4 | A node built without the spork in `ImplementedSporksMap` | at runtime, rolls back the enforcing momentum, logs `Crit`, refuses momentums at or past enforcement, and stays at `H - 1` when rollback succeeds (or returns `ErrCanonicalStateUncertain` if rollback fails); on restart against a past-enforcement database, `chain.Init` refuses to start and returns an error (`cli.go` exits non-zero; note `v0.0.10` exited with status 2 on both paths) |
 | S-5 | Restart of every node after activation | spork state survives, chain continues |
 | S-6 | Sporks activated in different orders, including all in one momentum | the method table matches the released ladder for all 32 combinations (#300 fixed #290 here) |
 | S-7 | An account block that acknowledges a momentum from before H, sent after H | judged by the rule #280 sets (every enforced spork must be acknowledged) |
@@ -285,8 +285,8 @@ This is the part unit tests cannot settle. These changes are not behind a spork:
 | Change | PR | State |
 |---|---|---|
 | Embedded method table selection | #74, fixed by #300 | fixed to follow the released ladder; needs replay to confirm |
-| PoW target comparison made unsigned | #66 | differs for `Difficulty >= 2^63`; issue #78 open, no decision |
-| Bridge TSS key: off-curve rejected, coordinates padded | #66 | issue #78 open; scan result for the padding is recorded on #292 |
+| PoW target comparison made unsigned | #66 | differs for `Difficulty >= 2^63`; decision made to gate behind `DynamicPlasmaSpork` (issue #78; gating PR #346 pending merge) |
+| Bridge TSS key: off-curve rejected, coordinates padded | #66 | decision made to gate send-side curve check and receive-side padding behind `DynamicPlasmaSpork` (issues #78, #292; gating PR #347 pending merge) |
 | Receive recipient rule from genesis | #182 | same on mainnet by construction; changes other chains |
 | Contract-receive validation from the renewal height | #309 | same rule and height as v0.0.10 |
 | Panic-to-error conversions, nil guards, tombstone skipping, ABI decode guards | #184, #206, #208, #236, #243, #246, #248, #255, #257, #273 | argued neutral by reading; needs replay |
@@ -346,7 +346,7 @@ Tested on their own branch before merge, then again as part of `dev`. State on 2
 ## 10. Decisions needed
 
 1. **Mainnet host for L6.** Where does the full sync run, and who operates it? Nothing in section 7 can start without it.
-2. **Issue #78 (resolved: must be spork-gated).** Both the PoW-target and bridge-key changes must be spork-gated behind `DynamicPlasmaSpork` and verified with L5 mixed-version rehearsal. Accepting #78 ungated on the strength of the M-3 scan is not an option: a history scan only covers past blocks and cannot protect against blocks produced during a mixed-version rollout window. M-3 still runs to inspect mainnet history and the live stored bridge key.
+2. **Issue #78 (decision made; gating PRs pending).** Decision: both the PoW-target and bridge-key changes must be spork-gated behind `DynamicPlasmaSpork` (tracked in #78 and #292; gating PRs #346 and #347 pending merge into `dev`) and verified with L5 mixed-version rehearsal. Accepting #78 ungated on the strength of the M-3 scan is not an option: a history scan only covers past blocks and cannot protect against blocks produced during a mixed-version rollout window. M-3 still runs to inspect mainnet history and the live stored bridge key.
 3. **Spork ids.** Four are placeholders. Testing uses genesis-seeded ids; a release needs the real ones and a re-run of 6.1 on that build.
 4. **Go toolchain.** Tests run on 1.23, release binaries on 1.24.1. Pick one, or test on both (L0-1 assumes both).
 5. **Scope of the release candidate.** Which of the open pull requests (section 9) are in. #310 and #72 add sporks and their own suites.
