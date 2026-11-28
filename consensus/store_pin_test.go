@@ -169,6 +169,9 @@ type pinTestElection struct {
 	common.Ticker
 	chain         *pinTestChain
 	afterElection func()
+	// jailProofProducer makes the pillar that produced a tick's proof
+	// momentum count as jailed at that proof.
+	jailProofProducer bool
 }
 
 func (e *pinTestElection) proofPillar(momentumStore store.Momentum, tick uint64) (pinTestPillar, error) {
@@ -212,6 +215,17 @@ func (e *pinTestElection) electionByTickAt(momentumStore store.Momentum, tick ui
 		hook()
 	}
 	return result, nil
+}
+
+func (e *pinTestElection) jailedAtProof(momentumStore store.Momentum, tick uint64) (map[string]bool, error) {
+	if !e.jailProofProducer {
+		return map[string]bool{}, nil
+	}
+	pillar, err := e.proofPillar(momentumStore, tick)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]bool{pillar.name: true}, nil
 }
 
 func (e *pinTestElection) DelegationsByTick(tick uint64) ([]*types.PillarDelegationDetail, error) {
@@ -276,6 +290,26 @@ func describePoint(p *storage.Point) string {
 		parts = append(parts, fmt.Sprintf("%q:%d/%d/%v", name, d.ExpectedNum, d.FactualNum, d.Weight))
 	}
 	return fmt.Sprintf("(%x, %x] total %v {%s}", p.PrevHash[:2], p.EndHash[:2], p.TotalWeight, strings.Join(parts, " "))
+}
+
+// describePeriodStats renders each tick as its start offset from
+// genesis and, by pillar name, produced/expected momentums.
+func describePeriodStats(stats []*api.PeriodStats) string {
+	parts := make([]string, 0, len(stats))
+	for _, tick := range stats {
+		names := make([]string, 0, len(tick.Pillars))
+		for name := range tick.Pillars {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		counts := make([]string, 0, len(names))
+		for _, name := range names {
+			c := tick.Pillars[name]
+			counts = append(counts, fmt.Sprintf("%q:%d/%d", name, c.BlockNum, c.ExpectedBlockNum))
+		}
+		parts = append(parts, fmt.Sprintf("+%ds {%s}", tick.StartTime-pinTestGenesisTime.Unix(), strings.Join(counts, " ")))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func describeWeights(weights map[string]*big.Int) string {
@@ -413,6 +447,179 @@ func TestFixedReader_EpochStatsAnswerFromOlderMomentum(t *testing.T) {
 		t.Fatalf("EpochStats(1) fixed at h5 with h7 live = %v, %v", got, err)
 	}
 	assertSameEpochStats(t, fmt.Sprintf("EpochStats(1) fixed at h5 with h7 live (want point %s)", describePoint(wantPoint)), got, wantStats)
+}
+
+// FinishedPeriodStats through a reader fixed at an older momentum must
+// return the ticks that moment sees as finished, though the live
+// frontier h7 has reached tick 6 and has cached the later ticks.
+func TestFixedReader_FinishedPeriodStatsAnswerFromOlderMomentum(t *testing.T) {
+	older := pinTestBranch(0xa, pinTestBranchA, 5)
+	live := pinTestBranch(0xa, pinTestBranchA, 7)
+
+	want, err := newPinTestFixture(older).reader(older).FinishedPeriodStats(3)
+	if err != nil {
+		t.Fatalf("FinishedPeriodStats(3) with h5 live: %v", err)
+	}
+	wantText := `+10s {"pillar-c":1/1}; +20s {"pillar-c":1/1}; +30s {"":1/0 "pillar-c":0/1}`
+	if describePeriodStats(want) != wantText {
+		t.Fatalf("FinishedPeriodStats(3) with h5 live\n got %s\nwant %s", describePeriodStats(want), wantText)
+	}
+
+	f := newPinTestFixture(live)
+	warm, err := f.reader(live).FinishedPeriodStats(12)
+	if err != nil || len(warm) != 6 {
+		t.Fatalf("FinishedPeriodStats(12) with h7 live = %d entries, %v; want 6 entries", len(warm), err)
+	}
+	got, err := f.reader(older).FinishedPeriodStats(3)
+	if err != nil {
+		t.Fatalf("FinishedPeriodStats(3) fixed at h5 with h7 live: %v", err)
+	}
+	if describePeriodStats(got) != describePeriodStats(want) {
+		t.Fatalf("FinishedPeriodStats(3) fixed at h5 with h7 live\n got %s\nwant %s", describePeriodStats(got), describePeriodStats(want))
+	}
+}
+
+// FinishedPeriodStats numbers each tick and marks a pillar ineligible in
+// exactly the ticks whose proof momentum, on the reader's chain, has it
+// jailed.
+func TestFinishedPeriodStats_TickAndEligibilityFollowTheProof(t *testing.T) {
+	live := pinTestBranch(0xa, pinTestBranchA, 7)
+	f := newPinTestFixture(live)
+	f.election.jailProofProducer = true
+
+	stats, err := f.reader(live).FinishedPeriodStats(12)
+	if err != nil {
+		t.Fatalf("FinishedPeriodStats(12): %v", err)
+	}
+	if len(stats) == 0 {
+		t.Fatal("FinishedPeriodStats(12) returned no ticks")
+	}
+	first := pinTestPeriod.ToTick(time.Unix(stats[0].StartTime, 0))
+	for i, tick := range stats {
+		if tick.Tick != first+uint64(i) {
+			t.Fatalf("entry %d has tick %d, want %d", i, tick.Tick, first+uint64(i))
+		}
+		jailed, err := f.election.jailedAtProof(live, tick.Tick)
+		common.FailIfErr(t, err)
+		for name, s := range tick.Pillars {
+			if s.Eligible == jailed[name] {
+				t.Fatalf("tick %d pillar %q: eligible %v, jailed at proof %v", tick.Tick, name, s.Eligible, jailed[name])
+			}
+		}
+	}
+}
+
+// FinishedPeriodStats through a reader fixed at branch A must not serve
+// the period points the live branch B has cached for the same ticks.
+func TestFixedReader_FinishedPeriodStatsIgnoreOtherBranchCache(t *testing.T) {
+	storeA := pinTestBranch(0xa, pinTestBranchA, 7)
+	storeB := pinTestBranch(0xb, pinTestBranchB, 7)
+
+	want, err := newPinTestFixture(storeA).reader(storeA).FinishedPeriodStats(12)
+	if err != nil || len(want) != 6 {
+		t.Fatalf("FinishedPeriodStats(12) on a stable branch A = %d entries, %v; want 6 entries", len(want), err)
+	}
+
+	f := newPinTestFixture(storeB)
+	onB, err := f.reader(storeB).FinishedPeriodStats(12)
+	if err != nil {
+		t.Fatalf("FinishedPeriodStats(12) on branch B: %v", err)
+	}
+	if describePeriodStats(onB) == describePeriodStats(want) {
+		t.Fatalf("branches A and B give the same statistics, so the test cannot tell them apart: %s", describePeriodStats(onB))
+	}
+	got, err := f.reader(storeA).FinishedPeriodStats(12)
+	if err != nil {
+		t.Fatalf("FinishedPeriodStats(12) fixed at A with B live: %v", err)
+	}
+	if describePeriodStats(got) != describePeriodStats(want) {
+		t.Fatalf("FinishedPeriodStats(12) fixed at A with B live\n got %s\nwant %s (branch A's statistics)", describePeriodStats(got), describePeriodStats(want))
+	}
+}
+
+// The tick holding the frontier momentum has not finished and is never
+// returned, including when the frontier sits exactly at its start.
+func TestFixedReader_FinishedPeriodStatsExcludeUnfinishedTick(t *testing.T) {
+	// h5 is mid-tick 4: ticks 0..3 have finished.
+	midTick := pinTestBranch(0xa, pinTestBranchA, 5)
+	got, err := newPinTestFixture(midTick).reader(midTick).FinishedPeriodStats(12)
+	if err != nil {
+		t.Fatalf("FinishedPeriodStats(12) at h5: %v", err)
+	}
+	want := `+0s {"pillar-c":0/1}; +10s {"pillar-c":1/1}; +20s {"pillar-c":1/1}; +30s {"":1/0 "pillar-c":0/1}`
+	if len(got) != 4 || describePeriodStats(got) != want {
+		t.Fatalf("FinishedPeriodStats(12) at h5\n got %s\nwant %s", describePeriodStats(got), want)
+	}
+
+	// h6 at the start of tick 5: tick 4 has finished, tick 5 has not.
+	atStart := pinTestBranch(0xa, pinTestBranchA, 5)
+	next := pinTestMomentum(0xa, 6, pinTestBranchA)
+	ts := pinTestGenesisTime.Add(50 * time.Second)
+	next.Timestamp, next.TimestampUnix = &ts, uint64(ts.Unix())
+	next.PreviousHash = atStart.momentums[4].Hash
+	atStart.momentums = append(atStart.momentums, next)
+	f := newPinTestFixture(atStart)
+	got, err = f.reader(atStart).FinishedPeriodStats(2)
+	if err != nil {
+		t.Fatalf("FinishedPeriodStats(2) at the start of tick 5: %v", err)
+	}
+	want = `+30s {"":1/0 "pillar-c":0/1}; +40s {"":1/0 "pillar-c":0/1}`
+	if len(got) != 2 || describePeriodStats(got) != want {
+		t.Fatalf("FinishedPeriodStats(2) at the start of tick 5\n got %s\nwant %s", describePeriodStats(got), want)
+	}
+	got, err = f.reader(atStart).FinishedPeriodStats(0)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("FinishedPeriodStats(0) = %d entries, %v; want none", len(got), err)
+	}
+
+	// A genesis-only chain has no finished tick.
+	genesis := pinTestBranch(0xa, pinTestBranchA, 1)
+	got, err = newPinTestFixture(genesis).reader(genesis).FinishedPeriodStats(12)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("FinishedPeriodStats(12) at genesis = %d entries, %v; want none", len(got), err)
+	}
+}
+
+// A finished tick in the middle of the chain with no momentums is
+// returned in order with each elected pillar at 0 produced and 1
+// expected, and no "" entry, so its produced total is 0.
+func TestFixedReader_FinishedPeriodStatsReturnEmptyTick(t *testing.T) {
+	// h5 is in tick 4 and h6 is in tick 7: ticks 5 and 6 hold no
+	// momentum.
+	gap := pinTestBranch(0xa, pinTestBranchA, 5)
+	next := pinTestMomentum(0xa, 6, pinTestBranchA)
+	ts := pinTestGenesisTime.Add(75 * time.Second)
+	next.Timestamp, next.TimestampUnix = &ts, uint64(ts.Unix())
+	next.PreviousHash = gap.momentums[4].Hash
+	gap.momentums = append(gap.momentums, next)
+
+	got, err := newPinTestFixture(gap).reader(gap).FinishedPeriodStats(3)
+	if err != nil {
+		t.Fatalf("FinishedPeriodStats(3) across empty ticks: %v", err)
+	}
+	want := `+40s {"":1/0 "pillar-c":0/1}; +50s {"pillar-a":0/1}; +60s {"pillar-a":0/1}`
+	if len(got) != 3 || describePeriodStats(got) != want {
+		t.Fatalf("FinishedPeriodStats(3) across empty ticks\n got %s\nwant %s", describePeriodStats(got), want)
+	}
+	for _, tick := range got[1:] {
+		produced := uint64(0)
+		for _, c := range tick.Pillars {
+			produced += c.BlockNum
+		}
+		if produced != 0 {
+			t.Fatalf("empty tick at +%ds produced %d momentums, want 0", tick.StartTime-pinTestGenesisTime.Unix(), produced)
+		}
+	}
+}
+
+// A reader with no momentum store reports an error instead of
+// panicking on the missing frontier.
+func TestFixedReader_FinishedPeriodStatsWithoutStoreIsAnError(t *testing.T) {
+	live := pinTestBranch(0xa, pinTestBranchA, 5)
+	got, err := newPinTestFixture(live).reader(nil).FinishedPeriodStats(1)
+	if got != nil || err != errNoMomentumStore {
+		t.Fatalf("FinishedPeriodStats(1) without a store = %v, %v; want nil, %v", got, err, errNoMomentumStore)
+	}
 }
 
 // GetPillarDelegationsByEpoch through a reader fixed at branch A must

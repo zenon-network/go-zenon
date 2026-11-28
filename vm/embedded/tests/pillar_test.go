@@ -664,6 +664,7 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 			"isRevocable": false,
 			"revokeCooldown": 20,
 			"revokeTimestamp": 0,
+			"isJailed": false,
 			"giveMomentumRewardPercentage": 0,
 			"giveDelegateRewardPercentage": 100,
 			"currentStats": {
@@ -682,6 +683,7 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 			"isRevocable": false,
 			"revokeCooldown": 20,
 			"revokeTimestamp": 0,
+			"isJailed": false,
 			"giveMomentumRewardPercentage": 0,
 			"giveDelegateRewardPercentage": 100,
 			"currentStats": {
@@ -700,6 +702,7 @@ t=2001-09-09T02:47:00+0000 lvl=info msg="received donation" module=embedded cont
 			"isRevocable": false,
 			"revokeCooldown": 20,
 			"revokeTimestamp": 0,
+			"isJailed": false,
 			"giveMomentumRewardPercentage": 0,
 			"giveDelegateRewardPercentage": 100,
 			"currentStats": {

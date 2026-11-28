@@ -108,6 +108,9 @@ func (termsPillarReader) GetPillarDelegationsByEpoch(epoch uint64) (map[string]*
 		},
 	}, nil
 }
+func (termsPillarReader) FinishedPeriodStats(count uint64) ([]*api.PeriodStats, error) {
+	return nil, nil
+}
 
 const termsVMPillar = "vm-terms-pillar"
 

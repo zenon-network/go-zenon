@@ -7,6 +7,7 @@ import (
 
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/vm/constants"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 )
 
@@ -17,6 +18,34 @@ func (ms *momentumStore) GetActivePillars() ([]*definition.PillarInfo, error) {
 	}
 
 	return definition.GetPillarsList(sd.Storage(), true, definition.AnyPillarType)
+}
+func (ms *momentumStore) GetJailedPillars() (map[string]bool, error) {
+	sd, err := ms.getEmbeddedStore(types.PillarContract)
+	if err != nil {
+		return nil, fmt.Errorf("getEmbeddedStore failed: %w", err)
+	}
+
+	list, err := definition.GetPillarJailList(sd.Storage())
+	if err != nil {
+		return nil, err
+	}
+	jailed := make(map[string]bool)
+	for _, jail := range list {
+		if !jail.Jailed {
+			continue
+		}
+		pillar, err := definition.GetPillarInfo(sd.Storage(), jail.Name)
+		if err == constants.ErrDataNonExistent {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if pillar.IsActive() {
+			jailed[jail.Name] = true
+		}
+	}
+	return jailed, nil
 }
 func (ms *momentumStore) getAllDelegations() ([]*definition.DelegationInfo, error) {
 	sd, err := ms.getEmbeddedStore(types.PillarContract)

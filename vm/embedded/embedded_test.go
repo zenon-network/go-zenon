@@ -20,6 +20,7 @@ func getAllEmbedded() map[types.Address]*embeddedImplementation {
 	applyHtlcDiffs(contractsMap)
 	applyDynamicPlasmaDiffs(contractsMap)
 	applyPtlcDiffs(contractsMap)
+	applyPillarJailDiffs(contractsMap)
 	return contractsMap
 }
 
@@ -107,6 +108,7 @@ func TestDumpContractsABIMethods(t *testing.T) {
 {"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"RegisterLegacy", "id":"e4588207", "signature":"RegisterLegacy(string,address,address,uint8,uint8,string,string)"}
 {"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"Revoke", "id":"95631306", "signature":"Revoke(string)"}
 {"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"Undelegate", "id":"7e8952c8", "signature":"Undelegate()"}
+{"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"Unjail", "id":"7c4f4047", "signature":"Unjail(string)"}
 {"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"Update", "id":"20093ea6", "signature":"Update()"}
 {"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"UpdatePillar", "id":"de0ae34b", "signature":"UpdatePillar(string,address,address,uint8,uint8)"}
 {"address":"z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg", "name":"WithdrawQsr", "id":"b3d658fd", "signature":"WithdrawQsr()"}

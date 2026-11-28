@@ -17,10 +17,12 @@ var ErrNoActivePillars = errors.New("no active pillars to select producers from"
 
 // AlgorithmConfig is the input of one producer selection: the pillar
 // delegations computed at the election's proof momentum and that
-// momentum's hash-height, whose height seeds the deterministic PRNG.
+// momentum's hash-height. The deterministic PRNG is seeded with the
+// height plus seedOffset, which is zero except in fallback elections.
 type AlgorithmConfig struct {
 	delegations []*types.PillarDelegation
 	hashH       *types.HashHeight
+	seedOffset  uint64
 }
 
 // NewAlgorithmContext bundles the delegations and proof momentum
@@ -29,6 +31,16 @@ func NewAlgorithmContext(delegations []*types.PillarDelegation, hashH *types.Has
 	return &AlgorithmConfig{
 		delegations: delegations,
 		hashH:       hashH,
+	}
+}
+
+// newFallbackAlgorithmContext is NewAlgorithmContext for a fallback
+// election, whose seed is the proof height plus seedOffset.
+func newFallbackAlgorithmContext(delegations []*types.PillarDelegation, hashH *types.HashHeight, seedOffset uint64) *AlgorithmConfig {
+	return &AlgorithmConfig{
+		delegations: delegations,
+		hashH:       hashH,
+		seedOffset:  seedOffset,
 	}
 }
 
@@ -56,7 +68,7 @@ func NewElectionAlgorithm(group *Context) *electionAlgorithm {
 // Generates a deterministic seed based on the context
 // formula depends on seed, weights and momentumHeight
 func (ea *electionAlgorithm) findSeed(context *AlgorithmConfig) int64 {
-	return int64(context.hashH.Height)
+	return int64(context.hashH.Height + context.seedOffset)
 }
 
 func (ea *electionAlgorithm) SelectProducers(context *AlgorithmConfig) ([]*types.PillarDelegation, error) {

@@ -26,6 +26,8 @@ type testEpochBoundContext struct {
 	dynPlasmaEnforced bool
 	epochStats        map[uint64]*api.EpochStats
 	pillarDelegations map[uint64]map[string]*types.PillarDelegationDetail
+	// periodStats answers FinishedPeriodStats.
+	periodStats []*api.PeriodStats
 	// activeSporks answers CacheStore().IsSporkActive; a nil map
 	// reports every spork inactive.
 	activeSporks map[types.Hash]bool
@@ -78,6 +80,9 @@ func (ctx *testEpochBoundContext) IsHtlcSporkEnforced() bool               { ret
 func (ctx *testEpochBoundContext) IsBridgeAndLiquiditySporkEnforced() bool { return true }
 func (ctx *testEpochBoundContext) IsDynamicPlasmaSporkEnforced() bool      { return ctx.dynPlasmaEnforced }
 func (ctx *testEpochBoundContext) IsPtlcSporkEnforced() bool               { return false }
+func (ctx *testEpochBoundContext) IsPillarJailSporkEnforced() bool {
+	return ctx.activeSporks[types.PillarJailSpork.SporkId]
+}
 
 func (ctx *testEpochBoundContext) GetPillarWeights() (map[string]*big.Int, error) {
 	return nil, nil
@@ -105,6 +110,9 @@ func (ctx *testEpochBoundContext) GetPillarDelegationsByEpoch(epoch uint64) (map
 		}
 	}
 	return nil, nil
+}
+func (ctx *testEpochBoundContext) FinishedPeriodStats(count uint64) ([]*api.PeriodStats, error) {
+	return ctx.periodStats, nil
 }
 
 // seedStakeEntry stores a single stake entry with the given start time so

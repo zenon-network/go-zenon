@@ -106,6 +106,9 @@ var (
 	// ErrNotActive rejects an operation on a pillar that has been
 	// revoked.
 	ErrNotActive = errors.New("pillar is not active")
+	// ErrPillarNotJailed rejects an Unjail of a pillar that is not
+	// jailed.
+	ErrPillarNotJailed = errors.New("pillar is not jailed")
 
 	// ErrIDNotUnique rejects a token issuance whose derived token
 	// standard collides with an existing token.

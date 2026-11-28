@@ -34,24 +34,41 @@ const (
 	// PrefixElectionResult keys election results by the hash of
 	// their proof momentum.
 	PrefixElectionResult = byte(10)
+	// PrefixFallbackElectionResult keys the results of fallback
+	// elections, which ignore pillar jails, by proof-momentum hash
+	// and tick.
+	PrefixFallbackElectionResult = byte(11)
 )
 
 // DB is the consensus database: an underlying key-value store with
 // an LRU cache in front of every key namespace — one cache per point
-// prefix plus one for election results. NewConsensus sizes the
-// caches to hold roughly one week of election ticks.
+// prefix plus one each for election and fallback election results.
+// NewConsensus sizes the caches to hold roughly one week of election
+// ticks.
 type DB struct {
 	db            db.DB
 	electionCache *lru.Cache
+	fallbackCache *lru.Cache
 	pointCache    []*lru.Cache
 }
 
-// NewConsensusDB wraps db with fresh LRU caches: one of
-// electionCacheSize entries for election results and one of
-// pointCacheSize entries for each of the NumPointTypes point
-// prefixes.
+// fallbackKey identifies a fallback election: its proof momentum and
+// the tick it serves.
+type fallbackKey struct {
+	hash types.Hash
+	tick uint64
+}
+
+// NewConsensusDB wraps db with fresh LRU caches: two of
+// electionCacheSize entries for election and fallback election
+// results and one of pointCacheSize entries for each of the
+// NumPointTypes point prefixes.
 func NewConsensusDB(db db.DB, electionCacheSize int, pointCacheSize int) *DB {
 	electionCache, err := lru.New(electionCacheSize)
+	if err != nil {
+		panic(err)
+	}
+	fallbackCache, err := lru.New(electionCacheSize)
 	if err != nil {
 		panic(err)
 	}
@@ -67,6 +84,7 @@ func NewConsensusDB(db db.DB, electionCacheSize int, pointCacheSize int) *DB {
 	return &DB{
 		db:            db,
 		electionCache: electionCache,
+		fallbackCache: fallbackCache,
 		pointCache:    pointCache,
 	}
 }
@@ -177,6 +195,59 @@ func (db *DB) StoreElectionResultByHash(hash types.Hash, data *ElectionData) err
 	// Saved to DB ok - Update cache
 	db.electionCache.Add(hash, data)
 	return nil
+}
+
+// GetFallbackElectionResult returns the fallback election result
+// stored for the proof momentum with the given hash and the given
+// tick, reading through the fallback cache. It returns nil, nil when
+// no result is stored.
+func (db *DB) GetFallbackElectionResult(hash types.Hash, tick uint64) (*ElectionData, error) {
+	cacheKey := fallbackKey{hash: hash, tick: tick}
+	if cacheValue, ok := db.fallbackCache.Get(cacheKey); ok {
+		return cacheValue.(*ElectionData), nil
+	}
+
+	value, err := db.db.Get(CreateFallbackElectionResultKey(hash, tick))
+	if err != nil {
+		if err == leveldb.ErrNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	data := &ElectionData{}
+	if err := data.Unmarshal(value); err != nil {
+		return nil, errors.Errorf("error Unmarshal fallback ElectionData hash %v tick %v reason %e", hash, tick, err)
+	}
+	db.fallbackCache.Add(cacheKey, data)
+	return data, nil
+}
+
+// StoreFallbackElectionResult persists the fallback election result
+// computed from the proof momentum with the given hash for the given
+// tick and, once written, caches it.
+func (db *DB) StoreFallbackElectionResult(hash types.Hash, tick uint64, data *ElectionData) error {
+	bytes, err := data.Marshal()
+	if err != nil {
+		return err
+	}
+	if err := db.db.Put(CreateFallbackElectionResultKey(hash, tick), bytes); err != nil {
+		return err
+	}
+	db.fallbackCache.Add(fallbackKey{hash: hash, tick: tick}, data)
+	return nil
+}
+
+// CreateFallbackElectionResultKey returns the database key of the
+// fallback election anchored at the proof momentum with the given hash
+// for the given tick: PrefixFallbackElectionResult (1 byte) + hash
+// (32 bytes) + big-endian tick (8 bytes).
+func CreateFallbackElectionResultKey(hash types.Hash, tick uint64) []byte {
+	key := make([]byte, 1+types.HashSize+8)
+	key[0] = PrefixFallbackElectionResult
+	copy(key[1:types.HashSize+1], hash.Bytes())
+	binary.BigEndian.PutUint64(key[types.HashSize+1:], tick)
+	return key
 }
 
 // CreateElectionResultKey returns the database key of the election
