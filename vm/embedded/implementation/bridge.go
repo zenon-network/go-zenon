@@ -81,6 +81,24 @@ func CheckSignatureStringLength(signature string) error {
 	return nil
 }
 
+// CheckCompressedECDSAPubKey is the Dynamic-Plasma-spork send rule for
+// ChangeTssECDSAPubKey: it rejects a 33-byte payload that does not
+// decompress to a point on secp256k1. ValidateSendBlock has no spork
+// context, so the VM applies this in checkSporkGatedSendRules.
+func CheckCompressedECDSAPubKey(pubKeyB64 string) error {
+	pubKey, err := base64.StdEncoding.DecodeString(pubKeyB64)
+	if err != nil {
+		return constants.ErrInvalidB64Decode
+	}
+	if len(pubKey) != constants.CompressedECDSAPubKeyLength {
+		return constants.ErrInvalidCompressedECDSAPubKeyLength
+	}
+	if X, Y := secp256k1.DecompressPubkey(pubKey); X == nil || Y == nil {
+		return constants.ErrInvalidCompressedECDSAPubKey
+	}
+	return nil
+}
+
 // CanPerformAction is the combined gate in front of every
 // token-moving bridge call (WrapToken, UpdateWrapRequest, UnwrapToken
 // and Redeem): the bridge must be initialized
@@ -1443,7 +1461,9 @@ func (p *ChangeTssECDSAPubKeyMethod) GetPlasma(plasmaTable *constants.PlasmaTabl
 // constants.CompressedECDSAPubKeyLength (33) bytes, else
 // constants.ErrInvalidCompressedECDSAPubKeyLength; the two
 // signatures are only verified in ReceiveBlock, and only for
-// non-administrator senders.
+// non-administrator senders. Curve decompression is enforced on the
+// send path by CheckCompressedECDSAPubKey once the Dynamic Plasma
+// spork is active, and unconditionally in ReceiveBlock.
 func (p *ChangeTssECDSAPubKeyMethod) ValidateSendBlock(block *nom.AccountBlock) error {
 	var err error
 	param := new(definition.ChangeECDSAPubKeyParam)
@@ -1456,12 +1476,6 @@ func (p *ChangeTssECDSAPubKeyMethod) ValidateSendBlock(block *nom.AccountBlock) 
 	}
 	if len(pubKey) != constants.CompressedECDSAPubKeyLength {
 		return constants.ErrInvalidCompressedECDSAPubKeyLength
-	}
-	// The correct length does not imply the bytes encode a point on the secp256k1
-	// curve. DecompressPubkey returns nil coordinates for anything off-curve, so
-	// the point has to be resolved here rather than assumed by the consumers below.
-	if X, Y := secp256k1.DecompressPubkey(pubKey); X == nil || Y == nil {
-		return constants.ErrInvalidCompressedECDSAPubKey
 	}
 
 	if block.Amount.Sign() != 0 {
@@ -1476,6 +1490,11 @@ func (p *ChangeTssECDSAPubKeyMethod) ValidateSendBlock(block *nom.AccountBlock) 
 // decompressed forms and clears AllowKeyGen. Security and
 // orchestrator info must be initialized; the halt state is not
 // checked, so the key can rotate while the bridge is halted.
+//   - the compressed key is decompressed unconditionally before
+//     storage access (constants.ErrInvalidCompressedECDSAPubKey if
+//     off-curve); under the Dynamic Plasma spork, coordinates are
+//     left-padded to 32 bytes each so the decompressed form is always
+//     65 bytes
 //   - non-administrator senders need AllowKeyGen set
 //     (constants.ErrNotAllowedToChangeTss otherwise) and must carry
 //     signatures over GetChangePubKeyMessage by both the current TSS
@@ -1496,6 +1515,15 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, err
 	}
 
+	// ValidateSendBlock already verified base64 decoding and the 33-byte length.
+	pubKey, _ := base64.StdEncoding.DecodeString(param.PubKey)
+	X, Y := secp256k1.DecompressPubkey(pubKey)
+	// Decompress unconditionally so nil coordinates are never dereferenced,
+	// including for sends admitted before DynamicPlasmaSpork.
+	if X == nil || Y == nil {
+		return nil, constants.ErrInvalidCompressedECDSAPubKey
+	}
+
 	if _, err := CheckSecurityInitialized(context); err != nil {
 		return nil, err
 	}
@@ -1508,24 +1536,20 @@ func (p *ChangeTssECDSAPubKeyMethod) ReceiveBlock(context vm_context.AccountVmCo
 		return nil, err
 	}
 
-	// we check it in the send block
-	pubKey, _ := base64.StdEncoding.DecodeString(param.PubKey)
-
-	X, Y := secp256k1.DecompressPubkey(pubKey)
-	// ValidateSendBlock rejects off-curve keys, so this is unreachable for blocks
-	// admitted by the current rules. It is kept so that the coordinates are never
-	// consumed unchecked, independent of what the caller validated.
-	if X == nil || Y == nil {
-		return nil, constants.ErrInvalidCompressedECDSAPubKey
-	}
 	// X.Bytes()/Y.Bytes() are minimal-width, so a coordinate with a leading
-	// zero byte would serialize short and produce an uncompressed key under 65
-	// bytes. CheckECDSASignature requires exactly 0x04 || X[32] || Y[32], so the
-	// coordinates must be left-padded to a fixed 32 bytes each.
+	// zero byte serializes short unless left-padded to 32 bytes. Gate the
+	// fixed-width padding behind DynamicPlasmaSpork to preserve historical
+	// replay compatibility for pre-spork TimeChallenge hashes and stored keys;
+	// post-spork rotations always produce 0x04 || X[32] || Y[32].
 	dPubKeyBytes := make([]byte, 1, 65)
 	dPubKeyBytes[0] = 4
-	dPubKeyBytes = append(dPubKeyBytes, ecommon.LeftPadBytes(X.Bytes(), 32)...)
-	dPubKeyBytes = append(dPubKeyBytes, ecommon.LeftPadBytes(Y.Bytes(), 32)...)
+	if context.IsDynamicPlasmaSporkEnforced() {
+		dPubKeyBytes = append(dPubKeyBytes, ecommon.LeftPadBytes(X.Bytes(), 32)...)
+		dPubKeyBytes = append(dPubKeyBytes, ecommon.LeftPadBytes(Y.Bytes(), 32)...)
+	} else {
+		dPubKeyBytes = append(dPubKeyBytes, X.Bytes()...)
+		dPubKeyBytes = append(dPubKeyBytes, Y.Bytes()...)
+	}
 	newDecompressedPubKey := base64.StdEncoding.EncodeToString(dPubKeyBytes)
 
 	if sendBlock.Address.String() != bridgeInfo.Administrator.String() {
