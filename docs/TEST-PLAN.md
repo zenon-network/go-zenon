@@ -239,6 +239,7 @@ Follows `docs/libp2p-rollout.md`, which has the expected log lines.
 | D-9 | Gated contract fixes turn on with the spork: reward loops bounded per call (#234), accelerator final tally (#237), guardian bounds (#233), token-tuple percentages (#210), HTLC preimage and bridge signature lengths (#179) |
 | D-10 | Load: `nom-loadtest` at 10, 50 and 200 TPS for 10 minutes each; record momentum interval, price curve, memory and pool size. The tool is a Node.js project and runs inside `nodebox` |
 | D-11 | Rollback across the activation height, then re-apply |
+| D-12 | Spork-gated #78/#292 rules turn on with the spork: PoW unsigned target and `dp.MaxDifficultyForAccountBlock` cap (#346; legacy `int64` target preserved in-momentum before activation), and bridge `ChangeTssECDSAPubKey` send-side curve check plus receive-side 32-byte coordinate padding (#347) |
 
 ### 6.4 PTLC, embedded refund, epoch reward terms (L3)
 
@@ -285,8 +286,8 @@ This is the part unit tests cannot settle. These changes are not behind a spork:
 | Change | PR | State |
 |---|---|---|
 | Embedded method table selection | #74, fixed by #300 | fixed to follow the released ladder; needs replay to confirm |
-| PoW target comparison made unsigned | #66 | differs for `Difficulty >= 2^63`; decision made to gate behind `DynamicPlasmaSpork` (issue #78; gating PR #346 pending merge) |
-| Bridge TSS key: off-curve rejected, coordinates padded | #66 | decision made to gate send-side curve check and receive-side padding behind `DynamicPlasmaSpork` (issues #78, #292; gating PR #347 pending merge) |
+| PoW target comparison made unsigned | #66 | differs for `Difficulty >= 2^63`; decision made to gate behind `DynamicPlasmaSpork` (issue #78; gating PR #346 pending merge — moves out of this ungated table once merged) |
+| Bridge TSS key: off-curve rejected, coordinates padded | #66 | decision made to gate send-side curve check and receive-side padding behind `DynamicPlasmaSpork` (issues #78, #292; gating PR #347 pending merge — moves out of this ungated table once merged) |
 | Receive recipient rule from genesis | #182 | same on mainnet by construction; changes other chains |
 | Contract-receive validation from the renewal height | #309 | same rule and height as v0.0.10 |
 | Panic-to-error conversions, nil guards, tombstone skipping, ABI decode guards | #184, #206, #208, #236, #243, #246, #248, #255, #257, #273 | argued neutral by reading; needs replay |
@@ -298,7 +299,7 @@ This is the part unit tests cannot settle. These changes are not behind a spork:
 |---|---|---|
 | M-1 | Full sync of a `dev` binary from genesis to the frontier with default config | reaches the frontier, no rejected momentum, no panic |
 | M-2 | State comparison against a v0.0.10 node at fixed heights: every spork activation height, the heights around 4,188,199 to 4,188,206 (the HTLC-before-Bridge window from #290), the renewal height 14,567,887, and the frontier | momentum hash and changes hash equal at each height; a sample of 1,000 account infos and every embedded getter equal |
-| M-3 | History scan for the #78 cases: any account block with `Difficulty >= 2^63` (plus visibility counts above the legacy and Dynamic Plasma difficulty caps); any `ChangeTssECDSAPubKey` send with an off-curve key or a leading-zero-byte `X`/`Y` coordinate (`< 2^248`); and live `embedded.bridge.getBridgeInfo` `decompressedTssECDSAPubKey` 65-byte on-curve check | none found, or each one listed with the height where `dev` and v0.0.10 would disagree |
+| M-3 | History scan for the #78 cases: any account block with `Difficulty >= 2^63` (plus visibility counts above the legacy and Dynamic Plasma difficulty caps); any `ChangeTssECDSAPubKey` send with an off-curve key or a leading-zero-byte `X`/`Y` coordinate (`< 2^248`); and live `embedded.bridge.getBridgeInfo` `decompressedTssECDSAPubKey` 65-byte on-curve check | none found, or each one listed with its height (once #346 and #347 merge, `dev` and v0.0.10 agree pre-spork on every historical M-3 case, so listed historical items are informational; a short live `decompressedTssECDSAPubKey` still fails TSS signature checks until the next rotation) |
 | M-4 | Follow the frontier for 7 days next to a v0.0.10 node | same frontier hash at every sampled height |
 | M-5 | Sync time, peak memory and disk for `dev` and v0.0.10 on the same host | recorded; `dev` not slower by more than an agreed margin |
 | M-6 | Same as M-1 with `P2PBackend` left at `auto` | stays on legacy, since `Libp2pSpork` is a placeholder |
