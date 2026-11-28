@@ -32,6 +32,7 @@ func (m *stopsOnAcquire) DB() db.DB {
 }
 func (m *stopsOnAcquire) Add(id types.HashHeight, p db.Patch) error { return m.inner.Add(id, p) }
 func (m *stopsOnAcquire) Pop() error                                { return m.inner.Pop() }
+func (m *stopsOnAcquire) Compact() error                            { return m.inner.Compact() }
 func (m *stopsOnAcquire) Stop() error                               { return m.inner.Stop() }
 
 func stopsAfterFirstAcquire(inner storage.CacheManager) *stopsOnAcquire {

@@ -23,6 +23,7 @@ func (m *stopsAfterAcquire) DB() db.DB {
 }
 func (m *stopsAfterAcquire) Add(id types.HashHeight, p db.Patch) error { return m.inner.Add(id, p) }
 func (m *stopsAfterAcquire) Pop() error                                { return m.inner.Pop() }
+func (m *stopsAfterAcquire) Compact() error                            { return m.inner.Compact() }
 func (m *stopsAfterAcquire) Stop() error                               { return m.inner.Stop() }
 
 // The constructor's frontier read runs on a handle that was closed after it

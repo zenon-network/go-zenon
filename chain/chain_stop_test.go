@@ -37,6 +37,7 @@ type stopRecordingCacheManager struct {
 func (m *stopRecordingCacheManager) DB() db.DB                            { return nil }
 func (m *stopRecordingCacheManager) Add(types.HashHeight, db.Patch) error { return nil }
 func (m *stopRecordingCacheManager) Pop() error                           { return nil }
+func (m *stopRecordingCacheManager) Compact() error                       { return nil }
 func (m *stopRecordingCacheManager) Stop() error {
 	m.stopCalls++
 	return m.stopErr

@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/util"
 
 	"github.com/zenon-network/go-zenon/common"
 	"github.com/zenon-network/go-zenon/common/db"
@@ -281,4 +284,178 @@ func TestAddInverseReadFailureWritesNothing(t *testing.T) {
 	common.FailIfErr(t, m.Pop())
 	common.Expect(t, GetFrontierIdentifier(m.DB()), before)
 	common.ExpectString(t, db.DebugDB(m.DB()), beforeDump)
+}
+
+func TestAddDoesNotTriggerManualCompact(t *testing.T) {
+	m := mustNewCacheDBManager(t, t.TempDir()).(*cacheManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+
+	realCompact := m.compact
+	var compactCalls int32
+	m.compact = func(r util.Range) error {
+		atomic.AddInt32(&compactCalls, 1)
+		return realCompact(r)
+	}
+
+	const totalHeights = 250
+	for h := uint64(1); h <= totalHeights; h++ {
+		patch := db.NewPatch()
+		patch.Put([]byte("counter"), common.Uint64ToBytes(h))
+		patch.Put(common.JoinBytes([]byte("k"), common.Uint64ToBytes(h)), common.Uint64ToBytes(h))
+		common.FailIfErr(t, m.Add(getMockIdentifier(h), patch))
+	}
+
+	if got := atomic.LoadInt32(&compactCalls); got != 0 {
+		t.Fatalf("Add across %d heights triggered %d manual compactions, want 0", totalHeights, got)
+	}
+	common.Expect(t, GetFrontierIdentifier(m.DB()), getMockIdentifier(totalHeights))
+
+	// Explicit Compact runs once and leaves frontier, values, and rollback intact.
+	common.FailIfErr(t, m.Compact())
+	if got := atomic.LoadInt32(&compactCalls); got != 1 {
+		t.Fatalf("Compact triggered %d compactions, want 1", got)
+	}
+	common.Expect(t, GetFrontierIdentifier(m.DB()), getMockIdentifier(totalHeights))
+
+	for i := 0; i < 10; i++ {
+		common.FailIfErr(t, m.Pop())
+	}
+	wantHeight := uint64(totalHeights - 10)
+	common.Expect(t, GetFrontierIdentifier(m.DB()), getMockIdentifier(wantHeight))
+	val, err := m.DB().Get([]byte("counter"))
+	common.FailIfErr(t, err)
+	common.Expect(t, common.BytesToUint64(val), wantHeight)
+}
+
+func TestCompactPropagatesError(t *testing.T) {
+	m := mustNewCacheDBManager(t, t.TempDir()).(*cacheManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+
+	compactErr := errors.New("injected compaction failure")
+	m.compact = func(util.Range) error {
+		return compactErr
+	}
+
+	if err := m.Compact(); !errors.Is(err, compactErr) {
+		t.Fatalf("Compact() = %v, want %v", err, compactErr)
+	}
+}
+
+func TestCompactAfterStopReturnsClosed(t *testing.T) {
+	m := mustNewCacheDBManager(t, t.TempDir())
+	common.FailIfErr(t, m.Stop())
+
+	if err := m.Compact(); !errors.Is(err, leveldb.ErrClosed) {
+		t.Fatalf("Compact() after Stop = %v, want leveldb.ErrClosed", err)
+	}
+}
+
+func TestCompactDoesNotHoldChangesLock(t *testing.T) {
+	m := mustNewCacheDBManager(t, t.TempDir()).(*cacheManager)
+	t.Cleanup(func() { common.FailIfErr(t, m.Stop()) })
+	common.FailIfErr(t, m.Add(getMockIdentifier(1), getMockPatch([]byte{1})))
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	m.compact = func(util.Range) error {
+		close(entered)
+		<-release
+		return nil
+	}
+
+	compactDone := make(chan error, 1)
+	go func() {
+		compactDone <- m.Compact()
+	}()
+
+	<-entered
+
+	// While Compact is blocked in I/O, DB reads, Add, and Pop must not block.
+	common.Expect(t, GetFrontierIdentifier(m.DB()), getMockIdentifier(1))
+	common.FailIfErr(t, m.Add(getMockIdentifier(2), getMockPatch([]byte{2})))
+	common.Expect(t, GetFrontierIdentifier(m.DB()), getMockIdentifier(2))
+	common.FailIfErr(t, m.Pop())
+	common.Expect(t, GetFrontierIdentifier(m.DB()), getMockIdentifier(1))
+
+	close(release)
+	common.FailIfErr(t, <-compactDone)
+}
+
+func TestCompactConcurrentWithReadsWritesAndStop(t *testing.T) {
+	for iter := 0; iter < 5; iter++ {
+		m := mustNewCacheDBManager(t, t.TempDir())
+		for h := uint64(1); h <= 120; h++ {
+			common.FailIfErr(t, m.Add(getMockIdentifier(h), getMockPatch(common.Uint64ToBytes(h))))
+		}
+
+		start := make(chan struct{})
+		compacted := make(chan struct{}, 1)
+		errCh := make(chan error, 4)
+
+		var wg sync.WaitGroup
+
+		// Compactor goroutine.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for {
+				err := m.Compact()
+				if err != nil {
+					if !errors.Is(err, leveldb.ErrClosed) {
+						errCh <- fmt.Errorf("unexpected Compact error: %w", err)
+					}
+					return
+				}
+				select {
+				case compacted <- struct{}{}:
+				default:
+				}
+			}
+		}()
+
+		// Reader goroutine.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for {
+				d := m.DB()
+				if d == nil {
+					return
+				}
+				if _, err := ReadFrontierIdentifier(d); err != nil && !errors.Is(err, ErrCacheStopped) && !errors.Is(err, leveldb.ErrClosed) {
+					errCh <- fmt.Errorf("unexpected ReadFrontierIdentifier error: %w", err)
+					return
+				}
+			}
+		}()
+
+		// Writer goroutine.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for h := uint64(121); ; h++ {
+				err := m.Add(getMockIdentifier(h), getMockPatch(common.Uint64ToBytes(h)))
+				if err != nil {
+					if !errors.Is(err, leveldb.ErrClosed) {
+						errCh <- fmt.Errorf("unexpected Add error: %w", err)
+					}
+					return
+				}
+			}
+		}()
+
+		close(start)
+		// Wait for at least one concurrent compaction to complete, then stop
+		// while compaction, reads, and writes are actively racing.
+		<-compacted
+		common.FailIfErr(t, m.Stop())
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			t.Fatal(err)
+		}
+	}
 }
