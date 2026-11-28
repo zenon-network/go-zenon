@@ -333,11 +333,18 @@ func (abv *accountBlockVerifier) pow() error {
 		if types.IsEmbeddedAddress(abv.block.Address) {
 			return ErrABPoWInvalid
 		}
+		// Strict admission (pool, RPC, local generation) enforces the unified
+		// difficulty cap unconditionally without any spork lookup, so fail fast
+		// here before previous/MA lookups to preserve strict verdict ordering.
+		if abv.strictPoW && abv.block.Difficulty > dp.MaxDifficultyForAccountBlock {
+			return ErrABPoWInvalid
+		}
 		// Below 2^63, unsigned and legacy PoW targets are identical, so
 		// verify right here before previous/MA lookups (preserving verdict
-		// ordering and nil-chain unit test isolation). Difficulties >= 2^63
-		// and spork-gated difficulty caps are evaluated in powSporkRules()
-		// once MomentumAcknowledged has been verified canonical.
+		// ordering below 2^63 and nil-chain unit test isolation). For non-strict
+		// in-momentum verification, difficulties > dp.MaxDifficultyForAccountBlock
+		// (including >= 2^63) are deferred to powSporkRules() once
+		// MomentumAcknowledged has been verified canonical.
 		if abv.block.Difficulty < (1 << 63) {
 			if !pow.CheckPoWNonce(abv.block) {
 				return ErrABPoWInvalid

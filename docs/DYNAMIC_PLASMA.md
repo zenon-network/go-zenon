@@ -24,6 +24,9 @@ Dynamic Plasma replaces the fixed plasma pricing model with an adaptive one. Fus
 | `common/types/spork.go` | Added `DynamicPlasmaSpork` with placeholder hash (see Deployment section for release flow) |
 | `pillar/worker_momentum.go` | `generateMomentum` branches on spork: DP path uses `dp.NewDynamicPlasma` + `NewMomentumContentSelector` for content selection and sets price fields on momentum |
 | `verifier/momentum.go` | Version validation and content validation branches on `isDynamicPlasmaActive` |
+| `verifier/account_block.go` | Spork-gated PoW target & difficulty cap (`powSporkRules`), `AccountBlockInMomentum` for momentum verification, strict admission cap in `pow()` |
+| `pow/pow.go` | Preserves unsigned `CheckPoWNonce` and adds bit-exact `CheckPoWNonceLegacy` for pre-spork in-momentum replay |
+| `vm/supervisor.go` | Routes `ApplyBlockInMomentumStatus` and `VerifyBlockInMomentum` through `AccountBlockInMomentum` while keeping pool/RPC/local paths strict |
 | `vm/vm.go` | `enoughPlasma` uses `AvailablePlasmaV2` and `dp.DifficultyToPlasma` when spork active |
 | `vm/plasma.go` | `GetBasePlasmaForAccountBlock` and `AvailablePlasmaV2` for DP-aware plasma calculation |
 | `vm/embedded/embedded.go` | `applyDynamicPlasmaDiffs()` adds `SetVariables` method to plasma contract when spork active |
@@ -128,8 +131,12 @@ The verifier (`verifier/momentum.go:198-231`) enforces these by iterating blocks
 | Fusion cost per unit | Fixed 2100 plasma | `AccountBlockBasePlasma * fusionPrice / PriceScaleFactor` |
 | PoW difficulty per plasma | Fixed 1500 | `1500 * workPrice / PriceScaleFactor` |
 | Max fusion units per account | 5000 (fixed) | 100,000,000 (practically unlimited) |
-| Max PoW per block | `EmbeddedWDoubleResponse` | Same as max fusion (unlimited) |
+| Max PoW per block | `EmbeddedWDoubleResponse` | `dp.MaxPoWPlasmaForAccountBlock` (difficulty capped at `dp.MaxDifficultyForAccountBlock` = 315,000,000,000,000) |
 | Content selection | FIFO (all uncommitted) | Price-ranked, capped by `maxBasePlasmaInMomentum` |
+
+### Proof-of-Work Target & Difficulty Cap
+
+Before `DynamicPlasmaSpork` enforcement, in-momentum verification preserves the legacy `v0.0.10` `int64` target comparison (`pow.CheckPoWNonceLegacy`) for `Difficulty >= 2^63` and imposes no consensus difficulty cap (plasma credit is capped by `DifficultyToPlasma`), so historical replay and mixed-version sync with `v0.0.10` stay identical. Once `DynamicPlasmaSpork` is enforced at a block's acknowledged momentum, in-momentum verification switches to unsigned `uint64` target evaluation (`pow.CheckPoWNonce`) and rejects any block with `Difficulty > dp.MaxDifficultyForAccountBlock` (`315,000,000,000,000`, which also excludes all `Difficulty >= 2^63`). On the admission path (account pool, RPC publish, local generation), `Difficulty > dp.MaxDifficultyForAccountBlock` is rejected strictly as policy both before and after activation (`dp.GetDifficultyForPlasma` and `vm.GetDifficultyForPlasma` never quote above this cap).
 
 ---
 

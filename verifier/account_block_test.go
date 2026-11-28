@@ -649,4 +649,56 @@ func TestAccountBlockVerifier_PoW_NilChainAndVerdictOrderingPreserved(t *testing
 	if err := abvNilChain.powSporkRules(); !errors.Is(err, ErrABMAMissing) {
 		t.Fatalf("powSporkRules high difficulty with nil chain: got %v, want ErrABMAMissing", err)
 	}
+
+	// Strict admission rejects Difficulty > dp.MaxDifficultyForAccountBlock
+	// (including >= 2^63) fail-fast inside pow(), before previous()/MA lookups.
+	for _, difficulty := range []uint64{dp.MaxDifficultyForAccountBlock + 1, 1 << 63, math.MaxUint64} {
+		strictBlock := &nom.AccountBlock{
+			Version:              1,
+			ChainIdentifier:      1,
+			BlockType:            nom.BlockTypeUserSend,
+			Address:              addr,
+			ToAddress:            addr,
+			Amount:               big.NewInt(0),
+			Height:               2,
+			PreviousHash:         types.NewHash([]byte("missing-prev")),
+			MomentumAcknowledged: ma,
+			Difficulty:           difficulty,
+		}
+		abvStrict := &accountBlockVerifier{
+			block:         strictBlock,
+			accountStore:  &stubPoWAccountStore{frontier: &nom.AccountBlock{Height: 1, Hash: types.NewHash([]byte("other"))}},
+			frontierStore: &stubPoWMomentumStore{chainID: 1, frontier: nil},
+			chain:         nil,
+			strictPoW:     true,
+		}
+		if err := abvStrict.all(); !errors.Is(err, ErrABPoWInvalid) {
+			t.Fatalf("strict all(difficulty=%d) with missing prev/MA: got %v, want ErrABPoWInvalid", difficulty, err)
+		}
+	}
+
+	// In-momentum verification defers Difficulty >= 2^63 past previous()/MA so
+	// missing context yields the non-remembered context verdict rather than ErrABPoWInvalid.
+	inMomBlock := &nom.AccountBlock{
+		Version:              1,
+		ChainIdentifier:      1,
+		BlockType:            nom.BlockTypeUserSend,
+		Address:              addr,
+		ToAddress:            addr,
+		Amount:               big.NewInt(0),
+		Height:               2,
+		PreviousHash:         types.NewHash([]byte("missing-prev")),
+		MomentumAcknowledged: ma,
+		Difficulty:           math.MaxUint64,
+	}
+	abvInMom := &accountBlockVerifier{
+		block:         inMomBlock,
+		accountStore:  &stubPoWAccountStore{frontier: &nom.AccountBlock{Height: 1, Hash: types.NewHash([]byte("other"))}},
+		frontierStore: &stubPoWMomentumStore{chainID: 1, frontier: nil},
+		chain:         nil,
+		strictPoW:     false,
+	}
+	if err := abvInMom.all(); !errors.Is(err, ErrABPreviousMissing) {
+		t.Fatalf("in-momentum all(difficulty=MaxUint64) with missing prev: got %v, want ErrABPreviousMissing", err)
+	}
 }

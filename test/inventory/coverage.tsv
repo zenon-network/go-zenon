@@ -175,6 +175,7 @@ spork	DynamicPlasmaSpork	E7:LAD-1 E7:S-7
 spork	EmbeddedRefundSpork	
 spork	EpochRewardTermsSpork	
 verifier-rule	accountVerifier.getContext	E1:B-1 E2:B-5d E6:B-5c
+verifier-rule	accountVerifier.verifyBlock	
 verifier-rule	accountVerifier.verifyTransaction	E1:B-1
 verifier-rule	accountBlockVerifier.all	E1:B-1
 verifier-rule	accountBlockVerifier.version	E6:B-5j
@@ -188,6 +189,7 @@ verifier-rule	accountBlockVerifier.acknowledgementRecency	E7:S-7
 verifier-rule	accountBlockVerifier.fromHash	E3:B-4 E4:B-5a E4:B-5b
 verifier-rule	accountBlockVerifier.sequencer	
 verifier-rule	accountBlockVerifier.isDynamicPlasmaActiveAtMA	E7:B-12
+verifier-rule	accountBlockVerifier.powSporkRules	
 verifier-rule	accountBlockVerifier.receiveData	E7:B-12
 verifier-rule	accountBlockTransactionVerifier.all	
 verifier-rule	accountBlockTransactionVerifier.contractReceiveRulesActive	
