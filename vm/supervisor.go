@@ -134,7 +134,7 @@ func (s *Supervisor) ApplyBlockInMomentumStatus(block *nom.AccountBlock, momentu
 	if block.BlockType == nom.BlockTypeContractSend {
 		return nil, false, errors.Errorf("can't apply BlockTypeContractSend")
 	}
-	return s.applyBlockWithStatus(block, nil, func(transaction *nom.AccountBlockTransaction) error {
+	return s.applyBlockWithStatus(block, nil, s.verifier.AccountBlockInMomentum, func(transaction *nom.AccountBlockTransaction) error {
 		return s.verifier.AccountBlockTransactionInMomentum(transaction, momentumHeight)
 	})
 }
@@ -158,7 +158,7 @@ func (s *Supervisor) VerifyBlockInMomentum(block *nom.AccountBlock, momentumHeig
 	if block.BlockType == nom.BlockTypeContractSend {
 		return errors.Errorf("can't apply BlockTypeContractSend")
 	}
-	if err := s.verifier.AccountBlock(block); err != nil {
+	if err := s.verifier.AccountBlockInMomentum(block); err != nil {
 		return err
 	}
 	return s.verifier.AccountBlockTransactionInMomentum(&nom.AccountBlockTransaction{Block: block}, momentumHeight)
@@ -369,15 +369,16 @@ func (s *Supervisor) GenerateGenesisMomentum(template *nom.Momentum, pool chain.
 }
 
 func (s *Supervisor) applyBlock(block *nom.AccountBlock, signFunc SignFunc) (*nom.AccountBlockTransaction, error) {
-	tx, _, err := s.applyBlockWithStatus(block, signFunc, s.verifier.AccountBlockTransaction)
+	tx, _, err := s.applyBlockWithStatus(block, signFunc, s.verifier.AccountBlock, s.verifier.AccountBlockTransaction)
 	return tx, err
 }
 
-// applyBlockWithStatus is applyBlock with the transaction verification the
-// caller chooses (unconditional for pool admission/local generation,
-// momentum-height for momentum insertion) and reports whether a matching
-// ContractReceive came from a contract method that returned a non-nil error.
-func (s *Supervisor) applyBlockWithStatus(block *nom.AccountBlock, signFunc SignFunc, verify func(*nom.AccountBlockTransaction) error) (transaction *nom.AccountBlockTransaction, methodFailed bool, internalErr error) {
+// applyBlockWithStatus is applyBlock with the block and transaction
+// verifiers the caller chooses (unconditional strict rules for pool
+// admission/local generation, momentum-context rules for momentum insertion)
+// and reports whether a matching ContractReceive came from a contract method
+// that returned a non-nil error.
+func (s *Supervisor) applyBlockWithStatus(block *nom.AccountBlock, signFunc SignFunc, verifyBlock func(*nom.AccountBlock) error, verify func(*nom.AccountBlockTransaction) error) (transaction *nom.AccountBlockTransaction, methodFailed bool, internalErr error) {
 	defer func() {
 		if err := recover(); err != nil {
 			l := s.log.New("block", block.Header())
@@ -389,7 +390,7 @@ func (s *Supervisor) applyBlockWithStatus(block *nom.AccountBlock, signFunc Sign
 		}
 	}()
 
-	if err := s.verifier.AccountBlock(block); err != nil {
+	if err := verifyBlock(block); err != nil {
 		return nil, false, err
 	}
 	// For externally supplied blocks (signFunc == nil), verify hash,

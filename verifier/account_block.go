@@ -10,6 +10,7 @@ import (
 	"github.com/zenon-network/go-zenon/chain/store"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/consensus"
+	"github.com/zenon-network/go-zenon/dp"
 	"github.com/zenon-network/go-zenon/pow"
 	"github.com/zenon-network/go-zenon/vm/embedded/definition"
 	"github.com/zenon-network/go-zenon/wallet"
@@ -49,11 +50,16 @@ func isContractReceive(block *nom.AccountBlock) bool {
 }
 
 // AccountBlockVerifier validates account-blocks. AccountBlock checks a
-// block's intrinsic fields and its position in the ledger; the heavier
-// AccountBlockTransaction additionally validates the hash, signature and
-// producer once the block has been embedded in a transaction.
+// block's intrinsic fields and its position in the ledger for pool admission
+// and local generation (applying strict rules unconditionally).
+// AccountBlockInMomentum checks a block as part of a momentum being inserted,
+// preserving pre-spork behavior below the spork gate so historical momentums
+// replay identically. The heavier AccountBlockTransaction and
+// AccountBlockTransactionInMomentum additionally validate the hash, signature
+// and producer once the block has been embedded in a transaction.
 type AccountBlockVerifier interface {
 	AccountBlock(block *nom.AccountBlock) error
+	AccountBlockInMomentum(block *nom.AccountBlock) error
 	// AccountBlockTransaction verifies a transaction that is being admitted
 	// to the account pool or generated locally. Every rule applies.
 	AccountBlockTransaction(transaction *nom.AccountBlockTransaction) error
@@ -133,6 +139,12 @@ func (av *accountVerifier) getContext(block *nom.AccountBlock) (store.Account, s
 	return accountStore, frontierStore, nil
 }
 func (av *accountVerifier) AccountBlock(block *nom.AccountBlock) error {
+	return av.verifyBlock(block, true)
+}
+func (av *accountVerifier) AccountBlockInMomentum(block *nom.AccountBlock) error {
+	return av.verifyBlock(block, false)
+}
+func (av *accountVerifier) verifyBlock(block *nom.AccountBlock, strictPoW bool) error {
 	if block.BlockType == nom.BlockTypeContractSend {
 		return ErrABTypeInvalidExternal
 	}
@@ -147,15 +159,16 @@ func (av *accountVerifier) AccountBlock(block *nom.AccountBlock) error {
 		accountStore:  accountStore,
 		frontierStore: frontierStore,
 		chain:         av.chain,
+		strictPoW:     strictPoW,
 	}).all()
 }
 func (av *accountVerifier) AccountBlockTransaction(transaction *nom.AccountBlockTransaction) error {
-	return av.verifyTransaction(transaction, true)
+	return av.verifyTransaction(transaction, true, true)
 }
 func (av *accountVerifier) AccountBlockTransactionInMomentum(transaction *nom.AccountBlockTransaction, momentumHeight uint64) error {
-	return av.verifyTransaction(transaction, momentumHeight >= definition.CommunitySporkAddressRenewalStartHeight)
+	return av.verifyTransaction(transaction, momentumHeight >= definition.CommunitySporkAddressRenewalStartHeight, false)
 }
-func (av *accountVerifier) verifyTransaction(transaction *nom.AccountBlockTransaction, contractReceiveRules bool) error {
+func (av *accountVerifier) verifyTransaction(transaction *nom.AccountBlockTransaction, contractReceiveRules bool, strictPoW bool) error {
 	if transaction.Block.BlockType == nom.BlockTypeContractSend {
 		return ErrABTypeInvalidExternal
 	}
@@ -171,6 +184,7 @@ func (av *accountVerifier) verifyTransaction(transaction *nom.AccountBlockTransa
 		frontierStore:        frontierStore,
 		chain:                av.chain,
 		contractReceiveRules: contractReceiveRules,
+		strictPoW:            strictPoW,
 	}).all()
 }
 
@@ -191,6 +205,12 @@ type accountBlockVerifier struct {
 	momentumStore store.Momentum
 	frontierStore store.Momentum
 	chain         chain.Chain
+	// strictPoW is true for pool admission, RPC submission, and local block
+	// generation, where difficulties above dp.MaxDifficultyForAccountBlock
+	// (including all >= 2^63) are rejected unconditionally. It is false for
+	// in-momentum verification, where pre-DynamicPlasmaSpork blocks preserve
+	// exact v0.0.10 legacy PoW target verification.
+	strictPoW bool
 }
 
 func (abv *accountBlockVerifier) all() error {
@@ -213,6 +233,9 @@ func (abv *accountBlockVerifier) all() error {
 		return err
 	}
 	if err := abv.momentumAcknowledged(); err != nil {
+		return err
+	}
+	if err := abv.powSporkRules(); err != nil {
 		return err
 	}
 	if err := abv.acknowledgementRecency(); err != nil {
@@ -310,8 +333,22 @@ func (abv *accountBlockVerifier) pow() error {
 		if types.IsEmbeddedAddress(abv.block.Address) {
 			return ErrABPoWInvalid
 		}
-		if !pow.CheckPoWNonce(abv.block) {
+		// Strict admission (pool, RPC, local generation) enforces the unified
+		// difficulty cap unconditionally without any spork lookup, so fail fast
+		// here before previous/MA lookups to preserve strict verdict ordering.
+		if abv.strictPoW && abv.block.Difficulty > dp.MaxDifficultyForAccountBlock {
 			return ErrABPoWInvalid
+		}
+		// Below 2^63, unsigned and legacy PoW targets are identical, so
+		// verify right here before previous/MA lookups (preserving verdict
+		// ordering below 2^63 and nil-chain unit test isolation). For non-strict
+		// in-momentum verification, difficulties > dp.MaxDifficultyForAccountBlock
+		// (including >= 2^63) are deferred to powSporkRules() once
+		// MomentumAcknowledged has been verified canonical.
+		if abv.block.Difficulty < (1 << 63) {
+			if !pow.CheckPoWNonce(abv.block) {
+				return ErrABPoWInvalid
+			}
 		}
 	}
 	return nil
@@ -550,7 +587,11 @@ func (abv *accountBlockVerifier) sequencer() error {
 // spork queries from the momentum's patch set without replaying rollbacks.
 func (abv *accountBlockVerifier) isDynamicPlasmaActiveAtMA() (bool, error) {
 	if abv.momentumStore != nil {
-		return abv.momentumStore.IsSporkActive(types.DynamicPlasmaSpork)
+		active, err := abv.momentumStore.IsSporkActive(types.DynamicPlasmaSpork)
+		if err != nil {
+			return false, InternalError(err)
+		}
+		return active, nil
 	}
 	if abv.chain == nil {
 		return false, ErrABMAMissing
@@ -559,7 +600,40 @@ func (abv *accountBlockVerifier) isDynamicPlasmaActiveAtMA() (bool, error) {
 	if cacheStore == nil {
 		return false, InternalError(fmt.Errorf("no cache store at momentum %s", abv.block.MomentumAcknowledged.Hash))
 	}
-	return cacheStore.IsSporkActive(types.DynamicPlasmaSpork)
+	active, err := cacheStore.IsSporkActive(types.DynamicPlasmaSpork)
+	if err != nil {
+		return false, InternalError(err)
+	}
+	return active, nil
+}
+
+// powSporkRules enforces the DynamicPlasmaSpork-gated proof-of-work difficulty
+// cap and pre-spork legacy target compatibility after MomentumAcknowledged has
+// been verified canonical. Difficulties at or below dp.MaxDifficultyForAccountBlock
+// (< 2^63) were already verified in pow() and bypass the spork lookup.
+func (abv *accountBlockVerifier) powSporkRules() error {
+	if abv.block.Difficulty == 0 || types.IsEmbeddedAddress(abv.block.Address) {
+		return nil
+	}
+	if abv.block.Difficulty <= dp.MaxDifficultyForAccountBlock {
+		return nil
+	}
+	if abv.strictPoW {
+		return ErrABPoWInvalid
+	}
+	active, err := abv.isDynamicPlasmaActiveAtMA()
+	if err != nil {
+		return err
+	}
+	if active {
+		return ErrABPoWInvalid
+	}
+	if abv.block.Difficulty >= (1 << 63) {
+		if !pow.CheckPoWNonceLegacy(abv.block) {
+			return ErrABPoWInvalid
+		}
+	}
+	return nil
 }
 
 // receiveData rejects user receive blocks that carry non-empty Data once the
@@ -603,6 +677,7 @@ type accountBlockTransactionVerifier struct {
 	// the momentum's height. A momentum below that height is committed as
 	// every node committed it before the rules existed, blocks included.
 	contractReceiveRules bool
+	strictPoW            bool
 }
 
 func (abvt *accountBlockTransactionVerifier) all() error {
@@ -711,6 +786,7 @@ func (abvt *accountBlockTransactionVerifier) descendantBlocks() error {
 			momentumStore: abvt.momentumStore,
 			frontierStore: abvt.frontierStore,
 			chain:         abvt.chain,
+			strictPoW:     abvt.strictPoW,
 		}).all(); err != nil {
 			return DescendantVerifyError(err)
 		}
@@ -729,6 +805,7 @@ func (abvt *accountBlockTransactionVerifier) descendantBlocks() error {
 			frontierStore:        abvt.frontierStore,
 			chain:                abvt.chain,
 			contractReceiveRules: abvt.contractReceiveRules,
+			strictPoW:            abvt.strictPoW,
 		}
 		if err := child.hash(); err != nil {
 			return DescendantVerifyError(err)

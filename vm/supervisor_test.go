@@ -177,13 +177,21 @@ func TestNewEmbeddedBlockContext_ReusesMomentumStoreForPillarReader(t *testing.T
 
 type countingTxVerifier struct {
 	verifier.Verifier
-	txCalls           int
-	txInMomentumCalls int
-	lastTx            *nom.AccountBlockTransaction
-	lastTotalPlasma   uint64
+	blockCalls           int
+	blockInMomentumCalls int
+	txCalls              int
+	txInMomentumCalls    int
+	lastTx               *nom.AccountBlockTransaction
+	lastTotalPlasma      uint64
 }
 
 func (v *countingTxVerifier) AccountBlock(*nom.AccountBlock) error {
+	v.blockCalls++
+	return nil
+}
+
+func (v *countingTxVerifier) AccountBlockInMomentum(*nom.AccountBlock) error {
+	v.blockInMomentumCalls++
 	return nil
 }
 
@@ -238,20 +246,32 @@ func TestApplyBlock_VerifiesTransactionOnce(t *testing.T) {
 	// ApplyBlock (signFunc == nil): verifies once before VM, not again in packBlockWith.
 	tx, err := s.ApplyBlock(newUserSend())
 	common.FailIfErr(t, err)
+	common.Expect(t, counting.blockCalls, 1)
+	common.Expect(t, counting.blockInMomentumCalls, 0)
 	common.Expect(t, counting.txCalls, 1)
 	common.Expect(t, counting.lastTotalPlasma, uint64(0))
 	if tx.Block.TotalPlasma == 0 || tx.Changes == nil {
 		t.Fatalf("expected VM execution and packing after pre-VM verify, got totalPlasma=%d changes=%v", tx.Block.TotalPlasma, tx.Changes)
 	}
 
-	// ApplyBlockInMomentum (signFunc == nil): verifies once before VM, not again in packBlockWith.
+	// ApplyBlockInMomentum (signFunc == nil): verifies once before VM via AccountBlockInMomentum,
+	// not again in packBlockWith.
 	tx, err = s.ApplyBlockInMomentum(newUserSend(), 10)
 	common.FailIfErr(t, err)
+	common.Expect(t, counting.blockCalls, 1)
+	common.Expect(t, counting.blockInMomentumCalls, 1)
 	common.Expect(t, counting.txInMomentumCalls, 1)
 	common.Expect(t, counting.lastTotalPlasma, uint64(0))
 	if tx.Block.TotalPlasma == 0 || tx.Changes == nil {
 		t.Fatalf("expected VM execution and packing after pre-VM verify, got totalPlasma=%d changes=%v", tx.Block.TotalPlasma, tx.Changes)
 	}
+
+	// VerifyBlockInMomentum routes through AccountBlockInMomentum and AccountBlockTransactionInMomentum.
+	err = s.VerifyBlockInMomentum(newUserSend(), 10)
+	common.FailIfErr(t, err)
+	common.Expect(t, counting.blockCalls, 1)
+	common.Expect(t, counting.blockInMomentumCalls, 2)
+	common.Expect(t, counting.txInMomentumCalls, 2)
 
 	// GenerateFromTemplate (signFunc != nil): skips pre-VM verify and verifies once after signing.
 	counting.txCalls = 0
