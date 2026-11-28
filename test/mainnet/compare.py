@@ -113,10 +113,10 @@ MAX_PAGES = 500      # guard against unbounded paging; truncation is reported
 # item keys is INFO, not FAIL.
 EXPECTED_ITEM_ADDITIONS = {
     "embedded.plasma.getEntriesByAddress": {
-        "isRevocable": "added on dev with Dynamic Plasma: reports whether "
-                       "the frontier height passed the entry's expiration "
-                       "height (rpc/api/embedded/plasma.go); absent in "
-                       "v0.0.10",
+        "isRevocable": "added on dev by 6e75bb5, a standalone RPC fix "
+                       "(not Dynamic Plasma): reports whether the frontier "
+                       "height passed the entry's expiration height "
+                       "(rpc/api/embedded/plasma.go); absent in v0.0.10",
     },
 }
 

@@ -124,8 +124,8 @@ Classification of one getter pair (see `classify_getter`):
   reason), so exit status 0 is a real gate for dev-vs-v0.0.10 runs. The
   same applies to additions inside list items via
   `EXPECTED_ITEM_ADDITIONS` (currently `isRevocable` on
-  `embedded.plasma.getEntriesByAddress` entries, added on dev with
-  Dynamic Plasma). Any
+  `embedded.plasma.getEntriesByAddress` entries, added on dev by 6e75bb5,
+  a standalone RPC fix that is not part of Dynamic Plasma). Any
   other diff is a `FAIL` with the first differing key/index in the record.
 - A getter whose argument cannot be built because the reference chain has
   no such entity (e.g. no accelerator project with a phase — `getAll` is
